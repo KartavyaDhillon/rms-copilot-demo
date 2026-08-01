@@ -57,17 +57,35 @@ python --version
 
 Must print `Python 3.13.7`.
 
-### 2. Copy the repo
+### 2. Download the code from GitHub
 
-Copy `D:\CLAUDE\rms-copilot` to `D:\CLAUDE\rms-copilot` on the new machine.
+Do **not** copy the folder across. Use Git — it brings exactly the right files
+and nothing else (no `.venv`, no databases, no zips), and every future update is
+then a single `git pull`.
 
-**Delete `.venv\` from the copy.** A Windows virtualenv hardcodes absolute
-paths into `pyvenv.cfg` and its activate scripts — it will not work on another
-machine and will fail in confusing ways if you leave it. It gets rebuilt in the
-next step.
+Make the console folder and clone into it:
 
-Also delete `rms_history.db` if present — the SQLite fallback file. Postgres is
-the real store; a stale copy of this only causes confusion.
+```powershell
+mkdir D:\CONSOLE
+cd /d D:\CONSOLE
+git clone https://github.com/KartavyaDhillon/rms-copilot-demo.git rms-copilot
+```
+
+You'll be asked to sign in to GitHub the first time. The repo is private, so
+this is expected.
+
+Final layout on the new machine:
+
+```
+D:\CONSOLE\
+├── rms-copilot\     the code — git pull lands here
+└── data\            every working folder, created automatically
+```
+
+> Why not copy the folder? A Windows virtualenv hardcodes absolute paths into
+> `pyvenv.cfg`, so a copied `.venv` cannot work on another machine — and a
+> copied folder also drags across `knowledge.db` (200+ MB of rebuildable index)
+> and every stale temp file. Cloning sidesteps all of it.
 
 ### 3. Build the virtualenv
 
