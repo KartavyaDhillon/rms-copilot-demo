@@ -1,0 +1,11 @@
+SAMPLE DOCUMENT - illustrative only. Numbers are fictional, for learning. Replace with real circulars later.
+
+Margin Trading Facility (MTF) Concentration Norms
+
+Under the Margin Trading Facility, a broker funds part of a client's purchase against approved collateral. To manage risk, exposure must be diversified across securities and cannot be overly concentrated in a single scrip or a narrow group of scrips.
+
+A single-scrip concentration limit restricts how much of a client's total MTF book may be held in one security. Group-level limits restrict exposure to securities outside major indices. Securities that are part of large, liquid indices are treated as lower risk and attract a smaller haircut, while securities outside these indices attract a larger haircut or may be ineligible for funding.
+
+When a client's portfolio breaches a concentration limit, the risk team flags a concentration violation. The client is required to either bring in additional margin or reduce the concentrated position within the prescribed time. Persistent violations can lead to the funded position being squared off.
+
+Concentration checks are run end-of-day against the latest index constituent lists.

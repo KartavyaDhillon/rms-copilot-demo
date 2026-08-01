@@ -1,0 +1,199 @@
+================================================================================
+  RMS COPILOT — CODE MAP  (what every part of the code does)
+  Generated 2026-06-20 by reading the source directly. Plain reference, no fluff.
+================================================================================
+
+HOW TO READ THIS
+  • "logic module"  = the actual work (pure-ish Python: download, compute, write files).
+  • "_run module"   = a thin STREAMING wrapper around a logic module that yields live
+                      log lines to the dashboard over SSE (Server-Sent Events).
+  • Almost every pipeline is a pair:  xxx.py (logic)  +  xxx_run.py (live streaming).
+
+
+--------------------------------------------------------------------------------
+1. THE BIG PICTURE  (how a request flows)
+--------------------------------------------------------------------------------
+  Browser (dashboard.html)
+        │  HTTP / SSE
+        ▼
+  api.py  (FastAPI)  ── routes each button/question to …
+        │
+        ├── a pipeline runner  (core/pipelines/*_run.py) ── streams live logs back
+        │        └── calls the pipeline logic (core/pipelines/*.py)
+        │                 └── uses core/downloaders, core/notify, core/config
+        │
+        └── the chat agent  (core/agent.py via core/agent_run.py)
+                 ├── tools: read files, run pipelines, ask_data, search_code …
+                 ├── core/llm.py        → Groq (Llama-3.3-70B) — the ONLY LLM call site
+                 ├── core/rag.py        → answers from data/circulars/*.txt
+                 ├── core/root_cause.py → explains WHY a client is short
+                 └── known-error matcher → instant answers from pipeline_knowledge.txt
+
+  Config & secrets: core/config.py reads everything from .env (Groq key, SMTP,
+  FTP, WhatsApp, exchange logins). Outputs are written to D:\ business folders.
+
+
+--------------------------------------------------------------------------------
+2. ENTRY POINTS  (how to run things)
+--------------------------------------------------------------------------------
+  api.py                  Backend API. Start:  uvicorn api:app --reload   (Swagger at /docs)
+  dashboard.html          The whole front end (single file). Open in a browser; talks to api.
+  run_peak_margin.py      Local end-to-end test of the peak-margin pipeline (no sending).
+  reset_peak_day.py       Reset today's peak-margin state (report + run log + images).
+  ask.py                  Throwaway smoke-test that the LLM connection works.
+  ask_compliance.py       First RAG demo — ask a compliance question from the terminal.
+  check.py / check_nse.py Diagnostics: confirm env / NSE credentials loaded from .env.
+
+
+--------------------------------------------------------------------------------
+3. core/  — THE BRAINS (shared logic the whole app depends on)
+--------------------------------------------------------------------------------
+  config.py        Central configuration. EVERY setting/secret is read here from .env,
+                   nowhere else. (Groq key, SMTP/Netcore, FTP, WhatsApp, exchange creds.)
+  llm.py           The ONE place that talks to a language model. Today: Groq, model
+                   "llama-3.3-70b-versatile" (free tier). Swap providers here only.
+
+  agent.py         THE RMS OPS AGENT (largest file). Contains:
+                     • SYSTEM prompt (rules of behaviour)
+                     • TOOLS list (what the agent may do — see section 6)
+                     • deterministic process routing (keyword → which pipeline)
+                     • _match_known_error() — instant, no-AI answers from the KB
+                     • _load_last_run_error() — attaches the real traceback on error Qs (NEW)
+                     • run_agent_chat() — the main loop the chat UI calls
+  agent_run.py     Streaming wrapper: runs the agent in a thread, yields events to the UI.
+
+  rag.py           Retrieval-Augmented Generation over data/circulars/*.txt. Local
+                   embeddings (MiniLM), cites sources — so circular answers aren't guessed.
+  code_index.py    Lets the agent SEARCH ITS OWN CODEBASE (semantic + exact). Powers the
+                   search_code / list_indexed_code tools.
+  root_cause.py    Explainability: "why is client X short / why did they get a WhatsApp?".
+                   Decomposes deposit vs margin vs shortfall from the real file. Explicitly
+                   REFUSES to invent a trade-level cause it can't see.
+  daily_summary.py One-glance morning summary: counts shortfalls / violations / blocked
+                   payouts FROM the real output files (says "not found" instead of guessing).
+  readiness.py     "Can I run it right now?" — checks each pipeline's required input files.
+  notify.py        Side-effects: sends WhatsApp (Tata) + email (SMTP). Only fires after
+                   approval OR when AUTO_SEND=true. Returns a clear reason on failure.
+  penalty.py       Penalty-rule helper exposed to the agent as a tool (calculate_penalty).
+  compliance.py    Compliance-assistant logic as a reusable function (used by /ask).
+
+  downloaders/
+    nse.py         The NSE extranet I/O layer — the only code that talks to NSE for the
+                   margin-shortage download (login, captcha, fetch).
+
+
+--------------------------------------------------------------------------------
+4. core/pipelines/  — THE 15 PIPELINES  (logic + live-stream pairs)
+--------------------------------------------------------------------------------
+  PEAK MARGIN
+    peak_margin.py / peak_margin_run.py   Pure logic + streaming. Cumulative column-wise
+                                          report for snapshots i01–i04 (10:30/12:30/13:45/15:30).
+    report_image.py                       Renders the peak-margin report as a crisp image
+                                          (headless, no Excel) for WhatsApp/email.
+    reset_peak_day.py                     Resets the day's peak state.
+
+  MARGIN SHORTAGE / CTCL  (two opposite-sign shortfall reports — never mix)
+    margin_shortage.py / _run.py          Downloads NSCCL (CM/FO/CO) + NCDEX deposits.
+    ctcl_vs_nmass.py / _run.py            NMASS-vs-CTCL diff, zone emails, TOP20, payout, backup.
+    margin_top20.py                       Top-20 margin utilisation report.
+
+  CONCENTRATION
+    concentration.py / _run.py            Index-bucket + scrip-concentration violations.
+                                          Two streams: download, then compute.
+
+  CNC / MTF / CODE2
+    cnc_f11.py / _run.py                  PositionBook buy/sell match → Sheet4 → email.
+    mtf_order.py / _run.py                Margin match → KAMB+O319 order files → zone emails.
+    code2_shortage.py                     Tuesday/Thursday CODE2 shortage report.
+
+  PAYOUT
+    payout_download.py                    Downloads payment-request log (BOAPI/KORP).
+    payout_check.py                       Flags payout requestors with negative margin.
+    payout_inspection.py / _run.py        Daily ingestion + per-client historical inspection.
+
+  FILE DOWNLOADS
+    ftp_download.py / _run.py             KAMB/O319/NOREN/SYMF via FTP → 8 destination folders.
+    files_downloader_70.py / _run.py      "70 Files": NSE (CM/FO/CO/CD) + MCX + NCDEX + EPI.
+                                          (This is the one that threw the NoneType error.)
+
+  Entry function naming: logic = run_xxx(...);  streaming = stream_xxx(...) /
+  process_pair_stream(...). The _run module is what api.py imports per endpoint.
+
+
+--------------------------------------------------------------------------------
+5. api.py  — ENDPOINTS  (each maps a UI action to a pipeline/agent)
+--------------------------------------------------------------------------------
+  GET  /                              health + auto_send flag
+  POST /ask                           compliance Q&A (RAG)
+  POST /agent                         agent goal (non-chat)
+  POST /agent-chat-stream             the chat UI (streams tool steps + answer)
+  GET  /peak-margin-stream/{i01..i04} run a snapshot live; ends with approve/auto-send
+  POST /approve-send                  human approval gate → sends WhatsApp/email
+  GET  /<pipeline>-stream             one per pipeline (concentration-download/-compute,
+                                      margin-shortage, ctcl-vs-nmass, cnc-f11, mtf-order,
+                                      ftp-download, files-downloader-70, payout-inspection-*)
+  GET  /ask-data                      Data Explorer: plain-English question → pandas (exact)
+  GET  /folder-readiness             input-file readiness for the dashboard tiles
+  GET  /agent-log                     recent agent Q&A (Audit Log tab)
+  POST /upload-file                  attach a file as chat context
+  All long-running endpoints stream via SSE (text/event-stream).
+
+
+--------------------------------------------------------------------------------
+6. AGENT TOOLS  (what core/agent.py is allowed to DO)
+--------------------------------------------------------------------------------
+  Read/inspect : list_output_files, read_output_file, analyze_file,
+                 list_uploaded_files, read_uploaded_file, check_input_readiness
+  Data (exact) : ask_data (English→pandas), explain_column, explain_client
+  Knowledge    : lookup_rule (circulars/RAG), calculate_penalty, daily_summary
+  Code         : search_code, list_indexed_code
+  Run pipelines: run_peak_margin, run_concentration, run_ctcl, run_cnc_f11,
+                 run_mtf_order, run_ftp_download, run_margin_shortage
+  Plus a ZERO-AI fast path: documented errors are answered instantly from the KB,
+  with no LLM call (cannot hallucinate, immune to rate limits).
+
+
+--------------------------------------------------------------------------------
+7. data/ , logs/ , knowledge
+--------------------------------------------------------------------------------
+  data/circulars/pipeline_knowledge.txt   The agent's deep knowledge: per-pipeline logic,
+                                          "why" explanations, AND the error reference the
+                                          known-error matcher uses. Edit this to make the
+                                          agent smarter — no code change needed.
+  data/circulars/*.txt                    Circular/rule docs for RAG (haircut, NSCCL margin,
+                                          MTF/concentration limits, payout process, penalties).
+  logs/agent_log.jsonl                    Every agent Q&A appended here (the Audit Log tab).
+  logs/last_error.json                    NEW: the last failed run's real traceback, so the
+                                          agent can diagnose from the actual stack.
+
+
+--------------------------------------------------------------------------------
+8. dashboard.html  — THE FRONT END (single file: HTML + CSS + JS)
+--------------------------------------------------------------------------------
+  Sidebar views (showView):
+    Dashboard    peak-margin snapshots, report images + approve, input-readiness tiles,
+                 processing tiles (Concentration / CTCL / CNC F11 / MTF).
+    Downloads    Index / Margin Shortage / FTP / 70 Files tiles.
+    Compliance   Daily ingestion + client inspection.
+    Agents       Full chat UI (RMS Agent) — streaming, tool badges, source panel.
+    Data Explorer  Plain-English or manual query → exact pandas answer (no AI).
+    Audit Log    Reads logs/agent_log.jsonl.
+  Shared "Live Console" (bottom) streams any running pipeline; on error shows
+  "Ask agent about this error". API base = http://localhost:8000.
+  NOTE: the look is driven entirely by the <style> block (design tokens in :root);
+  all behaviour is the <script> block. The 2026-06-20 restyle changed ONLY the
+  stylesheet + font link — every id, handler and endpoint is unchanged.
+
+
+--------------------------------------------------------------------------------
+9. CHANGES MADE 2026-06-20  (Phase 0 reliability + UI restyle)
+--------------------------------------------------------------------------------
+  files_downloader_70.py    Login-page scrapes guarded → clear error instead of NoneType.
+  files_downloader_70_run.py Saves the real traceback to logs/last_error.json on failure.
+  agent.py                  + SYSTEM rule (no guessing without a traceback);
+                            + _load_last_run_error() attaches the trace ONLY on genuine
+                              error questions (known-error fast path left exactly as before).
+  pipeline_knowledge.txt    + entry for "NoneType object is not subscriptable".
+  dashboard.html            Restyled (CSS + font only); all wiring byte-identical.
+  Backups of every edited file are in  .phase0_bak/   (revert with: cp .phase0_bak/<f>.bak <f>)
+================================================================================

@@ -1,0 +1,26 @@
+SOURCE: Payout Process and Checking Procedure — Mastertrust Internal SOP
+
+PAYOUT CHECKING PURPOSE
+Before releasing any client payout (funds withdrawal), RMS must verify that the client
+has sufficient margin surplus. Releasing payout to a margin-short client creates regulatory
+and credit risk for the firm.
+
+PAYOUT CHECK LOGIC
+1. Download today's Payout Request Log from BOAPI (Payment Request Log endpoint)
+   — This produces a dated xlsx with all withdrawal requests submitted today
+2. Load the "Update Limits" file which contains current Available Margin per client
+3. Compute TOTAL DEPOSIT by summing all collateral columns
+4. Filter to clients where Available Margin < 0 (margin deficit)
+5. Inner join: payment requests WHERE Available Margin < 0
+6. Output: PAYOUT_CHECKING_DDMMYYYY_HHMMSS.xlsx — only the at-risk requests
+7. Email to RMS head for review before any payout is processed
+
+CRITICAL RULE
+A payout MUST NOT be processed if the client's Available Margin after withdrawal would be negative.
+The Available Margin column in the Update Limits file must be checked, NOT just the raw balance.
+If Available Margin < 0, the payout is flagged regardless of the requested amount.
+
+FILES INVOLVED
+- DDMMYYYY*.xlsx in PAYOUT ASHISH folder: Payout Request Log
+- Update Limits*.xlsx: first searched in CTCL VS NMASS folder, then PAYOUT ASHISH folder
+- PAYOUT_CHECKING_*.xlsx: output file with only at-risk requests

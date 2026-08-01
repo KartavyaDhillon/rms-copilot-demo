@@ -1,0 +1,29 @@
+SOURCE: CTCL vs NMASS Daily Process — Mastertrust Internal SOP
+
+WHAT IS CTCL vs NMASS
+CTCL (Client Terminal Check and Limit) is the live limit set in the trading terminal.
+NMASS (Net Margin and Shortfall System) is the back-office margin deposit ledger.
+The daily reconciliation compares CTCL limits with NMASS deposits to identify:
+- Clients whose CTCL limit exceeds their actual NMASS deposit (shortfall)
+- Virtual ID accounts (handled differently)
+- Clients in critical threshold — marked as VIRTUAL ID, SHORTFALL, or OK
+
+DAILY CTCL PROCESS SEQUENCE
+Step 1: Download Margin Shortage files to the CTCL VS NMASS folder (Margin Shortage → CTCL button)
+Step 2: Run CTCL vs NMASS pipeline
+Step 3: The pipeline reads Update Limits file + collateral files from CTCL VS NMASS folder
+Step 4: Computes DEPOSIT NMASS and DEPOSIT CTCL columns and calculates difference
+Step 5: Assigns REMARKS: SHORTFALL (difference negative), VIRTUAL ID, or OK
+Step 6: Sends zone-wise emails to DELH, LUDH, CHND, MUMB zone heads
+Step 7: On Run 1 only — generates TOP 20 Margin Utilisation report
+Step 8: Every run — downloads Payout file and runs Payout Checking
+
+RUN COUNTER
+The pipeline tracks how many times it has run today (1 through 4 typically).
+Run 1 triggers the TOP20 report. Runs 2-4 update the existing file.
+Counter resets automatically at midnight.
+
+CRITICAL FILE DEPENDENCIES
+- FULL_FILE_CTCL_VS_NMASS_XX.xlsx: main output file
+- Update Limits file: searched first in CTCL folder, then PAYOUT folder
+- RISK_REPORT_*.csv: required for concentration and TOP20

@@ -1,0 +1,267 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   process-reskin.css — CSS-ONLY visual upgrade for the embedded Process Center.
+
+   Injected at SERVE time by api.py's /legacy?embed=1 route — dashboard.html on
+   disk is never modified, and /legacy without the flag still renders 100%
+   original. Zero JavaScript, zero logic, zero layout restructuring: this file
+   only refines the design tokens the console already uses (:root variables)
+   plus a few purely cosmetic component touches on class names that are stable
+   (.sa-run, .sa-run-btn, .sa-save, .sa-pill). Delete this file at any time to
+   fall back to the original look.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 1 ── retune the console's own design tokens to match the platform's active
+        theme, so the iframe blends seamlessly into the shell around it.
+        Default block below = Dark (also the fallback before JS runs, so
+        there's no flash of the wrong palette on first paint). Which theme is
+        actually active is set at runtime by process-theme-sync.js, which
+        reads the SAME "rms_ops_prefs" localStorage key the platform's theme
+        switcher writes to (same origin, so this iframe can read it directly)
+        and puts the result on this document's <html data-rms-theme="…">.
+        Palette values are copied 1:1 from platform/css/tokens.css so the
+        console and the shell around it are always pixel-identical. */
+:root, html[data-rms-theme="dark"] {
+  --bg: #0b0d12;
+  --panel: #12151d;
+  --panel-2: #10131a;
+  --panel-3: #171b25;
+  --line: #222836;
+  --line-2: #2d3444;
+  --ink: #e9eef6;
+  --muted: #93a0b4;
+  --dim: #5c687a;
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .45);
+  --sh-2: 0 6px 22px -6px rgba(0, 0, 0, .55);
+  --sh-3: 0 22px 60px -14px rgba(0, 0, 0, .75);
+  --ring: 0 0 0 3px rgba(96, 165, 250, .25);
+  --glow-1: rgba(96, 165, 250, .07); --glow-2: rgba(167, 139, 250, .05);
+}
+
+html[data-rms-theme="light"] {
+  --bg: #f4f6fa;
+  --panel: #ffffff;
+  --panel-2: #f8fafd;
+  --panel-3: #eef2f8;
+  --line: #e3e8f0;
+  --line-2: #d3dae6;
+  --ink: #17202e;
+  --muted: #55637a;
+  --dim: #8b98ad;
+  --sh-1: 0 1px 2px rgba(23, 32, 46, .06);
+  --sh-2: 0 8px 24px -8px rgba(23, 32, 46, .14);
+  --sh-3: 0 24px 60px -18px rgba(23, 32, 46, .22);
+  --ring: 0 0 0 3px rgba(47, 109, 246, .22);
+  --glow-1: rgba(59, 130, 246, .08); --glow-2: rgba(139, 92, 246, .06);
+}
+
+html[data-rms-theme="amoled"] {
+  --bg: #000000;
+  --panel: #0a0b0e;
+  --panel-2: #101218;
+  --panel-3: #161923;
+  --line: #1c212c;
+  --line-2: #29303e;
+  --ink: #edf1f8;
+  --muted: #8e9ab0;
+  --dim: #5a6578;
+  --sh-1: 0 1px 2px rgba(0, 0, 0, .7);
+  --sh-2: 0 8px 26px -8px rgba(0, 0, 0, .85);
+  --sh-3: 0 26px 70px -16px rgba(0, 0, 0, .95);
+  --ring: 0 0 0 3px rgba(96, 165, 250, .25);
+  --glow-1: rgba(96, 165, 250, .05); --glow-2: rgba(167, 139, 250, .04);
+}
+
+html[data-rms-theme="ocean"] {
+  --bg: #06131d;
+  --panel: #0b1d2a;
+  --panel-2: #0f2434;
+  --panel-3: #143047;
+  --line: #1b3347;
+  --line-2: #25455e;
+  --ink: #e6f2f8;
+  --muted: #8fa9bc;
+  --dim: #5b7488;
+  --sh-1: 0 1px 2px rgba(0, 10, 20, .5);
+  --sh-2: 0 8px 26px -8px rgba(0, 10, 20, .6);
+  --sh-3: 0 26px 66px -16px rgba(0, 10, 20, .8);
+  --ring: 0 0 0 3px rgba(45, 212, 191, .25);
+  --glow-1: rgba(45, 212, 191, .09); --glow-2: rgba(56, 189, 248, .07);
+}
+
+html[data-rms-theme="emerald"] {
+  --bg: #081410;
+  --panel: #0d1f18;
+  --panel-2: #11271e;
+  --panel-3: #163227;
+  --line: #1c3529;
+  --line-2: #274736;
+  --ink: #e8f6ee;
+  --muted: #91ab9d;
+  --dim: #5d7568;
+  --sh-1: 0 1px 2px rgba(0, 12, 6, .5);
+  --sh-2: 0 8px 26px -8px rgba(0, 12, 6, .6);
+  --sh-3: 0 26px 66px -16px rgba(0, 12, 6, .8);
+  --ring: 0 0 0 3px rgba(52, 211, 153, .25);
+  --glow-1: rgba(52, 211, 153, .09); --glow-2: rgba(163, 230, 53, .05);
+}
+
+html[data-rms-theme="purple"] {
+  --bg: #0d0916;
+  --panel: #151020;
+  --panel-2: #1a1428;
+  --panel-3: #221a35;
+  --line: #2a2140;
+  --line-2: #382c55;
+  --ink: #efeaf8;
+  --muted: #a396c0;
+  --dim: #6d6288;
+  --sh-1: 0 1px 2px rgba(5, 0, 15, .5);
+  --sh-2: 0 8px 26px -8px rgba(5, 0, 15, .65);
+  --sh-3: 0 26px 66px -16px rgba(5, 0, 15, .85);
+  --ring: 0 0 0 3px rgba(167, 139, 250, .25);
+  --glow-1: rgba(167, 139, 250, .1); --glow-2: rgba(236, 72, 153, .05);
+}
+
+html[data-rms-theme="contrast"] {
+  --bg: #000000;
+  --panel: #0a0a0a;
+  --panel-2: #111111;
+  --panel-3: #191919;
+  --line: #4a4a4a;
+  --line-2: #6e6e6e;
+  --ink: #ffffff;
+  --muted: #d8d8d8;
+  --dim: #a8a8a8;
+  --sh-1: none; --sh-2: none; --sh-3: none;
+  --ring: 0 0 0 3px rgba(255, 214, 10, .35);
+  --glow-1: transparent; --glow-2: transparent;
+}
+
+:root, html[data-rms-theme] {
+  --r-xs: 8px; --r-sm: 10px; --r: 13px; --r-lg: 17px; --r-xl: 22px;
+  --ease: .18s cubic-bezier(.4, 0, .2, 1);
+}
+
+/* 2 ── background: same glow signature as the platform shell */
+body {
+  background-color: var(--bg) !important;
+  background-image:
+    radial-gradient(1000px 560px at 100% -10%, var(--glow-1), transparent 60%),
+    radial-gradient(800px 560px at -8% 110%, var(--glow-2), transparent 55%) !important;
+}
+
+/* 3 ── scrollbars in line with the shell */
+::-webkit-scrollbar-thumb {
+  background: var(--line-2) !important;
+  border: 3px solid transparent !important;
+  background-clip: content-box !important;
+}
+
+/* 4 ── universal micro-polish (safe: purely additive transitions/focus) */
+button { transition: transform var(--ease), box-shadow var(--ease), filter var(--ease), opacity var(--ease); }
+button:not(:disabled):active { transform: scale(.98); }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: none !important;
+  box-shadow: var(--ring) !important;
+}
+
+/* 5 ── run tiles: crisper borders, gentle lift on hover */
+.sa-run {
+  border-radius: var(--r) !important;
+  transition: transform var(--ease), border-color var(--ease), box-shadow var(--ease);
+}
+.sa-run:not(.locked):hover {
+  transform: translateY(-1px);
+  border-color: var(--line-2);
+  box-shadow: var(--sh-2);
+}
+.sa-run.active-win.pending {
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, .28), 0 10px 26px -10px rgba(251, 191, 36, .22);
+}
+.sa-run.done { opacity: .92; }
+
+/* 6 ── primary action buttons: subtle gradient + hover glow */
+.sa-run-btn, .sa-save {
+  border-radius: 9px !important;
+  font-weight: 700 !important;
+  letter-spacing: .01em;
+}
+.sa-run-btn:not(:disabled):hover, .sa-save:not(:disabled):hover {
+  transform: translateY(-1px);
+  filter: brightness(1.07);
+  box-shadow: 0 8px 20px -8px rgba(96, 165, 250, .45);
+}
+
+/* 7 ── status pills: uniform tracking + tabular numerals */
+.sa-pill {
+  border-radius: 20px !important;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   8 ── EMBEDDED MODE (html.pc-embedded — only inside the platform's iframe).
+        The ONE structural change requested: remove the console's own inner
+        sidebar (RMS Co-pilot / Dashboard / Downloads / Compliance / Agents /
+        Data Explorer / Reports / Workflows / Audit Log / version footer /
+        backend pill) because the platform already provides THE sidebar.
+        Standalone /legacy is untouched and keeps it.
+
+        Everything inside the views — every process group heading, run tile,
+        button, banner, blink and glow — is left exactly as designed. The
+        reclaimed width becomes breathing room, not stretched content.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html.pc-embedded body { background-color: var(--bg) !important; }
+
+/* the inner sidebar goes away; the shell becomes a single column */
+html.pc-embedded .shell { grid-template-columns: 1fr !important; }
+html.pc-embedded .side { display: none !important; }
+
+/* the console's own inner header ("Operations Console — today") is redundant
+   inside the platform — the page header above the frame already says Process
+   Center. Hiding it means the FIRST visible content is the first workflow:
+   SHORT ALLOCATION — RUNS 4× DAILY. (Still shown on standalone /legacy.) */
+html.pc-embedded #view-dashboard > .topbar { display: none !important; }
+
+/* use the reclaimed width carefully: comfortable gutters + a max content
+   width so nothing stretches edge-to-edge on wide monitors.
+   NOTE: deliberately NO !important here — showView('agents') sets an inline
+   padding:0 on #mainArea for the full-bleed chat layout, and inline styles
+   must keep winning for that view to render correctly. */
+html.pc-embedded .main { padding: 28px 44px 48px; }
+html.pc-embedded .main > div { max-width: 1620px; margin-left: auto; margin-right: auto; }
+
+/* a touch more air BETWEEN workflow groups (Short Allocation / CTCL vs NMASS /
+   Client Prudential Limit / Margin Shortage) — first heading stays tight
+   under the console topbar. Spacing only; nothing inside a group changes. */
+html.pc-embedded div[id^="view-"] > .sec { margin-top: 38px; }
+html.pc-embedded div[id^="view-"] > .topbar + .sec,
+html.pc-embedded div[id^="view-"] > .sec:first-child { margin-top: 8px; }
+
+@media (max-width: 1100px) {
+  html.pc-embedded .main { padding: 22px 24px 40px; }
+}
+
+/* 9 ── Margin Shortage (15-min) toolbar: 11 buttons, more than any other box
+        (WhatsApp numbers, Email To/CC, Credentials, Upload files, Backup
+        files, Stop, Logs, NMASS/NCDEX, MCX 90%, Manual overrides, Safe test
+        run), so at the default .sa-tool sizing it wraps onto a second row.
+        Scoped tightening ONLY for this box's toolbar (padding/font/gap
+        trimmed just enough to reclaim the width) — every other box's buttons
+        are untouched. */
+#pxBox-ms15 .sa-tools { gap: 5px; }
+#pxBox-ms15 .sa-tools .sa-tool {
+  padding: 7px 8px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* 10 ── Margin Shortage run grid: 6 per row, not 5.
+         With 11 runs/day (09:30 … 16:50) a 5-column grid wraps as 5+5+1,
+         leaving a lone orphan tile on a third row. 6 columns gives a clean
+         6 + 5 across two rows. dashboard.html's pxRenderRuns() sets
+         grid-template-columns as an INLINE style, so !important is required
+         here to win — this is a display-only override, no logic involved. */
+#pxRuns-ms15 {
+  grid-template-columns: repeat(6, 1fr) !important;
+}

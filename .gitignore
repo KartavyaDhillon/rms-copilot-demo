@@ -1,0 +1,60 @@
+.venv/
+.env
+
+# Machine-specific config + secrets (folder root, PG password, credentials).
+# Generated per machine by tools/make_env_local.py — never shared, never
+# committed. This is what lets `git pull` be the whole deploy on the server.
+.env.local
+
+__pycache__/
+*.pyc
+.DS_Store
+
+logs/
+
+*.log
+
+# Local databases. These are DERIVED data — knowledge.db is the AI search index
+# rebuilt from your own files, rms_history.db is the SQLite fallback for run
+# history. Both are large (knowledge.db passed 200 MB) and change every day, and
+# Git keeps every version of every file forever — so tracking them grows the
+# repo without limit and pushes eventually break. GitHub also hard-refuses any
+# single file over 100 MB. They live on each machine and are never shared.
+*.db
+
+# Old Git repositories kept as backups. Renaming .git makes it a NORMAL visible
+# folder, so `git add -A` will happily commit the entire old repo — pack files,
+# every historic blob, the lot. That is how a 94 MB push became 370 MB.
+.git_backup*/
+*.git_backup*
+
+# Archives and one-off dumps — a zip of the project inside the project doubles
+# the repo every time it is committed.
+*.zip
+*.7z
+*.rar
+*.tmp
+
+# Superseded backup folders. Kept on disk for reference, not worth versioning
+# (Git is already the version history).
+.phase0_bak/
+.rollback_removed_*/
+
+# Generated documents and personal files — not part of the running system.
+*.pdf
+_resume_preview.jpg
+
+# Captcha screenshots, rewritten on every download run.
+captcha*.png
+sa_codes/captcha*.png
+
+*.xlsx
+*.xls
+*.csv
+
+.vscode/
+.idea/
+.code_index/
+
+# Self-signed HTTPS cert/key (generate_ssl_cert.py) — machine-specific, private key must never be committed
+certs/

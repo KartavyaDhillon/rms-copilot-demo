@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RMS Copilot — AI Operations Platform</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230b0d12'/><circle cx='16' cy='16' r='9' fill='none' stroke='%2360a5fa' stroke-width='3'/><circle cx='16' cy='16' r='3.5' fill='%2334d399'/></svg>">
+<script>
+/* Capture EVERY script error from the very first byte — page modules evaluate
+   before app.js's handlers exist, so without this, a module that dies at
+   parse/eval time fails silently and just "doesn't register". */
+window.__jsErrors = [];
+window.addEventListener("error", function (e) {
+  try {
+    window.__jsErrors.push(((e.filename || "").split("/").pop() || "inline") +
+      ":" + (e.lineno || "?") + " — " + (e.message || "unknown error"));
+  } catch (_) {}
+}, true);
+
+/* Apply saved appearance BEFORE first paint — no theme flash. */
+(function(){
+  try{
+    var p = JSON.parse(localStorage.getItem('rms_ops_prefs')||'{}');
+    var el = document.documentElement;
+    el.dataset.theme = p.theme || 'dark';
+    if(p.accent)  el.style.setProperty('--accent', p.accent);
+    if(p.radius)  el.style.setProperty('--radius', p.radius+'px');
+    if(p.fontSize)el.style.fontSize = p.fontSize+'px';
+    if(p.compact) el.classList.add('compact');
+    if(p.anim===false) el.classList.add('no-anim');
+    if(p.sidebar==='rail') el.classList.add('rail');
+  }catch(e){}
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/platform/css/tokens.css?v=5">
+<link rel="stylesheet" href="/platform/css/app.css?v=5">
+</head>
+<body>
+<div class="shell">
+
+  <!-- ═══════════ SIDEBAR ═══════════ -->
+  <aside class="side" id="sidebar">
+    <div class="brand" data-action="go:dashboard" title="RMS Copilot">
+      <div class="logo"><span></span></div>
+      <div class="brand-text">
+        <h1>RMS Copilot</h1>
+        <p>AI Operations Platform</p>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-sec">Operate</div>
+      <a class="nav-item" data-route="dashboard" href="#/dashboard"><i data-icon="dashboard"></i><span>Dashboard</span></a>
+      <a class="nav-item" data-route="process"   href="#/process"><i data-icon="play"></i><span>Process Center</span><em class="nav-live" id="navRunDot" hidden></em></a>
+      <a class="nav-item" data-route="history"   href="#/history"><i data-icon="history"></i><span>Execution History</span></a>
+
+      <div class="nav-sec">Intelligence</div>
+      <a class="nav-item" data-route="analytics" href="#/analytics"><i data-icon="chart"></i><span>Analytics</span></a>
+      <a class="nav-item" data-route="reports"   href="#/reports"><i data-icon="file"></i><span>Reports</span></a>
+      <a class="nav-item" data-route="assistant" href="#/assistant"><i data-icon="bot"></i><span>AI Assistant</span></a>
+
+      <div class="nav-sec">Automate</div>
+      <a class="nav-item" data-route="scheduler" href="#/scheduler"><i data-icon="calendar"></i><span>Scheduler</span></a>
+      <a class="nav-item" data-route="downloads" href="#/downloads"><i data-icon="download"></i><span>Downloads</span></a>
+      <a class="nav-item" data-route="files"     href="#/files"><i data-icon="folder"></i><span>Files</span></a>
+      <a class="nav-item" data-route="email"     href="#/email"><i data-icon="mail"></i><span>Email Center</span></a>
+    </nav>
+
+    <div class="side-foot">
+      <a class="nav-item" data-route="settings" href="#/settings"><i data-icon="settings"></i><span>Settings</span></a>
+      <button class="nav-item as-btn" id="railToggle" title="Collapse sidebar"><i data-icon="panel"></i><span>Collapse</span></button>
+      <div class="server-pill" id="serverPill">
+        <span class="dot ok" id="serverDot"></span>
+        <span class="sp-text"><b>Server</b><small id="serverUp">connecting…</small></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════ MAIN ═══════════ -->
+  <main class="main">
+    <header class="topbar">
+      <div class="tb-left">
+        <h2 id="topTitle">Dashboard</h2>
+        <span class="crumb" id="topCrumb">Overview of today's operations</span>
+      </div>
+      <div class="tb-right">
+        <button class="tb-search" id="searchBtn" title="Search (Ctrl+K)">
+          <i data-icon="search"></i><span>Search or run a command…</span><kbd>Ctrl K</kbd>
+        </button>
+        <div class="mkt" id="marketChips"></div>
+        <span class="tb-clock mono" id="tbClock">--:--:--</span>
+        <button class="tb-ic" id="themeBtn" title="Cycle theme"><i data-icon="moon"></i></button>
+        <button class="tb-ic" id="bellBtn" title="Notifications"><i data-icon="bell"></i><b class="badge" id="bellBadge" hidden>0</b></button>
+        <button class="avatar" id="userBtn" title="Account">MT</button>
+      </div>
+    </header>
+
+    <div class="content" id="content">
+      <section class="page" id="page-dashboard" hidden></section>
+      <section class="page page-full" id="page-process" hidden></section>
+      <section class="page" id="page-history" hidden></section>
+      <section class="page" id="page-analytics" hidden></section>
+      <section class="page" id="page-reports" hidden></section>
+      <section class="page" id="page-assistant" hidden></section>
+      <section class="page" id="page-scheduler" hidden></section>
+      <section class="page" id="page-downloads" hidden></section>
+      <section class="page" id="page-files" hidden></section>
+      <section class="page" id="page-email" hidden></section>
+      <section class="page" id="page-settings" hidden></section>
+    </div>
+  </main>
+</div>
+
+<!-- overlays -->
+<div class="palette-wrap" id="paletteWrap" hidden>
+  <div class="palette">
+    <div class="pal-head"><i data-icon="search"></i><input id="palInput" placeholder="Search pages, actions, themes, logs…" autocomplete="off"><kbd>esc</kbd></div>
+    <div class="pal-list" id="palList"></div>
+    <div class="pal-foot"><span><kbd>↑↓</kbd> navigate</span><span><kbd>↵</kbd> select</span><span><kbd>esc</kbd> close</span></div>
+  </div>
+</div>
+<div class="bell-menu" id="bellMenu" hidden></div>
+<div class="user-menu" id="userMenu" hidden></div>
+<div class="modal-wrap" id="modalRoot" hidden></div>
+<div class="toasts" id="toasts"></div>
+
+<script src="/platform/js/icons.js?v=5"></script>
+<script src="/platform/js/theme.js?v=5"></script>
+<script src="/platform/js/core.js?v=5"></script>
+<script src="/platform/js/charts.js?v=5"></script>
+<script src="/platform/js/pages/dashboard.js?v=5"></script>
+<script src="/platform/js/pages/process.js?v=5"></script>
+<script src="/platform/js/pages/history.js?v=5"></script>
+<script src="/platform/js/pages/analytics.js?v=5"></script>
+<script src="/platform/js/pages/reports.js?v=5"></script>
+<script src="/platform/js/pages/ask.js?v=6"></script>
+<script src="/platform/js/pages/scheduler.js?v=5"></script>
+<script src="/platform/js/pages/downloads.js?v=5"></script>
+<script src="/platform/js/pages/files.js?v=5"></script>
+<script src="/platform/js/pages/email.js?v=5"></script>
+<script src="/platform/js/pages/settings.js?v=5"></script>
+<script src="/platform/js/app.js?v=5"></script>
+</body>
+</html>

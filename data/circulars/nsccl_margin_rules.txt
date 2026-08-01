@@ -1,0 +1,24 @@
+SOURCE: NSCCL Margin Rules and Shortfall Penalties (Mastertrust Internal Reference)
+
+MARGIN SHORTFALL PENALTY STRUCTURE
+Penalty is charged by NSCCL/SEBI for peak margin shortfall. The rates are:
+- Shortfall less than ₹1 lakh OR less than 10% of required margin: 0.5% per day
+- Shortfall between ₹1 lakh–₹10 lakh OR 10%–25% of required: 0.7% per day
+- Shortfall above ₹10 lakh OR above 25% of required: 1.0% per day
+Penalty compounds for each consecutive day of shortfall.
+Three or more consecutive shortfall days in a calendar month triggers enhanced scrutiny.
+The RMS team must report shortfalls to compliance within one working day.
+
+PEAK MARGIN REPORTING OBLIGATION
+Under SEBI circular SEBI/HO/MRD2/DCAP/CIR/P/2020/127 dated July 20, 2020:
+Brokers must report peak margin utilised by each client at the end-of-day snapshots.
+Four intra-day snapshots are taken: 10:30, 12:30, 13:45, 15:30.
+The highest utilisation across all four snapshots is the "peak margin" for that day.
+Brokers must collect peak margin upfront. Shortfall at any snapshot creates liability.
+
+COLLATERAL ELIGIBILITY
+Cash: 100% eligible.
+Approved securities (Nifty50 constituents): up to 50% of required margin in securities.
+Other approved scrips (BSE200, BSE500): up to 25% applicable to non-F&O.
+Mutual fund units: eligible at net asset value with 10% haircut.
+Securities not on approved list: not eligible as collateral.

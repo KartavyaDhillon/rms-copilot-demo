@@ -1,0 +1,127 @@
+# ============================================================
+# SA EMAIL + WHATSAPP CONFIGURATION
+# ============================================================
+# Copy the lines below directly into your .env file.
+# All addresses and numbers extracted from:
+#   - shortallocation_final_new_with_co.py  (SA zone emails)
+#   - LAS4.py  (LAS emails + WhatsApp)
+#   - LASUPTO3.py  (same WhatsApp config as LAS4)
+# ============================================================
+
+
+# ── SMTP CONFIG (SA Code-2 — kartavya account) ─────────────
+SA_SMTP_SERVER=smtp3.netcore.co.in
+SA_SMTP_PORT=587
+SA_SMTP_USER=kartavya.dhillon@mastertrust.co.in
+SA_SMTP_PASS=$Kartavya25*
+
+# ── SMTP CONFIG (LAS4 — sandeep account) ───────────────────
+LAS_SMTP_SERVER=smtp3.netcore.co.in
+LAS_SMTP_PORT=587
+LAS_SMTP_USER=Sandeep.kumar2@mastertrust.co.in
+LAS_SMTP_PASS=$Sandeep24*
+
+
+# ============================================================
+# SA ZONE EMAILS  (shortallocation_final_new_with_co.py)
+# ============================================================
+
+# ZONE: LUDH  (zones: ZO, ZOLUDH)
+SA_MAIL_LUDH_TO=ludhianacompliance@mastertrust.co.in,kuljit.singh@mastertrust.co.in,amandeep.singh2@mastertrust.co.in,pawan.kumar1@mastertrust.co.in,naveen.sharma@mastertrust.co.in
+SA_MAIL_LUDH_CC=sandeep.kumar2@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,amit.pundir@mastertrust.co.in,vipin.rai@mastertrust.co.in
+
+# ZONE: DELH  (zones: ZOCDR, ZODELH, ZOMT)
+SA_MAIL_DELH_TO=rms_del@mastertrust.co.in
+SA_MAIL_DELH_CC=rms_del@mastertrust.co.in
+
+# ZONE: MUMB  (zones: ZOMUMB)
+SA_MAIL_MUMB_TO=pradip.mandavkar@mastertrust.co.in
+SA_MAIL_MUMB_CC=sandeep.kumar2@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,amit.pundir@mastertrust.co.in,vipin.rai@mastertrust.co.in
+
+# ZONE: CHND  (zones: ZOCHND)
+SA_MAIL_CHND_TO=rsharda@mastertrust.co.in,rms_chd@mastertrust.co.in,parveenrawat1910@mastertrust.co.in,surinder.kumar@mastertrust.co.in,kulbeersingh@mastertrust.co.in
+SA_MAIL_CHND_CC=sandeep.kumar2@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,amit.pundir@mastertrust.co.in,vipin.rai@mastertrust.co.in
+
+# FULL FILE (SA output — sent to HO)
+SA_MAIL_FULL_TO=rms_del@mastertrust.co.in
+SA_MAIL_FULL_CC=
+
+
+# ============================================================
+# LAS EMAILS  (LAS4.py)
+# ============================================================
+
+# EMAIL 1: Scenario Analysis — All Zones
+LAS_MAIL_SCENARIO_ALL_TO=puneetsinghania@mastertrust.co.in
+LAS_MAIL_SCENARIO_ALL_CC=abhishek.dhiman@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,sandeep.kumar2@mastertrust.co.in,priyanshu.karna@mastertrust.co.in
+
+# EMAIL 2: Scenario Analysis LAS Account — Delhi Zone
+LAS_MAIL_SCENARIO_DELH_TO=bhumika.aggarwal@mastertrust.co.in
+LAS_MAIL_SCENARIO_DELH_CC=vipin.rai@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,sandeep.kumar2@mastertrust.co.in,jashanarora@mastertrust.co.in,priyanshu.karna@mastertrust.co.in
+
+# EMAIL 3: Tentative Obligation File
+LAS_MAIL_TENTATIVE_TO=sukhbirsingh@mastertrust.co.in,va@mastertrust.co.in,rks@mastertrust.co.in
+LAS_MAIL_TENTATIVE_CC=abhishek.dhiman@mastertrust.co.in,priyanshu.karna@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,sandeep.kumar2@mastertrust.co.in
+
+# EMAIL 4: Scenario Analysis — Top 100 All Zones
+LAS_MAIL_SCENARIO_TOP100_TO=va@mastertrust.co.in
+LAS_MAIL_SCENARIO_TOP100_CC=abhishek.dhiman@mastertrust.co.in,priyanshu.karna@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,sandeep.kumar2@mastertrust.co.in
+
+# EMAIL 5: Scenario Analysis — Top 15 All Zones
+LAS_MAIL_SCENARIO_TOP15_TO=rks@mastertrust.co.in
+LAS_MAIL_SCENARIO_TOP15_CC=abhishek.dhiman@mastertrust.co.in,priyanshu.karna@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in,sandeep.kumar2@mastertrust.co.in
+
+
+# ============================================================
+# WHATSAPP CONFIG  (LAS4.py + LASUPTO3.py — Tata Telebusiness)
+# ============================================================
+WA_UPLOAD_URL=https://wb.omni.tatatelebusiness.com/whatsapp-cloud/media
+WA_SEND_URL=https://wb.omni.tatatelebusiness.com/whatsapp-cloud/messages
+WA_AUTH_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJwaG9uZU51bWJlciI6Iis5MTg1OTU5MDkyOTQiLCJwaG9uZU51bWJlcklkIjoiNTYzNjExMDA2ODQzNzQ2IiwiaWF0IjoxNzYzNDYxMzExfQ.jUNJ_lDPJtueMU4vXMYy_JpjdV0cpKlE_2Rgv9qztPeKbCCUV3sIslRSGV5scu4ZiUpxv6rIICnvrJ7fzcLkdS3LVHlNFWFCTcP4aJLMccEf3z4X1MpaphoVVhuPufs5ouMHzRHVIjOpDSf0psZJi_dmUelui3jEPq7DE-nKLS0YFBBCNqcMDlP4Vts4WFoQzG9ssLC7WWsd0Ae_AXc0e0r3TPR-V0x14bOChW88uXsMmRCnW4RFOeguUO6NDmhK1ie-gbqk7Ov6w59CZU5wtQ1K2TNe5feM0Q0g8KUzQPIz7LfEEpxyumZplvCYZqBhsSvAm7-rpdVkvktlkH_2GlWPBAqiic9pDpGXvTOb0tZBFSqpE28fC9Wb-fh_YmHJC9GjJNWl8bz00-8P0HMtpwH28uL2uPpmAUca9CAXyzLSXP9eQFCYfz_PwfHsiGQrBpxrSAgou0VDsUCa7ofT9PgMQfMyHg26f0B-eZuxueYFJPHr1uohMuw7X2mapwioXWDvB-S1NkzoQt0vOsyXW6RtghXAeWJi7gOcVpgLEuBHfYNiXWMWrJ-odi3eU0eLQfUT9qD8049rH1GFgKLLEDMIHYsoExhfEFRCdaM8uAV222ib-bqB_9sX7E-tteCjIg8ntStslw9H_qU74ouM_CQR5thb47oLesp4BD60bZs
+
+# WhatsApp recipients by zone (image screenshots sent via API)
+WA_DELHI_NUMBER=+917541827310
+WA_CHND_NUMBER=+919914122055
+WA_LUDH_NUMBER=+919888556665
+WA_MUMB_NUMBER=+918655253655
+WA_V1_NUMBER=+917541827310
+WA_V2_NUMBER=+917541827310
+WA_6NBB707_NUMBER=+919711667470
+
+
+# ============================================================
+# QUICK REFERENCE — who gets what
+# ============================================================
+#
+# SA ZONE EMAILS (Code-2, sent from kartavya.dhillon@):
+#   LUDH zone    → ludhianacompliance, kuljit.singh, amandeep.singh2,
+#                  pawan.kumar1, naveen.sharma
+#                  CC: sandeep.kumar2, sumit.aggarwal, amit.pundir, vipin.rai
+#
+#   DELH zone    → rms_del
+#                  CC: rms_del
+#
+#   MUMB zone    → pradip.mandavkar
+#                  CC: sandeep.kumar2, sumit.aggarwal, amit.pundir, vipin.rai
+#
+#   CHND zone    → rsharda, rms_chd, parveenrawat1910,
+#                  surinder.kumar, kulbeersingh
+#                  CC: sandeep.kumar2, sumit.aggarwal, amit.pundir, vipin.rai
+#
+#   FULL FILE    → rms_del  (no CC)
+#
+# LAS EMAILS (LAS4, sent from Sandeep.kumar2@):
+#   Scenario All Zones          → puneetsinghania
+#   Scenario Delhi Zone         → bhumika.aggarwal
+#   Tentative Obligation        → sukhbirsingh, va, rks
+#   Scenario Top 100 All Zones  → va
+#   Scenario Top 15 All Zones   → rks
+#
+# WHATSAPP (both LAS3 + LAS4, Tata Telebusiness API):
+#   DELHI (V1/V2/FUNDING_SS)    → +917541827310
+#   CHANDIGARH (CHND_SS)        → +919914122055
+#   LUDHIANA (LUDH_SS)          → +919888556665
+#   MUMBAI (MUMB_SS)            → +918655253655
+#   6NBB707                     → +919711667470
+#
+# ============================================================

@@ -1,0 +1,3779 @@
+"""
+Backend API. Start: uvicorn api:app --reload  (docs at /docs)
+
+LIVE STREAMING: /peak-margin-stream uses Server-Sent Events (SSE) to push each
+status line the moment it happens, so the UI shows progress like a terminal.
+
+AUTO_SEND in .env:
+  false -> stage a pending send; human approves.
+  true  -> send automatically after a successful run (for the scheduler).
+"""
+import os
+import json
+import uuid
+import traceback
+from fastapi import FastAPI, Request, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from urllib.parse import quote
+from pydantic import BaseModel
+from dotenv import load_dotenv
+# MUST be the first core.* import. Runs the two-stage .env.local → .env load at
+# import time, so every module imported below already sees the resolved
+# configuration (including ${RMS_DATA_ROOT}-interpolated folder paths). Any
+# core module imported before this would call plain load_dotenv() first and
+# read a half-configured environment. See core/env_boot.py.
+import core.env_boot  # noqa: F401
+from core.compliance import answer_compliance
+from core.agent import run_agent_traced
+from core.pipelines.peak_margin_run import process_pair_stream, process_pair, cleanup_after_send
+from core.pipelines.concentration_run import stream_download, stream_compute, process_concentration
+from core.pipelines.ctcl_vs_nmass_run import stream_ctcl_vs_nmass
+from core.pipelines.cnc_f11_run import stream_cnc_f11
+from core.pipelines.mtf_order_run import stream_mtf_order
+from core.pipelines.ftp_download_run import stream_ftp_download
+from core.pipelines.payout_inspection_run import stream_daily, stream_client
+from core.pipelines.files_downloader_70_run import stream_files_downloader_70
+from core.agent_run import stream_agent
+from core.pipelines.peak_margin import FOLDER
+from core.notify import send_peak_margin_report
+
+load_dotenv()
+AUTO_SEND = os.getenv("AUTO_SEND", "false").strip().lower() == "true"
+
+app = FastAPI(title="RMS Co-pilot API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+                   allow_methods=["*"], allow_headers=["*"])
+PENDING = {}
+
+# Ensure shared common folder exists on startup
+_common_dir = os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
+try:
+    os.makedirs(_common_dir, exist_ok=True)
+    print(f"📂 SA_COMMON_DIR ready: {_common_dir}")
+except Exception as _e:
+    print(f"⚠️  Could not create SA_COMMON_DIR ({_common_dir}): {_e}")
+
+# When on PostgreSQL, make sure every table in core/db_postgres.py's schema
+# actually exists (CREATE TABLE IF NOT EXISTS - safe to run every boot).
+# Previously this only ran via a manual `python core/db_postgres.py setup`,
+# so a table added to the schema (e.g. margin_whatsapp_log) would silently
+# not exist on the live server until someone remembered to run that command
+# by hand - this auto-heals that class of bug on every restart from now on.
+if os.getenv("USE_POSTGRES", "false").strip().lower() == "true":
+    try:
+        from core.db_postgres import setup_db as _pg_setup_db
+        _pg_setup_db()
+    except Exception as _e:
+        print(f"⚠️  PostgreSQL schema check failed (tables may be missing): {_e}")
+
+
+class Question(BaseModel): question: str
+class Goal(BaseModel): goal: str
+class Approval(BaseModel): token: str
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "auto_send": AUTO_SEND}
+
+
+_NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate",
+             "Pragma": "no-cache", "Expires": "0"}
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+@app.get("/")
+def serve_platform():
+    """Serve the AI Operations Platform shell (platform/index.html) as the app's
+    front door — Dashboard first, with the original console embedded inside it
+    as the "Process Center" page. If the platform folder is ever missing, fall
+    back to the original console so the team is never locked out."""
+    shell = os.path.join(_REPO_DIR, "platform", "index.html")
+    if os.path.isfile(shell):
+        return FileResponse(shell, media_type="text/html", headers=_NO_CACHE)
+    return FileResponse(os.path.join(_REPO_DIR, "dashboard.html"),
+                        media_type="text/html", headers=_NO_CACHE)
+
+
+@app.get("/legacy")
+def serve_dashboard(embed: int = 0):
+    """The original console (dashboard.html), byte-for-byte untouched on disk.
+    Direct visit (/legacy) = exactly the pre-platform experience, kept as a
+    safety hatch. With ?embed=1 (how the platform's Process Center iframes it)
+    the response gets a <link> to platform/css/process-reskin.css injected at
+    serve time — a CSS-only visual upgrade; the file on disk is never edited
+    and no JS/logic changes."""
+    path = os.path.join(_REPO_DIR, "dashboard.html")
+    if not embed:
+        return FileResponse(path, media_type="text/html", headers=_NO_CACHE)
+    try:
+        html = open(path, encoding="utf-8").read()
+        # process-theme-sync.js runs BEFORE the stylesheet so data-rms-theme is
+        # already set on <html> the instant process-reskin.css starts applying
+        # — same "no flash of the wrong theme" reasoning as index.html's own
+        # inline prefs script. A classic (non-async) <script src> in <head>
+        # blocks parsing until it runs, so this is guaranteed to finish before
+        # <body> paints.
+        inject = ('<script src="/platform/js/process-theme-sync.js?v=1"></script>'
+                  '<link rel="stylesheet" href="/platform/css/process-reskin.css?v=6">'
+                  "<script>document.documentElement.classList.add('pc-embedded')</script></head>")
+        html = html.replace("</head>", inject, 1)
+        # global lock overlay: subscribes to /ops/locks/stream and live-disables
+        # the affected boxes' buttons for EVERY user when a run is active
+        # anywhere (server is the source of truth). Injected at serve time —
+        # dashboard.html on disk is never modified.
+        html = html.replace("</body>",
+                            '<script src="/platform/js/process-locks.js?v=1"></script>'
+                            '<script src="/platform/js/process-probable-box.js?v=1"></script></body>', 1)
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(html, headers=_NO_CACHE)
+    except Exception:
+        return FileResponse(path, media_type="text/html", headers=_NO_CACHE)
+
+
+# Static assets for the platform shell (CSS/JS/icons). Mounted under /platform
+# so nothing collides with existing API routes.
+try:
+    from fastapi.staticfiles import StaticFiles
+    _plat_dir = os.path.join(_REPO_DIR, "platform")
+    if os.path.isdir(_plat_dir):
+        app.mount("/platform", StaticFiles(directory=_plat_dir), name="platform")
+except Exception:
+    pass
+
+
+# ── Sign-in gate ───────────────────────────────────────────────────────────
+# Runs before every request. Only active when RMS_AUTH_REQUIRED=true.
+#
+# ESCAPE HATCH, WRITTEN DOWN ON PURPOSE: if anyone is ever locked out — a bad
+# deploy, a lost password at 09:25 with a run due — set RMS_AUTH_REQUIRED=false
+# in .env and restart. That always works, because enforcement is this ONE
+# function and nothing else in the app checks for a session.
+#
+# The allow-list below is what must stay reachable for signing in to be
+# possible at all. Anything omitted from it would make the login page unable
+# to load its own stylesheet and lock everyone out permanently.
+_AUTH_OPEN_PREFIXES = (
+    "/login",             # the sign-in page itself
+    "/platform/login/",   # its css/js/logo
+    "/auth/",             # login, logout, me, change-password
+    "/health",            # uptime checks must never need a session
+    "/favicon",
+)
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    try:
+        from core import auth as _a
+        if not _a.auth_required():
+            return await call_next(request)
+
+        path = request.url.path or "/"
+        if path.startswith(_AUTH_OPEN_PREFIXES):
+            return await call_next(request)
+
+        if _a.current_user(request):
+            return await call_next(request)
+
+        # Not signed in. A browser asking for a PAGE gets sent to the login
+        # screen; anything else (fetch/XHR/SSE) gets a 401 it can handle,
+        # because redirecting an API call to HTML produces confusing errors.
+        accept = (request.headers.get("accept") or "")
+        wants_html = "text/html" in accept and request.method == "GET"
+        if wants_html:
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse("/login", status_code=302)
+        return JSONResponse({"ok": False, "error": "Not signed in.",
+                             "login": "/login"}, status_code=401)
+    except Exception as _e:
+        # A bug in the gate must never take the whole console down. Fail OPEN
+        # and say so loudly — an unattributed run beats a desk that can't run
+        # its 09:30 job. (Same reasoning as core/auth.py's lockout note.)
+        print(f"[auth] gate error, allowing request through: {type(_e).__name__}: {_e}",
+              flush=True)
+        return await call_next(request)
+
+
+# ── Roster sheet sync (Book1.xlsx) ──────────────────────────────────────────
+# Runs once at boot so the sheet is genuinely the source of truth: add a row,
+# restart the server (already the normal way to pick up any change — see
+# START_SERVER.bat, auto-reload is off), and the account exists next time
+# anyone looks — no separate manage_users.py step required. Editing an
+# EXISTING row's NAME column also takes effect here (sync_to_db renames
+# existing accounts; it only ever refuses to touch a password).
+# Never fatal: a malformed sheet must not stop the server from starting.
+try:
+    from core import user_sheet as _boot_sheet
+    _boot_res = _boot_sheet.sync_to_db()
+    if _boot_res.get("created") or _boot_res.get("renamed"):
+        print(f"[user_sheet] boot sync: {len(_boot_res.get('created', []))} created, "
+              f"{len(_boot_res.get('renamed', []))} renamed from {_boot_sheet.sheet_path()}",
+              flush=True)
+except Exception as _boot_e:
+    print(f"[user_sheet] boot sync skipped: {type(_boot_e).__name__}: {_boot_e}", flush=True)
+
+
+# ── Authentication (employee ID + password) ────────────────────────────────
+# See the long note at the top of core/auth.py, especially the lockout section.
+# Enforcement is OFF unless RMS_AUTH_REQUIRED=true; signing in still works and
+# is still recorded, it just doesn't block anyone. That is deliberate: a missed
+# 09:30 run costs more than an unattributed one.
+@app.post("/auth/login")
+async def auth_login(request: Request):
+    from core import auth as _a
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    res = _a.authenticate(body.get("employee_id", ""), body.get("password", ""))
+    if not res.get("ok"):
+        return JSONResponse(res, status_code=401)
+    token = _a.make_session(res["employee_id"], res["display_name"])
+    out = JSONResponse({"ok": True, "redirect": "/",
+                        "display_name": res["display_name"],
+                        "must_change": res.get("must_change", False)})
+    out.set_cookie(_a.COOKIE_NAME, token,
+                   max_age=int(_a.session_hours() * 3600),
+                   httponly=True,      # page scripts can't read it
+                   samesite="lax",
+                   path="/")
+    # Keep the existing rms_user cookie in step so lock strips, log headers and
+    # the audit trail show the real name without any of them needing to change.
+    out.set_cookie("rms_user", quote(res["display_name"]),
+                   max_age=int(_a.session_hours() * 3600), samesite="lax", path="/")
+    return out
+
+
+@app.post("/auth/change-password")
+async def auth_change_password(request: Request):
+    """Set your own password. Requires the CURRENT one — so a walk-away machine
+    with a live session still can't be used to lock the real owner out.
+    On success the roster sheet's status column is updated (never the password
+    itself — see core/user_sheet.py for why)."""
+    from core import auth as _a
+    from core import user_sheet as _sheet
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    eid = (body.get("employee_id") or "").strip()
+    cur = body.get("current_password") or ""
+    new = body.get("new_password") or ""
+
+    # Prefer the signed-in identity over anything the page sent us.
+    sess = _a.current_user(request)
+    if sess and sess.get("sub"):
+        eid = sess["sub"]
+    if not eid:
+        return JSONResponse({"ok": False, "error": "Not signed in."}, status_code=401)
+
+    if len(new) < 8:
+        return JSONResponse({"ok": False, "error": "New password must be at least 8 characters."},
+                            status_code=400)
+    if new.strip().lower() == _sheet.DEFAULT_PASSWORD:
+        return JSONResponse({"ok": False, "error": "Choose something other than the default password."},
+                            status_code=400)
+
+    chk = _a.authenticate(eid, cur)
+    if not chk.get("ok"):
+        return JSONResponse({"ok": False, "error": "Current password is incorrect."},
+                            status_code=401)
+
+    u = _a.get_user(eid)
+    _a.upsert_user(eid, u["display_name"], new, must_change=False)
+    sheet_res = _sheet.mark_changed(eid, new_password=new)
+
+    out = JSONResponse({"ok": True, "sheet": sheet_res})
+    token = _a.make_session(eid, u["display_name"])
+    out.set_cookie(_a.COOKIE_NAME, token, max_age=int(_a.session_hours() * 3600),
+                   httponly=True, samesite="lax", path="/")
+    return out
+
+
+@app.post("/auth/logout")
+def auth_logout():
+    from core import auth as _a
+    out = JSONResponse({"ok": True})
+    out.delete_cookie(_a.COOKIE_NAME, path="/")
+    out.delete_cookie("rms_user", path="/")
+    return out
+
+
+@app.get("/auth/me")
+def auth_me(request: Request):
+    """Who am I, and is sign-in even being enforced? Used by the UI to decide
+    whether to show a sign-out button."""
+    from core import auth as _a
+    u = _a.current_user(request)
+    return {"signed_in": bool(u),
+            "employee_id": (u or {}).get("sub"),
+            "display_name": (u or {}).get("name"),
+            "auth_required": _a.auth_required()}
+
+
+@app.get("/login")
+def login_page():
+    """The sign-in page (platform/login/). Currently VIEW-ONLY: the /auth/login
+    endpoint it posts to does not exist yet, and nothing redirects here or
+    requires a session — the console works exactly as before. The page itself
+    says so if someone tries to sign in. Enforcement lands together with the
+    employee-ID auth backend (planned alongside server deployment)."""
+    from fastapi.responses import FileResponse
+    _f = os.path.join(_REPO_DIR, "platform", "login", "index.html")
+    if os.path.isfile(_f):
+        return FileResponse(_f, media_type="text/html")
+    return {"error": "login page not found"}
+
+
+# ── AI Operations Platform read-only data feeds (see core/ops_metrics.py) ─────
+# Imported lazily inside each route so a bug there can degrade gracefully to an
+# error payload instead of ever preventing the whole server from booting.
+
+@app.get("/ops/summary")
+def ops_summary():
+    try:
+        from core import ops_metrics
+        return ops_metrics.summary()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/ops/health")
+def ops_health():
+    try:
+        from core import ops_metrics
+        return ops_metrics.health()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/ops/timeline")
+def ops_timeline():
+    try:
+        from core import ops_metrics
+        return ops_metrics.timeline()
+    except Exception as e:
+        return {"error": str(e), "items": []}
+
+@app.get("/ops/history")
+def ops_history(days: int = 7):
+    try:
+        from core import ops_metrics
+        return {"items": ops_metrics.history(days)}
+    except Exception as e:
+        return {"error": str(e), "items": []}
+
+@app.get("/ops/brief")
+def ops_brief(refresh: int = 0):
+    try:
+        from core import ops_metrics
+        return ops_metrics.brief(refresh=bool(refresh))
+    except Exception as e:
+        return {"error": str(e), "text": "Briefing unavailable.", "ai": False}
+
+
+# ── Phase 2: file explorer / download center / AI assistant (all read-only) ──
+
+@app.get("/ops/file-roots")
+def ops_file_roots():
+    try:
+        from core import ops_metrics
+        return {"roots": ops_metrics.file_roots()}
+    except Exception as e:
+        return {"error": str(e), "roots": []}
+
+@app.get("/ops/files")
+def ops_files(root: str = "", sub: str = "", q: str = ""):
+    try:
+        from core import ops_metrics
+        return ops_metrics.files_list(root, sub, q)
+    except Exception as e:
+        return {"error": str(e), "items": []}
+
+@app.get("/ops/file/preview")
+def ops_file_preview(root: str = "", sub: str = ""):
+    try:
+        from core import ops_metrics
+        return ops_metrics.file_preview(root, sub)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/ops/file/get")
+def ops_file_get(root: str = "", sub: str = ""):
+    """Download one file. Path safety lives in ops_metrics.file_abspath():
+    whitelisted roots only, realpath-prefix checked — raw paths are never
+    accepted from the client."""
+    try:
+        from core import ops_metrics
+        fp = ops_metrics.file_abspath(root, sub)
+        if not fp:
+            return {"error": "File not found or outside allowed folders"}
+        return FileResponse(fp, filename=os.path.basename(fp),
+                            headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/ops/downloads")
+def ops_downloads(days: int = 3):
+    try:
+        from core import ops_metrics
+        return ops_metrics.downloads_index(days)
+    except Exception as e:
+        return {"error": str(e), "items": []}
+
+# NOTE: pydantic imported here directly — the shared _SA_BaseModel alias is
+# only defined much further down this file, after these routes execute at
+# import time; referencing it here would crash the server at boot.
+from pydantic import BaseModel as _OpsBaseModel
+
+class _OpsAsk(_OpsBaseModel):
+    question: str
+    logdir: str = ""
+    file: str = ""
+
+@app.post("/ops/ask")
+def ops_ask(a: _OpsAsk):
+    try:
+        from core import ops_metrics
+        ref = {"logdir": a.logdir, "file": a.file} if a.file else None
+        return ops_metrics.ask(a.question, log_ref=ref)
+    except Exception as e:
+        return {"error": str(e), "answer": "Assistant unavailable: " + str(e), "ai": False}
+
+
+# ── GLOBAL PROCESS LOCKING (core/lock_manager.py) ────────────────────────────
+# The server is the single source of truth for what is running. Lock state is
+# DERIVED from the real execution state (_PB/_SA/MCX file lock) so it can never
+# go stale; this layer adds who/where metadata, an audit trail, and a live SSE
+# broadcast every connected browser subscribes to.
+
+@app.middleware("http")
+async def _lock_identity_middleware(request, call_next):
+    """Notes WHO (rms_user cookie, set in platform Settings) and from WHERE
+    (client IP) issued each run-starting request, so the lock a pipeline claims
+    moments later can be attributed. Read-only; never blocks a request."""
+    try:
+        path = request.url.path
+        if path.endswith("-stream") or path.endswith("/run-stream"):
+            from core import lock_manager as _lm
+            from urllib.parse import unquote
+            _lm.note_request(unquote(request.cookies.get("rms_user", "")),
+                             request.client.host if request.client else "",
+                             path)
+    except Exception:
+        pass
+    return await call_next(request)
+
+
+@app.get("/ops/locks")
+def ops_locks():
+    try:
+        from core import lock_manager
+        return lock_manager.snapshot()
+    except Exception as e:
+        return {"error": str(e), "locks": []}
+
+
+@app.get("/ops/locks/stream")
+async def ops_locks_stream():
+    """SSE: pushes the lock snapshot whenever it changes (checked every second)
+    plus a 15s heartbeat. Every open browser — platform pages AND the embedded
+    Process Center overlay — stays in sync without refreshing."""
+    import asyncio as _aio
+
+    async def gen():
+        last = None
+        beat = 0
+        while True:
+            try:
+                from core import lock_manager
+                snap = lock_manager.snapshot()
+                # elapsed_s changes every second; compare only the identity part
+                sig = json.dumps([{k: l.get(k) for k in ("key", "state", "pipe", "by", "started_at")}
+                                   for l in snap["locks"]], sort_keys=True)
+            except Exception:
+                snap, sig = {"locks": []}, "err"
+            beat += 1
+            if sig != last or beat >= 15:
+                last = sig
+                beat = 0
+                yield f"data: {json.dumps(snap)}\n\n"
+            await _aio.sleep(1)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no",
+                                      "Connection": "keep-alive"})
+
+
+@app.get("/ops/audit")
+def ops_audit(limit: int = 120):
+    try:
+        from core import lock_manager
+        return {"events": lock_manager.read_audit(limit)}
+    except Exception as e:
+        return {"error": str(e), "events": []}
+
+
+# ── PHASE 3: KNOWLEDGE ENGINE (core/knowledge.py — background SQLite index) ──
+
+@app.get("/kb/status")
+def kb_status():
+    try:
+        from core import knowledge
+        return knowledge.status()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/kb/search")
+def kb_search(q: str = "", limit: int = 24):
+    try:
+        from core import knowledge
+        return knowledge.search(q, limit)
+    except Exception as e:
+        return {"error": str(e), "hits": []}
+
+@app.get("/kb/client")
+def kb_client(code: str = ""):
+    try:
+        from core import knowledge
+        return knowledge.find_client(code)
+    except Exception as e:
+        return {"error": str(e), "files": [], "total": 0}
+
+@app.get("/kb/processes")
+def kb_processes(pipe: str = ""):
+    try:
+        from core import knowledge
+        return knowledge.process_kb(pipe or None)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/kb/insights")
+def kb_insights():
+    try:
+        from core import knowledge
+        return knowledge.insights()
+    except Exception as e:
+        return {"error": str(e), "items": []}
+
+@app.post("/kb/reindex")
+def kb_reindex():
+    """Kick an immediate incremental re-scan (normally runs every 15 min)."""
+    try:
+        from core import knowledge
+        import threading as _th
+        knowledge.ensure_indexer()
+        _th.Thread(target=knowledge._cycle, daemon=True).start()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/ask")
+def ask(q: Question):
+    return answer_compliance(q.question)
+
+
+@app.post("/agent")
+def agent(g: Goal):
+    return run_agent_traced(g.goal)
+
+
+@app.get("/peak-margin-stream/{index}")
+def peak_margin_stream(index: str):
+    """Stream the run live as Server-Sent Events. Each line is flushed as it
+    happens. At the end, emits a 'done' (or 'error') event with the result,
+    and handles AUTO_SEND."""
+    def gen():
+        final = None
+        for ev in process_pair_stream(index):
+            yield f"data: {json.dumps(ev)}\n\n"
+            if ev["type"] in ("done", "error"):
+                final = ev
+
+        # After the run: if computed and AUTO_SEND, send now and stream the result.
+        if final and final.get("type") == "done" and final.get("status") == "computed":
+            if AUTO_SEND:
+                try:
+                    out = send_peak_margin_report(FOLDER)
+                    msg = ("📤 Auto-send ON — report dispatched."
+                           if out.get("ok") else "⚠️ Auto-send failed — see detail.")
+                    yield f"data: {json.dumps({'type':'log','msg':msg})}\n\n"
+                    yield f"data: {json.dumps({'type':'send','auto':True,'detail':out})}\n\n"
+                    # Cleanup ONLY after a successful send, and only on the final run.
+                    if out.get("ok") and final.get("is_final"):
+                        deleted = cleanup_after_send()
+                        yield f"data: {json.dumps({'type':'log','msg':f'🧹 Cleaned up {len(deleted)} downloaded data files (images kept).'})}\n\n"
+                    elif final.get("is_final") and not out.get("ok"):
+                        yield f"data: {json.dumps({'type':'log','msg':'⚠️ Send failed — keeping downloaded files for retry (no cleanup).'})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'type':'log','msg':f'🔥 Auto-send error: {e}'})}\n\n"
+            else:
+                token = uuid.uuid4().hex
+                PENDING[token] = {"index": index, "is_final": final.get("is_final", False)}
+                yield f"data: {json.dumps({'type':'pending','token':token})}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # tell proxies (nginx) not to buffer
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@app.post("/approve-send")
+def approve_send(a: Approval):
+    pend = PENDING.get(a.token)
+    if not pend:
+        return {"status": "rejected", "reason": "invalid or already-used token"}
+    is_final = pend.get("is_final", False)
+    del PENDING[a.token]
+    try:
+        out = send_peak_margin_report(FOLDER)
+        summary = _send_summary(out)
+        # Cleanup only after a successful send, and only on the final (i04) run.
+        if out.get("ok") and is_final:
+            deleted = cleanup_after_send()
+            summary["cleanup"] = f"Removed {len(deleted)} downloaded files (images kept)."
+        return summary
+    except Exception as e:
+        return {"status": "error", "message": f"{type(e).__name__}: {e}",
+                "trace": traceback.format_exc()[-500:]}
+
+
+def _send_summary(out):
+    """Turn the detailed send result into a clear summary with reasons."""
+    def reasons(block):
+        if block.get("ok"):
+            return "OK"
+        if "error" in block:
+            return block["error"]
+        # per-recipient detail
+        bad = [f"{r['to']}: {r.get('detail')}" for r in block.get("results", []) if not r.get("ok")]
+        return "; ".join(bad) if bad else "failed"
+    summary = {
+        "status": "sent" if out.get("ok") else "error",
+        "whatsapp_fo": reasons(out["wa_fo"]),
+        "whatsapp_cm": reasons(out["wa_cm"]),
+        "email": reasons(out["email"]),
+        "detail": out,
+    }
+    if not out.get("ok"):
+        summary["message"] = "Nothing sent. See the per-channel reasons."
+    return summary
+
+
+@app.post("/run/{index}")
+def run_for_scheduler(index: str):
+    """SIMPLE endpoint for N8N / schedulers: run one snapshot, do everything
+    (download -> compute -> images -> send if AUTO_SEND), return a final result
+    N8N can branch on. No streaming - just a clean success/failure.
+
+    Always returns HTTP 200 with a 'status' field, so N8N can read the outcome
+    and decide whether to alert/retry based on the body."""
+    result = process_pair(index)            # runs the whole pipeline (no UI stream)
+    status = result.get("status")
+
+    if status != "computed":
+        return {"ok": False, "status": status, "index": index,
+                "message": result.get("error") or "run did not complete",
+                "messages": result.get("messages", [])}
+
+    sent = None
+    if AUTO_SEND:
+        try:
+            out = send_peak_margin_report(FOLDER)
+            sent = out.get("ok", False)
+            # clean up only after a successful send, only on final run
+            if sent and result.get("is_final"):
+                cleanup_after_send()
+        except Exception as e:
+            return {"ok": False, "status": "send_error", "index": index,
+                    "message": f"{type(e).__name__}: {e}"}
+
+    return {"ok": True, "status": "computed", "index": index,
+            "captured": result.get("ran_label"),
+            "sent": sent,
+            "message": f"{index} processed" + (" and sent" if sent else "")}
+
+
+@app.get("/concentration-download-stream")
+def concentration_download_stream():
+    """Stream the file-download step live (INDEX files + KORP shortage)."""
+    def gen():
+        for ev in stream_download():
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/concentration-compute-stream")
+def concentration_compute_stream():
+    """Stream the compute + email + backup step live."""
+    def gen():
+        for ev in stream_compute():
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.post("/run/concentration")
+def run_concentration_for_scheduler():
+    """Simple endpoint for scheduler/N8N: run full concentration check, return result."""
+    result = process_concentration()
+    if result.get("status") != "computed":
+        return {"ok": False, "status": result.get("status"),
+                "message": result.get("error", "check did not complete")}
+    r = result.get("result", {})
+    return {"ok": True, "status": "computed",
+            "violations": r.get("violations", 0),
+            "unique_accounts": r.get("unique_accounts_in_violation", 0),
+            "message": f"Concentration check done. {r.get('violations',0)} violations."}
+
+
+@app.get("/ctcl-vs-nmass-stream")
+def ctcl_vs_nmass_stream():
+    """Stream the CTCL vs NMASS run live (compute + zone emails + TOP20 + payout + backup)."""
+    def gen():
+        for ev in stream_ctcl_vs_nmass():
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/cnc-f11-stream")
+def cnc_f11_stream():
+    """Stream the CNC F11 run live (PositionBook → Sheet4 → email → backup)."""
+    def gen():
+        for ev in stream_cnc_f11():
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/mtf-order-stream")
+def mtf_order_stream():
+    """Stream the MTF Order File run live (matching → order files → zone emails → backup)."""
+    def gen():
+        for ev in stream_mtf_order():
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/ftp-download-stream")
+def ftp_download_stream():
+    """Stream the daily FTP file download + distribution live."""
+    def gen():
+        for ev in stream_ftp_download():
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/payout-inspection-daily-stream")
+def payout_inspection_daily_stream():
+    def gen():
+        for ev in stream_daily():
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/payout-inspection-client-stream")
+def payout_inspection_client_stream(clients: str = "", fy: str = ""):
+    def gen():
+        for ev in stream_client(clients, fy):
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/files-downloader-70-stream")
+def files_downloader_70_stream(trade_date: str = ""):
+    from datetime import datetime as _dt
+    if not trade_date:
+        trade_date = _dt.today().strftime("%Y-%m-%d")
+    def gen():
+        for ev in stream_files_downloader_70(trade_date):
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+
+
+@app.get("/query-file")
+async def query_file(pipeline: str, group_by: str = "", filter_col: str = "", filter_contains: str = "",
+                     sort_by: str = "", sort_order: str = "desc", top_n: int = 0,
+                     lookup_col: str = "", lookup_value: str = ""):
+    """
+    Pure-pandas data query — NO LLM. Returns exact counts/sums.
+    - pipeline: which folder (ctcl, payout, concentration, ...)
+    - group_by: optional column to group counts by (e.g. 'Zone', 'REMARKS')
+    - filter_col + filter_contains: optional row filter (e.g. REMARKS contains SHORTFALL)
+    Returns the file read, total rows, and the computed breakdown — guaranteed exact.
+    """
+    import pandas as pd
+    from core.agent import _find_output_file, FOLDER_MAP
+    folder = FOLDER_MAP.get(pipeline)
+    if not folder or not os.path.isdir(folder):
+        return {"error": f"Folder not found for pipeline '{pipeline}'."}
+    fpath, display = _find_output_file(folder, pipeline, "latest")
+    if fpath is None:
+        return {"error": display}
+    try:
+        if fpath.lower().endswith(".csv"):
+            df = pd.read_csv(fpath, low_memory=False)
+        else:
+            df = pd.read_excel(fpath)
+    except Exception as e:
+        return {"error": f"Could not read {display}: {e}"}
+
+    def find_col(name):
+        for c in df.columns:
+            if name.lower() == str(c).lower().strip():
+                return c
+        for c in df.columns:
+            if name.lower() in str(c).lower():
+                return c
+        return None
+
+    result = {"file_read": display, "total_rows": int(len(df)), "columns": list(df.columns)}
+    work = df
+
+    # optional row filter
+    if filter_col and filter_contains:
+        fc = find_col(filter_col)
+        if fc:
+            mask = work[fc].astype(str).str.upper().str.contains(filter_contains.upper(), na=False)
+            work = work[mask]
+            result["filter_applied"] = f"{fc} contains '{filter_contains}'"
+            result["rows_after_filter"] = int(len(work))
+
+    # ── LOOKUP mode — find a specific row (e.g. one account) and return EVERYTHING ──
+    if lookup_col and lookup_value:
+        lc = find_col(lookup_col)
+        if not lc:
+            result["error"] = f"Column '{lookup_col}' not found. Available: {list(df.columns)}"
+            return result
+        mask = work[lc].astype(str).str.strip().str.upper() == lookup_value.strip().upper()
+        matched = work[mask]
+        if len(matched) == 0:
+            # try a contains match as fallback
+            mask = work[lc].astype(str).str.upper().str.contains(lookup_value.strip().upper(), na=False)
+            matched = work[mask]
+        result["lookup"] = f"{lc} = '{lookup_value}'"
+        result["matches_found"] = int(len(matched))
+        # return full rows as a list of dicts (all columns) — capped at 20 rows
+        records = []
+        for _, row in matched.head(20).iterrows():
+            records.append({str(k): (None if pd.isna(v) else
+                            (round(float(v),2) if isinstance(v,(int,float)) else str(v)))
+                            for k, v in row.items()})
+        result["records"] = records
+        return result
+
+    # ── TOP-N mode — sort by a numeric column and return the biggest/smallest ──
+    if sort_by:
+        sc = find_col(sort_by)
+        if not sc:
+            result["error"] = f"Column '{sort_by}' not found. Available: {list(df.columns)}"
+            return result
+        tmp = work.copy()
+        tmp["_sortval"] = pd.to_numeric(tmp[sc], errors="coerce")
+        tmp = tmp.dropna(subset=["_sortval"])
+        ascending = (sort_order.lower() == "asc")
+        tmp = tmp.sort_values("_sortval", ascending=ascending)
+        n = top_n if top_n > 0 else 10
+        result["sorted_by"] = sc
+        result["order"] = "ascending" if ascending else "descending"
+        # which columns to show: account-ish + the sort col + zone + remarks
+        show = []
+        for want in ["ACCOUNTID","Account ID","Client Code","ClientID","NAME","Zone","REMARKS"]:
+            c = find_col(want)
+            if c and c not in show:
+                show.append(c)
+        if sc not in show:
+            show.append(sc)
+        rows = []
+        for _, row in tmp.head(n).iterrows():
+            rows.append({str(k): (None if pd.isna(row[k]) else
+                         (round(float(row[k]),2) if isinstance(row[k],(int,float)) else str(row[k])))
+                         for k in show})
+        result["top_rows"] = rows
+        return result
+
+    # optional grouping
+    if group_by:
+        gc = find_col(group_by)
+        if gc:
+            vc = work[gc].fillna("(blank)").astype(str).str.strip().value_counts()
+            result["group_by"] = gc
+            result["counts"] = {str(k): int(v) for k, v in vc.items()}
+        else:
+            result["error"] = f"Column '{group_by}' not found. Available: {list(df.columns)}"
+    else:
+        result["matched_count"] = int(len(work))
+
+    return result
+
+
+@app.get("/ask-data")
+async def ask_data_endpoint(pipeline: str, question: str):
+    """
+    Plain-English data question -> exact pandas answer (text-to-query).
+    The LLM only translates the question into a query spec; pandas computes.
+    Returns the computed facts + how the question was understood.
+    """
+    import pandas as pd
+    from core.agent import _find_output_file, _translate_to_query, _execute_query, FOLDER_MAP
+    folder = FOLDER_MAP.get(pipeline)
+    if not folder or not os.path.isdir(folder):
+        return {"error": f"Folder not found for pipeline '{pipeline}'."}
+    fpath, display = _find_output_file(folder, pipeline, "latest")
+    if fpath is None:
+        return {"error": display}
+    try:
+        df = (pd.read_csv(fpath, low_memory=False) if fpath.lower().endswith(".csv")
+              else pd.read_excel(fpath))
+    except Exception as e:
+        return {"error": f"Could not read {display}: {e}"}
+    spec = _translate_to_query(question, list(df.columns))
+    if spec.get("_error"):
+        return {"error": spec["_error"]}
+    result = _execute_query(df, spec)
+    result["file_read"] = display
+    result["understood_as"] = spec
+    return result
+
+
+@app.get("/indexed-code")
+async def indexed_code():
+    """List every script the agent can read — for verifying code coverage."""
+    try:
+        from core.code_index import list_indexed_code
+        return list_indexed_code()
+    except Exception as e:
+        return {"error": f"Code index unavailable: {e}"}
+
+
+@app.post("/rebuild-code-index")
+async def rebuild_code_index():
+    """Force re-scan of CODE_FOLDERS (after adding/editing scripts)."""
+    try:
+        from core.code_index import rebuild_index
+        return rebuild_index()
+    except Exception as e:
+        return {"error": f"Rebuild failed: {e}"}
+
+
+@app.get("/daily-summary")
+async def daily_summary():
+    """RMS daily summary — counts from today's real output files (no LLM, no guessing)."""
+    try:
+        from core.daily_summary import generate_daily_summary
+        return generate_daily_summary()
+    except Exception as e:
+        return {"error": f"Daily summary failed: {e}"}
+
+
+@app.get("/folder-readiness")
+async def folder_readiness():
+    """Which pipelines can run RIGHT NOW — required input files present today?
+    Pure filesystem checks, no LLM. Powers the dashboard readiness card."""
+    try:
+        from core.readiness import check_all
+        return check_all()
+    except Exception as e:
+        return {"error": f"Readiness check failed: {e}"}
+
+
+@app.get("/agent-log")
+async def agent_log(n: int = 50):
+    """Last n agent Q&A entries from logs/agent_log.jsonl (newest first)."""
+    import json as _j
+    log_path = os.path.join(
+        os.getenv("AGENT_LOG_DIR", os.path.join(os.getcwd(), "logs")),
+        "agent_log.jsonl")
+    if not os.path.exists(log_path):
+        return {"entries": [], "note": "No agent activity logged yet."}
+    try:
+        lines = open(log_path, encoding="utf-8", errors="replace").read().splitlines()
+        entries = []
+        for ln in reversed(lines[-max(1, min(n, 500)):]):
+            try:
+                entries.append(_j.loads(ln))
+            except Exception:
+                continue
+        return {"entries": entries, "total_logged": len(lines)}
+    except Exception as e:
+        return {"error": f"Could not read log: {e}"}
+
+
+@app.post("/upload-file")
+async def upload_file(file: UploadFile = File(...)):
+    """Receive a file from the browser and save it to the uploads folder."""
+    import shutil
+    uploads = os.getenv("UPLOADS_FOLDER", r"D:\\CLAUDE\\rms-copilot\\uploads")
+    os.makedirs(uploads, exist_ok=True)
+    safe_name = os.path.basename(file.filename)   # strip any path
+    dest = os.path.join(uploads, safe_name)
+    try:
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(file.file, out)
+        return {"status": "saved", "filename": safe_name}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/agent-chat-stream")
+async def agent_chat_stream(request: Request):
+    """
+    Multi-turn streaming agent. Body: {"message": str, "history": list}.
+    Streams SSE events: tool_start, tool_done, answer, error, end.
+    history is the list of prior turns returned by the previous call.
+    """
+    body = await request.json()
+    user_message = body.get("message", "")
+    history      = body.get("history", [])
+
+    def gen():
+        for ev in stream_agent(user_message, history):
+            yield f"data: {json.dumps(ev)}\n\n"
+        yield "data: {\"type\": \"end\"}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control":"no-cache",
+                                      "X-Accel-Buffering":"no",
+                                      "Connection":"keep-alive"})
+
+
+@app.get("/report-image/{name}")
+def report_image(name: str):
+    if name not in ("F_filtered.png", "C_filtered.png"):
+        return {"error": "not allowed"}
+    path = os.path.join(FOLDER, name)
+    if not os.path.exists(path):
+        return {"error": "image not generated yet"}
+    return FileResponse(path, media_type="image/png")
+
+
+# === SHORT ALLOCATION ENDPOINTS ===
+import json as _sa_json, datetime as _sa_dt, os as _sa_os, tempfile as _sa_tmp
+from typing import List as _SA_List
+from pydantic import BaseModel as _SA_BaseModel
+from fastapi import UploadFile as _SA_UploadFile, File as _SA_File
+from fastapi.responses import StreamingResponse as _SA_Stream
+from core.short_allocation import (
+    stream_short_allocation as _sa_stream, cfg as _sa_cfg, read_run_state as _sa_rrs,
+    get_config as _sa_get_config, check_password as _sa_check_pw, update_env as _sa_update_env,
+    move_uploaded as _sa_move, list_logs as _sa_list_logs, read_log as _sa_read_log,
+    stop_short_allocation as _sa_stop,
+    get_credentials as _sa_get_creds,
+    list_backups as _sa_list_backups, copy_backups as _sa_copy_backups, browse_folder as _sa_browse,
+    get_all_run_status as _sa_all_status, check_sa_readiness as _sa_readiness,
+    save_uploaded_bytes as _sa_save_bytes,
+    client_peak_lookup as _sa_client_peak_lookup,
+    housekeep_common_files as _sa_housekeep_common,
+)
+
+@app.post("/sa/mark-run-done")
+def sa_mark_run_done(run: int = 0, password: str = ""):
+    """Manually mark an SA-0N run as done — the Short Allocation equivalent of
+    /px/advance-run (ctcl/ms15/cli/probable), for when a run genuinely
+    completed OUTSIDE this dashboard (e.g. run by hand on another machine).
+
+    SA tracks "done" differently from the other pipes: not a simple
+    run_counter.txt, but a per-run outcome record in short_allocation's
+    _run_status.json — saRenderRuns() (dashboard.html) unlocks the next tile
+    when `code2==='done' || overall==='done'` for the previous SA-0N, so this
+    writes exactly those two fields via the same _record() helper the real
+    pipeline itself uses to mark a run done.
+
+    Does NOT touch any files or re-run anything — only changes which tile the
+    dashboard considers "next". Password-gated with the SAME SA_CONFIG_PASSWORD
+    as the 🔑 Credentials button, checked server-side so it can't be bypassed
+    by calling this endpoint directly."""
+    from core.short_allocation import check_password as _smr_pw, _record as _smr_rec
+    if not _smr_pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    if run not in (1, 2, 3, 4):
+        return {"ok": False, "error": "run must be 1, 2, 3 or 4"}
+    tag = f"SA-0{run}"
+    rec = _smr_rec(tag, overall="done", code2="done")
+    return {"ok": True, "tag": tag, "record": rec}
+
+
+@app.get("/sa/status")
+def sa_status():
+    c = _sa_cfg()
+    # SA is independent of ctcl/ms15/cli — its main SA-01..04 cycle doesn't call
+    # sa_codes/mcx_deposit_downloader.py at all and shares no files with them
+    # (see core/short_allocation.py's stream_short_allocation docstring note),
+    # so it never needs to report THEIR busy state and shouldn't grey out its
+    # own Run buttons because e.g. CTCL vs NMASS is running elsewhere.
+    # server_busy* fields are kept for API-shape compatibility with older
+    # dashboard.html builds that may still read them; they now always reflect
+    # "nothing outside SA blocks SA" rather than a stale cross-pipe signal.
+    return {"windows": c["windows"], "run_state": _sa_rrs(c["state"]),
+            "now": _sa_dt.datetime.now().strftime("%H:%M"),
+            "runs": _sa_all_status(),
+            "server_busy": False, "server_busy_pipe": None,
+            "server_busy_label": None, "server_busy_since": None}
+
+@app.get("/sa/readiness")
+def sa_readiness(target: str = "short_allocation"):
+    return _sa_readiness(target)
+
+@app.get("/sa/common-housekeep")
+def sa_common_housekeep():
+    """Auto-backup stale COMMON FILES (yesterday's RISK_REPORT etc.) to a dated
+    backup sub-folder inside C:\\COMMON FILES and archive to Postgres.
+    Called by the upload modal on open so stale files are cleaned up before the
+    user uploads a new one."""
+    try:
+        moved = _sa_housekeep_common()
+        return {"ok": True, "moved": moved, "count": len(moved)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/sa/run-stream")
+def sa_run_stream(request: Request, run: str = "01", date: str = "", force: bool = False, skip_las: bool = False, las_only: bool = False, download_only: bool = False):
+    override = date.strip() if date else None
+    _by = None
+    try:
+        from core.auth import current_user as _cu
+        _u = _cu(request)
+        if _u:
+            _by = f"{_u.get('name') or _u.get('sub')} ({_u.get('sub')})"
+        else:
+            from urllib.parse import unquote as _uq
+            _by = _uq(request.cookies.get("rms_user", "")).strip() or None
+    except Exception:
+        _by = None
+    _ip = request.client.host if request.client else ""
+
+    # ── server-side double-run guard ─────────────────────────────────────────
+    # SA never had the atomic claim ctcl/ms15/cli got in _PB_LOCK — two users on
+    # different machines could both click SA-01 and silently start TWO SA runs
+    # (interleaving downloads, duplicate emails/WhatsApp). The server is the
+    # source of truth: reject the second request with a clear, attributed
+    # message. (No queueing by design — SA runs are bound to time-of-day
+    # windows; auto-firing a duplicate later would send wrong-time reports.)
+    from core.short_allocation import _SA as _sa_flags
+    if _sa_flags.get("running"):
+        try:
+            from core import lock_manager as _lm
+            _who = _lm.lock_line("sa")
+            _lm.on_reject("sa", "Short Allocation")
+        except Exception:
+            _who = ""
+        def busy_gen():
+            yield f"data: {_sa_json.dumps({'type': 'error', 'msg': '⚠ Short Allocation is already running right now — wait for it to finish, or Stop it, before starting a new run.' + _who})}\n\n"
+            yield 'data: {"type":"end"}\n\n'
+        return _SA_Stream(busy_gen(), media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+    _sa_clear_popup_state()  # drop any stale unanswered captcha/token from a previous stopped/crashed run
+    def gen():
+        try:
+            from core import lock_manager as _lm2
+            _lm2.on_start("sa", f"Short Allocation SA-{run}", pipe="sa", by=_by, ip=_ip)
+        except Exception:
+            pass
+        _sa_outcome = "finished"
+        try:
+            for ev in _sa_stream(run, override_date=override, force=force, skip_las=skip_las, las_only=las_only, download_only=download_only):
+                if isinstance(ev, dict):
+                    if ev.get("type") == "stopped":
+                        _sa_outcome = "stopped"
+                    elif ev.get("type") == "done":
+                        _sa_outcome = "completed" if ev.get("ok") else "failed"
+                yield f"data: {_sa_json.dumps(ev)}\n\n"
+            yield 'data: {"type":"end"}\n\n'
+        finally:
+            try:
+                from core import lock_manager as _lm3
+                _lm3.on_end("sa", _sa_outcome)
+            except Exception:
+                pass
+    return _SA_Stream(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+@app.get("/sa/config")
+def sa_config_get():
+    return _sa_get_config()
+
+class _SAConfig(_SA_BaseModel):
+    password: str
+    updates: dict
+
+@app.post("/sa/config")
+def sa_config_set(u: _SAConfig):
+    if not _sa_check_pw(u.password):
+        return {"ok": False, "error": "Wrong password"}
+    _sa_update_env(u.updates)
+    return {"ok": True}
+
+@app.get("/sa/logs")
+def sa_logs():
+    return {"logs": _sa_list_logs()}
+
+@app.get("/sa/log")
+def sa_log(name: str):
+    return {"name": name, "content": _sa_read_log(name)}
+
+import asyncio as _sa_asyncio
+_SA_WRITE_TIMEOUT_S = 30  # timeout for the DISK-WRITE phase only (not body read)
+
+@app.post("/sa/upload")
+async def sa_upload(target: str = "short_allocation",
+                    files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+    orig_names = [_sa_os.path.basename(f.filename) for f in files]
+
+    # ── Phase 1: read HTTP body into memory ─────────────────────────────────
+    # This MUST NOT be inside wait_for. If the timeout cancels a body-read,
+    # uvicorn drops the TCP connection before sending any response → browser
+    # sees "Failed to fetch" instead of a helpful error message.
+    try:
+        items = [(f.filename, await f.read()) for f in files]
+    except Exception as e:
+        return {"dest": "", "label": target, "ok": [], "skipped": [],
+                "rejected": [f"{n}: could not read upload: {e}" for n in orig_names],
+                "valid": [], "log": None}
+
+    # ── Phase 2: write to disk (blocking — apply timeout here only) ─────────
+    # Slow writes are caused by antivirus real-time scan or OneDrive/cloud-sync
+    # on the destination folder. The server console prints per-file timings.
+    async def _write():
+        loop = _sa_asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _sa_save_bytes, items, target)
+
+    try:
+        return await _sa_asyncio.wait_for(_write(), timeout=_SA_WRITE_TIMEOUT_S)
+    except _sa_asyncio.TimeoutError:
+        return {"dest": "", "label": target, "ok": [], "skipped": [],
+                "rejected": [f"{n}: write timed out after {_SA_WRITE_TIMEOUT_S}s — "
+                             f"likely antivirus or OneDrive scanning the destination folder. "
+                             f"Check the server console for per-file timing."
+                             for n in orig_names],
+                "valid": [], "log": None, "timeout": True}
+    except Exception as e:
+        return {"dest": "", "label": target, "ok": [], "skipped": [],
+                "rejected": [f"{n}: {e}" for n in orig_names],
+                "valid": [], "log": None}
+
+
+class _SAAuth(_SA_BaseModel):
+    password: str
+
+@app.post("/sa/auth")
+def sa_auth(a: _SAAuth):
+    return {"ok": _sa_check_pw(a.password)}
+
+
+def _sa_clear_popup_state():
+    """Delete any leftover captcha/token/missing-file popup state files so a stopped SA
+    run's unanswered prompt can't reappear on a later, unrelated run. (.missing_decision.json
+    used to be left out of this list — that's exactly why clicking Run again could instantly
+    re-show the PREVIOUS run's "Wait / Run with blank file" popup: the new run's downloader
+    clears that file itself once it starts, but there's a window right after clicking Run,
+    before the new subprocess has actually started executing, where the poller can still see
+    the OLD file. Clearing it here — right when Run is clicked, and on Stop — closes that gap.)"""
+    import os as _sco
+    _dir = _sco.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    for _fn in (".captcha_state", ".captcha_answer", ".captcha_ncdex.png",
+                ".token_state", ".token_answer", ".missing_decision.json"):
+        try: _sco.remove(_sco.path.join(_dir, _fn))
+        except OSError: pass
+
+@app.post("/sa/stop")
+def sa_stop():
+    _r = _sa_stop()
+    _sa_clear_popup_state()
+    return _r
+
+
+import tempfile as _sa_tmp
+
+_CHUNK_DIR = _sa_os.path.join(_sa_tmp.gettempdir(), "rms_upload_chunks")
+
+@app.post("/sa/upload-chunk")
+async def sa_upload_chunk(upload_id: str, chunk_num: int, total_chunks: int,
+                          filename: str, target: str = "short_allocation",
+                          chunk: _SA_UploadFile = _SA_File(...)):
+    """Receive one slice as multipart/form-data (same transport as small-file upload —
+    Defender only intercepts large single requests, not many small multipart ones)."""
+    chunk_dir = _sa_os.path.join(_CHUNK_DIR, upload_id)
+    _sa_os.makedirs(chunk_dir, exist_ok=True)
+    data = await chunk.read()
+    with open(_sa_os.path.join(chunk_dir, f"{chunk_num:05d}"), "wb") as f:
+        f.write(data)
+    return {"ok": True, "chunk": chunk_num, "total": total_chunks, "bytes": len(data)}
+
+@app.post("/sa/upload-finalize")
+def sa_upload_finalize(upload_id: str, filename: str, total_chunks: int,
+                       target: str = "short_allocation"):
+    """Assemble all chunks into the final file, validate, copy to SA/LAS folder."""
+    import shutil as _sh
+    from core.short_allocation import cfg as _c, _name_ok as _lnok, SA_VALID as _lv
+    chunk_dir = _sa_os.path.join(_CHUNK_DIR, upload_id)
+    base = _sa_os.path.basename(filename)
+    c = _c()
+    dest = (c["las"] if target == "las_funding"
+            else (_sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES") if target == "common_files"
+                  else c["output"]))
+    if not _lnok(base, target):
+        spec = _lv.get(target, _lv["short_allocation"])
+        _sh.rmtree(chunk_dir, ignore_errors=True)
+        return {"dest": dest, "ok": [], "skipped": [],
+                "rejected": [f"{base}: not a recognised {spec['label']} file"]}
+    tp = _sa_os.path.join(dest, base)
+    if _sa_os.path.exists(tp):
+        _sh.rmtree(chunk_dir, ignore_errors=True)
+        return {"dest": dest, "ok": [], "skipped": [base], "rejected": []}
+    try:
+        _sa_os.makedirs(dest, exist_ok=True)
+        with open(tp, "wb") as out:
+            for i in range(total_chunks):
+                cp = _sa_os.path.join(chunk_dir, f"{i:05d}")
+                with open(cp, "rb") as cf:
+                    out.write(cf.read())
+        print(f"[upload-finalize] assembled {base} from {total_chunks} chunks → {dest}")
+        try:
+            use_pg = _sa_os.getenv("USE_POSTGRES","false").strip().lower()=="true"
+            _sf = __import__("core.db_postgres",fromlist=["save_run_file"]).save_run_file if use_pg \
+                  else __import__("core.db",fromlist=["save_run_file"]).save_run_file
+            with open(tp,"rb") as fb: _sf("short_allocation","upload",base,fb.read(),tag=target)
+        except Exception as e:
+            print(f"[upload-finalize] DB archive skipped: {e}")
+        return {"dest": dest, "ok": [base], "skipped": [], "rejected": []}
+    except Exception as e:
+        return {"dest": dest, "ok": [], "skipped": [], "rejected": [f"{base}: {e}"]}
+    finally:
+        _sh.rmtree(chunk_dir, ignore_errors=True)
+
+
+class _SAFindImport(_SA_BaseModel):
+    filename: str        # just the filename — server finds it in common locations
+    target: str = "short_allocation"
+
+@app.post("/sa/find-and-import")
+def sa_find_and_import(req: _SAFindImport):
+    """Search the ENTIRE user profile (and common drives) for the filename and copy it.
+    No path entry needed — works wherever the file lives on this machine."""
+    import shutil as _sh, time as _lt, getpass as _gp
+    from core.short_allocation import cfg as _c, _name_ok as _lnok, SA_VALID as _lv
+    filename = _sa_os.path.basename(req.filename)
+    c = _c()
+    dest = (c["las"] if req.target == "las_funding"
+            else (_sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES") if req.target == "common_files"
+                  else c["output"]))
+    # validate name
+    if not _lnok(filename, req.target):
+        spec = _lv.get(req.target, _lv["short_allocation"])
+        return {"found": False, "dest": dest, "ok": [], "skipped": [],
+                "rejected": [f"{filename}: not a recognised {spec['label']} file"]}
+    # already in destination folder?
+    tp = _sa_os.path.join(dest, filename)
+    if _sa_os.path.exists(tp):
+        return {"found": True, "dest": dest, "ok": [], "skipped": [filename], "rejected": []}
+
+    def _do_copy(src):
+        _sa_os.makedirs(dest, exist_ok=True)
+        _sh.copy2(src, tp)
+        print(f"[find-and-import] {filename} found at {src}, copied in {_lt.time()-t0:.2f}s")
+        try:
+            use_pg = _sa_os.getenv("USE_POSTGRES","false").strip().lower()=="true"
+            _sf = __import__("core.db_postgres",fromlist=["save_run_file"]).save_run_file if use_pg \
+                  else __import__("core.db",fromlist=["save_run_file"]).save_run_file
+            with open(tp,"rb") as fb: _sf("short_allocation","upload",filename,fb.read(),tag=req.target)
+        except Exception as e:
+            print(f"[find-and-import] DB archive skipped: {e}")
+        return {"found": True, "dest": dest, "ok": [filename], "skipped": [], "rejected": []}
+
+    t0 = _lt.time()
+    try:
+        user = _sa_os.getenv("USERNAME") or _gp.getuser()
+    except Exception:
+        user = "User"
+
+    # ── Pass 1: check specific folders instantly (< 5 ms) ───────────────────
+    quick_roots = [
+        _sa_os.path.join("C:\\Users", user, "Downloads"),
+        _sa_os.path.join("C:\\Users", user, "Desktop"),
+        _sa_os.path.join("C:\\Users", user, "Documents"),
+        _sa_os.path.join("C:\\Users", user, "OneDrive"),
+        dest,  # already checked above but in case it was just created
+    ]
+    for root in quick_roots:
+        p = _sa_os.path.join(root, filename)
+        if _sa_os.path.isfile(p):
+            try: return _do_copy(p)
+            except Exception as e: return {"found": True, "dest": dest, "ok": [], "skipped": [], "rejected": [f"{filename}: {e}"]}
+
+    # ── Pass 2: recursive walk of entire user profile (skips heavy dirs) ────
+    SKIP = {"AppData", ".git", "node_modules", "__pycache__", "venv", ".venv",
+            "site-packages", "WindowsApps", "$RECYCLE.BIN", "System Volume Information"}
+    user_root = _sa_os.path.join("C:\\Users", user)
+    fn_lower = filename.lower()
+    for dirpath, dirs, files in _sa_os.walk(user_root, topdown=True):
+        dirs[:] = [d for d in dirs if d not in SKIP]
+        for f in files:
+            if f.lower() == fn_lower:
+                full = _sa_os.path.join(dirpath, f)
+                try: return _do_copy(full)
+                except Exception as e: return {"found": True, "dest": dest, "ok": [], "skipped": [], "rejected": [f"{filename}: {e}"]}
+
+    # ── Pass 3: check other drive roots (D:\, E:\, etc.) ────────────────────
+    import string as _str
+    for letter in _str.ascii_uppercase:
+        root = f"{letter}:\\"
+        if root == "C:\\" or not _sa_os.path.isdir(root): continue
+        p = _sa_os.path.join(root, filename)
+        if _sa_os.path.isfile(p):
+            try: return _do_copy(p)
+            except Exception as e: return {"found": True, "dest": dest, "ok": [], "skipped": [], "rejected": [f"{filename}: {e}"]}
+
+    print(f"[find-and-import] {filename} not found anywhere on this machine after {_lt.time()-t0:.1f}s")
+    return {"found": False, "dest": dest, "ok": [], "skipped": [], "rejected": [
+        f"{filename}: not found on this machine. Make sure the file is saved locally (not just in browser/email)."]}
+
+
+class _SALocalImport(_SA_BaseModel):
+    paths: list          # list of absolute Windows paths already on this machine
+    target: str = "short_allocation"
+    run_date: str = ""   # YYYY-MM-DD; blank = today
+    run_no: str = ""     # "01".."04"; blank = skip run-number check
+
+
+def _check_run_no(filename: str, run_no: str):
+    """Check the trailing run-number suffix in the filename matches run_no ('01'..'04').
+    Two trailing patterns are detected:
+      • _i0N  at the end → .lis files  (e.g. F_SA01_P_06436_26062026_i02.lis → run 02)
+      • _0N   at the end → MCX/NCCL    (e.g. MCX_PeakMargin56720_20260626_03.csv → run 03)
+    NOTE: _SA01_ in the MIDDLE of the name is the exchange product code, NOT the run number.
+    Files with no trailing run suffix (RISK_REPORT, main.csv, EXCEPTION…) always pass."""
+    if not run_no:
+        return None
+    import re as _re
+    expected = run_no.zfill(2)
+    base     = _sa_os.path.splitext(_sa_os.path.basename(filename))[0]
+    # Matches _i0N (lis files) or _0N (MCX/csv files) at the very end
+    m = _re.search(r'_i?(0[1-4])$', base, _re.IGNORECASE)
+    if m:
+        file_run = m.group(1)
+        if file_run != expected:
+            return (f"run-{file_run} file — current window is SA-{expected}. "
+                    f"Please select the SA-{expected} version.")
+    return None  # no trailing run suffix → shared file, always allowed
+
+
+def _check_file_date(filename: str, run_date: str):
+    """Return None if ok, or an error string if the date embedded in the filename
+    doesn't match the expected run date.  Files with NO date in their name pass freely."""
+    import re, datetime as _dt
+    if not run_date:
+        run_date = _dt.date.today().isoformat()
+    try:
+        expected = _dt.date.fromisoformat(run_date)
+    except Exception:
+        return None
+    base_no_ext = _sa_os.path.splitext(_sa_os.path.basename(filename))[0]
+    # Match 8-digit runs not surrounded by more digits (avoids partial matches)
+    for m in re.findall(r'(?<!\d)(\d{8})(?!\d)', base_no_ext):
+        candidate = None
+        # Try YYYYMMDD first (e.g. MCX_PeakMargin56720_20260626_03.csv)
+        try:
+            y, mo, d = int(m[:4]), int(m[4:6]), int(m[6:])
+            candidate = _dt.date(y, mo, d)
+        except (ValueError, OverflowError):
+            pass
+        # Then try DDMMYYYY (e.g. RISK_REPORT_25062026.csv)
+        if candidate is None:
+            try:
+                d, mo, y = int(m[:2]), int(m[2:4]), int(m[4:])
+                candidate = _dt.date(y, mo, d)
+            except (ValueError, OverflowError):
+                continue   # not a valid date in either format — skip
+        if candidate != expected:
+            return (f"wrong date — file is from {candidate.strftime('%d/%m/%Y')} "
+                    f"but run date is {expected.strftime('%d/%m/%Y')}. "
+                    f"Please select the {expected.strftime('%d/%m/%Y')} file.")
+        return None   # date matches — OK
+    return None  # no recognisable date in filename — always allowed
+
+
+@app.post("/sa/import-local")
+def sa_import_local(req: _SALocalImport):
+    """Copy files that already exist on THIS machine into the SA/LAS folder.
+    Avoids the 130MB HTTP upload entirely — just a local file copy, no size limit."""
+    import shutil as _sh, time as _lt
+    from core.short_allocation import cfg as _lcfg, SA_VALID as _lval, _name_ok as _lnok
+    c = _lcfg()
+    dest = (c["las"] if req.target == "las_funding"
+            else (_sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES") if req.target == "common_files"
+                  else c["output"]))
+    _sa_os.makedirs(dest, exist_ok=True)
+    ok, skipped, rejected = [], [], []
+    for raw_path in req.paths:
+        raw_path = raw_path.strip().strip('"')
+        base = _sa_os.path.basename(raw_path)
+        if not _sa_os.path.isfile(raw_path):
+            rejected.append(f"{base}: file not found at path '{raw_path}'")
+            continue
+        if not _lnok(base, req.target):
+            spec = _lval.get(req.target, _lval["short_allocation"])
+            rejected.append(f"{base}: not a recognised {spec['label']} file")
+            continue
+        date_err = _check_file_date(base, req.run_date)
+        if date_err:
+            rejected.append(f"{base}: {date_err}")
+            continue
+        run_err = _check_run_no(base, req.run_no)
+        if run_err:
+            rejected.append(f"{base}: {run_err}")
+            continue
+        tp = _sa_os.path.join(dest, base)
+        if _sa_os.path.exists(tp):
+            skipped.append(base)
+            continue
+        try:
+            t0 = _lt.time()
+            _sh.copy2(raw_path, tp)
+            dt = _lt.time() - t0
+            ok.append(base)
+            print(f"[sa/import-local] copied {base} ({_sa_os.path.getsize(tp):,} bytes) in {dt:.2f}s")
+            # Archive to DB if enabled
+            try:
+                use_pg = _sa_os.getenv("USE_POSTGRES", "false").strip().lower() == "true"
+                _sf = __import__("core.db_postgres", fromlist=["save_run_file"]).save_run_file if use_pg \
+                      else __import__("core.db", fromlist=["save_run_file"]).save_run_file
+                with open(tp, "rb") as _fb:
+                    _sf("short_allocation", "upload", base, _fb.read(), tag=req.target)
+            except Exception as _dbe:
+                print(f"[sa/import-local] DB archive skipped: {_dbe}")
+        except Exception as e:
+            rejected.append(f"{base}: {e}")
+    return {"dest": dest, "ok": ok, "skipped": skipped, "rejected": rejected}
+
+
+@app.get("/sa/pick-files")
+def sa_pick_files(target: str = "short_allocation"):
+    """Open Win32 GetOpenFileNameW via ctypes — zero startup, instant native dialog."""
+    import ctypes, ctypes.wintypes as _wt
+
+    OFN_EXPLORER        = 0x00080000
+    OFN_ALLOWMULTISELECT= 0x00000200
+    OFN_FILEMUSTEXIST   = 0x00001000
+    OFN_PATHMUSTEXIST   = 0x00000800
+
+    class _OFN(ctypes.Structure):
+        _fields_ = [
+            ("lStructSize",       _wt.DWORD),
+            ("hwndOwner",         _wt.HWND),
+            ("hInstance",         _wt.HINSTANCE),
+            ("lpstrFilter",       _wt.LPCWSTR),
+            ("lpstrCustomFilter", _wt.LPWSTR),
+            ("nMaxCustFilter",    _wt.DWORD),
+            ("nFilterIndex",      _wt.DWORD),
+            ("lpstrFile",         ctypes.c_void_p),   # must be void* to accept addressof(buf)
+            ("nMaxFile",          _wt.DWORD),
+            ("lpstrFileTitle",    _wt.LPWSTR),
+            ("nMaxFileTitle",     _wt.DWORD),
+            ("lpstrInitialDir",   _wt.LPCWSTR),
+            ("lpstrTitle",        _wt.LPCWSTR),
+            ("Flags",             _wt.DWORD),
+            ("nFileOffset",       _wt.WORD),
+            ("nFileExtension",    _wt.WORD),
+            ("lpstrDefExt",       _wt.LPCWSTR),
+            ("lCustData",         _wt.LPARAM),
+            ("lpfnHook",          ctypes.c_void_p),
+            ("lpTemplateName",    _wt.LPCWSTR),
+            ("pvReserved",        ctypes.c_void_p),
+            ("dwReserved",        _wt.DWORD),
+            ("FlagsEx",           _wt.DWORD),
+        ]
+
+    # ── PHASE 1: set up the struct (before dialog opens) ────────────────────────
+    # PowerShell fallback ONLY fires here — never after the dialog has opened.
+    BUF = 65536
+    buf = ctypes.create_unicode_buffer(BUF)
+    try:
+        ofn = _OFN()
+        ofn.lStructSize = ctypes.sizeof(_OFN)
+        ofn.hwndOwner   = ctypes.windll.user32.GetForegroundWindow()  # appear in front
+        ofn.lpstrFile   = ctypes.addressof(buf)
+        ofn.nMaxFile    = BUF
+        ofn.lpstrTitle  = "Select files to import"
+        ofn.Flags       = OFN_EXPLORER | OFN_ALLOWMULTISELECT | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST
+        fn = ctypes.windll.comdlg32.GetOpenFileNameW
+        fn.argtypes = [ctypes.POINTER(_OFN)]
+        fn.restype  = _wt.BOOL
+    except Exception as e_setup:
+        # Setup failed BEFORE any dialog opened → safe to try PowerShell instead
+        print(f"[pick-files] ctypes setup failed ({e_setup}), using PowerShell")
+        import subprocess as _sp
+        _ps = ("Add-Type -AssemblyName System.Windows.Forms;"
+               "$d=New-Object System.Windows.Forms.OpenFileDialog;"
+               "$d.Multiselect=$true;$d.Title='Select files to import';"
+               "if($d.ShowDialog() -eq 'OK'){$d.FileNames -join '|'}else{''}")
+        try:
+            r = _sp.run(["powershell","-NoProfile","-NonInteractive","-Command",_ps],
+                        capture_output=True, text=True, timeout=300)
+            raw2 = r.stdout.strip()
+            return {"paths": [p.strip() for p in raw2.split("|") if p.strip()] if raw2 else []}
+        except Exception as e2:
+            return {"paths": [], "error": str(e2)}
+
+    # ── PHASE 2: show dialog (no fallback after this point — dialog is open) ──
+    if not fn(ctypes.byref(ofn)):
+        return {"paths": []}  # user cancelled
+
+    # ── PHASE 3: parse result buffer ────────────────────────────────────────────
+    try:
+        # create_unicode_buffer has no .raw — read bytes directly from memory address
+        raw  = ctypes.string_at(ctypes.addressof(buf), BUF * 2)
+        parts, cur = [], bytearray()
+        i = 0
+        while i < len(raw) - 1:
+            lo, hi = raw[i], raw[i + 1]
+            if lo == 0 and hi == 0:
+                if cur:
+                    parts.append(cur.decode("utf-16-le"))
+                    cur = bytearray()
+                else:
+                    break   # double-null = end
+            else:
+                cur += bytes([lo, hi])
+            i += 2
+        if not parts:
+            return {"paths": []}
+        paths = parts if len(parts) == 1 else [parts[0].rstrip("\\") + "\\" + f for f in parts[1:]]
+        print(f"[pick-files] selected {len(paths)}: {paths}")
+        return {"paths": paths}
+    except Exception as e_parse:
+        print(f"[pick-files] buffer parse error: {e_parse}")
+        return {"paths": [], "error": str(e_parse)}
+
+
+@app.get("/sa/credentials")
+def sa_credentials_get():
+    return _sa_get_creds()
+
+@app.post("/sa/credentials")
+def sa_credentials_set(u: _SAConfig):
+    if not _sa_check_pw(u.password):
+        return {"ok": False, "error": "Wrong password"}
+    _sa_update_env(u.updates)
+    return {"ok": True}
+
+
+@app.get("/sa/backup/list")
+def sa_backup_list(from_date: str = "", to_date: str = "", types: str = ""):
+    tl = [t for t in types.split(",") if t.strip()] if types else None
+    return {"files": _sa_list_backups(from_date, to_date, tl)}
+
+@app.get("/sa/client-peak-lookup")
+def sa_client_peak_lookup(client_codes: str = "", from_date: str = "", to_date: str = ""):
+    codes = [c.strip().upper() for c in client_codes.replace(";", ",").split(",") if c.strip()]
+    if not codes:
+        return {"ok": False, "error": "client_codes is required (comma-separated for multiple)"}
+    try:
+        all_rows = []
+        for code in codes:
+            rows = _sa_client_peak_lookup(code, from_date, to_date)
+            for r in rows:
+                r["client_code"] = code
+            all_rows.extend(rows)
+        all_rows.sort(key=lambda x: (x["date"], x["client_code"], x["run"]))
+        return {"ok": True, "codes": codes, "rows": all_rows}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/sa/browse-folder")
+def sa_browse_folder():
+    return _sa_browse()
+
+@app.get("/sa/backup/default-dest")
+def sa_backup_default_dest():
+    """Return the configured default destination path for backup restore operations."""
+    c = _sa_cfg()
+    return {"dest": c.get("backup_dest", "") or ""}
+
+class _SARestore(_SA_BaseModel):
+    paths: list
+    dest: str
+
+@app.post("/sa/backup/copy")
+def sa_backup_copy(r: _SARestore):
+    return _sa_copy_backups(r.paths, r.dest)
+
+
+# === SHARED HISTORY DB (multi-machine) ===
+# When USE_POSTGRES=true in .env, all file archives go to PostgreSQL instead
+# of SQLite — so any machine on the LAN can retrieve files from the central DB.
+# When USE_POSTGRES=false (default), falls back to SQLite (core/db.py).
+_USE_PG = os.getenv("USE_POSTGRES", "false").strip().lower() == "true"
+if _USE_PG:
+    from core.db_postgres import list_run_files as _db_list_files, get_run_file as _db_get_file, delete_run_file as _db_del_file
+else:
+    from core.db import list_run_files as _db_list_files, get_run_file as _db_get_file, delete_run_file as _db_del_file
+
+@app.get("/sa/db/files")
+def sa_db_files(tag: str = "", days: int = 90, kind: str = "",
+                from_date: str = "", to_date: str = ""):
+    return {"files": _db_list_files(
+        pipeline="short_allocation",
+        tag=tag or None,
+        kind=kind or None,
+        days=days,
+        from_date=from_date or None,
+        to_date=to_date or None,
+    )}
+
+@app.get("/sa/db/file")
+def sa_db_file(id: int):
+    found = _db_get_file(id)
+    if not found:
+        return {"error": "not found"}
+    filename, content = found
+    return _SA_Stream(iter([content]), media_type="application/octet-stream",
+                      headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+@app.delete("/sa/db/file")
+def sa_db_file_delete(id: int):
+    """Permanently delete one record from run_files (removes bytes from Postgres too)."""
+    try:
+        deleted = _db_del_file(id)
+        return {"ok": deleted, "id": id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+class _SADbRestore(_SA_BaseModel):
+    file_ids: list
+    dest: str
+
+@app.post("/sa/db/restore")
+def sa_db_restore(r: _SADbRestore):
+    """Write files from Postgres to a local folder on the server machine."""
+    import os as _os
+    try:
+        _os.makedirs(r.dest, exist_ok=True)
+    except Exception as e:
+        return {"ok": False, "error": f"Cannot create folder: {e}", "copied": [], "failed": []}
+    ok, failed = [], []
+    for fid in r.file_ids:
+        try:
+            found = _db_get_file(int(fid))
+            if not found:
+                failed.append(f"id={fid}: not found in database")
+                continue
+            filename, content = found
+            dest_path = _os.path.join(r.dest, filename)
+            with open(dest_path, "wb") as f:
+                f.write(content)
+            ok.append(filename)
+        except Exception as e:
+            failed.append(f"id={fid}: {e}")
+    return {"ok": len(failed) == 0, "copied": ok, "failed": failed, "dest": r.dest}
+
+
+# === PIPELINE BOX (reusable, all pipelines) ===
+import json as _px_json
+from fastapi.responses import StreamingResponse as _PX_Stream
+from core.pipeline_box import (stream_pipeline as _px_stream, stop_pipeline as _px_stop,
+                               list_logs as _px_list_logs, read_log as _px_read_log)
+
+@app.get("/px/run-stream")
+def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time: str = ""):
+    # Identity comes straight off THIS request's signed session — not a shared
+    # global guessed from "whatever -stream request landed most recently"
+    # (that guess broke when two people's browsers were both making -stream
+    # requests around the same time; see lock_manager.on_start's docstring).
+    _by = None
+    try:
+        from core.auth import current_user as _cu
+        _u = _cu(request)
+        if _u:
+            _by = f"{_u.get('name') or _u.get('sub')} ({_u.get('sub')})"
+        else:
+            from urllib.parse import unquote as _uq
+            _by = _uq(request.cookies.get("rms_user", "")).strip() or None
+    except Exception:
+        _by = None
+    _ip = request.client.host if request.client else ""
+    if pipe == "ctcl":
+        _ctcl_clear_popup_state()  # drop any stale unanswered captcha/token from a previous stopped/crashed run
+    if pipe == "probable":
+        _probable_clear_popup_state()
+    # market_time: only meaningful for pipe="probable" — the operator's chosen
+    # market session time from the dashboard's web modal (process-probable-box.js),
+    # replacing code2.py's old customtkinter popup. Threaded into the run's own
+    # subprocess env (PROBABLE_MARKET_TIME), read by core/pipelines/probable_full.py.
+    # Never silently defaulted by THIS route — the modal always sends a real
+    # value; the "9:30 AM" fallback only applies if somehow called without one.
+    _extra_env = {"PROBABLE_MARKET_TIME": market_time.strip()} if (pipe == "probable" and market_time.strip()) else None
+    def gen():
+        for ev in _px_stream(pipe, run_no=run_no if run_no else None, extra_env=_extra_env,
+                              by=_by, ip=_ip):
+            yield f"data: {_px_json.dumps(ev)}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return _PX_Stream(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+@app.post("/px/stop")
+def px_stop(pipe: str = ""):
+    if not pipe:
+        return {"ok": False, "error": "pipe is required"}
+    return _px_stop(pipe)
+
+@app.get("/px/logs")
+def px_logs(pipe: str = ""):
+    return {"logs": _px_list_logs(pipe)}
+
+@app.get("/px/log")
+def px_log(pipe: str = "", name: str = ""):
+    return {"content": _px_read_log(pipe, name)}
+
+@app.get("/px/explain-error")
+def px_explain_error(pipe: str = "", log: str = ""):
+    """Plain-English explanation for ANY pipeline's failed run — works for every
+    pipe registered in PIPELINES (ctcl, ms15, cli, and anything added later), not
+    a one-off hand-built-per-pipe thing.
+
+    DETERMINISTIC FIRST, AI GUESS ONLY AS A LAST RESORT: every pipeline's
+    pre_run_file_check() prints an exact "Missing required files: X, Y" (or
+    wrong-date/stale) block on failure — that's not a guess, it's the complete,
+    already-known reason. extract_known_failure_reason() parses that block and
+    returns it directly, naming the exact file(s), which is far more useful than
+    an LLM's paraphrase ("some required files"). Only when the log does NOT
+    contain one of these known structures do we fall back to translate_error()
+    (Groq free tier) to take a best guess at a genuinely unrecognized failure —
+    same fallback contract nmass_download.py/mcx90_download.py already rely on.
+    Returns {ok, explanation, source: "known"|"ai"}."""
+    from core.pipeline_box import PIPELINES as _pel_P, extract_known_failure_reason as _pel_known
+    from core.error_translator import translate_error as _pel_tr
+    if pipe not in _pel_P:
+        return {"ok": False, "error": "unknown pipeline"}
+    text = _px_read_log(pipe, log)
+    if not text or text.startswith("(could not read log"):
+        return {"ok": False, "error": "log not found"}
+    known = _pel_known(text)
+    if known:
+        return {"ok": True, "explanation": known, "source": "known"}
+    lines = text.splitlines()
+    label = _pel_P[pipe].get("name", pipe.upper())
+    explanation = _pel_tr(f"{label} pipeline run", lines)
+    return {"ok": True, "explanation": explanation, "source": "ai"}
+
+
+from core.pipeline_box import pb_status as _pbs, pb_get_config as _pbc, pb_update as _pbu
+
+@app.get("/px/status")
+def px_status(pipe: str = ""):
+    return _pbs(pipe)
+
+@app.get("/px/config")
+def px_config_get(pipe: str = ""):
+    return _pbc(pipe)
+
+
+@app.post("/px/advance-run")
+def px_advance_run(pipe: str = "", to: int = 0, password: str = ""):
+    """Manually mark today's run counter forward for ANY pipe — generalizes
+    the existing /cli/advance-run (which only ever did this for CLI). Needed
+    when a run was genuinely completed OUTSIDE this dashboard (e.g. someone
+    ran it by hand on a different machine/instance pointed at the same
+    output folder) — the counter here never saw it happen, so the dashboard
+    keeps insisting on Run 01 before it will unlock Run 02.
+
+    `to` (optional): set the counter to this exact run number instead of just
+    incrementing by 1 — e.g. to='1' after manually running CTCL-01 elsewhere,
+    so CTCL-02 becomes the next enabled tile. If omitted, behaves like
+    /cli/advance-run always did: +1 from whatever today's counter currently is.
+
+    Does NOT touch which files exist on disk or re-run anything — this ONLY
+    changes which tile the dashboard considers "next", so use it once you're
+    sure the actual output for that run number is already sitting in the
+    backup folder (or was produced by whatever ran it elsewhere).
+
+    Password-gated with the SAME password as the "🔑 Credentials" button
+    (SA_CONFIG_PASSWORD, checked via the identical core.short_allocation.
+    check_password() every /px/config save already uses) — checked here
+    server-side, not just hidden behind the frontend's saAskPassword() modal,
+    so this can't be bypassed by calling the endpoint directly."""
+    from core.short_allocation import check_password as _ar_pw
+    if not _ar_pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    import os as _aro, datetime as _ard
+    from core.pipeline_box import PIPELINES as _arP
+    p = _arP.get(pipe)
+    if not p:
+        return {"ok": False, "error": f"unknown pipe '{pipe}'"}
+    base = _aro.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))
+    _aro.makedirs(base, exist_ok=True)
+    fp = _aro.path.join(base, p.get("state_file", "run_counter.txt"))
+    today = _ard.datetime.now().strftime("%Y-%m-%d")
+    n = 0
+    try:
+        content = open(fp, encoding="utf-8", errors="replace").read().strip()
+        if "|" in content:
+            d, existing_n = content.split("|", 1)
+            if d.strip() == today:
+                n = int(existing_n)
+    except Exception:
+        pass
+    n = int(to) if to else (n + 1)
+    n = max(0, min(n, p.get("runs", n)))
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(f"{today}|{n}")
+    return {"ok": True, "run_state": n, "folder": base}
+
+
+@app.post("/ctcl/backfill-db")
+def ctcl_backfill_db(date: str = "", run: int = 0, password: str = ""):
+    """Push an ALREADY-on-disk CTCL vs NMASS run folder into PostgreSQL.
+
+    For a run that genuinely completed OUTSIDE this dashboard (e.g. run by
+    hand on a different machine) whose output files were then copied by hand
+    into THIS machine's BACKUPFILES AUTOMATED\\<date>\\<run> folder — the
+    normal end-of-run archive step (backup_and_cleanup → _archive_to_db,
+    which only fires when THIS dashboard's Run button drives the pipeline)
+    never got a chance to run for those files, so they never made it into the
+    run_files Postgres table.
+
+    `date`: folder name exactly as on disk, e.g. "21-07-2026" (DD-MM-YYYY).
+    `run`: the two-digit run folder number, e.g. 1 for ".../01".
+
+    Does NOT touch or move anything on disk — only reads the files already
+    there and archives their bytes to Postgres (safe to call more than once).
+    Password-gated with the SAME SA_CONFIG_PASSWORD as the 🔑 Credentials
+    button, checked server-side exactly like /px/advance-run."""
+    from core.short_allocation import check_password as _bk_pw
+    if not _bk_pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    if not date or not run:
+        return {"ok": False, "error": "date and run are required"}
+    from core.pipelines.ctcl_vs_nmass import backfill_run_to_db
+    return backfill_run_to_db(date, int(run))
+
+
+@app.post("/px/backfill-db")
+def px_backfill_db(pipe: str = "", date: str = "", run: int = 0, subfolder: str = "", password: str = ""):
+    """Push an ALREADY-on-disk backup folder into PostgreSQL — generic version
+    covering ctcl, ms15, cli, and probable (the original CTCL-only
+    /ctcl/backfill-db still works too; this just extends the same idea to
+    every process, since the four pipes' backup folders don't all have the
+    same shape and each needed its own backfill_*_to_db() written for its
+    actual on-disk layout:
+      - ctcl / ms15: BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\<NN>\\
+      - cli:         BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\   (no run subfolder)
+      - probable:    BACKUPFILES AUTOMATED\\<date>\\RECONCILIATION or SHORTAGE\\
+                     (date format is "21 JUL 2026", NOT DD-MM-YYYY — different
+                     from the other three)
+
+    Does NOT touch or move anything on disk — only reads files already there
+    and archives their bytes to Postgres. Safe to call more than once.
+    Password-gated with the SAME SA_CONFIG_PASSWORD as every other sensitive
+    action here, checked server-side."""
+    from core.short_allocation import check_password as _bk_pw3
+    if not _bk_pw3(password):
+        return {"ok": False, "error": "Wrong password"}
+    if not date:
+        return {"ok": False, "error": "date is required"}
+    try:
+        if pipe == "ctcl":
+            from core.pipelines.ctcl_vs_nmass import backfill_run_to_db
+            if not run:
+                return {"ok": False, "error": "run is required for ctcl"}
+            return backfill_run_to_db(date, int(run))
+        elif pipe == "ms15":
+            from core.pipelines.margin_shortage_15min import backfill_run_to_db
+            if not run:
+                return {"ok": False, "error": "run is required for ms15"}
+            return backfill_run_to_db(date, int(run))
+        elif pipe == "cli":
+            from core.pipelines.cli_upload import backfill_date_to_db
+            return backfill_date_to_db(date)
+        elif pipe == "probable":
+            from core.pipelines.probable_full import backfill_run_to_db
+            return backfill_run_to_db(date, subfolder or None)
+        else:
+            return {"ok": False, "error": f"unknown pipe '{pipe}'"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/sa/backfill-db")
+def sa_backfill_db(date: str = "", run: int = 0, password: str = ""):
+    """Push an ALREADY-on-disk Short Allocation run folder into PostgreSQL —
+    the SA equivalent of /px/backfill-db (SA isn't in PIPELINES, so it gets
+    its own route, same as /sa/mark-run-done vs /px/advance-run).
+    Password-gated identically."""
+    from core.short_allocation import check_password as _bk_pw4
+    if not _bk_pw4(password):
+        return {"ok": False, "error": "Wrong password"}
+    if not date or not run:
+        return {"ok": False, "error": "date and run are required"}
+    from core.short_allocation import backfill_run_to_db as _sa_backfill
+    return _sa_backfill(date, int(run))
+
+
+class _PXConfig(_SA_BaseModel):
+    pipe: str
+    password: str
+    updates: dict
+
+@app.post("/px/config")
+def px_config_set(u: _PXConfig):
+    return _pbu(u.pipe, u.password, u.updates)
+
+
+from core.pipeline_box import (pb_upload as _pbup, pb_backup_types as _pbbt,
+                               pb_list_backups as _pblb, pb_copy_backups as _pbcb)
+
+@app.post("/px/upload")
+async def px_upload(pipe: str = "", target: str = "main",
+                    files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+    import shutil as _sh
+    saved = []
+    for f in files:
+        tmp = _sa_os.path.join(_sa_tmp.gettempdir(), _sa_os.path.basename(f.filename))
+        with open(tmp, "wb") as out:
+            _sh.copyfileobj(f.file, out)
+        saved.append(tmp)
+    return _pbup(pipe, saved, target)
+
+@app.get("/px/backup-types")
+def px_backup_types(pipe: str = ""):
+    return {"types": _pbbt(pipe)}
+
+@app.get("/px/backup/list")
+def px_backup_list(pipe: str = "", from_date: str = "", to_date: str = "", types: str = ""):
+    tl = [t for t in types.split(",") if t.strip()] if types else None
+    return {"files": _pblb(pipe, from_date, to_date, tl)}
+
+class _PXRestore(_SA_BaseModel):
+    pipe: str
+    paths: list
+    dest: str
+
+@app.post("/px/backup/copy")
+def px_backup_copy(r: _PXRestore):
+    return _pbcb(r.pipe, r.paths, r.dest)
+
+@app.get("/px/backup/download")
+def px_backup_download(pipe: str = "", path: str = ""):
+    """Download a single backup file to the browser (path must be inside the
+    pipeline's backup roots)."""
+    from core.pipeline_box import pb_backup_file as _pbbf
+    from fastapi.responses import FileResponse as _PX_FileResp
+    ap = _pbbf(pipe, path)
+    if not ap:
+        return {"error": "file not found or outside backup folder"}
+    return _PX_FileResp(ap, filename=_sa_os.path.basename(ap),
+                        media_type="application/octet-stream")
+
+@app.get("/px/client-lookup")
+def px_client_lookup(pipe: str = "", client_codes: str = "",
+                     from_date: str = "", to_date: str = "",
+                     runs: str = ""):
+    """Scan the pipeline's backup folders for per-client input collaterals and
+    output (FULL_FILE) values across a date range — CTCL analogue of
+    /sa/client-peak-lookup.
+    runs: optional comma-separated list of run numbers to include (e.g. "1,3,5").
+          Empty = all runs."""
+    from core.pipeline_box import pb_client_lookup as _pbcl
+    codes = [c.strip() for c in client_codes.replace(";", ",").split(",") if c.strip()]
+    run_filter = None
+    if runs.strip():
+        try:
+            run_filter = [int(x.strip()) for x in runs.split(",") if x.strip()]
+        except Exception:
+            pass
+    try:
+        return _pbcl(pipe, codes, from_date, to_date, run_filter)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/sa/las-email-download-stream")
+def sa_las_email_download_stream():
+    """Stream the LAS Debit Balances email download live.
+    Runs las_email_downloader.py and streams output as SSE events.
+    Exit 0 = success/already-exists; Exit 1 = not found in inbox."""
+    import subprocess as _sub, threading as _thr, queue as _q2, sys as _sys2
+    def gen():
+        q2 = _q2.Queue()
+        script = _sa_os.path.join(
+            _sa_os.getenv("SA_CODES_DIR", r"D:\CLAUDE\rms-copilot\sa_codes"),
+            "las_email_downloader.py"
+        )
+        python = _sa_os.getenv("SA_PYTHON", "python")
+        env2 = _sa_os.environ.copy()
+        env2["SA_ENV_FILE"] = r"D:\CLAUDE\rms-copilot\.env"
+        env2["PYTHONIOENCODING"] = "utf-8"   # prevent cp1252 UnicodeEncodeError
+        env2["PYTHONUTF8"] = "1"             # Python 3.7+ UTF-8 mode
+        env2["PYTHONUNBUFFERED"] = "1"       # otherwise child stdout is block-buffered on
+                                              # a pipe and a slow/quiet run can look hung
+        try:
+            proc = _sub.Popen(
+                [python, "-u", script],
+                stdout=_sub.PIPE, stderr=_sub.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env2,
+                cwd=_sa_os.path.join(_sa_os.path.dirname(_sa_os.path.abspath(__file__)))
+            )
+        except Exception as e:
+            yield f"data: {_sa_json.dumps({'type':'log','msg':f'❌ Failed to start downloader: {e}'})}\n\n"
+            yield f"data: {_sa_json.dumps({'type':'error','msg':str(e)})}\n\n"
+            yield 'data: {"type":"end"}\n\n'
+            return
+
+        def _reader():
+            for line in proc.stdout:
+                q2.put(("log", line.rstrip()))
+            proc.wait()
+            q2.put(("rc", proc.returncode))
+
+        _thr.Thread(target=_reader, daemon=True).start()
+
+        import time as _t2
+        rc = None
+        while True:
+            try:
+                kind2, val = q2.get(timeout=30)
+            except _q2.Empty:
+                yield f"data: {_sa_json.dumps({'type':'log','msg':'⏳ Waiting…'})}\n\n"
+                continue
+            if kind2 == "log":
+                yield f"data: {_sa_json.dumps({'type':'log','msg':val})}\n\n"
+            elif kind2 == "rc":
+                rc = val
+                break
+
+        if rc == 0:
+            yield f"data: {_sa_json.dumps({'type':'done','msg':'✅ LAS Debit file ready'})}\n\n"
+        else:
+            yield f"data: {_sa_json.dumps({'type':'error','msg':'⚠️ File not found in inbox — check later or add manually'})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+
+    return _SA_Stream(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/sa/las-debit-status")
+def sa_las_debit_status():
+    """Check if today's LAS Debit Balances file is present in the LAS folder."""
+    import datetime as _dtt
+    las_dir = _sa_os.getenv("SA_LAS_FUNDING_DIR", r"C:\LAS FUNDING")
+    today_str = _dtt.date.today().strftime("%d-%m-%Y")
+    fname = f"LAS Debit Balances-{today_str}.xlsx"
+    fpath = _sa_os.path.join(las_dir, fname)
+    exists = _sa_os.path.isfile(fpath)
+    size = _sa_os.path.getsize(fpath) if exists else 0
+    return {
+        "filename": fname,
+        "exists": exists,
+        "size": size,
+        "las_dir": las_dir,
+        "today": today_str,
+    }
+
+
+@app.get("/sa/missing-file/pending")
+def sa_missing_file_pending():
+    """Check if the downloader is waiting for an operator decision about a missing exchange file.
+    Returns {pending, missing, context, timeout_at} when a decision is needed."""
+    sa_dir     = _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    state_file = _sa_os.path.join(sa_dir, ".missing_decision.json")
+    try:
+        import json as _j, datetime as _dt_mf
+        with open(state_file, encoding="utf-8") as f:
+            data = _j.load(f)
+        if data.get("state") != "PENDING":
+            return {"pending": False}
+        # ── Staleness guard: if timeout_at is in the past, the downloader process
+        # that wrote this file is gone (killed/crashed). Auto-clear so the popup
+        # doesn't persist forever. Add a 60-second grace period.
+        timeout_at = data.get("timeout_at", "")
+        if timeout_at:
+            try:
+                expiry = _dt_mf.datetime.fromisoformat(timeout_at)
+                if _dt_mf.datetime.now() > expiry + _dt_mf.timedelta(seconds=60):
+                    try: _sa_os.remove(state_file)
+                    except Exception: pass
+                    return {"pending": False}
+            except Exception:
+                pass
+        return {
+            "pending":    True,
+            "missing":    data.get("missing", []),
+            "context":    data.get("context", ""),
+            "timeout_at": data.get("timeout_at", ""),
+        }
+    except Exception:
+        return {"pending": False}
+
+
+@app.post("/sa/missing-file/dismiss")
+def sa_missing_file_dismiss():
+    """Operator manually dismisses a stale missing-file popup when no run is active."""
+    sa_dir     = _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    state_file = _sa_os.path.join(sa_dir, ".missing_decision.json")
+    try:
+        _sa_os.remove(state_file)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+class _SAMissingDecision(_SA_BaseModel):
+    action: str   # "WAIT" | "RUN_BLANK"
+
+@app.post("/sa/missing-file/decision")
+def sa_missing_file_decision(r: _SAMissingDecision):
+    """Submit the operator's decision for a missing exchange file.
+    action='WAIT'     → downloader will retry after 5 min.
+    action='RUN_BLANK' → downloader will create blank placeholder file and continue."""
+    sa_dir     = _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    state_file = _sa_os.path.join(sa_dir, ".missing_decision.json")
+    action     = r.action.strip().upper()
+    if action not in ("WAIT", "RUN_BLANK"):
+        return {"ok": False, "error": f"Invalid action '{action}'. Must be WAIT or RUN_BLANK."}
+    try:
+        import json as _j
+        # Read current state to preserve missing list
+        try:
+            with open(state_file, encoding="utf-8") as f:
+                data = _j.load(f)
+        except Exception:
+            data = {}
+        data["state"] = action
+        with open(state_file, "w", encoding="utf-8") as f:
+            _j.dump(data, f)
+        return {"ok": True, "action": action}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/sa/las-wa-manifest")
+def sa_las_wa_manifest():
+    """Return the WhatsApp send manifest written by the last LAS run.
+    Shows zones, image filenames, masked recipient numbers (last 4 digits), sent status."""
+    las_dir = _sa_os.getenv("SA_LAS_FUNDING_DIR", r"C:\LAS FUNDING")
+    mf_path = _sa_os.path.join(las_dir, ".las_wa_manifest.json")
+    try:
+        import json as _j
+        data = _j.load(open(mf_path, encoding="utf-8"))
+        # Mask recipient numbers: show only last 4 digits for display
+        for zone in data.values():
+            zone["recipients_display"] = [
+                f"****{n[-4:]}" if len(n) >= 4 else n
+                for n in (zone.get("recipients") or [])
+            ]
+        return {"ok": True, "manifest": data}
+    except FileNotFoundError:
+        return {"ok": False, "error": "No manifest found — run LAS first."}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/sa/las-wa-image")
+def sa_las_wa_image(zone: str):
+    """Serve the LAS WhatsApp image for the given zone (reads path from manifest).
+    Searches backup folders automatically if original path is gone."""
+    from fastapi import HTTPException as _HE
+    las_dir  = _sa_os.getenv("SA_LAS_FUNDING_DIR", r"C:\LAS FUNDING")
+    mf_path  = _sa_os.path.join(las_dir, ".las_wa_manifest.json")
+    try:
+        import json as _jj
+        _mdata = _jj.load(open(mf_path, encoding="utf-8"))
+    except Exception:
+        raise _HE(status_code=404, detail="Manifest not found")
+    _zv = _mdata.get(zone)
+    if not _zv:
+        raise _HE(status_code=404, detail=f"Zone '{zone}' not in manifest")
+    _img_path = _zv.get("image", "")
+    if not _sa_os.path.isfile(_img_path):
+        _img_name = _sa_os.path.basename(_img_path)
+        _found    = None
+        _bak_root = _sa_os.path.join(las_dir, "BACKUP FILES AUTOMATED")
+        if _sa_os.path.isdir(_bak_root):
+            for _rr, _dd, _ff in _sa_os.walk(_bak_root):
+                if _img_name in _ff:
+                    _found = _sa_os.path.join(_rr, _img_name); break
+        if not _found:
+            for _sd in (_sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES"),
+                        _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION"),
+                        las_dir):
+                _c = _sa_os.path.join(_sd, _img_name)
+                if _sa_os.path.isfile(_c):
+                    _found = _c; break
+        if not _found:
+            raise _HE(status_code=404, detail=f"Image file not found: {_img_name}")
+        _img_path = _found
+    return FileResponse(_img_path, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-store"})
+
+
+class _SAWaResend(_SA_BaseModel):
+    zone:             str
+    image_path:       str
+    title:            str
+    recipients:       list   # full phone numbers to send to (may include a temp override)
+
+@app.post("/sa/las-wa-resend")
+def sa_las_wa_resend(r: _SAWaResend):
+    """Re-upload a LAS image and resend to specified recipients via WhatsApp.
+    Recipients may include a temporary override number not stored anywhere."""
+    import requests as _req, os as _os2
+    auth_token  = _sa_os.getenv("SA_WA_TOKEN", "")
+    upload_url  = _sa_os.getenv("SA_WA_UPLOAD_URL", "https://wb.omni.tatatelebusiness.com/whatsapp-cloud/media")
+    send_url    = _sa_os.getenv("SA_WA_SEND_URL",   "https://wb.omni.tatatelebusiness.com/whatsapp-cloud/messages")
+    today       = __import__("datetime").datetime.now().strftime("%d-%m-%Y")
+
+    # Resolve image path — original path first, then search backup subfolders,
+    # then check SA_OUTPUT_DIR (common/local fallback).
+    _img_path = r.image_path
+    if not _sa_os.path.isfile(_img_path):
+        _img_name  = _sa_os.path.basename(_img_path)
+        _las_dir   = _sa_os.getenv("SA_LAS_FUNDING_DIR", r"C:\LAS FUNDING")
+        _common_d  = _sa_os.getenv("SA_COMMON_DIR",      r"C:\COMMON FILES")
+        _sa_out_d  = _sa_os.getenv("SA_OUTPUT_DIR",      r"C:\SHORT ALLOCATION")
+        _found     = None
+        # Search backup subfolders of LAS FUNDING
+        _bak_root  = _sa_os.path.join(_las_dir, "BACKUP FILES AUTOMATED")
+        if _sa_os.path.isdir(_bak_root):
+            for _root, _dirs, _files in _sa_os.walk(_bak_root):
+                if _img_name in _files:
+                    _found = _sa_os.path.join(_root, _img_name); break
+        # Fallback: COMMON FILES and SA_OUTPUT_DIR
+        if not _found:
+            for _d in (_common_d, _sa_out_d, _las_dir):
+                _candidate = _sa_os.path.join(_d, _img_name)
+                if _sa_os.path.isfile(_candidate):
+                    _found = _candidate; break
+        if _found:
+            _img_path = _found
+            print(f"📂 Image resolved from backup: {_img_path}")
+        else:
+            return {"ok": False, "error": f"Image not found: {r.image_path} (also searched backup folders)"}
+    # Normalize phone numbers: user may enter 10-digit numbers without +91
+    def _norm_phone(p: str) -> str:
+        p = p.strip().replace(" ", "").replace("-", "")
+        if p.startswith("+91"):   p = p[3:]
+        elif p.startswith("91") and len(p) == 12: p = p[2:]
+        return ("+91" + p) if len(p) == 10 else p
+    _recipients = [_norm_phone(p) for p in r.recipients if str(p).strip()]
+    if not _recipients:
+        return {"ok": False, "error": "No recipients specified."}
+
+    # Upload image
+    try:
+        with open(_img_path, "rb") as _f:
+            up_r = _req.post(
+                upload_url,
+                headers={"Authorization": f"Bearer {auth_token}", "accept": "application/json"},
+                files={"file": ("report.jpg", _f, "image/jpeg")},
+                timeout=30,
+            )
+        if up_r.status_code not in (200, 201):
+            return {"ok": False, "error": f"Upload failed ({up_r.status_code}): {up_r.text[:200]}"}
+        media_id = up_r.json().get("id") or up_r.json().get("mediaHandle")
+    except Exception as e:
+        return {"ok": False, "error": f"Upload error: {e}"}
+
+    # Send to each recipient
+    results = []
+    for phone in _recipients:
+        payload = {
+            "to": phone,
+            "type": "template",
+            "source": "external",
+            "template": {
+                "name": "daily_report",
+                "language": {"code": "en"},
+                "components": [
+                    {"type": "header", "parameters": [{"type": "image", "image": {"id": media_id}}]},
+                    {"type": "body",   "parameters": [{"type": "text", "text": r.title}, {"type": "text", "text": today}]},
+                ],
+            },
+        }
+        try:
+            sr = _req.post(send_url, headers={"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"}, json=payload, timeout=20)
+            results.append({"phone": f"****{phone[-4:]}", "ok": sr.status_code == 200, "detail": sr.text[:100] if sr.status_code != 200 else ""})
+        except Exception as e:
+            results.append({"phone": f"****{phone[-4:]}", "ok": False, "detail": str(e)})
+
+    return {"ok": all(r["ok"] for r in results), "results": results}
+
+
+@app.get("/sa/captcha/pending")
+def sa_captcha_pending():
+    """Check if NCDEX CAPTCHA is awaiting browser input.
+    Returns {pending: bool, image_b64: str|null}.
+    ncdex_downloader writes .captcha_state='PENDING' + .captcha_ncdex.png to
+    SA_OUTPUT_DIR; this endpoint exposes them to the dashboard poller."""
+    import base64 as _b64
+    sa_dir     = _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    state_file = _sa_os.path.join(sa_dir, ".captcha_state")
+    img_file   = _sa_os.path.join(sa_dir, ".captcha_ncdex.png")
+    try:
+        st = open(state_file, encoding="utf-8").read().strip()
+        if st != "PENDING":
+            return {"pending": False}
+        if not _sa_os.path.isfile(img_file):
+            return {"pending": True, "image_b64": None}
+        img_b64 = _b64.b64encode(open(img_file, "rb").read()).decode()
+        return {"pending": True, "image_b64": img_b64}
+    except Exception:
+        return {"pending": False}
+
+
+class _SACaptchaAnswer(_SA_BaseModel):
+    text: str
+
+@app.post("/sa/captcha/answer")
+def sa_captcha_answer(a: _SACaptchaAnswer):
+    """Submit the typed CAPTCHA text to the waiting NCDEX downloader.
+    Writes .captcha_answer then sets .captcha_state='ANSWERED'."""
+    sa_dir     = _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    state_file = _sa_os.path.join(sa_dir, ".captcha_state")
+    ans_file   = _sa_os.path.join(sa_dir, ".captcha_answer")
+    try:
+        with open(ans_file, "w", encoding="utf-8") as f:
+            f.write(a.text.strip())
+        with open(state_file, "w", encoding="utf-8") as f:
+            f.write("ANSWERED")
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+
+
+_ctcl_last_answered_at: dict = {}   # {source: timestamp} — per-source, NOT shared across
+                                     # NMASS/NCDEX (a shared single timestamp used to leak a
+                                     # false "previous attempt failed" reason from one login
+                                     # context into the other's very first captcha attempt).
+
+@app.get("/ctcl/captcha/pending")
+def ctcl_captcha_pending():
+    """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input.
+    Returns {pending, image_b64, detected, reason, source}.
+    If the Python script doesn't write a reason (old version), we infer one from
+    how recently an answer was submitted for THIS SAME source (retry fallback) —
+    scoped per source so answering an NMASS captcha doesn't make a brand-new
+    NCDEX captcha falsely claim a previous attempt failed."""
+    import base64 as _b64, json as _cj, os as _co, time as _ct
+    global _ctcl_last_answered_at
+    _dir = _co.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _img = _co.path.join(_dir, ".captcha_nmass.png")
+    try:
+        _st = _cj.load(open(_sf, encoding="utf-8"))
+        if _st.get("state") != "PENDING":
+            return {"pending": False}
+        img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
+        reason = _st.get("reason", "")
+        # source: "ncdex" = NCDEX portal login (ncfe.ncdex.com), "nmass" = NMASS portal
+        source = _st.get("source", "nmass")
+        _last = _ctcl_last_answered_at.get(source, 0)
+        # Fallback: if script didn't write a reason but WE answered THIS source recently → it's a retry
+        if not reason and _last and (_ct.time() - _last) < 90:
+            reason = "⚠️ Previous attempt failed — try again"
+        return {"pending": True, "image_b64": img_b64, "detected": _st.get("detected", ""), "reason": reason, "source": source}
+    except Exception:
+        return {"pending": False}
+
+class _CTCLCaptchaAnswer(_SA_BaseModel):
+    text: str
+
+@app.post("/ctcl/captcha/answer")
+def ctcl_captcha_answer(a: _CTCLCaptchaAnswer):
+    """Submit typed captcha text to the waiting NMASS/NCDEX script."""
+    import os as _co, time as _ct, json as _cj
+    global _ctcl_last_answered_at
+    _dir = _co.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _af  = _co.path.join(_dir, ".captcha_answer")
+    try:
+        # Read which source we're answering BEFORE overwriting the state file,
+        # so the retry-fallback timestamp above is recorded against the right one.
+        _source = "nmass"
+        try:
+            _source = _cj.load(open(_sf, encoding="utf-8")).get("source", "nmass")
+        except Exception:
+            pass
+        with open(_af, "w", encoding="utf-8") as f: f.write(a.text.strip())
+        with open(_sf, "w", encoding="utf-8") as f:
+            _cj.dump({"state": "ANSWERED"}, f)
+        _ctcl_last_answered_at[_source] = _ct.time()   # record answer time for retry-reason fallback
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/sa/las-checkpoint")
+def sa_las_checkpoint():
+    """Return the last LAS checkpoint (step + status). Used by dashboard resume banner."""
+    try:
+        import sys as _ck_sys
+        _ck_sys.path.insert(0, _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes"))
+        import importlib
+        ckpt_mod = importlib.import_module("_checkpoint")
+        data = ckpt_mod.read_las()
+        return data or {}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+
+@app.get("/sa/sa-checkpoint")
+def sa_sa_checkpoint():
+    """Return the last SA Code-2 checkpoint. Used by dashboard resume banner."""
+    try:
+        import sys as _ck_sys
+        _ck_sys.path.insert(0, _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes"))
+        import importlib
+        ckpt_mod = importlib.import_module("_checkpoint")
+        data = ckpt_mod.read_sa()
+        return data or {}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/sa/post-email-stream")
+def sa_post_email_stream():
+    """SSE: run run_post_email_LAS4.py and stream output line by line to dashboard.
+    Use after LAS4 emails were sent but the post-email Scenario/Top-100/backup steps crashed."""
+    import json as _pe_json, subprocess as _pe_sub, sys as _pe_sys
+    sa_codes_dir = _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes")
+    script = _sa_os.path.join(sa_codes_dir, "run_post_email_LAS4.py")
+    def gen():
+        _tail = []
+        try:
+            env = {**_sa_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
+                   "PYTHONUNBUFFERED": "1"}
+            proc = _pe_sub.Popen(
+                [_pe_sys.executable, "-u", script],
+                cwd=sa_codes_dir, stdout=_pe_sub.PIPE, stderr=_pe_sub.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,
+            )
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                if line:
+                    yield f"data: {_pe_json.dumps({'type':'log','msg':line})}\n\n"
+                    _tail.append(line)
+                    if len(_tail) > 20:
+                        _tail.pop(0)
+            proc.wait()
+            rc = proc.returncode
+            if rc != 0:
+                # AI (Groq) plain-English fallback — same as every other pipeline now has,
+                # instead of just showing a bare exit code.
+                try:
+                    from core.error_translator import translate_error
+                    _ai_msg = translate_error("Short Allocation — Post-Email Steps", _tail)
+                except Exception:
+                    _ai_msg = None
+                if _ai_msg:
+                    yield f"data: {_pe_json.dumps({'type':'note','msg':_ai_msg})}\n\n"
+            yield f"data: {_pe_json.dumps({'type':'done','ok': rc == 0, 'msg': 'Post-email steps completed' if rc == 0 else f'Exit code {rc}'})}\n\n"
+        except Exception as e:
+            yield f"data: {_pe_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return _SA_Stream(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/sa/mcx-deposit-stream")
+def sa_mcx_deposit_stream():
+    """SSE: run mcx_deposit_downloader.py standalone and stream output to dashboard.
+    Downloads RSK383 (Cash Collateral Deposit Limit) from eclear.mcxccl.com.
+    RSA SecurID token popup appears on desktop — user enters manually.
+    Saves as MCX_DEPOSIT_HH.MM.xlsx in the SA output folder.
+    Full output is written to logs/short_allocation/MCX_DEPOSIT__<ts>.log (appears in Logs modal).
+    Uses daemon thread so log is preserved even if browser tab is closed mid-download."""
+    import json as _dep_json
+    from core.pipelines.mcx_deposit_download import stream_mcx_deposit_download
+    _sa_clear_popup_state()  # drop any stale unanswered captcha/token from a previous stopped/crashed run
+    def gen():
+        try:
+            for ev in stream_mcx_deposit_download():
+                yield f"data: {_dep_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_dep_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return _SA_Stream(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+# ── CTCL download + stop endpoints ──────────────────────────────────────────
+
+@app.get("/ctcl/download/nmass-stream")
+def ctcl_nmass_download_stream():
+    """SSE: run NMASS_NCFE_API_MIX.PY and stream output to dashboard.
+    Script path: ctcl_codes/NMASS_NCFE_API_MIX.PY (inside Claude folder).
+    Supports cancel via /ctcl/stop (sets _PB['cancel']=True)."""
+    import json as _nd_json
+    from core.pipelines.nmass_download import stream_nmass_download
+    _ctcl_clear_popup_state()  # drop any stale unanswered captcha/token from a previous stopped/crashed run
+    def gen():
+        try:
+            for ev in stream_nmass_download():
+                yield f"data: {_nd_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_nd_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/ctcl/download/mcx90-stream")
+def ctcl_mcx90_download_stream():
+    """SSE: run MCX_90_PERCENT_FILE_API.py and stream output to dashboard.
+    Script path: ctcl_codes/MCX_90_PERCENT_FILE_API.py (inside Claude folder).
+    RSA SecurID token is entered via the web dashboard (state-file pattern)."""
+    import json as _m9_json
+    from core.pipelines.mcx90_download import stream_mcx90_download
+    _ctcl_clear_popup_state()  # drop any stale unanswered captcha/token from a previous stopped/crashed run
+    def gen():
+        try:
+            for ev in stream_mcx90_download():
+                yield f"data: {_m9_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_m9_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.post("/ctcl/stop")
+def ctcl_stop():
+    """Stop any running CTCL pipeline or download (NMASS, MCX90, main run).
+    Sets CTCL's own _PB['ctcl'] cancel flag and terminates its tracked
+    subprocess if one is running — never touches MS15 or CLI's independent slots."""
+    from core.pipeline_box import stop_pipeline as _ctcl_sp
+    _ctcl_sp("ctcl")
+    _ctcl_clear_popup_state()
+    return {"ok": True}
+
+
+def _ctcl_clear_popup_state():
+    """Delete any leftover captcha/token popup state files so a stopped run's
+    unanswered prompt can't reappear and get shown for a later, unrelated run.
+    (This is exactly what caused the NCDEX captcha to pop back up when
+    running MCX Deposit afterwards.)"""
+    import os as _cco
+    _dir = _cco.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    for _fn in (".captcha_state", ".captcha_answer", ".captcha_nmass.png",
+                ".token_state", ".token_answer"):
+        try: _cco.remove(_cco.path.join(_dir, _fn))
+        except OSError: pass
+
+
+# ── RSA SecurID token endpoints (MCX 90% CTCL side) ─────────────────────────
+
+@app.get("/ctcl/token/pending")
+def ctcl_token_pending():
+    """Poll: is MCX 90% waiting for an RSA token? Reads .token_state in CTCL_NMASS_FOLDER."""
+    import json as _tj, os as _tos, time as _tt
+    _dir = _tos.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    _sf  = _tos.path.join(_dir, ".token_state")
+    try:
+        st = _tj.load(open(_sf, encoding="utf-8"))
+        if st.get("state") == "PENDING":
+            return {"pending": True, "label": st.get("label","MCX 90%"),
+                    "attempt": st.get("attempt",1), "max_attempts": st.get("max_attempts",3),
+                    "error_msg": st.get("error_msg")}
+    except Exception:
+        pass
+    return {"pending": False}
+
+
+@app.post("/ctcl/token/answer")
+async def ctcl_token_answer(req: Request):
+    """Submit RSA token answer for MCX 90% download."""
+    import json as _tj, os as _tos
+    data = await req.json()
+    token = (data.get("token") or "").strip()
+    if not token:
+        return {"ok": False, "error": "empty token"}
+    _dir = _tos.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    _sf  = _tos.path.join(_dir, ".token_state")
+    _af  = _tos.path.join(_dir, ".token_answer")
+    try:
+        open(_af, "w", encoding="utf-8").write(token)
+        _tj.dump({"state": "ANSWERED"}, open(_sf, "w", encoding="utf-8"))
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ── RSA SecurID token endpoints (MCX Deposit SA side) ───────────────────────
+
+@app.get("/sa/token/pending")
+def sa_token_pending():
+    """Poll: is MCX Deposit waiting for an RSA token? Reads .token_state in SA_OUTPUT_DIR.
+
+    This file is shared with Client Prudential Limit's own MCX Web Allocation
+    button (both ultimately call sa_codes/mcx_deposit_downloader.py's
+    download_mcx_deposit()) — "caller" (stamped by _token_popup() from the
+    MCX_DEPOSIT_CALLER env var the invoking pipeline sets) tells the dashboard
+    which box actually triggered this specific request, purely for display."""
+    import json as _stj, os as _sos
+    _dir = _sos.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    _sf  = _sos.path.join(_dir, ".token_state")
+    try:
+        st = _stj.load(open(_sf, encoding="utf-8"))
+        if st.get("state") == "PENDING":
+            return {"pending": True, "label": st.get("label","MCX Deposit"),
+                    "attempt": st.get("attempt",1), "max_attempts": st.get("max_attempts",3),
+                    "error_msg": st.get("error_msg"), "caller": st.get("caller","sa")}
+    except Exception:
+        pass
+    return {"pending": False}
+
+
+@app.post("/sa/token/answer")
+async def sa_token_answer(req: Request):
+    """Submit RSA token answer for MCX Deposit download."""
+    import json as _stj, os as _sos
+    data = await req.json()
+    token = (data.get("token") or "").strip()
+    if not token:
+        return {"ok": False, "error": "empty token"}
+    _dir = _sos.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+    _sf  = _sos.path.join(_dir, ".token_state")
+    _af  = _sos.path.join(_dir, ".token_answer")
+    try:
+        open(_af, "w", encoding="utf-8").write(token)
+        _stj.dump({"state": "ANSWERED"}, open(_sf, "w", encoding="utf-8"))
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+# ── CTCL readiness (file presence check for dashboard pre-run badge) ─────────
+
+@app.get("/ctcl/readiness")
+def ctcl_readiness():
+    """Check whether all NMASS/CTCL input files are present in CTCL_NMASS_FOLDER.
+    Returns {"items": [{"key":str, "ok":bool, "example":str}]}
+    Update Limits and MCX 90% added — core/pipelines/ctcl_vs_nmass.py already
+    requires both (see UPDATE_LIMITS_FILE / MCX_RANDOM_NAME_FILE there), the
+    readiness banner just never checked for them.
+
+    KAMBALA is appended HERE rather than inside _readiness_for() because that
+    helper is shared with /ms15/readiness, and Margin Shortage has no Kambala
+    file — adding it there would show MS15 a permanently-missing input.
+    """
+    _dir = os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    res = _readiness_for(_dir)
+    # Permanent reference file: presence only, no age rule — it is never
+    # re-downloaded, so "old" is the normal and correct state for it.
+    try:
+        from core.pipelines.ctcl_vs_nmass import kambala_name as _kb_name
+        _kb = _kb_name()
+        _kb_ok = os.path.isfile(os.path.join(_dir, _kb))
+        res["items"].append({
+            "key": "KAMBALA_REFERENCE", "ok": _kb_ok, "example": _kb,
+            "age_min": None,
+            "why": "" if _kb_ok else "not present — permanent reference file, must not be deleted",
+            "file": _kb if _kb_ok else ""})
+    except Exception as _kb_e:
+        print(f"[ctcl] readiness: KAMBALA check skipped: {type(_kb_e).__name__}: {_kb_e}", flush=True)
+    return res
+
+
+def _readiness_for(_dir):
+    """Shared by /ctcl/readiness and /ms15/readiness — both boxes download the
+    same five inputs into their own folder and both now apply the SAME age
+    limits, so an old file can never be silently reused as if freshly fetched.
+
+    An item is only "ok" when it is PRESENT **and** RECENT:
+        CM / FO / CO collaterals    ≤ 4 min   (stamp in the filename)
+        ClientNetEffectiveDeposits  ≤ 4 min   (no stamp — modified time)
+        MCX 90%                     ≤ 45 min  (stamp in the filename)
+        Update Limits               presence only — it's maintained by hand,
+                                    not downloaded, so an age rule would be wrong
+    Each item carries age_min/why so the banner can say WHY something isn't
+    usable ("18.4 min old — older than the 4 min limit") instead of just
+    "missing", which would be misleading when the file is sitting right there.
+    """
+    import os as _ros
+    from core import file_freshness as _ff
+
+    items = []
+    _collats = [
+        ("CM_CLIENT_LEVEL",               "CM_ClientLevelCollaterals",  "collateral"),
+        ("FO_CLIENT_LEVEL",               "FO_ClientLevelCollaterals",  "collateral"),
+        ("CO_CLIENT_LEVEL",               "CO_ClientLevelCollaterals",  "collateral"),
+        # No stamp in this one's name — falls back to modified time inside check().
+        ("CLIENT_NET_EFFECTIVE_DEPOSITS", "ClientNetEffectiveDeposits", "mtime"),
+    ]
+    for key, prefix, kind in _collats:
+        path = _ff.newest(_dir, lambda f, p=prefix: f.upper().startswith(p.upper())
+                          and f.lower().endswith(".csv"), kind="collateral")
+        r = _ff.check(path, kind=kind) if path else {
+            "ok": False, "age_min": None, "name": "", "why": "not present"}
+        items.append({"key": key, "ok": r["ok"], "example": prefix,
+                      "age_min": r.get("age_min"), "why": r.get("why"),
+                      "file": r.get("name")})
+
+    # Update Limits — presence only, on purpose (see docstring).
+    _ul = _ff.newest(_dir, lambda f: f.lower().startswith("update limits")
+                     and f.lower().endswith(".xlsx"), kind="mtime")
+    items.append({"key": "UPDATE_LIMITS", "ok": bool(_ul), "example": "Update Limits",
+                  "age_min": None, "why": "" if _ul else "not present",
+                  "file": _ros.path.basename(_ul) if _ul else ""})
+
+    # MCX 90% — random prefix, then YYYYMMDDHHMMSS (alkNAVlSFN-20260729145211.xlsx).
+    # Identified as "any .xlsx that isn't Update Limits", matching
+    # core/pipelines/ctcl_vs_nmass.py's MCX_RANDOM_NAME_FILE logic.
+    _mcx = _ff.newest(_dir, lambda f: f.lower().endswith(".xlsx")
+                      and "update limits" not in f.lower(), kind="mcx90")
+    _r = _ff.check(_mcx, kind="mcx90") if _mcx else {
+        "ok": False, "age_min": None, "name": "", "why": "not present"}
+    items.append({"key": "MCX_90_PERCENT", "ok": _r["ok"],
+                  "example": "MCX 90% (random filename, .xlsx)",
+                  "age_min": _r.get("age_min"), "why": _r.get("why"),
+                  "file": _r.get("name")})
+
+    return {"items": items, "folder": _dir,
+            "max_age_min": {"collateral": _ff.max_age_collateral(),
+                            "mcx90": _ff.max_age_mcx90()}}
+
+
+# ── Margin Shortage (15-min) download + captcha/token + readiness ──────────
+# Mirrors the CTCL block above exactly, but reads/writes MARGIN_SHORTAGE_FOLDER
+# and calls the shared download generators with pipe="ms15" instead of "ctcl" —
+# see core/pipelines/nmass_download.py + mcx90_download.py for the pipe-aware
+# folder selection + MCX90 cross-copy logic. Generic /px/* endpoints (status,
+# config/credentials, stop-via-taskkill, logs, backup) already work for
+# pipe=ms15 once it's registered in PIPELINES — only the download streams,
+# captcha/token popup handshake, and readiness check need dedicated routes,
+# same reason CTCL needs them instead of generic ones.
+
+@app.get("/ms15/download/nmass-stream")
+def ms15_nmass_download_stream():
+    """SSE: run NMASS_NCFE_API_MIX.PY (pipe=ms15 → saves into MARGIN_SHORTAGE_FOLDER)."""
+    import json as _mn_json
+    from core.pipelines.nmass_download import stream_nmass_download
+    _ms15_clear_popup_state()
+    def gen():
+        try:
+            for ev in stream_nmass_download(pipe="ms15"):
+                yield f"data: {_mn_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_mn_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/ms15/download/mcx90-stream")
+def ms15_mcx90_download_stream():
+    """SSE: run MCX_90_PERCENT_FILE_API.py (pipe=ms15 → saves into MARGIN_SHORTAGE_FOLDER,
+    auto-skips if today's file already arrived via CTCL's cross-copy at a paired run time)."""
+    import json as _mm_json
+    from core.pipelines.mcx90_download import stream_mcx90_download
+    _ms15_clear_popup_state()
+    def gen():
+        try:
+            for ev in stream_mcx90_download(pipe="ms15"):
+                yield f"data: {_mm_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_mm_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.post("/ms15/stop")
+def ms15_stop():
+    """Stop any running Margin Shortage download or the main pipeline run —
+    only MS15's own independent slot, never CTCL's or CLI's."""
+    from core.pipeline_box import stop_pipeline as _ms15_sp
+    _ms15_sp("ms15")
+    _ms15_clear_popup_state()
+    return {"ok": True}
+
+
+def _ms15_clear_popup_state():
+    """Delete any leftover captcha/token popup state files so a stopped run's
+    unanswered prompt can't reappear later — same fix as CTCL's
+    _ctcl_clear_popup_state, scoped to MARGIN_SHORTAGE_FOLDER."""
+    import os as _mco
+    _dir = _mco.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    for _fn in (".captcha_state", ".captcha_answer", ".captcha_nmass.png",
+                ".token_state", ".token_answer"):
+        try: _mco.remove(_mco.path.join(_dir, _fn))
+        except OSError: pass
+
+
+_ms15_last_answered_at: dict = {}
+
+@app.get("/ms15/captcha/pending")
+def ms15_captcha_pending():
+    """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
+    for the Margin Shortage box's own NMASS download. Same logic as
+    /ctcl/captcha/pending, scoped to MARGIN_SHORTAGE_FOLDER."""
+    import base64 as _b64, json as _cj, os as _co, time as _ct
+    global _ms15_last_answered_at
+    _dir = _co.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _img = _co.path.join(_dir, ".captcha_nmass.png")
+    try:
+        _st = _cj.load(open(_sf, encoding="utf-8"))
+        if _st.get("state") != "PENDING":
+            return {"pending": False}
+        img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
+        reason = _st.get("reason", "")
+        source = _st.get("source", "nmass")
+        _last = _ms15_last_answered_at.get(source, 0)
+        if not reason and _last and (_ct.time() - _last) < 90:
+            reason = "⚠️ Previous attempt failed — try again"
+        return {"pending": True, "image_b64": img_b64, "detected": _st.get("detected", ""), "reason": reason, "source": source}
+    except Exception:
+        return {"pending": False}
+
+@app.post("/ms15/captcha/answer")
+def ms15_captcha_answer(a: _CTCLCaptchaAnswer):
+    """Submit typed captcha text to the waiting NMASS/NCDEX script (Margin Shortage box)."""
+    import os as _co, time as _ct, json as _cj
+    global _ms15_last_answered_at
+    _dir = _co.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _af  = _co.path.join(_dir, ".captcha_answer")
+    try:
+        _source = "nmass"
+        try:
+            _source = _cj.load(open(_sf, encoding="utf-8")).get("source", "nmass")
+        except Exception:
+            pass
+        with open(_af, "w", encoding="utf-8") as f: f.write(a.text.strip())
+        with open(_sf, "w", encoding="utf-8") as f:
+            _cj.dump({"state": "ANSWERED"}, f)
+        _ms15_last_answered_at[_source] = _ct.time()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/ms15/token/pending")
+def ms15_token_pending():
+    """Poll: is MCX 90% (Margin Shortage box) waiting for an RSA token?"""
+    import json as _tj, os as _tos
+    _dir = _tos.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    _sf  = _tos.path.join(_dir, ".token_state")
+    try:
+        st = _tj.load(open(_sf, encoding="utf-8"))
+        if st.get("state") == "PENDING":
+            return {"pending": True, "label": st.get("label","MCX 90%"),
+                    "attempt": st.get("attempt",1), "max_attempts": st.get("max_attempts",3),
+                    "error_msg": st.get("error_msg")}
+    except Exception:
+        pass
+    return {"pending": False}
+
+
+@app.post("/ms15/token/answer")
+async def ms15_token_answer(req: Request):
+    """Submit RSA token answer for MCX 90% download (Margin Shortage box)."""
+    import json as _tj, os as _tos
+    data = await req.json()
+    token = (data.get("token") or "").strip()
+    if not token:
+        return {"ok": False, "error": "empty token"}
+    _dir = _tos.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    _sf  = _tos.path.join(_dir, ".token_state")
+    _af  = _tos.path.join(_dir, ".token_answer")
+    try:
+        open(_af, "w", encoding="utf-8").write(token)
+        _tj.dump({"state": "ANSWERED"}, open(_sf, "w", encoding="utf-8"))
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/ms15/readiness")
+def ms15_readiness():
+    """Check whether all input files are present in MARGIN_SHORTAGE_FOLDER.
+    Returns {"items": [{"key":str, "ok":bool, "example":str}]} — same shape
+    as /ctcl/readiness, matching core/pipelines/margin_shortage_15min.py's
+    pre_run_file_check() requirements (CM/FO/CO/NCDEX/RISK_REPORT/MCX90)."""
+    import os as _ros, glob as _rg
+    _dir = _ros.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    # Same age rules as CTCL (4 min collaterals, 45 min MCX 90%) — this box
+    # runs 11 times a day, so reusing an old file here is even easier to do by
+    # accident than on CTCL.
+    _base = _readiness_for(_dir)
+    # MS15 has no "Update Limits"; it needs RISK_REPORT instead, which may live
+    # in the shared common folder. RISK_REPORT is dropped once per day by hand,
+    # NOT downloaded per run, so it is checked for PRESENCE only — an age limit
+    # on it would fail every run after the first few minutes of the day.
+    items = [it for it in _base["items"] if it["key"] != "UPDATE_LIMITS"]
+    _rr = bool(_rg.glob(_ros.path.join(_dir, "RISK_REPORT_*.csv")))
+    if not _rr:
+        _common = _ros.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
+        _rr = bool(_rg.glob(_ros.path.join(_common, "RISK_REPORT_*.csv")))
+    items.insert(4, {"key": "RISK_REPORT", "ok": _rr, "example": "RISK_REPORT",
+                     "age_min": None, "why": "" if _rr else "not present", "file": ""})
+    return {"items": items, "folder": _dir, "max_age_min": _base["max_age_min"]}
+
+
+# ── SAFE TEST RUN (Margin Shortage 15-min) ─────────────────────────────────
+# A one-shot rehearsal of a FULL real run with every destination redirected to
+# the tester. Arming writes a marker file; the pipeline consumes (deletes) it
+# the moment the run commits, so it is structurally impossible for the flag to
+# survive into a second run. See the long comment block above
+# _safe_test_marker_path() in core/pipelines/margin_shortage_15min.py.
+@app.get("/ms15/safe-test")
+def ms15_safe_test_status():
+    """Armed state + the exact redirect targets, so the UI can show the operator
+    precisely where a test run's messages will land BEFORE they commit to it."""
+    import os as _st
+    from core.pipelines.margin_shortage_15min import is_safe_test_armed as _armed
+    return {
+        "armed": _armed(),
+        "email_to": [e.strip() for e in _st.getenv("MS15_TEST_EMAIL_TO", "kartavya.dhillon@mastertrust.co.in").split(",") if e.strip()],
+        "wa_to": _st.getenv("MS15_TEST_WA_TO", "+917889026088").strip(),
+    }
+
+
+@app.post("/ms15/safe-test/arm")
+def ms15_safe_test_arm(password: str = ""):
+    """Arm the NEXT Margin Shortage run as a safe test. Password-gated like every
+    other state-changing MS15 route — arming changes where real messages go."""
+    from core.short_allocation import check_password as _st_pw
+    if not _st_pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    from core.pipelines.margin_shortage_15min import arm_safe_test as _arm
+    try:
+        _arm()
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return {"ok": True, "armed": True}
+
+
+@app.post("/ms15/safe-test/disarm")
+def ms15_safe_test_disarm():
+    """Cancel an armed safe test. Deliberately NOT password-gated — disarming
+    only ever moves toward normal live behaviour, and an operator who armed by
+    mistake must always be able to undo it instantly."""
+    from core.pipelines.margin_shortage_15min import disarm_safe_test as _disarm
+    return {"ok": True, "armed": False, "was_armed": _disarm()}
+
+
+@app.get("/ms15/shortage-wa-config")
+def ms15_shortage_wa_config_get():
+    """Read the recipient list for the MARGIN SHORTAGE ALERT image (an internal
+    RM/branch team list — separate from the per-client Gupshup alerts, and
+    separate from the unrelated Peak Margin report's own WA_RECIPIENTS).
+    Backing store is just the MS15_SHORTAGE_WA_TO env var — no password
+    needed to READ it (matches every other /px/config-style GET), only to save."""
+    import os as _mwc
+    return {"to": _mwc.getenv("MS15_SHORTAGE_WA_TO", "")}
+
+
+def _ms15_normalize_wa_number(v: str) -> str:
+    """A user only ever types the 10 local digits; this fills in +91
+    automatically (mirrors process-probable-box.js's client-side
+    _ms15NormalizePhone, kept here too so the cap/format is enforced no
+    matter what calls this route)."""
+    v = (v or "").strip()
+    if not v:
+        return ""
+    if v.startswith("+"):
+        return v
+    digits = "".join(ch for ch in v if ch.isdigit())
+    if len(digits) > 10 and digits.startswith("91"):
+        digits = digits[2:]
+    return ("+91" + digits) if digits else ""
+
+
+@app.post("/ms15/shortage-wa-config")
+def ms15_shortage_wa_config_set(to: str = "", password: str = ""):
+    """Save the MARGIN SHORTAGE ALERT image's recipient list. MS15's box is
+    native to dashboard.html (can't be edited on disk), so this is the button
+    injected by process-probable-box.js — same password as Credentials."""
+    from core.short_allocation import check_password as _mwc_pw
+    if not _mwc_pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    numbers = [_ms15_normalize_wa_number(n) for n in to.split(",")]
+    numbers = [n for n in numbers if n]
+    if len(numbers) > 10:
+        return {"ok": False, "error": "Maximum 10 numbers allowed"}
+    from core.pipeline_box import _write_env as _mwc_write
+    _mwc_write({"MS15_SHORTAGE_WA_TO": ",".join(numbers)})
+    return {"ok": True}
+
+
+@app.get("/ms15/whatsapp-report")
+def ms15_whatsapp_report(date: str, runs: str = ""):
+    """Build and return an .xlsx listing every client who ACTUALLY received a
+    WhatsApp margin alert on `date` (YYYY-MM-DD), optionally filtered to specific
+    run numbers (`runs`= comma-separated, e.g. "2,4,8"). Columns: Run, Client
+    Code, Margin Warning %, Sent At. Reads the margin_whatsapp_log DB
+    table (Postgres or SQLite per USE_POSTGRES).
+
+    The client's mobile number is deliberately NOT a column. The client code
+    already identifies who was alerted, which is what this report is for; the
+    phone number added nothing and put client contact details into a file that
+    gets emailed and passed around. It is still recorded in the database for
+    audit, just not exported here."""
+    import io as _io, os as _wos
+    from fastapi.responses import Response as _Resp
+    run_list = [int(r) for r in runs.split(",") if r.strip().isdigit()]
+    use_pg = _wos.getenv("USE_POSTGRES", "false").strip().lower() == "true"
+    try:
+        if use_pg:
+            from core.db_postgres import list_whatsapp_sends as _lw
+        else:
+            from core.db import list_whatsapp_sends as _lw
+        rows = _lw(date, run_list)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    import openpyxl as _oxl
+    wb = _oxl.Workbook(); ws = wb.active; ws.title = "WhatsApp Alerts"
+    headers = ["Run", "Client Code", "Margin Warning %", "Sent At"]
+    ws.append(headers)
+    for r in rows:
+        ws.append([r.get("run_number"), r.get("client_code"),
+                   r.get("margin_pct"), str(r.get("sent_at") or "")])
+    for col in ws.columns:
+        _w = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+        ws.column_dimensions[col[0].column_letter].width = _w + 2
+    buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+    _rtag = ("_runs" + "-".join(str(r) for r in run_list)) if run_list else "_all-runs"
+    fname = f"WhatsApp_Recipients_{date}{_rtag}.xlsx"
+    return _Resp(content=buf.getvalue(),
+                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.get("/ms15/output-file")
+def ms15_output_file(date: str, run: int):
+    """Return the Shortage_vs_CC_Deposit output .xlsx for a given date (YYYY-MM-DD)
+    and run number. Looks in that run's backup folder first
+    (MARGIN_SHORTAGE_FOLDER/BACKUPFILES AUTOMATED/<DD-MM-YYYY>/<NN>/); if the run
+    is the current one whose files haven't been backed up yet, falls back to the
+    live output in the base folder."""
+    import os as _oos, glob as _og, datetime as _odt
+    _dir = _oos.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    try:
+        _ddmmyyyy = _odt.datetime.strptime(date, "%Y-%m-%d").strftime("%d-%m-%Y")
+    except Exception:
+        return {"ok": False, "error": "date must be YYYY-MM-DD"}
+    run_folder = _oos.path.join(_dir, "BACKUPFILES AUTOMATED", _ddmmyyyy, f"{int(run):02d}")
+    cands = _og.glob(_oos.path.join(run_folder, "Shortage_vs_CC_Deposit*.xlsx"))
+    # Prefer the main output over the per-zone files
+    cands.sort(key=lambda p: (("_" in _oos.path.basename(p)[len("Shortage_vs_CC_Deposit"):]), p))
+    if not cands:
+        # current run not yet backed up — fall back to live output in base folder,
+        # but only if today matches the requested date (otherwise it's stale/wrong)
+        if date == _odt.datetime.now().strftime("%Y-%m-%d"):
+            cands = _og.glob(_oos.path.join(_dir, "Shortage_vs_CC_Deposit*.xlsx"))
+            cands.sort(key=lambda p: (("_" in _oos.path.basename(p)[len("Shortage_vs_CC_Deposit"):]), p))
+    if not cands:
+        return {"ok": False, "error": f"No output file found for {date} run {run}."}
+    _fp = cands[0]
+    return FileResponse(_fp, filename=_oos.path.basename(_fp),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ── Probable Defaulter (pipe key "probable") ─────────────────────────────────
+# Generic /px/* endpoints (status/config-credentials/stop/logs/backup/upload)
+# already work for pipe=probable once it's registered in PIPELINES — same
+# reason CTCL/MS15/CLI only need dedicated routes for downloads, the
+# captcha/token popup handshake, and the readiness check.
+#
+# RSA token entry for the TCS BANCS RSK383/RSK335 downloads (core/pipelines/
+# probable_tcs_bancs.py) needs NO new route at all: it reuses the EXACT SAME
+# _token_popup()/.token_state file (in SA_OUTPUT_DIR) that Short Allocation's
+# MCX Deposit button and Client Prudential Limit's MCX Web Allocation button
+# already share — probable_tcs_bancs.py sets MCX_DEPOSIT_CALLER="probable"
+# before calling it, and /sa/token/pending already returns whatever "caller"
+# is stamped into the state file, generically. The ONLY frontend change needed
+# is teaching dashboard.html's _pipeBoxLabel() about the new caller value —
+# done via the injected process-probable-box.js (dashboard.html itself is
+# never edited), which wraps the existing function.
+
+def _probable_clear_popup_state():
+    """Delete any leftover NMASS/NCDEX captcha popup state so a stopped run's
+    unanswered prompt can't reappear later — same fix as CTCL/MS15's own
+    _clear_popup_state, scoped to PROBABLE_FOLDER."""
+    import os as _pco
+    _dir = _pco.getenv("PROBABLE_FOLDER", r"D:\PROBABLE")
+    for _fn in (".captcha_state", ".captcha_answer", ".captcha_nmass.png",
+                ".token_state", ".token_answer"):
+        try: _pco.remove(_pco.path.join(_dir, _fn))
+        except OSError: pass
+
+
+_probable_last_answered_at: dict = {}
+
+@app.get("/probable/captcha/pending")
+def probable_captcha_pending():
+    """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
+    for the Probable Defaulter box's own NMASS download. Same logic as
+    /ctcl/captcha/pending and /ms15/captcha/pending, scoped to PROBABLE_FOLDER.
+    Polled by process-probable-box.js's own captcha modal (dashboard.html's
+    built-in poller only checks ctcl/ms15/sa sources, so this pipe needs its
+    own small modal rather than touching that file)."""
+    import base64 as _b64, json as _cj, os as _co, time as _ct
+    global _probable_last_answered_at
+    _dir = _co.getenv("PROBABLE_FOLDER", r"D:\PROBABLE")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _img = _co.path.join(_dir, ".captcha_nmass.png")
+    try:
+        _st = _cj.load(open(_sf, encoding="utf-8"))
+        if _st.get("state") != "PENDING":
+            return {"pending": False}
+        img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
+        reason = _st.get("reason", "")
+        source = _st.get("source", "nmass")
+        _last = _probable_last_answered_at.get(source, 0)
+        if not reason and _last and (_ct.time() - _last) < 90:
+            reason = "⚠️ Previous attempt failed — try again"
+        return {"pending": True, "image_b64": img_b64, "detected": _st.get("detected", ""), "reason": reason, "source": source}
+    except Exception:
+        return {"pending": False}
+
+
+@app.post("/probable/captcha/answer")
+def probable_captcha_answer(a: _CTCLCaptchaAnswer):
+    """Submit typed captcha text to the waiting NMASS/NCDEX script (Probable Defaulter box)."""
+    import os as _co, time as _ct, json as _cj
+    global _probable_last_answered_at
+    _dir = _co.getenv("PROBABLE_FOLDER", r"D:\PROBABLE")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _af  = _co.path.join(_dir, ".captcha_answer")
+    try:
+        _source = "nmass"
+        try:
+            _source = _cj.load(open(_sf, encoding="utf-8")).get("source", "nmass")
+        except Exception:
+            pass
+        with open(_af, "w", encoding="utf-8") as f: f.write(a.text.strip())
+        with open(_sf, "w", encoding="utf-8") as f:
+            _cj.dump({"state": "ANSWERED"}, f)
+        _probable_last_answered_at[_source] = _ct.time()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/probable/download/nmass-stream")
+def probable_nmass_download_stream():
+    """SSE: run NMASS_NCFE_API_MIX.PY (pipe=probable → saves into PROBABLE_FOLDER).
+    Same shared cross-process dl_lock as ctcl/ms15 — see core/dl_lock.py."""
+    import json as _pn_json
+    from core.pipelines.nmass_download import stream_nmass_download
+    _probable_clear_popup_state()
+    def gen():
+        try:
+            for ev in stream_nmass_download(pipe="probable"):
+                yield f"data: {_pn_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_pn_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/probable/download/tcs-bancs-stream")
+def probable_tcs_bancs_download_stream():
+    """SSE: RSK383 (Cash Collateral Deposit Limit) + RSK335 (Margin Utilization
+    View / Clientwise MCX Margin) from eclear.mcxccl.com. Run as a genuine
+    subprocess via pipeline_box._stream_code() (same reason CLI's MCX Web
+    Allocation button does) so Stop can kill it instantly regardless of which
+    blocking call (TCS BANCS login, RSA token wait, export poll) is in
+    progress. See core/pipelines/probable_tcs_bancs.py."""
+    import json as _pt_json
+    from core.pipeline_box import _stream_code
+    _probable_clear_popup_state()
+    code = ("import os; from core.pipelines.probable_tcs_bancs import download_both as _f; "
+            "_r = _f(os.getenv('PROBABLE_FOLDER', r'D:\\\\PROBABLE')); "
+            "import sys; sys.exit(0 if (_r.get('rsk383') and _r.get('rsk335')) else 1)")
+    def gen():
+        try:
+            for ev in _stream_code(code, "probable", "probable_tcs_bancs"):
+                yield f"data: {_pt_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_pt_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/probable/readiness")
+def probable_readiness():
+    """Check whether all input files are present in PROBABLE_FOLDER for today —
+    same shape as /ctcl/readiness and /ms15/readiness, matching
+    core/pipelines/probable_reconcile.py's _check_required_files()."""
+    import os as _ros, glob as _rg, datetime as _rdt
+    _dir = _ros.getenv("PROBABLE_FOLDER", r"D:\PROBABLE")
+    _today_ddmmyyyy = _rdt.datetime.now().strftime("%d%m%Y")
+    _today_yyyymmdd = _rdt.datetime.now().strftime("%Y%m%d")
+    checks = [
+        ("PROBABLE_FULLFILE", f"Probable_Fullfile_{_today_ddmmyyyy}*.xlsx"),
+        ("NCDEX",              f"ClientNetEffectiveDeposits_{_today_ddmmyyyy}*"),
+        ("CM_CLIENT_LEVEL",    f"CM_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
+        ("CO_CLIENT_LEVEL",    f"CO_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
+        ("FO_CLIENT_LEVEL",    f"FO_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
+        ("MCX_RSK383",         f"*{_today_yyyymmdd}*.xlsx"),
+        ("MCX_RSK335_90PCT",   "Clientwise_mcx_margin*.xlsx"),
+    ]
+    items = []
+    for key, pat in checks:
+        found = bool(_rg.glob(_ros.path.join(_dir, pat)))
+        items.append({"key": key, "ok": found, "example": pat})
+    return {"items": items, "folder": _dir}
+
+
+# ── SAFE TEST RUN (Probable Defaulter) ─────────────────────────────────────
+# Replaces the old PROBABLE_TEST_MODE flag, which merely SKIPPED WhatsApp sends
+# and so proved nothing about whether they work. A safe test still really sends
+# everything — only the destination changes, and the backup step is skipped so
+# the day's files stay in place for the real run. Arming writes a marker file
+# that probable_full.py consumes the moment the pre-run file check passes, so
+# it is structurally impossible for the flag to survive into a second run.
+# See the long comment block above _safe_test_marker_path() in
+# core/pipelines/probable_alerts.py.
+@app.get("/probable/safe-test")
+def probable_safe_test_status():
+    """Armed state + the exact redirect targets, so the UI can show the operator
+    precisely where a test run's messages will land BEFORE they commit to it."""
+    from core.pipelines.probable_alerts import (
+        is_safe_test_armed as _armed, safe_test_targets as _targets,
+    )
+    _email_to, _wa_to = _targets()
+    return {"armed": _armed(), "email_to": _email_to, "wa_to": _wa_to}
+
+
+@app.post("/probable/safe-test/arm")
+def probable_safe_test_arm(password: str = ""):
+    """Arm the NEXT Probable run as a safe test. Password-gated like every other
+    state-changing route — arming changes where real messages go."""
+    from core.short_allocation import check_password as _st_pw
+    if not _st_pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    from core.pipelines.probable_alerts import arm_safe_test as _arm
+    try:
+        _arm()
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return {"ok": True, "armed": True}
+
+
+@app.post("/probable/safe-test/disarm")
+def probable_safe_test_disarm():
+    """Cancel an armed safe test. Deliberately NOT password-gated — disarming
+    only ever moves toward normal live behaviour, and an operator who armed by
+    mistake must always be able to undo it instantly."""
+    from core.pipelines.probable_alerts import disarm_safe_test as _disarm
+    return {"ok": True, "armed": False, "was_armed": _disarm()}
+
+
+@app.get("/probable/mcx-lock-status")
+def probable_mcx_lock_status():
+    """Live status of the shared TCS BANCS session lock (RSK383/RSK335 here,
+    same lock Short Allocation's MCX Deposit and Client Prudential Limit's MCX
+    Web Allocation buttons already use) — same shape as /sa/mcx-deposit/lock-status,
+    used by process-probable-box.js to grey out the TCS BANCS download button
+    live if another box is using it right now."""
+    try:
+        import sys as _ls, os as _lo
+        _ls.path.insert(0, _lo.path.join(_lo.path.dirname(__file__), "sa_codes"))
+        import importlib as _limp
+        _lmdd = _limp.import_module("mcx_deposit_downloader")
+        return _lmdd.mcx_lock_status()
+    except Exception as e:
+        return {"busy": False, "error": str(e)}
+
+
+# ── Client Prudential Limit (pipe key "cli") ─────────────────────────────────
+# Generic /px/* endpoints (status/config/credentials/stop/logs/backup) already
+# work for pipe=cli once it's registered in PIPELINES — only the download/upload
+# SSE streams and the readiness check need dedicated routes, same reason CTCL
+# has /ctcl/download/nmass-stream + /ctcl/readiness instead of generic ones.
+
+def _cli_stream_endpoint(code, logname_prefix):
+    """Shared plumbing: run `code` as a genuine subprocess via pipeline_box._stream_code()
+    (tracked in _PB["proc"]) so /cli/stop's taskkill /F /T can kill it INSTANTLY no
+    matter what it's doing — FTP transfer, pandas processing, a nested login subprocess.
+    This is what fixed "Stop didn't stop" — the old version ran the work directly in the
+    FastAPI request thread, which taskkill can't reach."""
+    import json as _cli_json
+    from core.pipeline_box import _stream_code
+    def gen():
+        try:
+            for ev in _stream_code(code, "cli", logname_prefix):
+                yield f"data: {_cli_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_cli_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/cli/download-stream")
+def cli_download_stream():
+    """SSE: FTP download + NSCCL/NCDEX collateral files + processing.
+    See core/pipelines/cli_download.py."""
+    return _cli_stream_endpoint(
+        "from core.pipelines.cli_download import run_cli_download as _f; _f()",
+        "cli_download")
+
+
+@app.get("/cli/mcx-download-stream")
+def cli_mcx_download_stream():
+    """SSE: MCX RSK383 (Query Detailed Limit) download + convert to
+    MCX_WebAllocationDeallocation.csv. Standalone button, same idea as CTCL's
+    "📥 MCX 90%" — skips the login entirely if the file's already there.
+    See core/pipelines/cli_mcx_download.py."""
+    return _cli_stream_endpoint(
+        "from core.pipelines.cli_mcx_download import run_cli_mcx_download as _f; _f()",
+        "cli_mcx_download")
+
+
+@app.get("/cli/upload-stream")
+def cli_upload_stream():
+    """SSE: FTP upload (with missing-file check) + backup.
+    See core/pipelines/cli_upload.py."""
+    return _cli_stream_endpoint(
+        "from core.pipelines.cli_upload import run_cli_upload as _f; _f()",
+        "cli_upload")
+
+
+class _CliOldRunAuth(_SA_BaseModel):
+    password: str
+
+@app.post("/cli/run-old-auth")
+def cli_run_old_auth(a: _CliOldRunAuth):
+    """Checks the password gate in front of the Run OLD button — separate from
+    SA's own /sa/auth (SA_CONFIG_PASSWORD): this is its own credential,
+    CLI_OLD_RUN_PASS, set in .env (defaults to "12345" if not set)."""
+    return {"ok": a.password == _sa_os.getenv("CLI_OLD_RUN_PASS", "12345")}
+
+
+@app.get("/cli/run-old-stream")
+def cli_run_old_stream():
+    """SSE: the full "OLD" Client Prudential Limit cycle for the CLI-01/CLI-02 Run
+    button — Allocation Detail (local-first, FTP fallback, builds CLI_PRUDENTIAL_
+    LIMIT.txt) → Download (CM/FO/CO/ClientNetEffectiveDeposits, skip what's already
+    there) → MCX Web Allocation (skip download if present, always still convert) →
+    FTP upload (always verifies/creates the FTP folder) + local backup + Postgres
+    backup. One subprocess for the whole chain, so Stop kills all of it at once
+    instead of only whichever of the 4 steps happened to be running.
+    This is the "OLD" pipeline — a "NEW" one will be added later as a second,
+    separate Run button once its logic is provided."""
+    code = (
+        "from core.pipelines.cli_allocation import run_cli_allocation as _a; "
+        "from core.pipelines.cli_download import run_cli_download as _d; "
+        "from core.pipelines.cli_mcx_download import run_cli_mcx_download as _m; "
+        "from core.pipelines.cli_upload import run_cli_upload as _u; "
+        "_a(); _d(); _m(); _u()"
+    )
+    return _cli_stream_endpoint(code, "cli_run_old")
+
+
+# Back-compat alias — old dashboard.html builds (or bookmarked links) may still
+# hit the pre-rename URL; route it to the exact same handler.
+@app.get("/cli/run-full-stream")
+def cli_run_full_stream_alias():
+    return cli_run_old_stream()
+
+
+@app.get("/cli/run-new-stream")
+def cli_run_new_stream():
+    """SSE: the "NEW" Client Prudential Limit cycle — the user's uploaded
+    ALLOCATION_CLI_NMASS_NCDEX-2841612e.py, explicitly described as "the new one is
+    this". Only the Allocation Detail step differs from OLD: it pre-checks
+    RISK_REPORT + Kambala for today (stopping the whole chain if either is missing),
+    then layers RISK_REPORT's MTF_STATUS='Y' accounts + Kambala's abs(Z-column) on
+    top of the base allocation sum when building CLI_PRUDENTIAL_LIMIT.txt. Download,
+    MCX Web Allocation and the FTP upload/backup steps are unchanged from OLD — the
+    user only described a new Allocation step — so this chain reuses those exact
+    same three functions."""
+    code = (
+        "from core.pipelines.cli_allocation_new import run_cli_allocation_new as _a; "
+        "from core.pipelines.cli_download import run_cli_download as _d; "
+        "from core.pipelines.cli_mcx_download import run_cli_mcx_download as _m; "
+        "from core.pipelines.cli_upload import run_cli_upload as _u; "
+        "_a(); _d(); _m(); _u()"
+    )
+    return _cli_stream_endpoint(code, "cli_run_new")
+
+
+@app.post("/cli/mark-variant")
+async def cli_mark_variant(request: Request):
+    """Records which Run button (OLD/NEW) was last used and whether it succeeded —
+    purely for the dashboard's "which one did I just run" indicator next to the
+    two Run buttons. Not used for any actual pipeline decision-making."""
+    import json as _cmv_json, os as _cmv_os, datetime as _cmv_dt
+    body = await request.json()
+    variant = str(body.get("variant", "")).upper()
+    if variant not in ("OLD", "NEW"):
+        return {"ok": False, "error": "variant must be OLD or NEW"}
+    logdir = _cmv_os.path.join(_cmv_os.path.dirname(_cmv_os.path.abspath(__file__)), "logs", "cli")
+    _cmv_os.makedirs(logdir, exist_ok=True)
+    fp = _cmv_os.path.join(logdir, "last_variant.json")
+    data = {"variant": variant, "ok": bool(body.get("ok", True)),
+            "ts": _cmv_dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    try:
+        _cmv_json.dump(data, open(fp, "w", encoding="utf-8"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+@app.get("/cli/last-variant")
+def cli_last_variant():
+    import json as _clv_json, os as _clv_os
+    fp = _clv_os.path.join(_clv_os.path.dirname(_clv_os.path.abspath(__file__)), "logs", "cli", "last_variant.json")
+    try:
+        return _clv_json.load(open(fp, encoding="utf-8"))
+    except Exception:
+        return {"variant": None, "ok": None, "ts": None}
+
+
+@app.post("/cli/stop")
+def cli_stop():
+    """Stop any running CLI download/upload subprocess (e.g. the NMASS_NCFE_API_MIX.PY
+    subprocess launched by cli_download.py's Step 3) — only CLI's own independent
+    slot, never CTCL's or MS15's."""
+    from core.pipeline_box import stop_pipeline as _cli_sp, _PB
+    was_cli = bool(_PB.get("cli", {}).get("running"))
+    _cli_sp("cli")
+    if was_cli:
+        # If CLI's own subprocess held the shared MCX-deposit lock (its "MCX Web
+        # Allocation" button) or the shared NMASS/NCFE login lock (its download
+        # step, core/dl_lock.py), a force-killed process never runs its own
+        # cleanup — release both explicitly now, so the NEXT click doesn't
+        # wrongly report "already in use" for minutes even though Stop was just
+        # clicked. Only releases each if its recorded owner is actually "cli"
+        # (see force_release_mcx_lock_if_owner's docstring for why that check
+        # matters — stopping CLI must never clear a lock SA/CTCL/MS15
+        # legitimately still holds).
+        try:
+            import sys as _cs
+            _cs.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+            import importlib as _cimp
+            _mdd = _cimp.import_module("mcx_deposit_downloader")
+            _mdd.force_release_mcx_lock_if_owner("cli")
+        except Exception:
+            pass
+        try:
+            from core import dl_lock as _cdl
+            if _cdl.status().get("owner") == "cli":
+                _cdl.release()
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+@app.post("/cli/advance-run")
+def cli_advance_run():
+    """Mark today's CLI-01/CLI-02 slot as complete (called by the dashboard after
+    Download+Upload both succeed) — advances run_counter.txt the same way CTCL's
+    counter advances, so the next run window's tile shows 'Opens HH:MM' correctly."""
+    import os as _car_os, datetime as _car_dt
+    _dir = _car_os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT")
+    _car_os.makedirs(_dir, exist_ok=True)
+    fp = _car_os.path.join(_dir, "run_counter.txt")
+    today = _car_dt.datetime.now().strftime("%Y-%m-%d")
+    n = 0
+    try:
+        content = open(fp, encoding="utf-8", errors="replace").read().strip()
+        if "|" in content:
+            d, existing_n = content.split("|", 1)
+            if d.strip() == today:
+                n = int(existing_n)
+    except Exception:
+        pass
+    n += 1
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write(f"{today}|{n}")
+    return {"ok": True, "run_state": n}
+
+
+@app.get("/cli/readiness")
+def cli_readiness():
+    """Check whether all Client Prudential Limit input files are present for today.
+    Same pattern as /ctcl/readiness — used by the dashboard's missing-files banner.
+    RISK_REPORT lives in the shared COMMON FILES folder (same file CTCL vs NMASS
+    uses), not the CLI base folder, so it's checked there separately."""
+    import os as _clr_os, glob as _clr_g, datetime as _clr_dt
+    _dir = _clr_os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT")
+    _common_dir = _clr_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
+    today_str = _clr_dt.datetime.now().strftime("%d%m%Y")
+    checks = [
+        ("ALLOCATION_DETAIL",            f"Allocation_Detail_{today_str}.csv"),
+        ("CM_CLIENT_LEVEL",              "CM_ClientLevelCollaterals_*.csv"),
+        ("FO_CLIENT_LEVEL",              "FO_ClientLevelCollaterals_*.csv"),
+        ("CO_CLIENT_LEVEL",              "CO_ClientLevelCollaterals_*.csv"),
+        ("CLIENT_NET_EFFECTIVE_DEPOSITS","ClientNetEffectiveDeposits_*.csv"),
+        ("CLI_PRUDENTIAL_LIMIT",         "CLI_PRUDENTIAL_LIMIT.txt"),
+        ("MCX_WEB_ALLOCATION",           "MCX_WebAllocationDeallocation.csv"),
+    ]
+    items = []
+    for key, pat in checks:
+        found = bool(_clr_g.glob(_clr_os.path.join(_dir, pat)))
+        items.append({"key": key, "ok": found, "example": pat})
+    # RISK_REPORT: pre-file check accepts either the CLI base folder or the shared
+    # COMMON FILES folder (the dashboard's "Common files" button uploads it there).
+    risk_found = (bool(_clr_g.glob(_clr_os.path.join(_dir, f"RISK_REPORT_{today_str}.csv")))
+                  or bool(_clr_g.glob(_clr_os.path.join(_common_dir, f"RISK_REPORT_{today_str}.csv"))))
+    items.append({"key": "RISK_REPORT", "ok": risk_found, "example": "RISK_REPORT_*.csv"})
+    # Kambala: pre-file check for the "new" allocation script — must be in the CLI
+    # base folder, dated today. No automated download source yet — manual upload only.
+    kambala_pat = f"Kambala_Omny_Depo_Adhoc_All_level.txt_{today_str}.txt"
+    kambala_found = bool(_clr_g.glob(_clr_os.path.join(_dir, kambala_pat)))
+    items.append({"key": "KAMBALA", "ok": kambala_found, "example": kambala_pat})
+    return {"items": items, "folder": _dir, "common_folder": _common_dir}
+
+
+# ── MCX Deposit stop ─────────────────────────────────────────────────────────
+
+_sa_mcx_dep_proc = None   # set by mcx_deposit_download.py when proc starts
+
+@app.post("/sa/mcx-deposit-stop")
+def sa_mcx_deposit_stop():
+    """Kill the MCX Deposit download subprocess if running."""
+    global _sa_mcx_dep_proc
+    import subprocess as _ksp, os as _kos
+    p = _sa_mcx_dep_proc
+    if p and p.poll() is None:
+        try:
+            if _kos.name == "nt":
+                _ksp.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+            else:
+                p.terminate()
+        except Exception:
+            pass
+    _sa_mcx_dep_proc = None
+    # Same reasoning as /cli/stop: a force-killed subprocess never runs its own
+    # lock cleanup, so release the shared MCX-deposit lock explicitly here too
+    # — only if it's actually still recorded as owned by "sa".
+    try:
+        import sys as _ss
+        _ss.path.insert(0, _kos.path.join(_kos.path.dirname(__file__), "sa_codes"))
+        import importlib as _simp
+        _smdd = _simp.import_module("mcx_deposit_downloader")
+        _smdd.force_release_mcx_lock_if_owner("sa")
+    except Exception:
+        pass
+    _sa_clear_popup_state()
+    return {"ok": True}
+
+
+@app.get("/sa/mcx-deposit/lock-status")
+def sa_mcx_deposit_lock_status():
+    """Live status of the shared MCX-deposit lock (see
+    sa_codes/mcx_deposit_downloader.py's _acquire_mcx_lock/mcx_lock_status) —
+    polled by the dashboard so Short Allocation's "MCX Deposit" button AND
+    Client Prudential Limit's "MCX Web Allocation" button can grey themselves
+    out THE INSTANT either one starts, on every connected screen, instead of
+    only finding out it's busy after clicking and getting an error back.
+    Returns {"busy": false} or {"busy": true, "owner": "sa"|"cli", "started_at": ...}."""
+    try:
+        import sys as _ls
+        _ls.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+        import importlib as _limp
+        _lmdd = _limp.import_module("mcx_deposit_downloader")
+        return _lmdd.mcx_lock_status()
+    except Exception as e:
+        return {"busy": False, "error": str(e)}
+
+
+# ── CTCL per-run log store (survives page refresh) ────────────────────────────
+
+_ctcl_run_logs: dict = {}   # {run_no(int): {download_log, ctcl_log, top20_log, payout_log, has_error, updated_at}}
+
+def _ctcl_log_path():
+    import os as _lp_os
+    d = _lp_os.path.join(_lp_os.path.dirname(__file__), "logs", "ctcl")
+    _lp_os.makedirs(d, exist_ok=True)
+    return _lp_os.path.join(d, "run_logs.json")
+
+def _ctcl_logs_load():
+    import json as _lj
+    try:
+        with open(_ctcl_log_path(), encoding="utf-8") as f:
+            return {int(k): v for k, v in _lj.load(f).items()}
+    except Exception:
+        return {}
+
+def _ctcl_logs_save(store):
+    import json as _lj
+    try:
+        with open(_ctcl_log_path(), "w", encoding="utf-8") as f:
+            _lj.dump({str(k): v for k, v in store.items()}, f, indent=2)
+    except Exception:
+        pass
+
+# Load persisted logs on startup
+_ctcl_run_logs = _ctcl_logs_load()
+
+
+@app.post("/ctcl/run-log")
+async def ctcl_save_run_log(req: Request):
+    """Save/update per-run log info. Merges into existing record so partial updates work."""
+    global _ctcl_run_logs
+    data = await req.json()
+    run_no = data.get("run_no")
+    if not run_no:
+        return {"ok": False, "error": "missing run_no"}
+    existing = _ctcl_run_logs.get(int(run_no), {})
+    # Only overwrite fields that were explicitly provided (non-empty)
+    for field in ("download_log", "ctcl_log", "top20_log", "payout_log"):
+        v = data.get(field)
+        if v:
+            existing[field] = v
+    for field in ("has_error", "updated_at", "stage_status", "friendly_msg"):
+        if field in data:
+            existing[field] = data[field]
+    # Explicit clear — a normal (non-retry) run does MarginTop20/Payout INLINE in the same
+    # combined log, so any top20_log/payout_log left over from a PAST DAY's "Retry ... only"
+    # (run numbers repeat every day — CTCL-02 today vs CTCL-02 four days ago is the same key)
+    # is now stale and must be wiped, or the View modal would show that old day's log forever
+    # instead of falling back to today's fresh combined ctcl_log.
+    for field in (data.get("clear_fields") or []):
+        if field in ("download_log", "ctcl_log", "top20_log", "payout_log"):
+            existing[field] = ""
+    _ctcl_run_logs[int(run_no)] = existing
+    _ctcl_logs_save(_ctcl_run_logs)
+    return {"ok": True}
+
+
+@app.get("/ctcl/run-log/{run_no}")
+def ctcl_get_run_log(run_no: int):
+    """Return saved log info for a CTCL run. Falls back to disk if not in memory."""
+    r = _ctcl_run_logs.get(run_no)
+    if not r:
+        store = _ctcl_logs_load()
+        r = store.get(run_no)
+        if r:
+            _ctcl_run_logs[run_no] = r
+    if r:
+              return {"ok": True, **r}
+    return {"ok": False}

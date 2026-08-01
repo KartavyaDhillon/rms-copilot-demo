@@ -1,0 +1,11 @@
+SAMPLE DOCUMENT - illustrative only. Numbers are fictional, for learning. Replace with real circulars later.
+
+Peak Margin Reporting and Penalty Framework
+
+Trading members must collect upfront margins from clients based on the peak margin observed during the trading day. The clearing corporation takes four random snapshots of margin utilisation during market hours, and the highest of these snapshots is treated as the client's peak margin for that day.
+
+If a client's available collateral is less than the peak margin requirement, the difference is treated as a margin shortfall. A short-collection or non-collection of margin attracts a penalty levied on the trading member.
+
+For a margin shortfall, the penalty is charged as a percentage of the short-collected amount. A shortfall of less than one lakh rupees and less than ten percent of the applicable margin attracts a lower penalty slab, while larger or repeated shortfalls attract a higher slab. If the same client defaults on margin for more than three consecutive days, the penalty percentage increases for each additional day of default.
+
+Penalties are reported by the clearing corporation on a T+1 basis and must be reconciled by the member's risk team the next morning.

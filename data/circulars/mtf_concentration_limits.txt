@@ -1,0 +1,32 @@
+SOURCE: MTF Concentration and Exposure Limits — Mastertrust Internal SOP
+
+MTF SCRIP-LEVEL CONCENTRATION LIMITS
+Per SEBI and exchange guidelines, no single client should exceed the following
+in their MTF position for any one scrip:
+
+Nifty50 scrips: maximum 50% of approved MTF limit in a single scrip
+BSE200 (non-Nifty50) scrips: maximum 30% of approved limit
+BSE500 (non-BSE200) scrips: maximum 20% of approved limit
+Scrips not on any approved index: maximum 10% of approved limit
+
+FAMILY-GROUP LIMITS
+Related accounts (family codes mapped in the EXCEPTION.xlsx file) are aggregated.
+The family group combined exposure in any single scrip must not exceed:
+- Nifty50 scrips: ₹5 crore
+- BSE200 scrips: ₹3 crore
+- Other approved: ₹1 crore
+Exceeding family limits triggers immediate email alert to all zone RMS heads.
+
+ZONE DISTRIBUTION
+Mastertrust operates four zones for MTF reporting:
+ZODELH (Delhi), ZOLUDH (Ludhiana), ZOCHND (Chandigarh), ZOMUMB (Mumbai)
+Each zone head receives a separate concentration report for their clients only.
+ZOMT and ZOCDR are combined in the CDR + MT report.
+
+CONCENTRATION PIPELINE PROCESS
+1. Download Nifty50, BSE200, BSE500 index files (INDEX_FILE_DOWNLOAD)
+2. Download KORP shortage file
+3. Run concentration compute: reads positions, applies tier rules, checks family limits
+4. Output: violation rows with zone, client, scrip, current %, limit %
+5. Emails are sent zone-wise with only that zone's violations
+6. Files are backed up and original position files are deleted

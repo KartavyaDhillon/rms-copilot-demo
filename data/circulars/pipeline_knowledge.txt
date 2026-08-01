@@ -1,0 +1,1199 @@
+SOURCE: RMS Co-pilot — Complete Pipeline Logic Reference (built from actual code)
+=================================================================================
+This document is the agent's primary reference for understanding what each pipeline
+does, how it works step-by-step, what every output means, why a client appears in
+any report, and what every error means with the exact fix. Built from reading the
+real source code line by line.
+
+=================================================================================
+WHERE EACH FILE LIVES (Folder Map)
+=================================================================================
+Peak Margin files:         C:\Peak Margin
+Concentration files:       D:\CONCENTRATION
+CTCL vs NMASS files:       D:\CTCL VS NMASS
+CNC F11 files:             C:\CNC_F11
+MTF Order files:           D:\MTF ORDER FILE
+FTP downloaded files:      C:\FTP FILES  (then distributed to 8 other folders)
+Margin Shortage (15min):   D:\15 minutes
+Margin Shortage (CTCL):    D:\CTCL VS NMASS  (same as CTCL folder)
+Margin TOP20 files:        D:\MARGIN TOP20
+Payout files:              D:\PAYOUT ASHISH
+Inspection history:        D:\INSPECTION
+CODE2 (Tue/Thu shortage):  D:\TUESDAY THURSDAY
+
+State files (internal, do not delete):
+  C:\Peak Margin\peak_margin_report.json   — today's cumulative peak margin data
+  C:\Peak Margin\peak_runs.json            — which snapshots ran today
+  D:\CTCL VS NMASS\run_counter.txt         — how many times CTCL ran today
+
+=================================================================================
+PIPELINE 1: PEAK MARGIN
+=================================================================================
+Entry function: process_pair_stream(index) in peak_margin_run.py
+                process_pair(index) — non-streaming version for the agent
+
+PURPOSE:
+Downloads margin snapshot files from NSE extranet and builds a cumulative
+4-column report (Peak1 through Peak4) showing each client's peak margin
+across the four daily time slots.
+
+HOW IT WORKS STEP BY STEP:
+1. For index i01 (10:30 run): calls reset_day() — wipes yesterday's report
+   and creates a FRESH blank JSON with all Peak columns set to 0.
+   This means i01 MUST run before i02/i03/i04 on any given day.
+
+2. Downloads from NSE extranet (connect2nse.com):
+   - Logs in using NSE_MEMBER_CODE, NSE_LOGIN_ID, NSE_PASSWORD from .env
+   - Downloads two files per snapshot: F_SA01_P_{member}_{DDMMYYYY}_i0{N}.lis
+     One for FO (F_ prefix) and one for CM (C_ prefix).
+   - If the files don't exist yet on NSE's server → status "not_arrived", retry later.
+
+3. Calls update_report_with_pair(index, fo_path, cm_path, today):
+   - Reads the FO file: looks for clients matching PEAK_FO_CODES from .env
+     (JDA563, JDA937, JDA1209, JDA1210, JDA1260 by default).
+     For each FO client, reads the "Peak1" column of the file (always called Peak1
+     regardless of which snapshot this is — it's the value for THIS snapshot).
+     Writes it into the correct column: i01→Peak1, i02→Peak2, i03→Peak3, i04→Peak4.
+   - Reads the CM file: looks for codes matching PEAK_CM_CODES (06436, PRO_06436, 6436).
+     Records as "cm_segment" in the JSON.
+   - Also finds FO segment codes from PEAK_CM_CODES in the FO file (recorded separately).
+   - Updates ONLY THIS SNAPSHOT'S column — all other columns stay unchanged.
+   - Saves the updated state to C:\Peak Margin\peak_margin_report.json.
+
+4. Calls build_report_images(report, folder):
+   - F_filtered.png: table showing FO client codes (JDA563 etc.) across Peak1-Peak4
+   - C_filtered.png: stacked table showing CM Segment / FO Segment / TOTAL (CM+FO)
+   - Images are supersampled 3x for clarity, then scaled down with LANCZOS.
+   - Numbers formatted with Indian comma (₹1,23,456).
+   - Uses Calibri font on Windows, DejaVu fallback on Linux.
+
+5. Records this run in peak_runs.json (so the dashboard knows which ran today).
+
+6. CLEANUP happens ONLY AFTER a successful send on i04 (not mid-run).
+   Deleted files: the 8 downloaded .lis files (4 FO + 4 CM).
+   Images are NOT deleted — they stay until the next day's reset.
+
+WHAT THE OUTPUT MEANS:
+- Peak1/2/3/4 columns: the client's margin utilised at that time slot.
+- F_filtered.png: shows your FO sub-broker codes and their margin at each snapshot.
+- C_filtered.png: shows CM segment total, FO segment total, and combined total.
+- The "TOTAL" row in C_filtered is cm_segment[PeakX] + fo_segment[PeakX] for each column.
+
+WHY A CLIENT APPEARS IN F_filtered BUT NOT C_filtered:
+F_filtered shows FO_CODES (JDA563 etc.) — the sub-broker client codes.
+C_filtered shows CM_CODES (06436 etc.) — the firm/member-level codes.
+Different sets. FO clients = sub-brokers. CM/FO segment = aggregate firm positions.
+
+WHY A CLIENT IS MISSING FROM F_filtered:
+The client code is not in PEAK_FO_CODES in your .env, OR
+the file from NSE showed 0 for them (they had no peak margin that snapshot).
+
+WHY PEAK2/3/4 SHOWS 0 EVEN AFTER RUNNING:
+i01 was NOT run first. The reset_day() call in i01 creates the JSON with all zeros.
+If you run i02 before i01, the JSON doesn't exist yet, so a fresh blank JSON is
+created — which means Peak1 stays 0. Always run i01 first on a new day.
+
+WHY "NOT ARRIVED" IS SHOWN:
+NSE uploads files to their extranet at specific times. If you run the snapshot
+before NSE has uploaded it (e.g. running i01 at 10:15 before NSE uploads at 10:30),
+the file won't be on their server yet. Wait and retry.
+
+=================================================================================
+PIPELINE 2: CONCENTRATION
+=================================================================================
+Entry functions:
+  download_concentration_files() — downloads index + KORP shortage files
+  run_concentration_compute()    — computes violations, emails, backs up
+  run_concentration()            — both steps combined
+
+PURPOSE:
+Checks if any client's MTF holding in a single scrip exceeds the allowed
+percentage based on which index that scrip belongs to. Also checks family groups.
+
+HOW IT WORKS — PART 1: DOWNLOAD (download_concentration_files):
+Downloads three types of files to D:\CONCENTRATION:
+1. Nifty50 index file (ind_nifty50list.csv) — from NSE website via Selenium + Chrome
+2. BSE200 index file (BSE200.csv) — from BSE website via Selenium + Chrome
+3. BSE500 index file (BSE500.csv) — from BSE website via Selenium + Chrome
+4. KORP shortage file (MTF CRR Report 5) — from BOAPI via AES-encrypted API call:
+   - Gets session key, encrypts KORP_PASSWORD with AES-CBC, posts to /api/token
+   - Downloads the shortage file, decrypts it with pycryptodome AES
+
+HOW IT WORKS — PART 2: COMPUTE (run_concentration_compute):
+1. Reads the three index files to build a membership lookup:
+   nifty50_set: all scrips in Nifty50
+   bse200_set: all scrips in BSE200 (but NOT Nifty50)
+   bse500_set: all scrips in BSE500 (but NOT BSE200 or Nifty50)
+
+2. Reads position files from D:\CONCENTRATION (zone files named by zone code).
+
+3. For each client and each scrip they hold:
+   - Determines which tier the scrip is in (Nifty50/BSE200/BSE500/none)
+   - Computes: client's position in that scrip / client's total MTF limit
+   - Compares against the limit for that tier:
+     Nifty50: 50%, BSE200: 30%, BSE500: 20%, unlisted: 10%
+
+4. Applies FAMILY_RULES: groups accounts that are related (family codes).
+   If the family's combined exposure in one scrip exceeds the family limit,
+   all members of that family are flagged.
+
+5. Applies EXCEPTION.xlsx overrides: specific client+scrip combinations
+   can be manually whitelisted to skip the check.
+
+6. Sends zone-wise email reports:
+   - ZODELH: Delhi zone clients only
+   - ZOLUDH: Ludhiana zone
+   - ZOCHND: Chandigarh zone
+   - ZOMUMB: Mumbai zone
+   Each zone head only sees their clients.
+
+7. Backs up all files to D:\CONCENTRATION\BACKUP AUTOMATION\DD-MM-YYYY\
+   then deletes originals from D:\CONCENTRATION.
+
+OUTPUT FILES (exact names):
+- FULLFILE_CONCENTRATION_DDMMYYYY.xlsx — the MAIN violation output (all zones in one file)
+- CONCENTRATION_<ZONE>_DDMMYYYY.xlsx — one per zone (e.g. CONCENTRATION_ZODELH_12062026.xlsx)
+To find which scrip has the highest concentration: read FULLFILE_CONCENTRATION and sort by
+the Scrip_Concentration percentage column descending. The file also has Cover % on Portfolio.
+
+WHY A CLIENT APPEARS IN THE VIOLATION REPORT:
+Their position in a specific scrip exceeds the tier limit.
+Example: Client holds ₹35 lakh of HDFC Bank (BSE200 scrip) against a total
+MTF limit of ₹1 crore. That's 35% which exceeds the BSE200 limit of 30%.
+
+WHY A CLIENT DOES NOT APPEAR DESPITE LARGE POSITION:
+- The scrip they hold is in a higher tier (e.g. Nifty50 has 50% limit)
+- They are in EXCEPTION.xlsx with a manual override
+- Their position file was missing from D:\CONCENTRATION (zone file not present)
+
+WHAT "FAMILY VIOLATION" MEANS:
+Multiple accounts are linked as a family (via FAMILY_RULES config).
+The family's combined position in one scrip was checked and exceeded the family limit.
+Individual accounts may each be below their own limit but collectively over the family cap.
+
+=================================================================================
+PIPELINE 3: CTCL VS NMASS
+=================================================================================
+Entry function: run_ctcl_vs_nmass() in ctcl_vs_nmass.py
+
+PURPOSE:
+Daily reconciliation between what clients are ALLOWED to trade (their CTCL limit
+set in the trading terminal) and what they have ACTUALLY DEPOSITED (NMASS = back
+office deposit ledger). If CTCL limit > actual deposit, the client is trading on
+air — this is a margin shortfall that must be corrected.
+
+WHAT IS "CTCL" vs "NMASS":
+CTCL = Client Terminal Check & Limit: the upper limit the trading terminal enforces.
+       This is the number visible in the front-end trading system.
+NMASS = Net Margin and Shortfall System: what the client has physically deposited
+        as collateral in the back office.
+The gap between these two is the problem. In the output the column is
+DIFFERENCE(G-F) = DEPOSIT CTCL - DEPOSIT NMASS.
+If this is POSITIVE, the client's limit (CTCL) exceeds their lodged deposit (NMASS)
+— that is a SHORTFALL (trading on more limit than collateral lodged at the exchange).
+If NEGATIVE (OK - Minus Difference), lodged collateral exceeds the limit — safe.
+(See the detailed CTCL VS NMASS logic section below for the full VIRTUAL/SHORTFALL/OK
+priority rules taken directly from the code.)
+
+HOW IT WORKS STEP BY STEP:
+1. RUN COUNTER CHECK:
+   Reads D:\CTCL VS NMASS\run_counter.txt to see today's run number.
+   Format: "YYYY-MM-DD|N" (date|run_number).
+   If file is from today: run_number = last_run + 1.
+   If file is from a previous day OR missing: run_number = 1.
+   Maximum run number is 5 (resets to 1 after 5).
+
+2. PRE-RUN FILE CHECK (runs BEFORE any processing):
+   Checks for today's date in the filenames of these required files:
+   - CM_ClientLevelCollaterals_DDMMYYYY.csv (from NSCCL)
+   - FO_ClientLevelCollaterals_DDMMYYYY.csv (from NSCCL)
+   - CO_ClientLevelCollaterals_DDMMYYYY.csv (from NSCCL, optional but checked)
+   - Update Limits*.xlsx (searched by filename starting with "Update Limits" or "Update_Limits")
+   - ClientNetEffectiveDeposits*.csv (NCDEX file, from margin shortage download)
+   If ANY required file is missing → returns {"status": "prerun_failed"} immediately.
+   The pre-run check also verifies files were modified within the last 30 minutes
+   (to avoid using stale files from yesterday).
+
+3. COMPUTE DEPOSIT NMASS:
+   Sums all collateral columns from the CM/FO/CO files:
+   Payin, Payout, Collateral(Total), Cash, DaylongCash, MtfDaylongCash,
+   CacDaylongCash, UnclearedCash, BrokerCollateral,
+   EQT Collateral, DER Collateral, COM Collateral, FX Collateral,
+   AUXDaylongCash, AuxUnclearedCash, AuxBrokerCollateral, Remarks Amount.
+   This total = DEPOSIT NMASS.
+
+4. JOIN AND COMPUTE DIFFERENCE:
+   - Joins CM/FO/CO data with Update Limits on ACCOUNTID/Entity.
+   - DEPOSIT CTCL comes from the "Available Margin" or "CTCL Limit" column.
+   - Computes: DEPOSIT NMASS - DEPOSIT CTCL = difference.
+
+5. ASSIGN REMARKS:
+   - "VIRTUAL ID": accounts flagged as virtual/proprietary (firm's own accounts).
+     These are excluded from shortfall calculations.
+   - "SHORTFALL": difference is negative AND account is not a VIRTUAL ID.
+     Means client's limit exceeds their actual deposit.
+   - "OK": difference is 0 or positive. Client has enough deposit.
+
+6. GENERATE OUTPUT FILE:
+   FULL_FILE_CTCL_VS_NMASS_{run_number:02d}.xlsx
+   Example: FULL_FILE_CTCL_VS_NMASS_01.xlsx on the first run.
+   Contains all clients with columns: Zone, ACCOUNTID, NAME, DEPOSIT NMASS,
+   DEPOSIT CTCL, DEPOSIT NMASS - DEPOSIT CTCL, REMARKS, CPCode, and more.
+
+7. ZONE SPLIT AND EMAILS:
+   Splits the output by Zone column:
+   - CHND = ZOCHND clients → emailed to CTCL_CHND_TO
+   - LUDH = ZO and ZOLUDH clients → emailed to CTCL_LUDH_TO
+   - MUMB = ZOMUMB clients → emailed to CTCL_MUMB_TO
+   - DELH = ZODELH, ZOMT, ZOCDR clients → emailed to CTCL_DELH_TO
+   Each zone receives only their clients.
+
+8. RUN 1 ONLY — MARGIN TOP20:
+   Copies RISK_REPORT_*.csv and FULL_FILE_CTCL_VS_NMASS_01.xlsx
+   into D:\MARGIN TOP20 folder, then calls run_margin_top20().
+   Also copies files to RUN01_DESTINATION_FOLDER (D:\NEW AMIT SIR) and
+   RUN1_COPY_CTCL_AND_RISK_DESTINATION (C:\Ashutosh) if enabled.
+
+9. TUESDAY/THURSDAY ONLY — CODE2 SHORTAGE:
+   If today is Tuesday or Thursday AND RUN_CODE2_ENABLED=true in .env:
+   Calls run_code2_shortage() which computes the expiry margin shortage.
+
+10. EVERY RUN — PAYOUT:
+    Calls run_payout_download() → downloads today's bank payout requests from BOAPI.
+    Calls run_payout_check() → checks which payout requestors have negative margin.
+
+11. BACKUP AND CLEANUP:
+    Backs up all input files to D:\CTCL VS NMASS\BACKUPFILES AUTOMATED\DD-MM-YYYY\run_N\
+    Deletes: CM/FO/CO collateral files, Update Limits, ClientNetEffectiveDeposits.
+    Does NOT delete: FULL_FILE output (kept for next run's reference).
+
+12. COMMITS RUN NUMBER:
+    Writes "YYYY-MM-DD|N" to run_counter.txt.
+
+WHY A CLIENT SHOWS "SHORTFALL":
+Their DEPOSIT NMASS (actual collateral on deposit) is less than their DEPOSIT CTCL
+(what the trading terminal shows as their available limit).
+Example: Client has ₹10 lakh deposit but trading system shows ₹15 lakh limit.
+DEPOSIT NMASS - DEPOSIT CTCL = 10L - 15L = -5L → SHORTFALL.
+The broker must either reduce the client's limit or ask them to deposit more.
+
+WHY A CLIENT SHOWS "VIRTUAL ID":
+The CPCode column is non-empty (not null and not blank string).
+Virtual IDs are proprietary/HNI accounts used for internal purposes or specific arrangements.
+They are excluded from shortfall action because they are managed differently.
+
+WHY "PRE-RUN FAILED":
+One or more required input files are missing from D:\CTCL VS NMASS.
+The files must come from the Margin Shortage download (run that first → CTCL folder).
+Also fails if a file exists but is older than 30 minutes (considered stale).
+
+=================================================================================
+PIPELINE 4: MARGIN TOP20 (called by CTCL run 1)
+=================================================================================
+Entry function: run_margin_top20() in margin_top20.py
+
+PURPOSE:
+Generates Top 20 Margin Utilisation reports for three groups of clients,
+password-protects each Excel file, and emails them to management.
+
+HOW IT WORKS:
+1. Reads from D:\MARGIN TOP20:
+   - RISK_REPORT_*.csv: contains Zone, ACCOUNTID, FNO_MARGIN, MCX_MARGIN,
+     NCDEX_MARGIN, MARGIN columns per client
+   - FULL_FILE_CTCL_VS_NMASS_01.xlsx: contains DEPOSIT CTCL per account
+
+2. Merges on ACCOUNTID to get both MARGIN (from RISK_REPORT) and DEPOSIT CTCL.
+
+3. Sorts ALL clients by MARGIN column descending (highest margin utilisation first).
+
+4. Creates 3 files (Top 20 of each group):
+   - "Top20 Derivative Utilization(CDR + MT).xlsx"
+     Clients in Zone ZOMT or ZOCDR.
+     Emailed to: CTCL_TOP20_CDRMT_TO from .env
+   
+   - "Top20 Derivative Utilization(V2).xlsx"
+     Clients in Zone ZODELH whose ACCOUNTID starts with "8" OR equals "6RBB01".
+     "V2" = Variant 2 = specific sub-category of Delhi zone clients.
+     Emailed to: CTCL_TOP20_V2_TO from .env
+   
+   - "Top20 Derivative Utilization(V1).xlsx"
+     Clients in Zone ZODELH whose ACCOUNTID does NOT start with "8",
+     does NOT start with "SN" (case insensitive), and is NOT "6RBB01".
+     "V1" = Variant 1 = the standard Delhi zone sub-category.
+     Emailed to: CTCL_TOP20_V1_TO from .env
+
+5. Applies password "master123" to each file using win32com (Excel COM automation).
+   This is why Windows + Excel + pywin32 must be installed.
+
+6. Emails each file separately with subject "Top 20 Margin Utilisation".
+
+7. Backs up all files in D:\MARGIN TOP20 and deletes originals.
+
+WHY V2 VS V1 SPLIT:
+V2 clients (ACCOUNTID starts with "8") are typically clients from a specific
+trading segment or sub-broker arrangement that is reported separately.
+6RBB01 is a specific account also classified under V2.
+V1 gets everyone else in ZODELH who isn't V2.
+
+=================================================================================
+PIPELINE 5: CODE2 — TUESDAY/THURSDAY SHORTAGE
+=================================================================================
+Entry function: run_code2_shortage() in code2_shortage.py
+
+PURPOSE:
+Runs only on Tuesday and Thursday. Computes which clients have a shortage
+when their expiry margin is taken into account (not just regular margin).
+
+HOW IT WORKS:
+1. Reads from D:\TUESDAY THURSDAY:
+   - FULL_FILE_CTCL_VS_NMASS_*.xlsx: the CTCL output file
+   - Update Limits*.xlsx: latest one picked by modification date
+
+2. Extracts from Update Limits: Entity → ACCOUNTID and ExpiryMargin → EXPIRY MARGIN.
+
+3. INNER JOINs the CTCL full file with Update Limits on ACCOUNTID.
+   Only clients that appear in BOTH files are included.
+
+4. Computes two shortage columns:
+   "Shortage as per NMASS" = DEPOSIT NMASS - EXPIRY MARGIN
+   "Shortage as per CTCL"  = DEPOSIT CTCL  - EXPIRY MARGIN
+
+5. Final SHORTAGE logic (important — this is the actual business logic):
+   IF both shortages are negative:
+     SHORTAGE = the MORE NEGATIVE of the two (min of the two values)
+     (Worst case scenario — use whichever system shows the bigger problem)
+   ELSE:
+     SHORTAGE = the LESS NEGATIVE / more positive of the two (max of the two values)
+     (Conservative — use whichever shows a smaller problem)
+
+6. FILTERS: keeps only rows where:
+   - SHORTAGE < 0 (actual shortage exists)
+   - REMARKS != "VIRTUAL ID" (excludes virtual accounts)
+   - CPCode is null OR empty string (excludes certain account types)
+
+7. Selects columns: Zone, ACCOUNTID, DEPOSIT NMASS, DEPOSIT CTCL, EXPIRY MARGIN, SHORTAGE
+
+8. Sorts by SHORTAGE ascending (most negative = biggest shortage first).
+
+9. Saves to D:\TUESDAY THURSDAY\Output.xlsx with:
+   - Professional styling: header fill, zebra striping, borders
+   - Note rows appended below the data explaining the methodology
+   - Auto column width, frozen header row
+
+10. Converts Output.xlsx to JPEG image using xlwings (Excel COM → clipboard grab).
+    This requires Windows + Excel installed.
+
+11. Sends image via WhatsApp (Tata) to CODE2_WA_RECIPIENT.
+
+12. Backup and cleanup.
+
+WHY A CLIENT APPEARS IN CODE2 OUTPUT:
+They have a net shortage even after including expiry margin obligations.
+The EXPIRY MARGIN column (from Update Limits) represents margin locked for
+expiring positions. When that's subtracted from their deposit, they go negative.
+
+WHY CODE2 IS ONLY TUE/THU:
+Expiry margin concentrations are particularly relevant on these days
+because of option expiry cycles (weekly and monthly).
+
+=================================================================================
+PIPELINE 6: CNC F11
+=================================================================================
+Entry function: run_cnc_f11() in cnc_f11.py
+
+PURPOSE:
+Finds clients who have a long (buy) position in MTF/NRML product AND a short
+(sell) position in MTFS/CNC in the same scrip. These pairs are "F11" candidates
+— positions that can be converted from MTF to CNC product.
+
+HOW IT WORKS:
+1. Reads PositionBook.csv from C:\CNC_F11.
+   The file may have varying column names — normalize_columns() maps them
+   to standard names using COLUMN_MAP. For example:
+   "clientid" or "accountid" → "ClientID"
+   "exchg-seg" → "Exch"
+   "product type" → "Product"
+   etc.
+
+2. Selects only 8 final columns: ClientID, Exch, Symbol, Instrument, Product,
+   NetBuyQty, NetSellQty, NetQty.
+
+3. Creates BUYING sheet:
+   Filter: Product in ["MTF", "NRML"] AND NetQty > 0 (strictly positive).
+   These are open long positions under MTF or Normal product.
+
+4. Creates SELLING sheet:
+   Filter: Product in ["MTFS", "CNC"] AND NetQty < 0 (strictly negative).
+   These are open short positions under MTFS or CNC product.
+
+5. Adds "Union" column = ClientID + Exch + Symbol (concatenated as strings).
+   This is the join key — same client, same exchange, same symbol.
+
+6. VL column (VLOOKUP equivalent):
+   For each row in BUYING: if its Union key exists in SELLING's set → VL = Union value.
+   Otherwise VL = "N/A".
+   Same for SELLING rows vs BUYING.
+
+7. Sheet4 = BUYING rows where VL != "N/A" (i.e. a matching sell position exists).
+8. Sheet5 = SELLING rows where VL != "N/A" (matching buy position exists).
+
+9. update_sheet4_quantities: fills Sheet4's NetSellQty from Sheet5 using the Union key.
+   NetBuyQty comes from the original buying_df NetQty.
+   NetQty = NetBuyQty - NetSellQty.
+   Product is forced to "CNC" in Sheet4.
+
+10. append_filtered_cnc: also adds CNC rows from Sheet1 where BOTH NetBuyQty AND
+    NetSellQty are non-zero (these are already converted positions with residual).
+    Replaces NetQty=0 with blank. Sorts by NetQty ascending (most negative first).
+
+11. Saves result.xlsx with 5 sheets: Sheet1 (all data), Buying, Selling, Sheet4, Sheet5.
+
+12. Saves CNC_F11_DATED_DD-MM-YYYY.xlsx (Sheet4 only) and emails it.
+
+13. Backs up all files, deletes originals.
+
+WHY A CLIENT APPEARS IN SHEET4:
+They hold an open long position (MTF or NRML, positive NetQty) AND an open short
+position (MTFS or CNC, negative NetQty) in the SAME scrip on the SAME exchange.
+The Union key (ClientID+Exch+Symbol) matches between buying and selling sides.
+
+WHY SHEET4 IS EMPTY:
+No client has both sides open simultaneously. Either:
+- All MTF/NRML positions are one-directional (no offsetting MTFS/CNC shorts)
+- The PositionBook.csv is from a day with no such activity
+- PositionBook was stale or had different column names (check normalize_columns)
+
+WHAT NetQty IN SHEET4 MEANS:
+NetQty = NetBuyQty (MTF long) - NetSellQty (MTFS/CNC short).
+If NetQty > 0: the buy side is larger — net long position after netting.
+If NetQty < 0: the sell side is larger — net short after netting.
+If NetQty = 0 (shown as blank): exactly offset — the position nets to zero.
+
+=================================================================================
+PIPELINE 7: MTF ORDER FILE
+=================================================================================
+Entry function: run_mtf_order() in mtf_order.py
+
+PURPOSE:
+For clients whose MTF positions are margin-short (their margin deposit is less
+than required), generates sell order files that specify WHICH stocks to sell
+and HOW MANY shares, to cover the margin shortfall.
+
+REQUIRED FILES (all must be in D:\MTF ORDER FILE):
+1. MTFPOSITION_DDMMYYYY.csv — positions file with columns:
+   AccountID, ScripName, ClRate (closing rate), MtfRate, MtfVar (margin var %),
+   Qty (current quantity held), MtfValueClosing, ClRate-MtfRate(L-K).
+2. MTF_RISK_SHORTAGE_REPORT.xlsx or .csv — clients with shortage amounts.
+   Must have an AccountID column and a "Net Shortage" or similar column.
+3. RISK_REPORT_*.csv — for TRADING_SOFTWARE_TYPE (KAMB vs O319 classification).
+
+HOW PART 1 WORKS — EDIT THE MTF POSITION FILE:
+1. Reads MTFPOSITION file, computes for each scrip per client:
+   MtfValueClosing = Qty × ClRate (if MtfValueClosing is 0)
+   ClRate-MtfRate(L-K) = ClRate - MtfRate  (positive=gain, negative=loss)
+   Margin to be released = MtfValueClosing × MtfVar / 100
+   unit_margin = ClRate × MtfVar / 100  (margin released per single share sold)
+
+HOW PART 2 WORKS — MARGIN-BASED MATCHING ALGORITHM:
+For each client in the risk shortage report (sorted by largest shortage first):
+
+STEP 1 — SELL LOSS-MAKING STOCKS FIRST (negative L-K priority):
+  Find all the client's scrips where ClRate < MtfRate (i.e. L-K is negative).
+  These are loss-making positions — the closing price is below the MTF buy rate.
+  Sort by most negative L-K first (biggest loss first).
+  For each loss-making scrip:
+    - Try to use the entire quantity (full_release = Qty × unit_margin)
+    - If overshoot (full_release - remaining_shortage) is within ₹100 TOLERANCE:
+      take the full quantity
+    - Else: reduce quantity one share at a time until within tolerance
+
+STEP 2 — FILL REMAINING SHORTAGE FROM PROFITABLE STOCKS:
+  (Only stocks NOT already used in Step 1)
+  PRIMARY pick: the scrip whose total "Margin to be released" is closest to
+  the remaining shortage (minimise overshoot or undershoot).
+  Priority: stocks that release <= remaining shortage preferred over those that overshoot.
+  Takes as many shares as needed (ceil division) up to available qty.
+  Adjusts down if overshoot > ₹100.
+  
+  SECONDARY fill: if shortage still remains after primary, fills using remaining scrips
+  sorted by unit_margin ascending (cheapest per rupee first).
+  Takes as many shares as fit within remaining shortage + ₹100 tolerance.
+
+3. TOLERANCE = ₹100: if release - remaining <= 100, accept it. This prevents
+   infinite loops trying to get exact matches.
+
+HOW PART 3 WORKS — CREATE ORDER FILES:
+After matching:
+- KAMB clients (TRADING_SOFTWARE_TYPE = "KAMB"): ORD_KAMB_MTFS_DDMMYYYY.csv
+  Columns: Exchange, Instr, Symbol, OptionType, Strike, ExpDate,
+           AccountId, BUY/SELL=SELL, CustFirm=C, Product=MTFS,
+           PriceType=MKT, OrdDuration=DAY, Price=0, Qty, TriggerPrice=0,
+           DiscQty=0, Remarks=0:00, MKT Prot%=3, PCode, OrderValue
+
+- O319 clients (TRADING_SOFTWARE_TYPE = "O319"): ORD_O319_MTFS_DDMMYYYY.csv
+  Different column format: EXCHANGE, SERIES, SYMBOL, FILLER1-5,
+           QTY1, QTY2, BUY/SELL=SELL, ORDER TYPE=MARKET, CLI,
+           PRODUCT TYPE=MTFS, VALIDITY=DAY, CLIENT CODE
+
+HOW PART 4 WORKS — ZONE SPLIT AND EMAILS:
+Loads risk shortage file for zone codes (Account ID → Zone mapping).
+Splits SUMMARY.csv, KAMB order file, O319 order file, and RISK file by zone:
+- CHND: Zone = ZOCHND
+- MUMB: Zone = ZOMUMB
+- LUDH: Zone = ZOLUDH or ZO
+- DELH: everything else
+Each zone gets one email with all 3-4 attachment files.
+Then one final combined email with the full (un-split) files.
+
+WHY A SPECIFIC STOCK WAS CHOSEN FOR A CLIENT:
+Either it's loss-making (ClRate < MtfRate, sold first by design), or
+its "Margin to be released" is closest to covering the remaining shortfall.
+The algorithm minimises the number of shares and stocks needed.
+
+WHY A CLIENT HAS MANY STOCKS IN THEIR ORDER:
+Their single largest-margin stock wasn't enough to cover the shortfall,
+so secondary stocks were needed to fill the remaining gap.
+
+WHY ONLY PARTIAL QUANTITY OF A STOCK:
+The algorithm took only enough shares to cover the shortage ± ₹100 tolerance.
+It does NOT always sell the entire holding — only what's needed.
+
+WHY A CLIENT IS MISSING FROM THE ORDER FILE:
+They are not in the MTF_RISK_SHORTAGE_REPORT, meaning their net shortage
+was 0 or positive (they have enough margin). Only negative-shortage clients appear.
+
+=================================================================================
+PIPELINE 8: MARGIN SHORTAGE DOWNLOAD
+=================================================================================
+Entry function: download_margin_shortage_files(dest_folder) in margin_shortage.py
+
+PURPOSE:
+Downloads the client-level collateral files from two exchanges.
+These files are the inputs for the CTCL vs NMASS pipeline.
+
+HOW IT WORKS:
+NSCCL DOWNLOAD (connect2nsccl.com):
+1. Opens Chrome via Selenium, navigates to NSCCL website.
+2. Login with NSCCL_USERNAME and NSCCL_PASSWORD from .env.
+3. Downloads captcha image, uses EasyOCR to read it.
+   Shows a popup for manual correction if OCR misread.
+4. Downloads 3 files:
+   - CM_ClientLevelCollaterals_DDMMYYYY.csv (Cash Market segment)
+   - FO_ClientLevelCollaterals_DDMMYYYY.csv (Futures & Options segment)
+   - CO_ClientLevelCollaterals_DDMMYYYY.csv (Currency Options segment)
+
+NCDEX DOWNLOAD (ncfe.ncdex.com):
+1. Opens Chrome via Selenium, navigates to NCDEX website.
+2. Login with NCDEX_USERNAME and NCDEX_PASSWORD.
+3. Processes captcha with Tesseract OCR + manual correction popup.
+4. Answers security question with NCDEX_SECURITY_ANSWER from .env.
+5. Downloads: ClientNetEffectiveDeposits_DDMMYYYY.csv (commodity deposits)
+
+DESTINATION FOLDER:
+"15min" → saves to MARGIN_SHORTAGE_FOLDER (D:\15 minutes)
+   Used for the standalone 15-minute margin shortage report.
+"ctcl" → saves to CTCL_NMASS_FOLDER (D:\CTCL VS NMASS)
+   Used as inputs for the CTCL vs NMASS pipeline.
+
+=================================================================================
+PIPELINE 9: FTP DOWNLOAD
+=================================================================================
+Entry function: run_ftp_download() in ftp_download.py
+
+PURPOSE:
+Downloads all daily KAMB, O319, NOREN, and SYMF files from the FTP server
+(202.58.232.124) and distributes each file to its correct destination folder
+based on its filename prefix.
+
+HOW IT WORKS:
+1. Connects to FTP at 202.58.232.124 as user TRADING (password from .env).
+2. Downloads files from 9 FTP folders. Key folders:
+   /TRADING/CTCL_FILES/KORP_LIVE/SYMF → Symphony RMS files
+   /TRADING/CTCL_FILES/KORP_LIVE/KAMB/POSI → Kambala position files
+   /TRADING/CTCL_FILES/KORP_LIVE/KAMB/HOLD → Kambala holding files
+   /TRADING/CTCL_FILES/KORP_LIVE/KAMB/DEPO → Kambala deposit files
+   /TRADING/CTCL_FILES/KORP_LIVE/O319/POSI → O319 position files
+   /TRADING/CTCL_FILES/KORP_LIVE/O319/HOLD → O319 holding files
+   /TRADING/CTCL_FILES/KORP_LIVE/O319/DEPO → O319 deposit files
+   /TRADING/CTCL_FILES/KORP_LIVE/NOREN/HOLD → NOREN holding files
+   /TRADING/CTCL_FILES/KORP_LIVE/NOREN/POSI → NOREN position files
+
+3. MCX position file (MCX_POSITION_56720_DDMMYYYY.csv) is in three places:
+   - KAMB/POSI → saved to POSI_KAMB sub-folder, then copied to FTP_KAMB_FINAL
+   - O319/POSI → saved to O319_POSI sub-folder, then copied to FTP_O319_FINAL
+   - NOREN/POSI → saved to DAY_ROOT, then copied to FTP_NOREN_FINAL
+   (Same file downloaded 3 times because it's needed in 3 places)
+
+4. DISTRIBUTION by filename prefix after download:
+   symphony_rms_limit_* → copies to BANK_ALERT + FULL_RECO
+   t1_holding_symphony_*, t1_holding_kambala_*, t1_holding_isin_* →
+     copies to T1_TEMP + T1_FINAL + FULL_RECO
+   t1_holding_noren_* → copies to T1_TEMP + T1_FINAL only (no FULL_RECO)
+   mf_kamb_holding_* → copies to FULL_RECO + T1_FINAL
+   mf_noren_holding_* → copies to T1_FINAL only
+   bsef_position_kamb_*, fo_position_kambala_*, kamb_cash_pos_nrml_* →
+     copies to POSITIONBOOK, moves to POSI_KAMB folder
+   kambala_omny_com_depo_adhoc* → copies to COMM_LIMIT_DIR, moves to DEPO_KAMB
+   kambala_omny_depo_adhoc_all_level* → copies to BANK_ALERT + FULL_RECO, moves to DEPO_KAMB
+   kambala_mtf_depo_* → moves to DEPO_KAMB only (no copy)
+   omni3.19_depo_adhoc_all_level* → copies to FULL_RECO, moves to DEPO_O319
+
+5. Writes download log to C:\FTP FILES\BACKUPFILES AUTOMATED\DDMMYYYY\download_log_*.txt.
+6. Cleans up: deletes any non-.py non-.bat files from C:\FTP FILES base.
+7. Cleans up: deletes leftover files from DAY_ROOT (keeps only the log).
+
+=================================================================================
+PIPELINE 10: PAYOUT — DOWNLOAD + CHECK
+=================================================================================
+
+PAYOUT DOWNLOAD — run_payout_download() in payout_download.py:
+Downloads today's bank payout request log from BOAPI (Mastertrust back-office API).
+1. Gets session key from /api/Common/SessionKey/Get
+2. Encrypts KORP_PASSWORD with AES-CBC using session key as both key and IV.
+3. Posts login to /api/token with KORP_USERNAME, encrypted password, client IP/MAC.
+4. Gets access_token.
+5. Calls /api/Vouchers/PaymentRequestLog/Get for today's date.
+6. Renames columns to standard names (Account ID, Request Amount, etc.)
+7. Formats date columns.
+8. Saves as DDMMYYYYHHMMSS.xlsx in D:\PAYOUT ASHISH.
+   (filename = date+time so multiple downloads in a day don't overwrite each other)
+
+PAYOUT CHECK — run_payout_check() in payout_check.py:
+1. Finds today's base file: looks for a file named DDMMYYYY*.xlsx or DDMMYYYY*.csv
+   in D:\PAYOUT ASHISH (where DDMMYYYY = today's date).
+
+2. Finds Update Limits file — SEARCHES CTCL FOLDER FIRST, then PAYOUT FOLDER:
+   Looks for files starting with "update limits" or "update_limits" (case-insensitive).
+   If found in D:\CTCL VS NMASS → uses that, records source as "CTCL".
+   If not found there → looks in D:\PAYOUT ASHISH, records source as "PAYOUT".
+   This dual-folder search matters for cleanup (see below).
+
+3. Reads Update Limits file. Adds missing deposit columns as 0.
+   Computes TOTAL DEPOSIT = sum of 17 collateral columns.
+   Filters: Available Margin < 0 (negative available margin).
+
+4. INNER JOIN: payout requests JOINED WITH negative-margin clients on Account ID / Entity.
+   Result: only clients who both (a) requested payout AND (b) have negative margin.
+
+5. Selects final columns: Zone, Region, Account ID, Request Amount, Release Amount,
+   Request Date, Bank Account No, Bank Code, Maker, Approve By, Approve Date,
+   Checker Time, Available Margin, MarginUsed, TOTAL DEPOSIT.
+
+6. Auto-formats column widths in openpyxl.
+
+7. Saves as PAYOUT_CHECKING_DDMMYYYY_HHMMSS.xlsx in D:\PAYOUT ASHISH.
+
+8. Emails to PAYOUT_CHECK_TO with the file attached.
+
+9. BACKUP AND CLEANUP:
+   Always backs up: base_file (payout log), output_file (PAYOUT_CHECKING result).
+   If Update Limits came from PAYOUT folder → also backs up and DELETES it.
+   If Update Limits came from CTCL folder → does NOT delete it (CTCL pipeline still needs it).
+   Creates backup structure: D:\PAYOUT ASHISH\BACKUPFILES AUTOMATED\DD MMM YYYY\01, 02...
+
+WHY A CLIENT IS IN THE PAYOUT_CHECKING FILE:
+They submitted a bank payout request AND their Available Margin is negative.
+Available Margin < 0 means they have used more margin than they have deposited.
+Releasing funds to them would worsen their margin position → payout must be blocked.
+
+WHY A CLIENT IS NOT IN PAYOUT_CHECKING DESPITE REQUESTING PAYOUT:
+Their Available Margin >= 0. They have a surplus. The payout is safe to process.
+
+=================================================================================
+PIPELINE 11: PAYOUT INSPECTION
+=================================================================================
+Entry functions:
+  run_payout_inspection_daily() — reads yesterday's CSV, deduplicates, appends
+  run_payout_inspection_client(client_ids, fy_str) — filter by clients + FY
+
+PURPOSE:
+Maintains a running historical database of all payout requests. The daily mode
+adds new records from each day's CSV. The inspection mode lets you search which
+payouts were made for a specific client in a specific financial year.
+
+DAILY INGESTION:
+1. Looks backwards up to 30 days to find a daily CSV file named "DD MMM YYYY.csv"
+   (e.g. "07 JUN 2026.csv") in D:\INSPECTION.
+2. Normalises column names (clientid → ClientId etc.).
+3. Parses InstructionDateTime to a date (tries 5 date formats).
+4. Loads ALL existing history files (named "PAYOUT REQUEST FROM DD... TO DD...csv").
+5. Extracts existing (ClientId, InstructionNo) pairs globally (the dedup keys).
+6. Anti-joins: only keeps rows from the daily file that are NOT already in history.
+7. If no new rows → prints "data already exists", returns.
+8. If current file has fewer than 1,000,000 rows → appends to it (rename with new date range).
+9. If file would exceed 1,000,000 rows → creates a new history file.
+10. Backs up the daily CSV to D:\INSPECTION\BACKUP FILES AUTOMATED\MMM-YYYY\
+    and deletes it.
+
+CLIENT INSPECTION:
+1. Loads all history files and concatenates them.
+2. Filters by client IDs (case-insensitive, comma-separated).
+3. Filters by financial year: from April 1 of start_year to March 31 of end_year.
+4. Writes INSPECTION_OUTPUT_FY_YYYY_YYYY.csv to D:\INSPECTION.
+
+=================================================================================
+COMPLETE ERROR REFERENCE — EVERY ERROR AND HOW TO FIX IT
+=================================================================================
+
+"Missing required file(s): [PositionBook.csv]"
+→ Place PositionBook.csv in C:\CNC_F11 and run CNC F11 again.
+
+"Missing required file(s): [FULL_FILE_CTCL_VS_NMASS_*.xlsx]" (in CODE2)
+→ The CTCL vs NMASS pipeline has not run today, or its output is not in D:\TUESDAY THURSDAY.
+  Copy FULL_FILE_CTCL_VS_NMASS_01.xlsx and Update Limits to D:\TUESDAY THURSDAY and retry.
+
+"Missing required file(s): [RISK_REPORT_*.csv]" (in MTF Order)
+→ Place RISK_REPORT_YYYYMMDD.csv in D:\MTF ORDER FILE before running.
+
+"Pre-run check failed" / "status: prerun_failed" (in CTCL)
+→ One or more required input files are missing from D:\CTCL VS NMASS.
+  Run the Margin Shortage download → CTCL folder first.
+  Required files: CM_ClientLevelCollaterals_DDMMYYYY.csv,
+                  FO_ClientLevelCollaterals_DDMMYYYY.csv,
+                  Update Limits*.xlsx, ClientNetEffectiveDeposits*.csv.
+  Also check: files must be modified within the last 30 minutes to pass freshness check.
+
+"Update Limits not found in CTCL or PAYOUT folder"
+→ The Update Limits file (from NSCCL) is not in D:\CTCL VS NMASS or D:\PAYOUT ASHISH.
+  Run Margin Shortage → CTCL download first, which places Update Limits in the CTCL folder.
+
+"polars.exceptions.ColumnNotFoundError: DEPOSIT NMASS not found"
+→ The CM/FO/CO collateral files have unexpected column names.
+  NSE occasionally changes their column headers. Open the file and check column names.
+  The expected sum columns are: Payin, Payout, Collateral(Total), Cash, etc.
+
+"polars.exceptions.ColumnNotFoundError: ExpiryMargin" (in CODE2)
+→ The Update Limits file doesn't have an ExpiryMargin column.
+  This file must be the standard NSCCL Update Limits export — check you have the right file.
+
+"polars.exceptions.ColumnNotFoundError: Entity" (in CODE2 or payout_check)
+→ The Update Limits file doesn't have an "Entity" column.
+  Entity = the account ID column. Different NSCCL exports may use different names.
+
+"not_arrived" status on peak margin
+→ NSE has not uploaded the snapshot file yet. Too early to run this snapshot.
+  Wait until after the snapshot time (10:30, 12:30, 13:45, 15:30) and retry.
+
+"CAPTCHA failed" / "OCR error" (in margin shortage or NCDEX)
+→ EasyOCR/Tesseract misread the captcha. The popup allows manual correction.
+  Type the correct captcha text and press OK. The pipeline will retry the login.
+
+"Read timed out" / "HTTPSConnectionPool" / "Connection timed out" on NSE (connect2nse.com)
+→ This is a NETWORK/SERVER error, NOT a password problem. The NSE site (connect2nse.com)
+  was slow or unreachable when the script tried to connect. The script normally retries
+  automatically. Fixes: (1) wait and let it retry — NSE servers are often briefly slow,
+  especially at peak snapshot times; (2) check your office network / VPN is connected;
+  (3) if it persists for many minutes, NSE's extranet may be down — try opening
+  connect2nse.com in a browser to confirm. Do NOT change any password for this error.
+
+"Login Failed" / "Invalid credentials" / "authentication failed" on NSE extranet
+→ Only when the site explicitly says login/credentials failed (NOT a timeout):
+  NSE_PASSWORD in .env is wrong or expired. NSE passwords must be changed periodically.
+  Update NSE_PASSWORD in .env with the current encrypted password.
+
+"Login Failed" on NSCCL
+→ NSCCL_PASSWORD or NSCCL_USERNAME in .env is incorrect. Update and retry.
+
+"❌ Upload failed" / "❌ Failed to send" (WhatsApp in CODE2)
+→ WA_AUTH_TOKEN has expired. Tata WhatsApp tokens expire periodically.
+  Get a new token and update WA_AUTH_TOKEN in .env.
+  Also check CODE2_WA_RECIPIENT is a valid WhatsApp number with country code (+91...).
+
+"ConnectionRefusedError" / "Connection timed out" on FTP (202.58.232.124)
+→ FTP server is unreachable. Likely a VPN/network issue.
+  FTP only works from the office network or with VPN connected. Check VPN status.
+
+"KORP login failed" / "KeyError: access_token"
+→ KORP_USERNAME or KORP_PASSWORD in .env is wrong.
+  Or KORP_CLIENT_IP / KORP_CLIENT_MAC don't match the registered credentials.
+  Try logging into BOAPI manually to confirm credentials.
+
+"pycryptodome not found" / "AES import error"
+→ Run: pip install pycryptodome --break-system-packages
+  (or: pip install pycryptodome in the venv)
+
+"win32com error" / "pywintypes.com_error" / "pythoncom error"
+→ pywin32 is not installed or Excel is not installed on this machine.
+  Run: pip install pywin32
+  Then run: python -m win32com.client.makepy  (registers Excel COM type library)
+  Excel (Microsoft Office) must be installed on the same machine.
+
+"xlwings error" (in CODE2)
+→ xlwings requires Excel to be installed and accessible. Same fix as win32com above.
+
+"PermissionError" when deleting files
+→ A file is open in Excel or another application. Close it and retry.
+
+"run counter shows wrong run number" (CTCL shows run 5 when it's the first run today)
+→ The run_counter.txt file has a wrong date. Delete D:\CTCL VS NMASS\run_counter.txt
+  and run again. It will reset to run 1.
+
+"EventSource closed" / stream stops mid-run in the dashboard
+→ The uvicorn backend crashed. Check the terminal window where uvicorn is running
+  for the Python traceback. The error will be there, not in the browser.
+
+"NameError: 'Request' is not defined" in api.py
+→ The FastAPI import is missing Request. Open api.py and ensure:
+  from fastapi import FastAPI, Request, StreamingResponse
+
+"NameError: 'StreamingResponse' is not defined" in api.py
+→ Same fix: from fastapi import FastAPI, Request, StreamingResponse
+
+"backend: offline" in dashboard
+→ Uvicorn is not running. Run: uvicorn api:app --reload from the project directory.
+
+"sentence_transformers not installed" or "all-MiniLM-L6-v2 download"
+→ The RAG model is downloading on first use (~80MB, happens once).
+  Wait for it to finish. Future starts will use the cached model.
+
+"NoneType object is not subscriptable" / "TypeError NoneType" (70 Files downloader)
+→ An exchange LOGIN PAGE (NSE / NCDEX / MCX) did not return the expected form, so a
+  scraped field came back empty and the code indexed into None. Almost always means the
+  session expired, a captcha appeared, or the exchange changed the page markup.
+  Fix: re-run after refreshing the session / solving any captcha. If it persists, the
+  login page layout changed — check the soup.find(id="__VIEWSTATE"/...) selectors in
+  core/pipelines/files_downloader_70.py (get_login_tokens and the security step).
+
+
+PIPELINE LOGIC & "WHY" KNOWLEDGE
+=================================
+This section captures the EXACT classification logic from the real source
+code — the rules that decide why a row is marked SHORTFALL / OK / VIOLATION /
+BLOCKED etc. It exists so the agent can answer an RMS person's "why did this
+client get this remark?" from the real logic, not a guess.
+
+For every pipeline below: what the key columns mean, what rule assigns each
+REMARK, and the common questions an RMS reviewer asks.
+
+
+========================================
+CTCL VS NMASS (FULL_FILE_CTCL_VS_NMASS)
+========================================
+WHAT IT COMPARES: each client's CTCL deposit (the trading limit set in the
+  back office) against their NMASS deposit (the actual collateral lodged at
+  the exchange/clearing corp).
+
+KEY COLUMN — DIFFERENCE(G-F) = DEPOSIT CTCL − DEPOSIT NMASS.
+  POSITIVE difference = SHORTFALL (the limit given is MORE than the collateral
+  actually lodged — the client has been allowed to trade on more than they've
+  deposited at the exchange). This is the risk the report exists to catch.
+
+REMARKS — assigned by a 3-TIER PRIORITY (in this exact order):
+  1. VIRTUAL ID  — assigned first if the row's Zone is blank/nan OR the
+     ACCOUNTID is in the hardcoded VIRTUAL_ID_LIST (house/virtual accounts like
+     ZV88, AN05, XDL0008, etc. — these are internal pseudo-accounts, not real
+     clients). EXCEPTION: if a "VIRTUAL ID" row actually has DEPOSIT NMASS > 0,
+     the VIRTUAL flag is REMOVED (it's a real account after all) and it falls
+     through to the shortfall/OK test.
+  2. SHORTFALL   — if not virtual AND DIFFERENCE(G-F) > 0.
+  3. OK - No Difference  — if DIFFERENCE(G-F) == 0.
+     OK - Minus Difference — if DIFFERENCE(G-F) < 0 (collateral exceeds limit;
+     this is safe, the client has lodged more than their limit).
+
+Sub-accounts (ACCOUNTID starting with "SUB") are DROPPED entirely before remarks.
+Rows are sorted by DIFFERENCE(G-F) descending (biggest shortfall on top).
+
+WHY-QUESTIONS THIS ANSWERS:
+  - "Why is client X SHORTFALL?" → because their CTCL limit exceeds their NMASS
+    deposit by ₹(difference); they're trading on more limit than collateral lodged.
+  - "Why is X marked VIRTUAL ID?" → blank zone or on the virtual-account list,
+    and NMASS deposit is 0.
+  - "Why is X OK - Minus Difference?" → their lodged collateral is MORE than the
+    limit given — safe, no action needed.
+  - "Why is the biggest shortfall this client?" → highest DIFFERENCE(G-F).
+WHAT IT CANNOT TELL: why the limit was set high or why collateral is low — that's
+  set in the back office / collateral files, not in this output.
+
+
+=====================================================
+MARGIN SHORTAGE / 15 MINUTES (Shortage_vs_CC_Deposit)
+=====================================================
+WHAT IT COMPARES: each client's total deposit (NMASS = CM+FO+CO collaterals +
+  NCDEX deposit + MCX limit) against total margin used across all segments.
+
+KEY COLUMN — DIFFERENCE(F-G) = DEPOSIT NMASS − TOTAL MARGIN.
+  NEGATIVE difference = SHORTFALL (margin used exceeds deposit). NOTE: this is
+  the OPPOSITE SIGN to CTCL. Here negative is bad; in CTCL positive is bad.
+
+REMARKS:
+  - SHORTFALL              if DIFFERENCE(F-G) < 0
+  - OK - No Difference     if DIFFERENCE(F-G) == 0
+  - OK - Excess Difference if DIFFERENCE(F-G) > 0 (deposit exceeds margin — safe)
+
+MARGIN WARNING % = DERIVATIVE MARGIN USED ÷ DEPOSIT NMASS × 100, where
+  DERIVATIVE MARGIN USED = TOTAL MARGIN − CM SEGMENT MARGIN (i.e. the FO/NCDEX/
+  MCX portion). Rows are sorted by MARGIN WARNING % descending. A high warning %
+  means derivative exposure is large relative to the deposit.
+
+WHATSAPP ALERTS: sent to clients with MARGIN WARNING % > 105, BUT only the first
+  time per day it crosses, OR again if it moved ±10 percentage-points since the
+  last alert that day. The actual sent-list lives in margin_alert_tracker.json,
+  NOT in the output file. So "eligible" (% > 105) is computable from the file;
+  "actually sent" is not.
+
+WHY-QUESTIONS THIS ANSWERS:
+  - "Why is X SHORTFALL?" → margin used (₹) exceeds deposit (₹) by the difference.
+  - "Why is X margin warning so high?" → derivative margin (₹) is that % of deposit.
+  - "Why did X get a WhatsApp?" → margin warning % is above 105.
+WHAT IT CANNOT TELL: which specific trade/position raised the derivative margin
+  (needs FO/MCX position files), and whether the alert was actually sent (tracker).
+
+
+========================================
+CONCENTRATION (FULLFILE_CONCENTRATION)
+========================================
+TWO SEPARATE CLASSIFICATIONS — don't confuse them:
+
+REMARKS (which index basket the scrip belongs to), by ISIN:
+  - "ind_nifty50list.csv"            if ISIN is in Nifty 50
+  - "BSE 200index_Constituents.csv"  if in BSE 200
+  - "BSE 500index_Constituents.csv"  if in BSE 500
+  - "Others"                         if in none of the above
+  (Special override: if ScripName == "BSE", forced to the BSE 200 bucket.)
+
+remarks_1 (the actual VIOLATION flag), by portfolio value with tiered limits:
+  - "Violation" if BOTH FIN_UPTODATE_MTF and PORTFOLIO VALUE exceed ₹1 crore
+    (absolute), OR
+  - index stocks (REMARKS != "Others"): limit is ₹1 crore — "OK" if PORTFOLIO
+    VALUE ≤ 1 Cr, else "Violation"
+  - Others (illiquid/non-index): tighter limit ₹50 lakh — "OK" if ≤ 50 L, else
+    "Violation"
+  RATIONALE: index/liquid stocks get a higher concentration limit (1 Cr); non-index
+  illiquid stocks get half that (50 L) because they're riskier to liquidate.
+
+SCRIP CONCENTRATION COUNT = number of distinct scrips held per AccountID.
+Scrip_Concentration[(L/M)*100] = the scrip-level concentration %.
+
+WHY-QUESTIONS THIS ANSWERS:
+  - "Why is X a concentration Violation?" → portfolio value in that scrip exceeds
+    the limit for its bucket (₹1 Cr for index stocks, ₹50 L for Others).
+  - "Why is this scrip 'Others'?" → its ISIN isn't in Nifty50/BSE200/BSE500.
+  - "Why does X have 100% scrip concentration?" → entire portfolio in one scrip.
+
+
+========================================
+CNC F11 (CNC_F11_DATED)
+========================================
+WHAT IT FLAGS: keeps only rows where NetQty < 0 — i.e. clients with a NEGATIVE
+  net quantity in the CNC (cash-and-carry) segment (short positions that
+  shouldn't exist in delivery/CNC). The output is the list of such breaches.
+WHY: a negative NetQty in CNC means the client is net short in a product where
+  they should be holding delivery — a risk/compliance flag.
+
+
+========================================
+PAYOUT (PAYOUT_CHECKING)
+========================================
+WHAT IT FLAGS: keeps only rows where Available Margin < 0 — payout requestors
+  whose available margin is NEGATIVE. These are the accounts whose payout should
+  be BLOCKED (paying them out would worsen an already-negative margin).
+KEY COLUMNS: Entity (account), Available Margin, MarginUsed, TOTAL DEPOSIT.
+WHY-QUESTIONS:
+  - "Why is X's payout blocked?" → their Available Margin is negative
+    (MarginUsed exceeds deposit), so releasing funds isn't allowed.
+
+
+========================================
+MTF ORDER FILE (ORD_KAMB / ORD_O319)
+========================================
+WHAT IT PRODUCES: square-off order quantities for MTF (margin trading funding)
+  positions that need reduction. Computes a per-unit margin, then allocates
+  square-off quantity per client up to an acceptable tolerance (takes full qty
+  if the overshoot is acceptable, else reduces qty step by step).
+NOT a remarks/shortfall report — it's an executable order list.
+WHY-QUESTIONS:
+  - "Why is X in the order file?" → their MTF position needs squaring off to bring
+    margin within tolerance; the qty shown is how much to reduce.
+
+
+=============================================
+PEAK MARGIN (F_filtered.png / C_filtered.png)
+=============================================
+WHAT IT SHOWS: each client's margin at the 4 daily NSE snapshots
+  (i01 10:30 → Peak1, i02 12:30 → Peak2, i03 13:45 → Peak3, i04 15:30 → Peak4).
+  i01 MUST run first each day — it resets the report; running a later snapshot
+  before i01 leaves earlier Peak columns at 0.
+NOT a shortfall report — it's peak utilisation across the day.
+
+
+GENERAL "WHY" BOUNDARY (applies to all):
+  These reports explain WHAT a client's status is and the DIRECT formula behind it
+  (deposit vs limit, margin vs deposit, portfolio value vs threshold). They do NOT
+  contain the upstream cause — which trade was placed, why collateral changed, why
+  a limit was set. Answering that requires the source position/collateral files,
+  not these outputs. Always explain to the boundary of the data and name the limit.
+
+
+COLUMN LINEAGE — EVERY OUTPUT COLUMN, ITS SOURCE & FORMULA
+===========================================================
+For each pipeline output, this traces EVERY column back to where its value
+comes from and the exact formula/transformation used to build it. This lets
+the agent answer "where does column X come from / how is it calculated?" for
+any column, not just the remark.
+
+
+==============================================
+CTCL VS NMASS — output FULL_FILE_CTCL_VS_NMASS
+==============================================
+
+INPUT FILES READ:
+  - CM_ClientLevelCollaterals_<date>  (CM segment collaterals)
+  - FO_ClientLevelCollaterals_<date>  (FO segment collaterals)
+  - CO_ClientLevelCollaterals_<date>  (CO/commodity segment collaterals)
+  - ClientNetEffectiveDeposits_<date> (net effective deposits)
+  - Client Margin Limit file          (margin limits)
+  - Update Limits <date>.xlsx         (the back-office limit file → CTCL side)
+  - RISK_REPORT_<date>                (zone / account metadata)
+
+INTERMEDIATE COLUMNS (built then summed into DEPOSIT NMASS):
+  CM_SUM  = Cash allocated (b) + Cash-Others (c) + Non-cash Securities (d),
+            from CM_ClientLevelCollaterals, then grouped (summed) per Client Code.
+  FO_SUM  = same three columns from FO_ClientLevelCollaterals, summed per client.
+  CO_SUM  = same three columns from CO_ClientLevelCollaterals, summed per client.
+  DEP_SUM = "Total Collateral (Cash and Non Cash)" from ClientNetEffectiveDeposits,
+            summed per Client/CP Code.
+  MARGIN_LIMIT = "Client Margin Limit" from the margin file, summed per client.
+  ROW_CTCL / DEPOSIT_CTCL: from "Update Limits" — sums these columns horizontally
+            per row: Payin, Payout, Collateral(Total), Cash, DaylongCash,
+            MtfDaylongCash, CacDaylongCash, UnclearedCash, BrokerCollateral,
+            EQT/DER/COM/FX Collateral, AUXDaylongCash, AuxUnclearedCash,
+            AuxBrokerCollateral, Remarks Amount, Remarks Text — then grouped
+            (summed) per Entity to give DEPOSIT CTCL.
+
+FINAL OUTPUT COLUMNS:
+  ACCOUNTID         = the client code (Entity / Client Code, renamed).
+  DEPOSIT NMASS     = CM_SUM + FO_SUM + CO_SUM + DEP_SUM + MARGIN_LIMIT.
+                      (= total collateral actually lodged across all segments.)
+  DEPOSIT CTCL      = DEPOSIT_CTCL above (= total limit from Update Limits file).
+  DIFFERENCE(G-F)   = DEPOSIT CTCL − DEPOSIT NMASS, rounded 2 dp.
+                      POSITIVE = SHORTFALL (limit > collateral lodged).
+  Zone, TRADING_SOFTWARE_TYPE, CPCode, PISAccount = joined from RISK_REPORT by ACCOUNTID.
+  REMARKS           = VIRTUAL ID / SHORTFALL / OK (see logic section).
+  (Sub-accounts — ACCOUNTID starting "SUB" — are dropped. Rows sorted by
+   DIFFERENCE(G-F) descending.)
+
+WHERE EACH NUMBER COMES FROM (plain answers):
+  - "Where does DEPOSIT NMASS come from?" → summed collateral from the CM, FO, CO
+    collateral files + net effective deposits + client margin limit.
+  - "Where does DEPOSIT CTCL come from?" → the Update Limits back-office file, summing
+    all its limit/collateral columns per entity.
+  - "How is DIFFERENCE(G-F) calculated?" → DEPOSIT CTCL minus DEPOSIT NMASS.
+
+
+============================================================
+MARGIN SHORTAGE / 15 MINUTES — output Shortage_vs_CC_Deposit
+============================================================
+
+INPUT FILES READ:
+  CM/FO/CO_ClientLevelCollaterals, ClientNetEffectiveDeposits, an MCX file
+  (matched by columns Client Code / Client Margin Limit / Margin Utilization),
+  and RISK_REPORT (for Zone etc.).
+
+INTERMEDIATE COLUMNS:
+  CM_SUM / FO_SUM / CO_SUM = Cash allocated (b) + Cash-others (c) + Non-cash
+            Securities (d) from each collateral file, summed per Client Code.
+  CM_MIN_MARGIN / FO_MIN_MARGIN / CO_MIN_MARGIN = "Minimum Margins (a)" from each
+            collateral file, summed per client.
+  DEP_SUM = "Total Collateral (Cash and Non Cash)" from ClientNetEffectiveDeposits.
+  CLIENTNET_MARGIN = "Margin" from ClientNetEffectiveDeposits.
+  MARGIN_LIMIT = "Client Margin Limit" from the MCX file (summed).
+  MCX_MARGIN_UTIL = "Margin Utilization" from the MCX file (summed).
+
+FINAL OUTPUT COLUMNS:
+  ACCOUNTID    = Client Code (renamed).
+  DEPOSIT NMASS = CM_SUM + FO_SUM + CO_SUM + DEP_SUM + MARGIN_LIMIT.
+                  (total deposit/collateral incl. MCX limit.)
+  TOTAL MARGIN  = CM_MIN_MARGIN + FO_MIN_MARGIN + CO_MIN_MARGIN
+                  + CLIENTNET_MARGIN + MCX_MARGIN_UTIL.
+                  (total margin requirement/utilisation across all segments.)
+  DIFFERENCE(F-G) = DEPOSIT NMASS − TOTAL MARGIN, rounded.
+                    NEGATIVE = SHORTFALL (opposite sign to CTCL).
+  CM SEGMENT MARGIN = CM_MIN_MARGIN (the CM-only margin).
+  FINAL SHORT CM ADJ(H+J) = DIFFERENCE(F-G) + CM_MIN_MARGIN.
+                    (shortfall after adding back CM segment margin; <0 used for
+                     zone shortfall files.)
+  DERIVATIVE MARGIN USED = TOTAL MARGIN − CM SEGMENT MARGIN.
+                    (the FO/NCDEX/MCX portion of margin — i.e. derivatives.)
+  MARGIN WARNING % = DERIVATIVE MARGIN USED ÷ DEPOSIT NMASS × 100
+                    (0 if deposit is 0). Rows sorted by this, highest first.
+  Zone, TRADING_SOFTWARE_TYPE, CPCode, PISAccount = joined from RISK_REPORT.
+  REMARKS = SHORTFALL / OK - No Difference / OK - Excess Difference.
+  (Accounts starting "SUB" dropped.)
+
+WHERE EACH NUMBER COMES FROM:
+  - "How is MARGIN WARNING % calculated?" → derivative margin used ÷ deposit × 100,
+    where derivative margin = total margin minus the CM-segment margin.
+  - "What is TOTAL MARGIN made of?" → the minimum-margin columns from CM/FO/CO
+    collateral files + the ClientNet margin + MCX margin utilisation.
+  - "What is DEPOSIT NMASS?" → the same collateral sum as CTCL but including the
+    MCX margin limit.
+  - "What is FINAL SHORT CM ADJ?" → the shortfall with CM-segment margin added back.
+
+
+=============================================
+CONCENTRATION — output FULLFILE_CONCENTRATION
+=============================================
+
+INPUT FILES READ:
+  Holdings/MTF file (positions + portfolio values), plus index constituent lists:
+  ind_nifty50list.csv, BSE 200index_Constituents.csv, BSE 500index_Constituents.csv.
+
+KEY COLUMNS:
+  Boscrip / ISIN  = scrip code and its ISIN (ISIN joined from BSE 500 list).
+  ScripName       = the stock name.
+  PORTFOLIO VALUE = the value of that client's holding in that scrip (from holdings).
+  FIN_UPTODATE_MTF = the MTF-funded value for that scrip/client.
+  REMARKS (index bucket) = which index list the scrip's ISIN belongs to
+            (Nifty50 / BSE200 / BSE500 / Others), by set membership.
+  remarks_1 (violation flag) = Violation/OK by tiered portfolio-value limits:
+            both FIN_UPTODATE_MTF and PORTFOLIO VALUE > ₹1 cr → Violation;
+            index stock (REMARKS != Others) and PORTFOLIO VALUE ≤ ₹1 cr → OK;
+            Others and PORTFOLIO VALUE ≤ ₹50 L → OK; else Violation.
+  SCRIP CONCENTRATION COUNT = count of distinct Boscrip per AccountID
+            (group_by AccountID, count of scrips).
+  Scrip_Concentration[(L/M)*100] = scrip-level concentration percentage.
+  Cover % on Portfolio(100+((S/U)*100)) = portfolio cover percentage (separate metric).
+
+WHERE EACH NUMBER COMES FROM:
+  - "Where does the index bucket come from?" → ISIN matched against the Nifty50,
+    BSE200, BSE500 constituent CSVs; none → Others.
+  - "Why is the limit 1 cr or 50 L?" → index/liquid stocks get ₹1 cr; non-index
+    (Others) get the tighter ₹50 L limit.
+  - "What is SCRIP CONCENTRATION COUNT?" → how many distinct scrips the account holds.
+
+
+========================================
+PAYOUT — output PAYOUT_CHECKING
+========================================
+INPUT: a margin/deposit file with Entity, Available Margin, MarginUsed, TOTAL DEPOSIT.
+COLUMNS: output keeps only rows with Available Margin < 0 (the blocked set).
+  Available Margin = (from source) deposit minus margin used; negative = block.
+  MarginUsed, TOTAL DEPOSIT carried through from source.
+WHERE FROM: "Why blocked?" → Available Margin < 0, i.e. MarginUsed exceeds deposit.
+
+
+========================================
+CNC F11 — output CNC_F11_DATED
+========================================
+INPUT: PositionBook (CNC segment positions).
+COLUMNS: output keeps only rows with NetQty < 0 (net short in CNC).
+  ClientID normalised (numeric kept as int, else string).
+  NetQty = the client's net position quantity in that scrip (from PositionBook).
+WHERE FROM: "Why listed?" → NetQty is negative (net short where they should hold delivery).
+
+
+===========================================
+MTF ORDER FILE — output ORD_KAMB / ORD_O319
+===========================================
+INPUT: MTF positions + risk shortage/report files.
+COLUMNS: per-client square-off quantities.
+  unit margin = margin per single qty (computed from position margin ÷ qty).
+  qty to square off = allocated up to acceptable tolerance: take full qty if the
+    overshoot is acceptable, else reduce qty step by step until within tolerance.
+WHERE FROM: "Why this qty?" → the amount needed to bring MTF margin within tolerance.
+
+
+GENERAL NOTE: All "SUM per client" steps are pandas/polars group_by on the client
+code. "Joined from RISK_REPORT" means a left-join on ACCOUNTID to attach zone and
+account metadata. Sign conventions differ per report (CTCL: CTCL−NMASS positive=short;
+15-min: NMASS−margin negative=short) — never mix them.

@@ -1,0 +1,11 @@
+SAMPLE DOCUMENT - illustrative only. Numbers are fictional, for learning. Replace with real circulars later.
+
+Collateral Valuation and Haircuts
+
+Clients may pledge securities as collateral to meet margin requirements. The value of pledged collateral is not taken at full market value; a haircut is applied to account for price risk between the pledge and any liquidation.
+
+The size of the haircut depends on the liquidity and volatility of the security. Highly liquid index securities attract a smaller haircut, while illiquid or volatile securities attract a larger haircut. Cash and cash equivalents are treated as the highest quality collateral and attract the smallest haircut.
+
+After applying the haircut, the resulting figure is the collateral value available to offset margin requirements. If the value of available collateral after haircut falls below the client's total margin obligation, the client is in shortfall and must top up collateral.
+
+Collateral is revalued daily using closing prices, so a sharp fall in a pledged security's price can create a fresh shortfall even if the client has not traded.

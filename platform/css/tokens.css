@@ -1,0 +1,184 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   tokens.css — design tokens + the full theme engine.
+   Every visual decision in the platform reads from these variables; themes are
+   just alternative variable sets keyed off html[data-theme="…"]. The user's
+   accent / radius / font-size overrides (Settings → Appearance) are applied as
+   inline custom properties on <html>, which win over anything here.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* type */
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+
+  /* shape — --radius is user-tunable in Settings */
+  --radius: 14px;
+  --r-sm: calc(var(--radius) - 5px);
+  --r-lg: calc(var(--radius) + 6px);
+
+  /* motion */
+  --ease: .18s cubic-bezier(.4, 0, .2, 1);
+  --ease-slow: .34s cubic-bezier(.22, 1, .36, 1);
+
+  /* status colors — stable across themes (semantic, not decorative) */
+  --ok:   #34d399;
+  --warn: #fbbf24;
+  --err:  #f87171;
+  --info: #60a5fa;
+
+  /* ── DARK (default) ── */
+  --bg: #0b0d12;
+  --bg-glow-1: rgba(96,165,250,.07);
+  --bg-glow-2: rgba(167,139,250,.05);
+  --surface: #12151d;
+  --surface-2: #171b25;
+  --surface-3: #1d222e;
+  --glass: rgba(18,21,29,.72);
+  --line: #222836;
+  --line-2: #2d3444;
+  --text: #e9eef6;
+  --text-2: #93a0b4;
+  --text-3: #5c687a;
+  --accent: #60a5fa;
+  --accent-ink: #0a1226;
+  --sh-1: 0 1px 2px rgba(0,0,0,.45);
+  --sh-2: 0 6px 22px -6px rgba(0,0,0,.55);
+  --sh-3: 0 22px 60px -14px rgba(0,0,0,.75);
+  --scrollbar: #2d3444;
+}
+
+html[data-theme="light"] {
+  --bg: #f4f6fa;
+  --bg-glow-1: rgba(59,130,246,.08);
+  --bg-glow-2: rgba(139,92,246,.06);
+  --surface: #ffffff;
+  --surface-2: #f8fafd;
+  --surface-3: #eef2f8;
+  --glass: rgba(255,255,255,.78);
+  --line: #e3e8f0;
+  --line-2: #d3dae6;
+  --text: #17202e;
+  --text-2: #55637a;
+  --text-3: #8b98ad;
+  --accent: #2f6df6;
+  --accent-ink: #ffffff;
+  --sh-1: 0 1px 2px rgba(23,32,46,.06);
+  --sh-2: 0 8px 24px -8px rgba(23,32,46,.14);
+  --sh-3: 0 24px 60px -18px rgba(23,32,46,.22);
+  --scrollbar: #cbd5e3;
+  --ok: #0ea371; --warn: #d97706; --err: #dc2626; --info: #2f6df6;
+}
+
+html[data-theme="amoled"] {
+  --bg: #000000;
+  --bg-glow-1: rgba(96,165,250,.05);
+  --bg-glow-2: rgba(167,139,250,.04);
+  --surface: #0a0b0e;
+  --surface-2: #101218;
+  --surface-3: #161923;
+  --glass: rgba(8,9,12,.8);
+  --line: #1c212c;
+  --line-2: #29303e;
+  --text: #edf1f8;
+  --text-2: #8e9ab0;
+  --text-3: #5a6578;
+  --accent: #60a5fa;
+  --accent-ink: #0a1226;
+  --sh-1: 0 1px 2px rgba(0,0,0,.7);
+  --sh-2: 0 8px 26px -8px rgba(0,0,0,.85);
+  --sh-3: 0 26px 70px -16px rgba(0,0,0,.95);
+  --scrollbar: #29303e;
+}
+
+html[data-theme="ocean"] {
+  --bg: #06131d;
+  --bg-glow-1: rgba(45,212,191,.09);
+  --bg-glow-2: rgba(56,189,248,.07);
+  --surface: #0b1d2a;
+  --surface-2: #0f2434;
+  --surface-3: #143047;
+  --glass: rgba(9,26,38,.74);
+  --line: #1b3347;
+  --line-2: #25455e;
+  --text: #e6f2f8;
+  --text-2: #8fa9bc;
+  --text-3: #5b7488;
+  --accent: #2dd4bf;
+  --accent-ink: #04201c;
+  --sh-1: 0 1px 2px rgba(0,10,20,.5);
+  --sh-2: 0 8px 26px -8px rgba(0,10,20,.6);
+  --sh-3: 0 26px 66px -16px rgba(0,10,20,.8);
+  --scrollbar: #25455e;
+}
+
+html[data-theme="emerald"] {
+  --bg: #081410;
+  --bg-glow-1: rgba(52,211,153,.09);
+  --bg-glow-2: rgba(163,230,53,.05);
+  --surface: #0d1f18;
+  --surface-2: #11271e;
+  --surface-3: #163227;
+  --glass: rgba(10,26,20,.74);
+  --line: #1c3529;
+  --line-2: #274736;
+  --text: #e8f6ee;
+  --text-2: #91ab9d;
+  --text-3: #5d7568;
+  --accent: #34d399;
+  --accent-ink: #032015;
+  --sh-1: 0 1px 2px rgba(0,12,6,.5);
+  --sh-2: 0 8px 26px -8px rgba(0,12,6,.6);
+  --sh-3: 0 26px 66px -16px rgba(0,12,6,.8);
+  --scrollbar: #274736;
+}
+
+html[data-theme="purple"] {
+  --bg: #0d0916;
+  --bg-glow-1: rgba(167,139,250,.1);
+  --bg-glow-2: rgba(236,72,153,.05);
+  --surface: #151020;
+  --surface-2: #1a1428;
+  --surface-3: #221a35;
+  --glass: rgba(19,14,30,.74);
+  --line: #2a2140;
+  --line-2: #382c55;
+  --text: #efeaf8;
+  --text-2: #a396c0;
+  --text-3: #6d6288;
+  --accent: #a78bfa;
+  --accent-ink: #170b33;
+  --sh-1: 0 1px 2px rgba(5,0,15,.5);
+  --sh-2: 0 8px 26px -8px rgba(5,0,15,.65);
+  --sh-3: 0 26px 66px -16px rgba(5,0,15,.85);
+  --scrollbar: #382c55;
+}
+
+html[data-theme="contrast"] {
+  --bg: #000000;
+  --bg-glow-1: transparent;
+  --bg-glow-2: transparent;
+  --surface: #0a0a0a;
+  --surface-2: #111111;
+  --surface-3: #191919;
+  --glass: rgba(0,0,0,.92);
+  --line: #4a4a4a;
+  --line-2: #6e6e6e;
+  --text: #ffffff;
+  --text-2: #d8d8d8;
+  --text-3: #a8a8a8;
+  --accent: #ffd60a;
+  --accent-ink: #000000;
+  --ok: #3dffa2; --warn: #ffd60a; --err: #ff5c5c; --info: #6cb8ff;
+  --sh-1: none; --sh-2: none; --sh-3: none;
+  --scrollbar: #6e6e6e;
+}
+
+/* derived translucent tints — computed from whatever the active accent is */
+:root, html[data-theme] {
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-soft-2: color-mix(in srgb, var(--accent) 26%, transparent);
+  --ok-soft:   color-mix(in srgb, var(--ok) 13%, transparent);
+  --warn-soft: color-mix(in srgb, var(--warn) 13%, transparent);
+  --err-soft:  color-mix(in srgb, var(--err) 13%, transparent);
+  --info-soft: color-mix(in srgb, var(--info) 13%, transparent);
+}
