@@ -35,7 +35,14 @@
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var PIPE = 'probable';
   var _es = null;          // active EventSource for whichever action is running
-  var _busy = false;       // local guard for THIS box's own download buttons
+  // Per-ACTION local guard for this box's own download buttons. Was a single
+  // shared _busy flag, which meant starting NMASS/NCDEX also blocked starting
+  // TCS BANCS (and vice versa) from this tab — they're independent downloads
+  // hitting different servers, so each gets its own guard. _busyAny() is the
+  // "is anything downloading in this box" test used where that's what matters
+  // (e.g. before starting a full Run, which genuinely can't overlap either).
+  var _busyAct = { nmass: false, tcs: false };
+  function _busyAny() { return _busyAct.nmass || _busyAct.tcs; }
 
   // ── wait for the real DOM the rest of dashboard.html builds ──────────────
   function ready(fn) {
@@ -1402,10 +1409,18 @@
     };
   }
 
-  // ── shared helper: keep NMASS/NCDEX + TCS BANCS buttons disabled while
-  // EITHER a full Run or either download is in progress — a Run and a
-  // download must never overlap, and the two downloads share one session
-  // lock (TCS/NCDEX logins), so all three actions gate both buttons.
+  // ── shared helper for the two download buttons' disabled state.
+  //
+  // A full Run gates BOTH buttons (a Run and a download must never overlap).
+  // But the two downloads DO NOT gate each other: NMASS/NCDEX runs
+  // NMASS_NCFE_API_MIX.PY against the NMASS/NCDEX portal, while TCS BANCS
+  // runs probable_tcs_bancs.py against eclear.mcxccl.com — different scripts,
+  // different servers, different credentials, no shared session lock between
+  // them. The original version of this helper disabled both buttons for any
+  // action on the (incorrect) assumption that they shared a login session,
+  // so starting one download locked the other for no reason. Passing an
+  // activeId now scopes the disable to just that one button.
+  //
   // .sa-tool has no built-in :disabled styling in dashboard.html's CSS
   // (unlike the tile-level Run button, which already dims/relabels itself
   // via .sa-run.running/.locked), and these two buttons also hardcode an
@@ -1419,6 +1434,9 @@
   };
   function _probableSetDlButtonsDisabled(disabled, activeId, busyLabel) {
     ['probableNmassBtn', 'probableTcsBtn'].forEach(function (id) {
+      // Scope to the one button that's actually busy, when we know which.
+      // No activeId means a whole-box action (a Run) — that gates both.
+      if (disabled && activeId && id !== activeId) return;
       var b = document.getElementById(id); if (!b) return;
       b.disabled = disabled;
       b.style.opacity = disabled ? '0.55' : '';
@@ -1470,7 +1488,7 @@
     try { if (window._pxES) { window._pxES.close(); window._pxES = null; } } catch (e) {}
     fetch(API + '/px/stop?pipe=' + PIPE, { method: 'POST' }).catch(function () {});
     _probableSetDlButtonsDisabled(false);
-    _busy = false;
+    _busyAct.nmass = false; _busyAct.tcs = false;
     window._pxRunning = false; window._pxRunningPipe = null;
     if (typeof window.pxEv === 'function') window.pxEv(PIPE, false, 'Process terminated by user', 'stopped');
     if (typeof window.pxStatus === 'function') window.pxStatus(PIPE);
@@ -1487,52 +1505,89 @@
   // error/done events, never raw log noise). Full raw output still lands in
   // the 🗂️ Logs button for whoever actually needs to see it.
   window.probableNmassDownload = function (cb) {
-    if (_busy || window._pxRunning) return;
-    _busy = true;
+    if (_busyAct.nmass || window._pxRunning) return;
+    _busyAct.nmass = true;
     _probableSetDlButtonsDisabled(true, 'probableNmassBtn', '⏳ Downloading…');
     var strip = document.getElementById('probableNmassStrip');
     if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Downloading NMASS/NCDEX… (a captcha may appear)</div>'; }
     probableCaptchaStartPoller();
-    var ev = new EventSource(API + '/probable/download/nmass-stream'); _es = ev;
+    // window._pxES (not just the local _es) is what platform/js/process-locks.js's
+    // localBusy() checks to recognize "this tab is the one that started this" —
+    // without it, the cross-viewer lock overlay can't tell this tab apart from
+    // anyone else's, and shows THIS SAME tab a "running on another screen" strip
+    // + greys out the whole box for the person who just clicked the button.
+    var ev = new EventSource(API + '/probable/download/nmass-stream'); _es = ev; window._pxES = ev;
     var ok = false;
     ev.onmessage = function (m) {
       var d; try { d = JSON.parse(m.data); } catch (e) { return; }
       if (d.type === 'done') { ok = !!d.ok; }
       if (d.type === 'error' && strip) strip.innerHTML = '<div style="font-weight:700;color:var(--red)">✗ ' + String(d.msg || 'Download failed').replace(/[<>]/g, '') + '</div>';
       if (d.type === 'end') {
-        ev.close(); _es = null; _busy = false;
-        _probableSetDlButtonsDisabled(false);
-        if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ Done' : '✗ Failed — see 🗂️ Logs for details') + '</div>';
+        ev.close(); _es = null; window._pxES = null; _busyAct.nmass = false;
+        _probableSetDlButtonsDisabled(false, 'probableNmassBtn');
+        if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ NMASS/NCDEX downloaded — CM/FO/CO ClientLevelCollaterals + ClientNetEffectiveDeposits saved.' : '✗ NMASS/NCDEX download failed — see 🗂️ Logs for details') + '</div>';
         probableCaptchaStopPoller();
         probableLoadReady();
         if (typeof cb === 'function') cb(ok);
       }
     };
-    ev.onerror = function () { ev.close(); _es = null; _busy = false; _probableSetDlButtonsDisabled(false); probableCaptchaStopPoller(); if (typeof cb === 'function') cb(false); };
+    ev.onerror = function () { ev.close(); _es = null; window._pxES = null; _busyAct.nmass = false; _probableSetDlButtonsDisabled(false, 'probableNmassBtn'); probableCaptchaStopPoller(); if (typeof cb === 'function') cb(false); };
   };
 
   // ── TCS BANCS RSK383+335 download (own strip; RSA token popup reuses the
-  // EXISTING /sa/token/pending poller already running globally in
-  // dashboard.html — no extra code needed for that part) ────────────────
+  // SAME /sa/token/pending state file mcx_deposit_downloader.py's
+  // _token_popup() always writes, regardless of caller — but dashboard.html's
+  // captchaStartPoller() (the function that actually polls that endpoint) is
+  // NOT running unconditionally in the background; it's only alive while
+  // whichever action started it is in flight (SA's run, CLI's run-old/new,
+  // MS15's mcx90 download, etc. each start/stop it themselves). This box
+  // never called it, so nothing was ever polling /sa/token/pending during a
+  // TCS BANCS download — the token got requested, the state file got
+  // written, and no one was listening. Starting/stopping it here, exactly
+  // like ms15Mcx90Download() already does for its own MCX 90% download,
+  // fixes it. ──────────────────────────────────────────────────────────
   window.probableTcsBancsDownload = function () {
-    if (_busy || window._pxRunning) return;
-    _busy = true;
+    if (_busyAct.tcs || window._pxRunning) return;
+    _busyAct.tcs = true;
     _probableSetDlButtonsDisabled(true, 'probableTcsBtn', '⏳ Logging in…');
     var strip = document.getElementById('probableTcsStrip');
-    if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Logging in to TCS BANCS… an RSA token prompt may appear.</div>'; }
-    var ev = new EventSource(API + '/probable/download/tcs-bancs-stream'); _es = ev;
+    // Placeholder only — the first 'note' event from the Python side replaces
+    // this within a second, and each stage replaces it again after that.
+    if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Starting TCS BANCS download…</div>'; }
+    if (typeof window.captchaStartPoller === 'function') window.captchaStartPoller();
+    // window._pxES (not just the local _es) is what process-locks.js's
+    // localBusy() checks to recognize "this tab started this" — without it,
+    // the tab that clicked the button gets shown its OWN action back as
+    // "running on another screen by <name>".
+    var ev = new EventSource(API + '/probable/download/tcs-bancs-stream'); _es = ev; window._pxES = ev;
     var ok = false;
     ev.onmessage = function (m) {
       var d; try { d = JSON.parse(m.data); } catch (e) { return; }
       if (d.type === 'done') { ok = !!d.ok; }
+      // Live stage updates. probable_tcs_bancs.py prints "[FRIENDLY_MSG] …"
+      // at each stage, which pipeline_box._status() turns into a 'note'
+      // event. Without this the strip was stuck on "Logging in to TCS BANCS…
+      // an RSA token prompt may appear." for the entire multi-minute run —
+      // still saying a token might appear long after one had been entered,
+      // and giving no sign that it had moved on to waiting for the exports.
+      if (d.type === 'note' && strip) {
+        strip.innerHTML = '<div style="color:var(--muted)">' +
+          String(d.msg || '').replace(/[<>]/g, '') + '</div>';
+      }
       if (d.type === 'error' && strip) strip.innerHTML = '<div style="font-weight:700;color:var(--red)">✗ ' + String(d.msg || 'Download failed').replace(/[<>]/g, '') + '</div>';
       if (d.type === 'end') {
-        ev.close(); _es = null; _busy = false; _probableSetDlButtonsDisabled(false);
-        if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ Done' : '✗ Failed — see 🗂️ Logs for details') + '</div>';
+        ev.close(); _es = null; window._pxES = null; _busyAct.tcs = false;
+        _probableSetDlButtonsDisabled(false, 'probableTcsBtn');
+        if (typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
+        if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ TCS BANCS downloaded — RSK383 (Cash Collateral Deposit Limit) + RSK335 (Margin Utilization View / 90% file) saved.' : '✗ TCS BANCS download failed — see 🗂️ Logs for details') + '</div>';
         probableLoadReady();
       }
     };
-    ev.onerror = function () { ev.close(); _es = null; _busy = false; _probableSetDlButtonsDisabled(false); };
+    ev.onerror = function () {
+      ev.close(); _es = null; window._pxES = null; _busyAct.tcs = false;
+      _probableSetDlButtonsDisabled(false, 'probableTcsBtn');
+      if (typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
+    };
   };
 
   // ── tiny self-contained captcha modal for the NMASS/NCFE step —
@@ -1588,7 +1643,7 @@
     if (typeof window.pxRun === 'function' && !window.pxRun.__probablePatched) {
       var orig = window.pxRun;
       var wrapped = function (pipe) {
-        if (pipe === PIPE) { if (window._pxRunning || _busy) return; showMarketTimeModal(probableRunReal); return; }
+        if (pipe === PIPE) { if (window._pxRunning || _busyAny()) return; showMarketTimeModal(probableRunReal); return; }
         return orig(pipe);
       };
       wrapped.__probablePatched = true;

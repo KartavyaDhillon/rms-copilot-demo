@@ -101,6 +101,19 @@
     });
   }
 
+  // A standalone download-button action (kind:"action", e.g. someone else's
+  // NMASS/NCDEX download) greys out ONLY its own button — never the rest of
+  // the box. Falls back to disableBox() if the lock names a button id that
+  // isn't on this page (safer default than silently locking nothing).
+  function disableButtonOnly(box, btnId) {
+    var b = btnId && document.getElementById(btnId);
+    if (!b) { disableBox(box); return; }
+    if (b.dataset.lmDis) return;
+    if (b.disabled) return;
+    b.disabled = true;
+    b.dataset.lmDis = "1";
+  }
+
   function fmtElapsed(startedIso) {
     if (!startedIso) return "";
     var s = Math.max(0, Math.floor((Date.now() - new Date(startedIso).getTime()) / 1000));
@@ -177,7 +190,13 @@
     LOCKS.forEach(function (lock) {
       (lock.affects || []).forEach(function (t) {
         var subsys = t === "sa" ? "sa" : "px";
-        if (!localBusy(subsys, t)) wanted[t] = lock;
+        if (localBusy(subsys, t)) return;
+        // A real whole-box lock (a full Run, Short Allocation, etc.) always
+        // wins the slot for this target. A single-button "action" lock (a
+        // colleague's standalone download) only fills the slot if nothing
+        // stronger already claimed it — it must never mask/override an
+        // actual run in progress on the same box.
+        if (!wanted[t] || lock.kind !== "action") wanted[t] = lock;
       });
     });
 
@@ -189,18 +208,28 @@
       var box = boxEl(t);
       if (!box) return;
       var strip = box.querySelector(".lm-strip");
-      if (wanted[t]) {
-        disableBox(box);
-        var html = stripHTML(wanted[t]);
+      var lock = wanted[t];
+      if (lock) {
+        if (lock.kind === "action") {
+          // Single button only — e.g. someone else's NMASS/NCDEX download.
+          // Everything else in the box (Run, TCS BANCS, Upload, Credentials…)
+          // stays clickable, since these standalone downloads don't share a
+          // server/session with the rest of the box.
+          disableButtonOnly(box, lock.button);
+        } else {
+          disableBox(box);
+        }
+        var html = stripHTML(lock);
         if (!strip) {
           strip = document.createElement("div");
           strip.className = "lm-strip";
           box.insertBefore(strip, box.firstChild);
         }
         if (strip.dataset.sig !== html) { strip.innerHTML = html; strip.dataset.sig = html; }
-        // …and stop the green banner telling this screen to run something that
-        // is already running (see bannerEl/banBusy above).
-        banBusy(t, wanted[t]);
+        // The green "ready — run it now" banner is specifically about the Run
+        // button, which a standalone-download action lock never touches — so
+        // only rewrite it busy for a real whole-box lock.
+        if (lock.kind === "action") banFree(t); else banBusy(t, lock);
       } else {
         if (strip) strip.remove();
         enableBox(box);

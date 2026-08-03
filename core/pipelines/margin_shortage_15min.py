@@ -339,6 +339,18 @@ def run_margin_shortage_15min(run_number_override=None):
         raise
 
 
+def _stage(msg):
+    """Announce the current stage to the dashboard.
+
+    core/pipeline_box.py's _status() turns a "[FRIENDLY_MSG] …" line into a
+    {"type":"note"} SSE event, which the console renders as the live stage
+    text on this box's running pill. Without these the pill sat on a bare
+    "running…" for the whole run — clicking Run when the files were already
+    downloaded looked like nothing was happening at all, unlike CTCL vs NMASS
+    and Short Allocation which both show a real stage feed."""
+    print(f"[FRIENDLY_MSG] {msg}")
+
+
 def _run_margin_shortage_15min_impl():
     # =====================================================
     # CONFIG
@@ -506,9 +518,11 @@ def _run_margin_shortage_15min_impl():
         print("✅ PRE-RUN FILE CHECK PASSED")
         return None
 
+    _stage("checking input files…")
     _prerun = pre_run_file_check()
     if _prerun is not None:
         return _prerun
+    _stage("files OK — reading & computing shortage…")
 
     # ── SAFE TEST RUN: consume the arm (see the block above _safe_test_marker_path).
     # Consumed HERE, past the file check — an aborted run must not burn the arm,
@@ -1245,6 +1259,7 @@ def _run_margin_shortage_15min_impl():
         ws.column_dimensions[col_letter].width = max_len + 2
     wb.save(OUTPUT_FILE)
     print("✅ OUTPUT FILE created successfully")
+    _stage("output file created — sending shortage image to the team…")
 
     # Same counting method used later for run_whatsapp_alerts()/backup_and_cleanup()
     # (see the comment there) — computed here too since the image alert sends
@@ -1352,6 +1367,7 @@ Master Capital Services Ltd<br>
 📞 011-66331000 | Ext. 84
 """
 
+    _stage("image sent — sending main + zone emails…")
     send_email(
         subject=_subj("Margin Shortage Monitoring"),
         body=email_body,
@@ -1473,6 +1489,7 @@ Master Capital Services Ltd<br>
     # "WhatsApp check" report). Same counting method backup_and_cleanup uses, so
     # the number matches the backup folder name.
     _ms_run_number = _count_todays_backup_runs(BASE_DIR, today_str)
+    _stage("emails sent — sending client WhatsApp margin alerts…")
     run_whatsapp_alerts(final_df, _ms_run_number)  # sending whatsapp alert
 
     # =====================================================
@@ -1540,6 +1557,7 @@ Master Capital Services Ltd<br>
         )
         return run_number
 
+    _stage("alerts sent — backing up & archiving today's files…")
     _run_number = backup_and_cleanup(BASE_DIR)
 
     # Refresh the JSON tracker for the night shift (see export_tracker_json).

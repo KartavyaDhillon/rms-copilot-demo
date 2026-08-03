@@ -72,6 +72,20 @@ _LAST_REQ = {"at": 0.0}
 # login takes, never a whole pipeline run.
 _AFFECTS = {"px_ctcl": ["ctcl"], "px_ms15": ["ms15"], "px_cli": ["cli"], "sa": ["sa"]}
 
+# Standalone download-button actions (core.pipeline_box's _ACT slots, e.g.
+# "ctcl:mcx90", "ms15:nmass") each map to exactly ONE button's DOM id — used
+# so the frontend can grey out just that one button instead of the whole box.
+# A colleague downloading NMASS/NCDEX on PROBABLE has nothing to do with that
+# box's separate TCS BANCS button (different .py, different server, no shared
+# session) — only a lock's OWN button should ever disable from this list.
+_ACTION_BUTTON = {
+    ("ctcl", "mcx90"):    "ctclMcx90Btn",
+    ("ms15", "nmass"):    "ms15NmassBtn",
+    ("ms15", "mcx90"):    "ms15Mcx90Btn",
+    ("probable", "nmass"): "probableNmassBtn",
+    ("probable", "tcs"):   "probableTcsBtn",
+}
+
 
 def note_request(name, ip, path):
     with _L:
@@ -179,6 +193,37 @@ def snapshot():
                     "started_at": started, "elapsed_s": _elapsed(started) if started else None,
                     "affects": _AFFECTS.get(_key, [_pipe]),
                 })
+    except Exception:
+        pass
+
+    # Standalone download-button actions (NMASS/NCDEX, MCX 90%) — a SEPARATE
+    # slot from the main pipeline run (see core.pipeline_box.act_slot's long
+    # note on why). Before this, snapshot() only ever looked at _PB, so someone
+    # else's screen showed nothing at all while a colleague was mid-download —
+    # no strip, no greyed buttons, no "already running" — right up until the
+    # main run actually started, at which point the RUNNING strip would
+    # suddenly appear looking "late" (it wasn't late; the wait genuinely had
+    # no visible state to report until then). These actions don't call
+    # on_start()/on_end() (they're short, ~40-50s, and not attributed to a
+    # specific person the way a full run is) so `by` falls back to the pipe's
+    # own label, same precedent as the NMASS/NCFE login resource lock below.
+    try:
+        from core.pipeline_box import running_actions, act_label, _busy_label_for as _blf3
+        for _pipe, _action, _started in running_actions():
+            _key = f"act_{_pipe}_{_action}"
+            locks.append({
+                # kind:"action" (not "process") tells the frontend this is a
+                # single standalone button, not a whole-box run — it should
+                # grey out ONLY the one button named in "button" below, never
+                # the rest of the box, and never override an actual whole-box
+                # "process"/"resource" lock that's also active for this pipe.
+                "key": _key, "kind": "action", "state": "RUNNING",
+                "pipe": _pipe, "label": act_label(_pipe, _action),
+                "by": _blf3(_pipe) or _pipe, "ip": "",
+                "started_at": _started, "elapsed_s": _elapsed(_started) if _started else None,
+                "affects": _AFFECTS.get(f"px_{_pipe}", [_pipe]),
+                "button": _ACTION_BUTTON.get((_pipe, _action)),
+            })
     except Exception:
         pass
 

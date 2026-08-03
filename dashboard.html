@@ -4872,7 +4872,18 @@ async function ms15RunSmart(){
     const nmassKeys=['CM_CLIENT_LEVEL','FO_CLIENT_LEVEL','CO_CLIENT_LEVEL','CLIENT_NET_EFFECTIVE_DEPOSITS'];
     need = items.some(it=>nmassKeys.includes(it.key) && !it.ok);
   }catch(e){ need=true; }  // readiness check itself failed — safest is to (re)download
-  if(!need){ _pxRunReal('ms15'); return; }
+  if(!need){
+    // Say so, instead of jumping straight to a bare "running…". Clicking Run
+    // with the files already downloaded used to show no explanation for why
+    // no download happened — it just looked like nothing was going on.
+    const skipStrip=document.getElementById('ms15NmassStrip');
+    if(skipStrip){ skipStrip.style.display='block'; skipStrip.innerHTML='<div style="color:var(--muted)">⏭️ Download <b style="color:var(--ink)">skipped</b> — today\'s NMASS/NCDEX files are already in the folder. Going straight to processing…</div>'; }
+    // _pxRunReal rebuilds the status HTML (including the pill), so the stage
+    // text has to be set AFTER it, not before, or it gets overwritten.
+    _pxRunReal('ms15');
+    pxStage('ms15','download skipped — processing…');
+    return;
+  }
   const strip=document.getElementById('ms15NmassStrip');
   if(strip){ strip.style.display='block'; strip.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Today\'s NMASS/NCDEX files aren\'t downloaded yet — fetching them automatically before running…</span></div>'; }
   ms15NmassDownload(function(ok){
@@ -4918,7 +4929,20 @@ function pxStop(pipe){
   }
 }
 function pxEv(pipe,ok,msg,what){ const box=document.getElementById('pxEvents-'+pipe); if(!box) return; const d=document.createElement('div'); d.className='sa-ev '+(ok?'ok':'bad'); d.innerHTML=`<span class="ic">${ok?'✓':'!'}</span><span>${String(msg||'').replace(/[<>]/g,'')}</span><span class="what">${what||''}</span>`; box.appendChild(d); }
+// Live stage indicator. A pipeline prints "[FRIENDLY_MSG] <stage>" and
+// pipeline_box._status() turns it into a {type:'note'} event — but pxHandle
+// had no branch for 'note' at all, so those events were silently dropped and
+// the pill just said "running…" for the entire run with no sign of what stage
+// it had reached (CTCL vs NMASS and Short Allocation both show a real feed,
+// which is why MS15 looked stuck by comparison). Updates the pill in place
+// rather than appending an event row, so the box doesn't grow a long list of
+// superseded stages.
+function pxStage(pipe,msg){
+  const pp=document.getElementById('pxP-'+pipe);
+  if(pp && pp.classList.contains('running')) pp.textContent=String(msg||'').slice(0,80);
+}
 function pxHandle(pipe,d){
+  if(d.type==='note'){ pxStage(pipe,d.msg); return; }
   if(d.type==='email') pxEv(pipe,d.ok,d.ok?'Email sent successfully':'Email failed','email');
   else if(d.type==='whatsapp') pxEv(pipe,d.ok,d.ok?'WhatsApp submitted successfully':'WhatsApp failed','whatsapp');
   else if(d.type==='login_failed'){ pxEv(pipe,false, d.reason==='LOCKED'
@@ -5800,7 +5824,15 @@ async function mcxLockPollTick(){
   const saBtn = document.getElementById('saMcxDepositBtn');
   const cliBtn = document.getElementById('cliMcxBtn');
   if(d && d.busy){
-    const ownerLabel = d.owner === 'cli' ? 'Client Prudential Limit' : 'Short Allocation';
+    // Was a hardcoded cli/else-"Short Allocation" ternary, written back when
+    // "sa" and "cli" were the only two possible owners of this shared lock.
+    // PROBABLE's TCS BANCS button (added later) reuses the exact same lock
+    // file with owner:"probable" — under the old ternary it fell into the
+    // "else" branch and got mislabeled "Short Allocation" even when PROBABLE
+    // was the one actually holding (or had orphaned) the lock, which is
+    // exactly backwards for figuring out which box to go check.
+    const _mcxOwnerLabels = {cli: 'Client Prudential Limit', sa: 'Short Allocation', probable: 'PROBABLE'};
+    const ownerLabel = _mcxOwnerLabels[d.owner] || (d.owner || 'another box');
     // Don't touch a button whose OWN request this tab is currently driving —
     // it already shows its own accurate spinner/label via saMcxDepositDownload()/
     // _cliRunOneStep(). Only greys out the OTHER box's button (or this same

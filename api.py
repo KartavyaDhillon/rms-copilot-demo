@@ -3362,14 +3362,20 @@ def probable_tcs_bancs_download_stream():
     blocking call (TCS BANCS login, RSA token wait, export poll) is in
     progress. See core/pipelines/probable_tcs_bancs.py."""
     import json as _pt_json
-    from core.pipeline_box import _stream_code
+    # _stream_code_act (NOT _stream_code): claims PROBABLE's own "tcs" ACTION
+    # slot rather than its main run slot. Using the run slot made this single
+    # download look like a full pipeline run to every other screen — greying
+    # out the entire box (including the unrelated NMASS/NCDEX button) and
+    # announcing "PROBABLE is already running — started by <name>". See
+    # _stream_code_act's docstring in core/pipeline_box.py.
+    from core.pipeline_box import _stream_code_act
     _probable_clear_popup_state()
     code = ("import os; from core.pipelines.probable_tcs_bancs import download_both as _f; "
             "_r = _f(os.getenv('PROBABLE_FOLDER', r'D:\\\\PROBABLE')); "
             "import sys; sys.exit(0 if (_r.get('rsk383') and _r.get('rsk335')) else 1)")
     def gen():
         try:
-            for ev in _stream_code(code, "probable", "probable_tcs_bancs"):
+            for ev in _stream_code_act(code, "probable", "tcs", "probable_tcs_bancs"):
                 yield f"data: {_pt_json.dumps(ev)}\n\n"
         except Exception as e:
             yield f"data: {_pt_json.dumps({'type':'error','msg':str(e)})}\n\n"
@@ -3393,8 +3399,15 @@ def probable_readiness():
         ("CM_CLIENT_LEVEL",    f"CM_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
         ("CO_CLIENT_LEVEL",    f"CO_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
         ("FO_CLIENT_LEVEL",    f"FO_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
-        ("MCX_RSK383",         f"*{_today_yyyymmdd}*.xlsx"),
-        ("MCX_RSK335_90PCT",   "Clientwise_mcx_margin*.xlsx"),
+        # Names as the OPERATOR knows these two files, not as TCS BANCS's
+        # internal report codes. RSK383 arrives under a random exported name
+        # (<random>-<YYYYMMDDHHMMSS>.xlsx) and is what everyone calls the "MCX
+        # Deposit" file; RSK335 is the one we rename to Clientwise_mcx_margin
+        # and everyone calls the "90% file". Listing them as MCX_RSK383 /
+        # MCX_RSK335_90PCT meant the missing-files banner named report codes
+        # nobody can match to a file on disk.
+        ("MCX_DEPOSIT_FILE",        f"*{_today_yyyymmdd}*.xlsx"),
+        ("CLIENTWISE_MCX_MARGIN",   "Clientwise_mcx_margin*.xlsx"),
     ]
     items = []
     for key, pat in checks:

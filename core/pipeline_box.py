@@ -371,6 +371,7 @@ _ACT_LOCKS = {}
 _ACT_LABELS = {
     "nmass": "NMASS/NCDEX download",
     "mcx90": "MCX 90% download",
+    "tcs":   "TCS BANCS download (DEPOSIT+90%)",
 }
 
 
@@ -491,6 +492,29 @@ def stop_pipeline(pipe):
     try:
         from core import lock_manager as _lm
         _lm.on_end(f"px_{pipe}", "stopped")
+    except Exception:
+        pass
+    # If this pipe's subprocess was force-killed while it held the shared
+    # MCX-deposit/TCS BANCS lock (PROBABLE's TCS BANCS button reuses the exact
+    # same lock file as SA's "MCX Deposit" and CLI's "MCX Web Allocation" — see
+    # sa_codes/mcx_deposit_downloader.py), a taskkill'd process never reaches
+    # its own `finally: _release_mcx_lock()`. Previously only /cli/stop and
+    # /sa/mcx-deposit-stop did this explicit release — PROBABLE didn't, so a
+    # Stop click (or a server restart) mid-TCS-BANCS-download left the lock
+    # file behind with owner="probable" forever (until the 10-minute staleness
+    # window quietly expired), and every next click failed immediately with
+    # "already in progress (started by 'probable')" — stuck blocking itself.
+    # Generalized here (any pipe, not just cli) so this can't recur for
+    # whichever pipe reuses this lock next. Only releases if the lock is
+    # actually still recorded as owned by THIS pipe — never clears a lock
+    # another box legitimately still holds.
+    try:
+        sa_dir = os.path.join(REPO, "sa_codes")
+        if sa_dir not in sys.path:
+            sys.path.insert(0, sa_dir)
+        import importlib
+        _mdd = importlib.import_module("mcx_deposit_downloader")
+        _mdd.force_release_mcx_lock_if_owner(pipe)
     except Exception:
         pass
     return {"ok": True}
@@ -823,6 +847,98 @@ def _stream_code(code, logdir_key, logname_prefix):
         ev = q.get()
         if ev is None: break
         yield ev
+
+def _stream_code_act(code, pipe, action, logname_prefix):
+    """Same as _stream_code(), but claims that pipe's OWN named ACTION slot
+    (_ACT["pipe:action"]) instead of its main run slot (_PB[pipe]).
+
+    Why this exists: PROBABLE's "TCS (DEPOSIT+90%)" button was running through
+    _stream_code(), which takes the pipe's MAIN slot — the exact same slot a
+    full Run takes. Consequences, all of which were reported as bugs:
+      • lock_manager reported it as a whole-box "process" lock, so
+        process-locks.js greyed out EVERY button in the PROBABLE box (Email
+        To/CC, Credentials, Upload files, Backup files, Manual overrides, and
+        the completely unrelated NMASS/NCDEX button) — even though TCS BANCS
+        is a different script hitting a different server.
+      • the banner read "PROBABLE is already running — started by <name>",
+        i.e. it announced a whole pipeline run when all that was happening was
+        one download.
+      • it blocked a genuine Run, and a Run blocked it.
+    NMASS/NCDEX already used an action slot (see stream_nmass_download), which
+    is why only TCS BANCS showed this. Action slots are auto-reported by
+    lock_manager.snapshot() via running_actions() as kind:"action" locks, so
+    they grey out ONLY their own button — no on_start/on_end needed here."""
+    slot, lock = act_slot(pipe, action)
+    clear_if_stale_act(pipe, action)
+    with lock:
+        if slot.get("running"):
+            yield {"type": "error",
+                   "msg": f"⚠ {act_label(pipe, action)} is already running right now — "
+                          f"wait for it to finish, or Stop it, before starting it again."}
+            return
+        slot["running"] = True
+        slot["cancel"] = False
+        slot["started_at"] = datetime.datetime.now().isoformat()
+    _touch(slot)
+
+    logdir = os.path.join(LOG_BASE, pipe)
+    os.makedirs(logdir, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    logp = os.path.join(logdir, f"{logname_prefix}__{ts}.log")
+    q = queue.Queue()
+
+    def worker():
+        try:
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
+                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO}
+            saw_fail = False
+            with open(logp, "w", encoding="utf-8", errors="replace") as lf:
+                lf.write(f"# {logname_prefix}  start={ts}\n")
+                proc = subprocess.Popen([sys.executable, "-u", "-c", code], cwd=REPO, env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1)
+                slot["proc"] = proc
+                for line in proc.stdout:
+                    _ts2 = datetime.datetime.now().strftime("%H:%M:%S")
+                    lf.write(f"[{_ts2}] {line}" if not line.startswith("[") else line)
+                    lf.flush()
+                    _touch(slot)
+                    if _FAIL.search(line): saw_fail = True
+                    ev = _status(line)
+                    if ev: q.put(ev)
+                rc = proc.wait(); slot["proc"] = None
+            if slot.get("cancel"):
+                q.put({"type": "stopped", "msg": "⛔ Stopped by user.", "log": os.path.basename(logp)})
+            elif rc != 0 or saw_fail:
+                q.put({"type": "done", "ok": False, "log": os.path.basename(logp)})
+            else:
+                q.put({"type": "done", "ok": True, "log": os.path.basename(logp)})
+        except Exception as e:
+            q.put({"type": "error", "msg": str(e)})
+        finally:
+            slot["running"] = False
+            slot["proc"] = None
+            slot["started_at"] = None
+            # A force-killed subprocess never runs its own
+            # `finally: _release_mcx_lock()`, which would leave
+            # C:\SHORT ALLOCATION\.mcx_deposit_lock behind and make every
+            # later click fail with "already in progress".
+            try:
+                sa_dir = os.path.join(REPO, "sa_codes")
+                if sa_dir not in sys.path:
+                    sys.path.insert(0, sa_dir)
+                import importlib
+                importlib.import_module("mcx_deposit_downloader").force_release_mcx_lock_if_owner(pipe)
+            except Exception:
+                pass
+            q.put(None)
+
+    threading.Thread(target=worker, daemon=True).start()
+    while True:
+        ev = q.get()
+        if ev is None: break
+        yield ev
+
 
 def stream_ctcl_top20():
     """Retry: run Margin Top20 only (without re-running full CTCL pipeline)."""
