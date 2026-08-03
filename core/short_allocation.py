@@ -1057,6 +1057,15 @@ def update_env(updates: dict):
     return True
 
 
+# Rarely-updated reference files where a wrong/stale replacement silently
+# changes exception/BRM logic for every account rather than failing loudly —
+# so REPLACING an existing copy of one of these requires the same password
+# used everywhere else in this app (check_password() below). A FIRST upload
+# (nothing there yet) never needs a password — only replacing one that
+# already exists does. See core.pipeline_box.PROTECTED_UPLOAD_FILES for the
+# equivalent list for CTCL/PROBABLE's own reference files.
+SA_PROTECTED_UPLOAD_FILES = {"exception.xlsx", "brm list_file.xlsx", "brm list_file.csv"}
+
 # Authoritative expected filenames per folder (from the scripts themselves).
 SA_VALID = {
     "short_allocation": {
@@ -1291,12 +1300,19 @@ def _date_ok(name):
     return True, None
 
 
-def save_uploaded_bytes(items, target="short_allocation"):
+def save_uploaded_bytes(items, target="short_allocation", password=""):
     """Like move_uploaded, but writes the bytes directly to the final destination
     in ONE disk write — no temp-file-then-move. Halves the I/O the old path did,
     and times every file so a slow destination (antivirus scan / cloud-sync drive)
     shows up explicitly in the server console instead of as a silent hang.
-    items = list of (filename, bytes)."""
+    items = list of (filename, bytes).
+
+    An existing same-named file is REPLACED by default (not skipped) — per
+    explicit instruction, an ordinary re-upload should update the file in
+    place. The one exception is SA_PROTECTED_UPLOAD_FILES (EXCEPTION.xlsx,
+    BRM LIST_File.*): replacing an EXISTING copy of one of those requires a
+    correct `password`; a wrong/missing one reports that filename back in
+    `password_required` instead of silently skipping or replacing it."""
     import time as _time
     c = cfg()
     spec = SA_VALID.get(target, SA_VALID["short_allocation"])
@@ -1312,7 +1328,7 @@ def save_uploaded_bytes(items, target="short_allocation"):
     mkdir_s = _time.time() - t0
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     logp = os.path.join(LOG_DIR, f"UPLOAD__{target}__{ts}.log")
-    ok, skipped, rejected, timings = [], [], [], []
+    ok, skipped, rejected, timings, password_required = [], [], [], [], []
     lines = [f"# UPLOAD  target={target} ({spec['label']})  dest={dest}  time={ts}  mkdir={mkdir_s:.2f}s"]
     for name, data in items:
         base = os.path.basename(name)
@@ -1325,9 +1341,11 @@ def save_uploaded_bytes(items, target="short_allocation"):
             lines.append(f"REJECT  {base}  ({date_err})")
             continue
         tp = os.path.join(dest, base)
-        if os.path.exists(tp):
-            skipped.append(base); lines.append(f"SKIP    {base}  (already in folder)")
+        if os.path.exists(tp) and base.lower() in SA_PROTECTED_UPLOAD_FILES and not check_password(password):
+            password_required.append(base); lines.append(f"PW-REQ  {base}  (protected file, existing copy)")
             continue
+        if os.path.exists(tp):
+            lines.append(f"REPLACE {base}  (already in folder)")
         t1 = _time.time()
         try:
             with open(tp, "wb") as f:
@@ -1349,7 +1367,8 @@ def save_uploaded_bytes(items, target="short_allocation"):
                       f"cloud-sync (OneDrive etc.) on '{dest}', it is the likely cause of upload timeouts.")
         except Exception as e:
             rejected.append(f"{base}: {e}"); lines.append(f"ERROR   {base}: {e}")
-    lines.append(f"# done: {len(ok)} copied, {len(skipped)} already-present, {len(rejected)} rejected")
+    lines.append(f"# done: {len(ok)} copied, {len(skipped)} already-present, "
+                 f"{len(password_required)} password-required, {len(rejected)} rejected")
     try:
         with open(logp, "w", encoding="utf-8") as lf:
             lf.write("\n".join(lines) + "\n")
@@ -1357,7 +1376,8 @@ def save_uploaded_bytes(items, target="short_allocation"):
         pass
     return {"dest": dest, "label": spec["label"], "ok": ok, "skipped": skipped,
             "rejected": rejected, "valid": spec["examples"], "log": os.path.basename(logp),
-            "timings": [{"name": n, "seconds": round(s, 2)} for n, s in timings]}
+            "timings": [{"name": n, "seconds": round(s, 2)} for n, s in timings],
+            "password_required": password_required}
 
 
 def move_uploaded(items, target="short_allocation"):

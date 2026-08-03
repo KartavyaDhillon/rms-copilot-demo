@@ -1142,7 +1142,7 @@ def _run_margin_shortage_15min_impl():
         img.save(output_path, quality=95)
         print(f"Margin shortage alert image created: {output_path} ({n} accounts)")
 
-    def run_shortage_image_alert(df):
+    def run_shortage_image_alert(df, run_number):
         """
         Filters accounts where DIFFERENCE(F-G) <= SHORTAGE_THRESHOLD, builds the
         4-column MARGIN SHORTAGE ALERT image for those accounts, and sends it to
@@ -1152,6 +1152,13 @@ def _run_margin_shortage_15min_impl():
         wired up for the Peak Margin report) instead of a second, duplicate
         upload/send implementation — this only supplies its own image, caption,
         and recipient list.
+
+        `run_number`: this run's number, logged alongside each successful send so
+        the dashboard's "WhatsApp check" report can show team-image sends next to
+        client alert sends — previously this send was never logged to the DB at
+        all, so there was no way to confirm/deny "was this number actually sent
+        to" when a team member said they didn't receive it despite the pipeline
+        log saying it went out.
         """
         shortage_df = df.loc[
             df["DIFFERENCE(F-G)"] <= SHORTAGE_THRESHOLD,
@@ -1195,6 +1202,13 @@ def _run_margin_shortage_15min_impl():
                 if _r.get("ok"):
                     print(f"WhatsApp submitted for {_num} — MARGIN SHORTAGE ALERT image "
                           f"({len(rows)} accounts) → {_num}{_tag}", flush=True)
+                    if not SAFE_TEST:
+                        # client_code is repurposed here as a clear marker so this
+                        # row is unmistakable next to real client rows in the
+                        # "WhatsApp check" download — margin_pct repurposed to hold
+                        # the account count the image covered (not a percentage).
+                        _log_whatsapp_send(TODAY, run_number, "TEAM — MARGIN SHORTAGE IMAGE",
+                                            _num, len(rows))
                 else:
                     print(f"WhatsApp error for {_num} — MARGIN SHORTAGE ALERT image → "
                           f"{_num} · {_r.get('detail') or 'send failed'}", flush=True)
@@ -1232,7 +1246,12 @@ def _run_margin_shortage_15min_impl():
     wb.save(OUTPUT_FILE)
     print("✅ OUTPUT FILE created successfully")
 
-    run_shortage_image_alert(final_df)   # MARGIN SHORTAGE ALERT image -> WhatsApp (internal RM list)
+    # Same counting method used later for run_whatsapp_alerts()/backup_and_cleanup()
+    # (see the comment there) — computed here too since the image alert sends
+    # BEFORE that later point in the run, and its DB log needs a run number now,
+    # not later. Read-only count, safe to call twice.
+    _shortage_run_number = _count_todays_backup_runs(BASE_DIR, today_str)
+    run_shortage_image_alert(final_df, _shortage_run_number)   # MARGIN SHORTAGE ALERT image -> WhatsApp (internal RM list)
 
     cm_file = os.path.basename(find_file("CM_ClientLevelCollaterals", today_ddmmyyyy))
     fo_file = os.path.basename(find_file("FO_ClientLevelCollaterals", today_ddmmyyyy))

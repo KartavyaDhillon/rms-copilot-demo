@@ -51,7 +51,7 @@ PIPELINES = {
                  ["Client Net Effective Deposits", "ClientNetEffectiveDeposits_*.csv,ClientNetEffectiveDeposits_*.xlsx", "ClientNetEffectiveDeposits_<date>.csv"],
                  ["Update Limits", "Update Limits*.xlsx", "Update Limits <date>.xlsx"],
                  ["RISK_REPORT", "RISK_REPORT_*.csv", "RISK_REPORT_<date>.csv"],
-                 ["MCX deposit (xlsx)", "*.xlsx", "MCX deposit  *.xlsx"],
+                 ["MCX 90% file (xlsx)", "*.xlsx", "<random>-<YYYYMMDDHHMMSS>.xlsx"],
                  ["CTCL output file", "FULL_FILE_CTCL_VS_NMASS_*.xlsx", "FULL_FILE_CTCL_VS_NMASS_<NN>.xlsx"],
              ],
              # Phase transition markers — emitted as {type:'phase', name:'...'} SSE events
@@ -1299,19 +1299,103 @@ def _pb_archive_stale_common_files(common_dir, globs, pipe):
                 pass   # best-effort — don't let a stray file block the actual upload
 
 
-def pb_upload(pipe, items, target="main"):
+# ── Password-protected reference files ───────────────────────────────────────
+# A small set of rarely-updated files where a wrong/stale replacement silently
+# changes real calculations for every account (KAMBALA's virtual-ID list,
+# PROBABLE's branch/region + mail-list masters) rather than failing loudly —
+# so REPLACING an existing copy of one of these requires the same password
+# used everywhere else in this app (core.short_allocation.check_password).
+# A FIRST upload (nothing there yet) never needs a password — only replacing
+# one that already exists does. Matched case-insensitively on filename alone,
+# so it works no matter which button/target the upload came in through.
+PROTECTED_UPLOAD_FILES = {
+    "ctcl": {
+        "kambala_allocation_list.xlsx": {"dest_env": "CTCL_NMASS_FOLDER",
+                                          "dest_default": r"D:\CTCL VS NMASS", "dest_subdir": ""},
+    },
+    "probable": {
+        "mail list.xlsx":               {"dest_env": "PROBABLE_FOLDER",
+                                          "dest_default": r"D:\PROBABLE", "dest_subdir": "MASTER"},
+        "brm list_file.xlsx":           {"dest_env": "PROBABLE_FOLDER",
+                                          "dest_default": r"D:\PROBABLE", "dest_subdir": "MASTER"},
+        "brm list_file.csv":            {"dest_env": "PROBABLE_FOLDER",
+                                          "dest_default": r"D:\PROBABLE", "dest_subdir": "MASTER"},
+        "branch_and_region_list.xlsx":  {"dest_env": "PROBABLE_FOLDER",
+                                          "dest_default": r"D:\PROBABLE", "dest_subdir": "MASTER"},
+    },
+}
+
+
+def _pb_protected_dest(rule):
+    base = os.getenv(rule["dest_env"], rule["dest_default"])
+    sub = rule.get("dest_subdir") or ""
+    return os.path.join(base, sub) if sub else base
+
+
+def pb_upload(pipe, items, target="main", password=""):
     """Validated upload. target='main' → pipeline folder (e.g. D:\\CTCL VS NMASS);
     target='common' → the common folder (e.g. C:\\COMMON FILES, RISK_REPORT only);
     target='master' → a pipe's own rarely-updated reference folder (currently only
     PROBABLE's PROBABLE_FOLDER\\MASTER — MAIL LIST.xlsx / Branch_AND_Region_LIST.xlsx).
-    Unlike 'main'/'common' (daily input files, where an existing same-named file
-    correctly means "already downloaded today, skip it"), 'master' files are
-    updated by hand roughly once a month, so an upload here always REPLACES
-    whatever's already there instead of being rejected as a duplicate."""
+
+    Every file is checked against PROTECTED_UPLOAD_FILES FIRST, regardless of
+    `target` — if it's a recognized protected filename for this pipe, it goes
+    to its own fixed destination and REPLACING an existing copy requires
+    `password` to check out via check_password(); a wrong/missing password
+    puts that filename in the returned "password_required" list instead of
+    ok/skipped/rejected, so the frontend can prompt and retry.
+
+    For everything else: an existing same-named file is now REPLACED, not
+    skipped — this used to be "skip, keep the old one" for 'main'/'common'
+    (daily input files) on the theory that a same-named file already being
+    there meant "already downloaded today". Per explicit instruction, every
+    ordinary upload should now update the file in place; the small protected
+    set above is the only place a stale re-upload is actually dangerous
+    enough to gate behind a password instead."""
+    from core.short_allocation import check_password as _pb_check_pw
     p = PIPELINES.get(pipe, {})
     spec = pb_valid(pipe)
     common_globs = [g.lower() for g in p.get("common_globs", [])]
-    replace_existing = (target == "master")
+    protected_map = PROTECTED_UPLOAD_FILES.get(pipe, {})
+    password_required = []
+    remaining_items = []
+    protected_ok, protected_rejected = [], []
+    for fp in items:
+        base = os.path.basename(fp)
+        rule = protected_map.get(base.lower())
+        if not rule:
+            remaining_items.append(fp)
+            continue
+        dest2 = _pb_protected_dest(rule)
+        try:
+            os.makedirs(dest2, exist_ok=True)
+        except Exception as e:
+            protected_rejected.append(f"{base}: could not reach {dest2} ({e})")
+            try: os.remove(fp)
+            except Exception: pass
+            continue
+        tp2 = os.path.join(dest2, base)
+        if os.path.exists(tp2) and not _pb_check_pw(password):
+            password_required.append(base)
+            continue   # leave fp where it is — the frontend retries with a password
+        try:
+            if os.path.exists(tp2):
+                os.remove(tp2)
+            shutil.move(fp, tp2)
+            protected_ok.append(base)
+            try:
+                use_pg = os.getenv("USE_POSTGRES", "false").strip().lower() == "true"
+                _sf = (__import__("core.db_postgres", fromlist=["save_run_file"]).save_run_file if use_pg
+                       else __import__("core.db", fromlist=["save_run_file"]).save_run_file)
+                with open(tp2, "rb") as fb:
+                    _sf(pipe, "upload", base, fb.read(), tag="protected")
+            except Exception:
+                pass
+        except Exception as e:
+            protected_rejected.append(f"{base}: {e}")
+    items = remaining_items
+    # Default is now REPLACE for every target, not just 'master' — see docstring.
+    replace_existing = True
     if target == "master":
         dest = os.getenv(p.get("master_dir_env", ""), p.get("upload_default", ""))
         dest = os.path.join(dest, p.get("master_subdir", "MASTER"))
@@ -1348,8 +1432,12 @@ def pb_upload(pipe, items, target="main"):
     logdir = os.path.join(LOG_BASE, p.get("logdir", pipe)); os.makedirs(logdir, exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     logp = os.path.join(logdir, f"UPLOAD__{ts}.log")
-    ok, skipped, rejected = [], [], []
+    ok, skipped, rejected = list(protected_ok), [], list(protected_rejected)
     lines = [f"# UPLOAD {pipe}  dest={dest}  time={ts}"]
+    if protected_ok:
+        lines.append(f"# password-protected files replaced: {', '.join(protected_ok)}")
+    if password_required:
+        lines.append(f"# password required, not replaced: {', '.join(password_required)}")
     for fp in items:
         base = os.path.basename(fp)
         if globs and not _name_ok(base, globs):
@@ -1409,7 +1497,8 @@ def pb_upload(pipe, items, target="main"):
     except Exception:
         pass
     return {"dest": dest, "label": spec["label"], "ok": ok, "skipped": skipped,
-            "rejected": rejected, "valid": spec["examples"], "dest_is_fallback": dest_is_fallback}
+            "rejected": rejected, "valid": spec["examples"], "dest_is_fallback": dest_is_fallback,
+            "password_required": password_required}
 
 def pb_backup_types(pipe):
     return [{"label": r[0], "globs": r[1]} for r in PIPELINES.get(pipe, {}).get("file_types", [])]

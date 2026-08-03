@@ -3422,16 +3422,20 @@ async function saStop(){
 }
 async function saDoUpload(inp){
   if(!inp.files.length) return;
+  const fileList=Array.from(inp.files);   // captured now — a password retry needs these same files again
+  inp.value='';
+  await saDoUploadFiles(fileList, '');
+}
+async function saDoUploadFiles(files, password){
   const target=window._saUpTarget||'short_allocation';
   const folder=(target==='las_funding')?'LAS FUNDING':(target==='common_files')?'COMMON FILES':'SHORT ALLOCATION';
-  const files=[...inp.files];
   const CHUNK_SIZE=5*1024*1024; // 5 MB chunks — safe through Defender on any file size
   const _doneBtn=`<button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal();saLoadReady()">Done</button>`;
 
   // ── Collect results from all files (large + small) into one combined modal ──
   const large=files.filter(f=>f.size>CHUNK_SIZE);
   const small=files.filter(f=>f.size<=CHUNK_SIZE);
-  const allOk=[], allSkip=[], allReject=[];
+  const allOk=[], allSkip=[], allReject=[], allPwReq=[];
   let finalDest='';
 
   // Large files: chunked upload
@@ -3452,10 +3456,10 @@ async function saDoUpload(inp){
     }
     if(!failed){
       try{
-        const r2=await fetch(`${API}/sa/upload-finalize?upload_id=${uid}&filename=${encodeURIComponent(f.name)}&total_chunks=${total}&target=${encodeURIComponent(target)}`,{method:'POST'});
+        const r2=await fetch(`${API}/sa/upload-finalize?upload_id=${uid}&filename=${encodeURIComponent(f.name)}&total_chunks=${total}&target=${encodeURIComponent(target)}&password=${encodeURIComponent(password||'')}`,{method:'POST'});
         const d2=await r2.json();
         if(d2.dest) finalDest=d2.dest;
-        allOk.push(...(d2.ok||[])); allSkip.push(...(d2.skipped||[])); allReject.push(...(d2.rejected||[]));
+        allOk.push(...(d2.ok||[])); allSkip.push(...(d2.skipped||[])); allReject.push(...(d2.rejected||[])); allPwReq.push(...(d2.password_required||[]));
       }catch(e){ allReject.push(f.name+': finalize error — '+e.message); }
     }
   }
@@ -3463,7 +3467,7 @@ async function saDoUpload(inp){
   // Small files: single HTTP upload
   if(small.length){
     saShowModal('Uploading…', `<div style="color:var(--muted);font-size:13px">Uploading ${small.length} file(s)${large.length?' more':''} into ${folder}…</div>`);
-    const fd=new FormData(); for(const f of small){ fd.append('files', f); }
+    const fd=new FormData(); for(const f of small){ fd.append('files', f); } fd.append('password', password||'');
     const ctl=new AbortController();
     window._saUploadCtl=ctl;
     const to=setTimeout(()=>ctl.abort(), 180000);
@@ -3473,7 +3477,7 @@ async function saDoUpload(inp){
       if(!ctl.signal.aborted && r.ok){
         const d=await r.json();
         if(d.dest) finalDest=d.dest;
-        allOk.push(...(d.ok||[])); allSkip.push(...(d.skipped||[])); allReject.push(...(d.rejected||[]));
+        allOk.push(...(d.ok||[])); allSkip.push(...(d.skipped||[])); allReject.push(...(d.rejected||[])); allPwReq.push(...(d.password_required||[]));
       } else if(!ctl.signal.aborted){
         let t=''; try{ t=await r.text(); }catch(_){}
         allReject.push('Upload failed: Server '+r.status+(t?' — '+t.slice(0,120):''));
@@ -3484,6 +3488,11 @@ async function saDoUpload(inp){
         allReject.push((e&&e.name==='AbortError')?'Timed out — is the backend running?':((e&&e.message)?e.message:String(e)));
       }
     }finally{ window._saUploadCtl=null; }
+  }
+
+  if(allPwReq.length){
+    saAskPassword('Replace protected file — '+allPwReq.join(', '), function(pw){ saDoUploadFiles(files, pw); });
+    return;
   }
 
   // ── Show combined result modal ────────────────────────────────────────────
@@ -3497,7 +3506,6 @@ async function saDoUpload(inp){
   const _totalCopied=allOk.length;
   saShowModal(allReject.length?'Upload result':('✓ '+(_totalCopied===files.length?'All '+files.length+' files uploaded':_totalCopied+' / '+files.length+' files uploaded')), html);
   saLoadReady();
-  inp.value='';
 }
 // Highlights failure-looking lines (error/traceback/failed/expired/etc.) in red
 // and reports the index of the first one found, so the log viewer can jump
@@ -5132,10 +5140,17 @@ function pxPickFiles(target){
   const i=document.getElementById('pxUploadInput'); if(i) i.click();
 }
 async function pxDoUpload(inp){
-  if(!inp.files.length) return; const pipe=window._pxUpPipe||''; const target=window._pxUpTarget||'main';
+  if(!inp.files.length) return;
+  const fileList=Array.from(inp.files);   // captured now — inp.value gets cleared below, and a
+                                           // password retry needs the SAME files again later
+  inp.value='';
+  await pxDoUploadFiles(fileList, '');
+}
+async function pxDoUploadFiles(fileList, password){
+  const pipe=window._pxUpPipe||''; const target=window._pxUpTarget||'main';
   const folder=(target==='common')?'COMMON FILES':'CTCL VS NMASS';
-  saShowModal('Uploading…', `<div style="color:var(--muted);font-size:13px">Copying ${inp.files.length} file(s) into the ${folder} folder…</div>`);
-  const fd=new FormData(); for(const f of inp.files){ fd.append('files', f); }
+  saShowModal('Uploading…', `<div style="color:var(--muted);font-size:13px">Copying ${fileList.length} file(s) into the ${folder} folder…</div>`);
+  const fd=new FormData(); for(const f of fileList){ fd.append('files', f); } fd.append('password', password||'');
   const ctl=new AbortController();
   window._saUploadCtl=ctl;  // let saCloseModal() abort this if user closes mid-upload
   const to=setTimeout(()=>ctl.abort(), 180000);
@@ -5146,6 +5161,10 @@ async function pxDoUpload(inp){
     if(!r.ok){ let t=''; try{ t=await r.text(); }catch(_){ } throw new Error('Server '+r.status+(t?(' — '+t.slice(0,160)):'')); }
     const d=await r.json();
     if(ctl.signal.aborted) return;
+    if((d.password_required||[]).length){
+      saAskPassword('Replace protected file — '+d.password_required.join(', '), function(pw){ pxDoUploadFiles(fileList, pw); });
+      return;
+    }
     let html=`<div style="font-size:13px;color:var(--muted);margin-bottom:10px">Folder: <span style="font-family:var(--mono);color:var(--ink)">${d.dest||''}</span></div>`;
     (d.ok||[]).forEach(m=>{ html+=`<div class="sa-ev ok"><span class="ic">✓</span><span>${m}</span><span class="what">copied</span></div>`; });
     (d.skipped||[]).forEach(m=>{ html+=`<div class="sa-ev" style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);color:var(--amber)"><span class="ic" style="background:var(--amber);color:#1a0d00">!</span><span>${m}</span><span class="what">already in folder</span></div>`; });
@@ -5160,7 +5179,6 @@ async function pxDoUpload(inp){
     const msg=(e&&e.name==='AbortError')?'Timed out — is the backend running?':((e&&e.message)?e.message:String(e));
     saShowModal('Upload failed', `<div style="color:var(--red)">${msg}</div>`);
   }finally{ window._saUploadCtl=null; }
-  inp.value='';
 }
 // ── CTCL backup modal — SA-style (tabs + colored chip sections + archive rows) ──
 const _PX_BK_META={
@@ -5170,8 +5188,9 @@ const _PX_BK_META={
   'Client Net Effective Deposits': {icon:'N', col:'#60a5fa', sec:'Exchange Inputs'},
   'Update Limits':                 {icon:'📋', col:'#a78bfa', sec:'Daily Reports'},
   'RISK_REPORT':                   {icon:'⚠', col:'#a78bfa', sec:'Daily Reports'},
-  'MCX deposit (xlsx)':            {icon:'💵', col:'#a78bfa', sec:'Daily Reports'},
+  'MCX 90% file (xlsx)':           {icon:'💵', col:'#a78bfa', sec:'Daily Reports'},
   'CTCL output file':              {icon:'📊', col:'#2dd4bf', sec:'CTCL Output'},
+  'Margin Shortage output':        {icon:'📊', col:'#2dd4bf', sec:'MS15 Output'},
 };
 function _pxBkRowMeta(name){
   const n=(name||'').toLowerCase();
@@ -5249,10 +5268,23 @@ async function pxBackup(pipe, tab){
   }
   // ── Get files tab — colored chip filters (SA design) ──────────────────────
   if(!window._pxBkSel) window._pxBkSel=new Set();
-  if(!window._pxBkTypesList){
-    try{ window._pxBkTypesList=((await (await fetch(API+'/px/backup-types?pipe='+pipe)).json()).types)||[]; }catch(e){ window._pxBkTypesList=[]; }
+  if(window._pxBkSelPipe!==pipe){
+    // Switching pipe (e.g. ctcl → ms15) — a filter selection from one pipe's
+    // globs means nothing on another pipe's file types, so reset it instead of
+    // silently carrying over a stale selection that can't match anything here.
+    window._pxBkSel=new Set();
+    window._pxBkSelPipe=pipe;
   }
-  const types=window._pxBkTypesList;
+  // Cache is keyed BY PIPE — a single shared window._pxBkTypesList previously meant
+  // opening CTCL's "Get files" first and then MS15's would silently reuse CTCL's
+  // file-type list (Update Limits, CTCL output file, etc. showing up on MS15, which
+  // never uses those), because the old check only asked "do we have ANY cached list"
+  // rather than "do we have THIS pipe's list".
+  if(!window._pxBkTypesCache) window._pxBkTypesCache={};
+  if(!window._pxBkTypesCache[pipe]){
+    try{ window._pxBkTypesCache[pipe]=((await (await fetch(API+'/px/backup-types?pipe='+pipe)).json()).types)||[]; }catch(e){ window._pxBkTypesCache[pipe]=[]; }
+  }
+  const types=window._pxBkTypesCache[pipe];
   const sections={};
   types.forEach(x=>{
     const m=_PX_BK_META[x.label]||{icon:'📄',col:'#94a3b8',sec:'Other'};

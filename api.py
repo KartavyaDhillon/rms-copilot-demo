@@ -1241,7 +1241,7 @@ import asyncio as _sa_asyncio
 _SA_WRITE_TIMEOUT_S = 30  # timeout for the DISK-WRITE phase only (not body read)
 
 @app.post("/sa/upload")
-async def sa_upload(target: str = "short_allocation",
+async def sa_upload(target: str = "short_allocation", password: str = "",
                     files: _SA_List[_SA_UploadFile] = _SA_File(...)):
     orig_names = [_sa_os.path.basename(f.filename) for f in files]
 
@@ -1261,7 +1261,7 @@ async def sa_upload(target: str = "short_allocation",
     # on the destination folder. The server console prints per-file timings.
     async def _write():
         loop = _sa_asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _sa_save_bytes, items, target)
+        return await loop.run_in_executor(None, _sa_save_bytes, items, target, password)
 
     try:
         return await _sa_asyncio.wait_for(_write(), timeout=_SA_WRITE_TIMEOUT_S)
@@ -1325,12 +1325,15 @@ async def sa_upload_chunk(upload_id: str, chunk_num: int, total_chunks: int,
         f.write(data)
     return {"ok": True, "chunk": chunk_num, "total": total_chunks, "bytes": len(data)}
 
+
 @app.post("/sa/upload-finalize")
 def sa_upload_finalize(upload_id: str, filename: str, total_chunks: int,
-                       target: str = "short_allocation"):
+                       target: str = "short_allocation", password: str = ""):
     """Assemble all chunks into the final file, validate, copy to SA/LAS folder."""
     import shutil as _sh
-    from core.short_allocation import cfg as _c, _name_ok as _lnok, SA_VALID as _lv
+    from core.short_allocation import (cfg as _c, _name_ok as _lnok, SA_VALID as _lv,
+                                       check_password as _sa_check_pw,
+                                       SA_PROTECTED_UPLOAD_FILES as _sa_protected)
     chunk_dir = _sa_os.path.join(_CHUNK_DIR, upload_id)
     base = _sa_os.path.basename(filename)
     c = _c()
@@ -1341,11 +1344,16 @@ def sa_upload_finalize(upload_id: str, filename: str, total_chunks: int,
         spec = _lv.get(target, _lv["short_allocation"])
         _sh.rmtree(chunk_dir, ignore_errors=True)
         return {"dest": dest, "ok": [], "skipped": [],
-                "rejected": [f"{base}: not a recognised {spec['label']} file"]}
+                "rejected": [f"{base}: not a recognised {spec['label']} file"], "password_required": []}
     tp = _sa_os.path.join(dest, base)
-    if _sa_os.path.exists(tp):
+    _protected = base.lower() in _sa_protected
+    if _sa_os.path.exists(tp) and _protected and not _sa_check_pw(password):
         _sh.rmtree(chunk_dir, ignore_errors=True)
-        return {"dest": dest, "ok": [], "skipped": [base], "rejected": []}
+        return {"dest": dest, "ok": [], "skipped": [], "rejected": [],
+                "password_required": [base]}
+    # Everything else: replace an existing same-named file rather than skipping
+    # it — per explicit instruction, an ordinary re-upload should update the
+    # file in place. Only the protected set above needs a password to do that.
     try:
         _sa_os.makedirs(dest, exist_ok=True)
         with open(tp, "wb") as out:
@@ -1361,9 +1369,9 @@ def sa_upload_finalize(upload_id: str, filename: str, total_chunks: int,
             with open(tp,"rb") as fb: _sf("short_allocation","upload",base,fb.read(),tag=target)
         except Exception as e:
             print(f"[upload-finalize] DB archive skipped: {e}")
-        return {"dest": dest, "ok": [base], "skipped": [], "rejected": []}
+        return {"dest": dest, "ok": [base], "skipped": [], "rejected": [], "password_required": []}
     except Exception as e:
-        return {"dest": dest, "ok": [], "skipped": [], "rejected": [f"{base}: {e}"]}
+        return {"dest": dest, "ok": [], "skipped": [], "rejected": [f"{base}: {e}"], "password_required": []}
     finally:
         _sh.rmtree(chunk_dir, ignore_errors=True)
 
@@ -2048,7 +2056,7 @@ from core.pipeline_box import (pb_upload as _pbup, pb_backup_types as _pbbt,
                                pb_list_backups as _pblb, pb_copy_backups as _pbcb)
 
 @app.post("/px/upload")
-async def px_upload(pipe: str = "", target: str = "main",
+async def px_upload(pipe: str = "", target: str = "main", password: str = "",
                     files: _SA_List[_SA_UploadFile] = _SA_File(...)):
     import shutil as _sh
     saved = []
@@ -2057,7 +2065,7 @@ async def px_upload(pipe: str = "", target: str = "main",
         with open(tmp, "wb") as out:
             _sh.copyfileobj(f.file, out)
         saved.append(tmp)
-    return _pbup(pipe, saved, target)
+    return _pbup(pipe, saved, target, password)
 
 @app.get("/px/backup-types")
 def px_backup_types(pipe: str = ""):
@@ -3131,14 +3139,21 @@ def ms15_whatsapp_report(date: str, runs: str = ""):
     """Build and return an .xlsx listing every client who ACTUALLY received a
     WhatsApp margin alert on `date` (YYYY-MM-DD), optionally filtered to specific
     run numbers (`runs`= comma-separated, e.g. "2,4,8"). Columns: Run, Client
-    Code, Margin Warning %, Sent At. Reads the margin_whatsapp_log DB
-    table (Postgres or SQLite per USE_POSTGRES).
+    Code, Margin Warning %, Sent At, Mobile (team sends only). Reads the
+    margin_whatsapp_log DB table (Postgres or SQLite per USE_POSTGRES).
 
-    The client's mobile number is deliberately NOT a column. The client code
-    already identifies who was alerted, which is what this report is for; the
-    phone number added nothing and put client contact details into a file that
-    gets emailed and passed around. It is still recorded in the database for
-    audit, just not exported here."""
+    The client's mobile number is deliberately left BLANK for real client rows —
+    the client code already identifies who was alerted, which is what this report
+    is for; the phone number added nothing and put client contact details into a
+    file that gets emailed and passed around. It is still recorded in the
+    database for audit, just not exported for clients here.
+
+    Team rows (client_code == "TEAM — MARGIN SHORTAGE IMAGE", logged by
+    run_shortage_image_alert() in margin_shortage_15min.py) are different: the
+    whole point of that row existing is to let someone cross-check "did this
+    specific internal number actually receive the shortage image" when a team
+    member says they didn't get it despite the run log saying it sent — so the
+    Mobile column IS populated for those, and blank for everyone else."""
     import io as _io, os as _wos
     from fastapi.responses import Response as _Resp
     run_list = [int(r) for r in runs.split(",") if r.strip().isdigit()]
@@ -3153,11 +3168,13 @@ def ms15_whatsapp_report(date: str, runs: str = ""):
         return {"ok": False, "error": str(e)}
     import openpyxl as _oxl
     wb = _oxl.Workbook(); ws = wb.active; ws.title = "WhatsApp Alerts"
-    headers = ["Run", "Client Code", "Margin Warning %", "Sent At"]
+    headers = ["Run", "Client Code", "Margin Warning %", "Sent At", "Mobile (team sends only)"]
     ws.append(headers)
     for r in rows:
+        _is_team = str(r.get("client_code") or "").startswith("TEAM")
         ws.append([r.get("run_number"), r.get("client_code"),
-                   r.get("margin_pct"), str(r.get("sent_at") or "")])
+                   r.get("margin_pct"), str(r.get("sent_at") or ""),
+                   (r.get("mobile") or "") if _is_team else ""])
     for col in ws.columns:
         _w = max((len(str(c.value)) for c in col if c.value is not None), default=10)
         ws.column_dimensions[col[0].column_letter].width = _w + 2

@@ -1907,10 +1907,18 @@
   // for a reference file that's meant to be replaced whenever it changes). ──
   function probableDoMasterUpload(inp) {
     if (!inp.files.length) return;
+    var fileList = Array.prototype.slice.call(inp.files);   // captured now — a
+                                                              // password retry needs these same files again
+    inp.value = '';
+    probableDoMasterUploadFiles(fileList, '');
+  }
+
+  function probableDoMasterUploadFiles(fileList, password) {
     var pipe = window._pxUpPipe || PIPE;
-    window.saShowModal('Uploading…', '<div style="color:var(--muted);font-size:13px">Copying ' + inp.files.length + ' file(s) into the MASTER folder…</div>');
+    window.saShowModal('Uploading…', '<div style="color:var(--muted);font-size:13px">Copying ' + fileList.length + ' file(s) into the MASTER folder…</div>');
     var fd = new FormData();
-    for (var i = 0; i < inp.files.length; i++) fd.append('files', inp.files[i]);
+    for (var i = 0; i < fileList.length; i++) fd.append('files', fileList[i]);
+    fd.append('password', password || '');
     var ctl = new AbortController();
     window._saUploadCtl = ctl;
     var to = setTimeout(function () { ctl.abort(); }, 180000);
@@ -1923,6 +1931,12 @@
       })
       .then(function (d) {
         if (!d) return;
+        if ((d.password_required || []).length) {
+          window.saAskPassword('Replace protected file — ' + d.password_required.join(', '), function (pw) {
+            probableDoMasterUploadFiles(fileList, pw);
+          });
+          return;
+        }
         var html = '<div style="font-size:13px;color:var(--muted);margin-bottom:10px">Folder: <span style="font-family:var(--mono);color:var(--ink)">' + (d.dest || '') + '</span></div>';
         (d.ok || []).forEach(function (m) {
           html += '<div class="sa-ev ok"><span class="ic">✓</span><span>' + m + '</span><span class="what">replaced with new version</span></div>';
@@ -1943,6 +1957,6 @@
         var msg = (e && e.name === 'AbortError') ? 'Timed out — is the backend running?' : ((e && e.message) ? e.message : String(e));
         window.saShowModal('Upload failed', '<div style="color:var(--red)">' + msg + '</div>');
       })
-      .finally(function () { window._saUploadCtl = null; inp.value = ''; });
+      .finally(function () { window._saUploadCtl = null; });
   }
 })();
