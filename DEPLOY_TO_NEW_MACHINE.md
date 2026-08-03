@@ -87,6 +87,22 @@ D:\CONSOLE\
 > copied folder also drags across `knowledge.db` (200+ MB of rebuildable index)
 > and every stale temp file. Cloning sidesteps all of it.
 
+### 2b. Copy `.env` by hand — Git does not bring this one
+
+`.env` holds live passwords and API tokens, so it is deliberately on the
+gitignore list and will **never** arrive via `git clone` or `git pull`. Copy
+it manually, once, from the old machine:
+
+```
+D:\CLAUDE\rms-copilot\.env  →  D:\CONSOLE\rms-copilot\.env
+```
+
+Drag it over RDC or carry it on the same USB drive as the database dump.
+`tools\make_env_local.py` in Step 4b reads this file, so it must be in place
+before that step runs. After this one-time copy, `.env` on the new machine is
+edited directly there if it ever needs a change — it does not sync from the
+old machine again.
+
 ### 3. Build the virtualenv
 
 From `D:\CONSOLE\rms-copilot`:
@@ -140,9 +156,13 @@ other three.
 | File | Goes in |
 |---|---|
 | `Book1.xlsx` | repo root (`D:\CONSOLE\rms-copilot\`) |
-| `KAMBALA_ALLOCATION_LIST.xlsx` | `D:\CTCL VS NMASS\` |
-| `MAIL LIST.xlsx` | `D:\PROBABLE\MASTER\` |
-| `Branch_AND_Region_LIST.xlsx` | `D:\PROBABLE\MASTER\` |
+| `KAMBALA_ALLOCATION_LIST.xlsx` | `<RMS_DATA_ROOT>\CTCL VS NMASS\` |
+| `MAIL LIST.xlsx` | `<RMS_DATA_ROOT>\PROBABLE\MASTER\` |
+| `Branch_AND_Region_LIST.xlsx` | `<RMS_DATA_ROOT>\PROBABLE\MASTER\` |
+
+`<RMS_DATA_ROOT>` is whatever you passed to `--root` when you ran
+`make_env_local.py` — e.g. `D:\CONSOLE\data`. Run `tools\doctor.py` and read
+the `RMS_DATA_ROOT` line under Configuration if you're not sure.
 
 Everything else arrives on the day: NMASS/NCDEX, TCS BANCS and the delivery
 margin file download themselves; you upload `Probable_Fullfile` by hand as usual.

@@ -5321,7 +5321,7 @@ async function pxBackupFind(){
   <span style="display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;background:color-mix(in srgb,${m.col} 12%,transparent);color:${m.col};border:1px solid color-mix(in srgb,${m.col} 30%,transparent)">${m.icon} ${m.label}</span>
   <div style="flex:1;min-width:0">
     <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${f.name||''}">${f.name||'—'}</div>
-    <div style="font-size:10px;color:var(--muted);margin-top:2px">${f.date} · ${(f.size/1024).toFixed(1)} KB</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:2px">${f.run?`<span style="color:var(--teal);font-weight:600">Run ${f.run}</span> · `:''}${f.time?`<span style="font-weight:600">${f.time}</span> · `:''}${f.date} · ${(f.size/1024).toFixed(1)} KB</div>
   </div>
   <a href="${API}/px/backup/download?pipe=${pipe}&path=${encodeURIComponent(f.path||'')}" download="${(f.name||'file').replace(/"/g,'')}" title="Download this file" style="flex-shrink:0;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.25);text-decoration:none;font-size:14px;transition:background .15s" onmouseenter="this.style.background='rgba(52,211,153,.22)'" onmouseleave="this.style.background='rgba(52,211,153,.1)'">⬇</a>
 </div>`;

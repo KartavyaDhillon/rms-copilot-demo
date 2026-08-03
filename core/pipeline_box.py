@@ -1451,9 +1451,20 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None):
         if not os.path.isdir(root): continue
         for dp, _d, files in os.walk(root):
             cdate = None
+            crun = None
             for part in dp.replace("\\", "/").split("/"):
                 _cd = _pb_parse_date_part(part)
-                if _cd: cdate = _cd
+                if _cd:
+                    cdate = _cd
+                    continue
+                # A bare 1-2 digit folder segment inside the dated backup tree is
+                # the run-number subfolder (ctcl/ms15: <date>\<NN>\...). Files with
+                # a fixed daily name (e.g. "Update Limits<date>.xlsx") are otherwise
+                # indistinguishable in the archive view — same name every run, only
+                # size differs — so surface which run + what time produced each one.
+                p = part.strip()
+                if re.fullmatch(r"\d{1,2}", p):
+                    crun = p
             for fn in files:
                 if globs and not any(_pb_fn.fnmatch(fn.lower(), g) for g in globs): continue
                 fpp = os.path.join(dp, fn)
@@ -1462,7 +1473,13 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None):
                 fdate = cdate or datetime.date.fromtimestamp(st.st_mtime)
                 if df and fdate < df: continue
                 if dt and fdate > dt: continue
-                res.append({"path": fpp, "name": fn, "date": fdate.strftime("%d-%m-%Y"), "size": st.st_size})
+                res.append({
+                    "path": fpp, "name": fn,
+                    "date": fdate.strftime("%d-%m-%Y"),
+                    "size": st.st_size,
+                    "run": crun,
+                    "time": datetime.datetime.fromtimestamp(st.st_mtime).strftime("%H:%M"),
+                })
     res.sort(key=lambda x: (x["date"], x["name"]))
     return res[:3000]
 
