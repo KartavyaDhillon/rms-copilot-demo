@@ -5237,7 +5237,7 @@ async function pxBackup(pipe, tab){
       chips+=`<button id="ms15WaChip${i}" onclick="ms15WaToggleRun(${i})" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'}">Run ${i}</button>`;
     }
     const chipRow=`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Runs</span>${chips}<button onclick="ms15WaRunsAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">All</button><button onclick="ms15WaRunsClear()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
-    saShowModal('📱 WhatsApp check — who got messaged', _tabs+`<div style="font-size:12px;color:var(--muted);margin-bottom:14px">Downloads an Excel listing every client who <b>actually received</b> a WhatsApp margin alert on the chosen date, for the selected run(s). Columns: Run, Client Code, Mobile, Margin Warning %, Sent At.</div><div class="sa-field" style="margin-bottom:14px"><label>Date</label><input type="date" id="msWaDate" value="${iso(t)}"></div><div id="msWaChips">${chipRow}</div><button class="sa-save" style="width:100%;background:var(--blue);color:var(--blue-d)" onclick="ms15DownloadWaReport()">⬇️ Download WhatsApp report</button><div style="font-size:10.5px;color:var(--dim);margin-top:10px">Note: an empty file means nobody crossed the 105% threshold (or no runs sent alerts) on that date/run.</div>`);
+    saShowModal('📱 WhatsApp check — who got messaged', _tabs+`<div style="font-size:12px;color:var(--muted);margin-bottom:14px">Two separate downloads for the selected date/run(s) — client alerts and the internal team image are different questions, so they're different files instead of one confusing mixed sheet.</div><div class="sa-field" style="margin-bottom:14px"><label>Date</label><input type="date" id="msWaDate" value="${iso(t)}"></div><div id="msWaChips">${chipRow}</div><button class="sa-save" style="width:100%;background:var(--blue);color:var(--blue-d)" onclick="ms15DownloadWaReport()">⬇️ Client alerts — Run, Client Code, Margin Warning %, Sent At</button><button class="sa-save" style="width:100%;background:var(--violet);color:#fff;margin-top:8px" onclick="ms15DownloadWaTeamReport()">⬇️ Team image sends — Run, Mobile, Accounts In Image, Sent At</button><div style="font-size:10.5px;color:var(--dim);margin-top:10px">Note: an empty file means nobody crossed the 105% threshold (or no runs sent alerts) on that date/run.</div>`);
     return;
   }
   // ── Client data tab — look up a client across all backup runs ─────────────
@@ -5465,6 +5465,13 @@ function ms15DownloadWaReport(){
   const sel=window._ms15WaRuns||new Set();
   const runs=[...sel].sort((a,b)=>a-b).join(',');   // empty = all runs that day
   window.open(API+'/ms15/whatsapp-report?date='+encodeURIComponent(date)+'&runs='+encodeURIComponent(runs),'_blank');
+}
+function ms15DownloadWaTeamReport(){
+  const date=(document.getElementById('msWaDate')||{}).value||'';
+  if(!date){ alert('Pick a date first.'); return; }
+  const sel=window._ms15WaRuns||new Set();
+  const runs=[...sel].sort((a,b)=>a-b).join(',');   // empty = all runs that day
+  window.open(API+'/ms15/whatsapp-report-team?date='+encodeURIComponent(date)+'&runs='+encodeURIComponent(runs),'_blank');
 }
 
 // ── Results popup — SINGLE COMBINED TABLE ───────────────────────────────────

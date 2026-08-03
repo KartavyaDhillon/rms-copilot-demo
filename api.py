@@ -3134,53 +3134,90 @@ def ms15_shortage_wa_config_set(to: str = "", password: str = ""):
     return {"ok": True}
 
 
+def _ms15_wa_rows(date: str, runs: str):
+    run_list = [int(r) for r in runs.split(",") if r.strip().isdigit()]
+    use_pg = os.getenv("USE_POSTGRES", "false").strip().lower() == "true"
+    if use_pg:
+        from core.db_postgres import list_whatsapp_sends as _lw
+    else:
+        from core.db import list_whatsapp_sends as _lw
+    return _lw(date, run_list), run_list
+
 @app.get("/ms15/whatsapp-report")
 def ms15_whatsapp_report(date: str, runs: str = ""):
-    """Build and return an .xlsx listing every client who ACTUALLY received a
+    """Build and return an .xlsx listing every CLIENT who actually received a
     WhatsApp margin alert on `date` (YYYY-MM-DD), optionally filtered to specific
     run numbers (`runs`= comma-separated, e.g. "2,4,8"). Columns: Run, Client
-    Code, Margin Warning %, Sent At, Mobile (team sends only). Reads the
-    margin_whatsapp_log DB table (Postgres or SQLite per USE_POSTGRES).
+    Code, Margin Warning %, Sent At. Reads the margin_whatsapp_log DB table
+    (Postgres or SQLite per USE_POSTGRES).
 
-    The client's mobile number is deliberately left BLANK for real client rows —
-    the client code already identifies who was alerted, which is what this report
-    is for; the phone number added nothing and put client contact details into a
-    file that gets emailed and passed around. It is still recorded in the
-    database for audit, just not exported for clients here.
+    Client-only — the separate internal "MARGIN SHORTAGE IMAGE" sends to the
+    RM/branch team (see run_shortage_image_alert() in margin_shortage_15min.py)
+    have their own dedicated report at /ms15/whatsapp-report-team instead of
+    being mixed into this one as extra rows. They used to be blended in here
+    with a mostly-blank "Mobile (team sends only)" column, which was confusing
+    to read — two separate downloads is clearer than one file trying to answer
+    two different questions ("which clients got alerted" vs "which team
+    numbers got the image").
 
-    Team rows (client_code == "TEAM — MARGIN SHORTAGE IMAGE", logged by
-    run_shortage_image_alert() in margin_shortage_15min.py) are different: the
-    whole point of that row existing is to let someone cross-check "did this
-    specific internal number actually receive the shortage image" when a team
-    member says they didn't get it despite the run log saying it sent — so the
-    Mobile column IS populated for those, and blank for everyone else."""
-    import io as _io, os as _wos
+    The client's mobile number is deliberately NOT a column here — the client
+    code already identifies who was alerted, which is what this report is for;
+    the phone number added nothing and put client contact details into a file
+    that gets emailed and passed around. It is still recorded in the database
+    for audit, just not exported here."""
+    import io as _io
     from fastapi.responses import Response as _Resp
-    run_list = [int(r) for r in runs.split(",") if r.strip().isdigit()]
-    use_pg = _wos.getenv("USE_POSTGRES", "false").strip().lower() == "true"
     try:
-        if use_pg:
-            from core.db_postgres import list_whatsapp_sends as _lw
-        else:
-            from core.db import list_whatsapp_sends as _lw
-        rows = _lw(date, run_list)
+        rows, run_list = _ms15_wa_rows(date, runs)
     except Exception as e:
         return {"ok": False, "error": str(e)}
+    rows = [r for r in rows if not str(r.get("client_code") or "").startswith("TEAM")]
     import openpyxl as _oxl
     wb = _oxl.Workbook(); ws = wb.active; ws.title = "WhatsApp Alerts"
-    headers = ["Run", "Client Code", "Margin Warning %", "Sent At", "Mobile (team sends only)"]
-    ws.append(headers)
+    ws.append(["Run", "Client Code", "Margin Warning %", "Sent At"])
     for r in rows:
-        _is_team = str(r.get("client_code") or "").startswith("TEAM")
         ws.append([r.get("run_number"), r.get("client_code"),
-                   r.get("margin_pct"), str(r.get("sent_at") or ""),
-                   (r.get("mobile") or "") if _is_team else ""])
+                   r.get("margin_pct"), str(r.get("sent_at") or "")])
     for col in ws.columns:
         _w = max((len(str(c.value)) for c in col if c.value is not None), default=10)
         ws.column_dimensions[col[0].column_letter].width = _w + 2
     buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
     _rtag = ("_runs" + "-".join(str(r) for r in run_list)) if run_list else "_all-runs"
     fname = f"WhatsApp_Recipients_{date}{_rtag}.xlsx"
+    return _Resp(content=buf.getvalue(),
+                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.get("/ms15/whatsapp-report-team")
+def ms15_whatsapp_report_team(date: str, runs: str = ""):
+    """Build and return an .xlsx listing every TEAM number that actually
+    received the internal MARGIN SHORTAGE IMAGE alert on `date` (YYYY-MM-DD),
+    optionally filtered to specific run numbers. Columns: Run, Mobile,
+    Accounts In Image, Sent At — the companion report to /ms15/whatsapp-report
+    (which is client-only), so "who on the team got the image" is a separate,
+    unambiguous download instead of oddly-formatted rows mixed into the client
+    file. This is exactly what to check when someone on the team says they
+    didn't get the image despite the run log saying it sent."""
+    import io as _io
+    from fastapi.responses import Response as _Resp
+    try:
+        rows, run_list = _ms15_wa_rows(date, runs)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    rows = [r for r in rows if str(r.get("client_code") or "").startswith("TEAM")]
+    import openpyxl as _oxl
+    wb = _oxl.Workbook(); ws = wb.active; ws.title = "Margin Shortage Image — Team"
+    ws.append(["Run", "Mobile", "Accounts In Image", "Sent At"])
+    for r in rows:
+        ws.append([r.get("run_number"), r.get("mobile") or "",
+                   r.get("margin_pct"), str(r.get("sent_at") or "")])
+    for col in ws.columns:
+        _w = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+        ws.column_dimensions[col[0].column_letter].width = _w + 2
+    buf = _io.BytesIO(); wb.save(buf); buf.seek(0)
+    _rtag = ("_runs" + "-".join(str(r) for r in run_list)) if run_list else "_all-runs"
+    fname = f"MarginShortageImage_TeamSends_{date}{_rtag}.xlsx"
     return _Resp(content=buf.getvalue(),
                  media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                  headers={"Content-Disposition": f'attachment; filename="{fname}"'})
