@@ -164,7 +164,7 @@ def compute_difference(df):
 
 
 def apply_remarks(df, kambala_ids, virtual_ids):
-    """Add ACCOUNTID_KEY, KAMBALA ALLOCATION STATUS and REMARKS.
+    """Add ACCOUNTID_KEY, KAMBALA EXCLUDE ALLOCATION and REMARKS.
 
     REMARKS priority — each step writes ONLY where REMARKS is still blank, so
     the first rule to match wins and nothing downstream can overwrite it:
@@ -203,7 +203,7 @@ def apply_remarks(df, kambala_ids, virtual_ids):
     df = df.with_columns(
         _pl.when(_pl.col("ACCOUNTID_KEY").is_in(list(kambala_ids)))
            .then(_pl.lit("Y")).otherwise(_pl.lit("N"))
-           .alias("KAMBALA ALLOCATION STATUS"))
+           .alias("KAMBALA EXCLUDE ALLOCATION"))
 
     df = df.with_columns(_pl.lit("").alias("REMARKS"))
 
@@ -689,14 +689,14 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     final_pl = final_pl.filter(~pl.col("ACCOUNTID").cast(pl.Utf8).str.to_uppercase().str.starts_with("SUB"))
     final_pl = final_pl.sort("DIFFERENCE(I-H)", descending=True, nulls_last=True)
 
-    # KAMBALA ALLOCATION STATUS + REMARKS — the priority rules live in
+    # KAMBALA EXCLUDE ALLOCATION + REMARKS — the priority rules live in
     # apply_remarks() at module level so they can be unit-tested directly
     # (tools/test_ctcl_logic.py) instead of only via a full live run.
     final_pl = apply_remarks(final_pl, KAMBALA_ID_LIST, VIRTUAL_ID_LIST)
 
     # ACCOUNTID_KEY is an internal match helper — not exported.
     final_pl = final_pl.select(["Zone", "TRADING_SOFTWARE_TYPE", "CPCode", "PISAccount",
-                                "MTF_STATUS", "ACCOUNTID", "KAMBALA ALLOCATION STATUS",
+                                "MTF_STATUS", "ACCOUNTID", "KAMBALA EXCLUDE ALLOCATION",
                                 "DEPOSIT NMASS", "DEPOSIT CTCL", "DIFFERENCE(I-H)", "REMARKS"])
     # Use pandas to_excel (not polars write_excel) — polars adds red conditional formatting
     # for negative values and other default styling. pandas produces a plain xlsx that
@@ -867,7 +867,7 @@ This report has been generated based on the following logic:
     </li>
 
     <li>
-        <b>KAMBALA ALLOCATION STATUS</b> shows <b>Y</b> when the ACCOUNTID is
+        <b>KAMBALA EXCLUDE ALLOCATION</b> shows <b>Y</b> when the ACCOUNTID is
         present in the Kambala allocation list, and <b>N</b> when it is not.
     </li>
 

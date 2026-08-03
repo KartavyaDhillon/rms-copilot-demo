@@ -1,6 +1,9 @@
 @echo off
 title RMS Co-pilot Server
-cd /d D:\CLAUDE\rms-copilot
+REM Go to the folder this .bat lives in - NOT a hardcoded path. This is what
+REM lets the same file work on the dev machine (D:\CLAUDE\rms-copilot) and the
+REM server (D:\CONSOLE\rms-copilot) without editing it per machine.
+cd /d "%~dp0"
 call .venv\Scripts\activate.bat 2>nul || echo (no venv, using system python)
 echo Starting RMS Co-pilot  [AUTO-RELOAD OFF]
 echo The server does NOT restart on file changes - this keeps live runs (downloads,

@@ -89,7 +89,7 @@ D:\CONSOLE\
 
 ### 3. Build the virtualenv
 
-From `D:\CLAUDE\rms-copilot`:
+From `D:\CONSOLE\rms-copilot`:
 
 ```powershell
 python -m venv .venv
@@ -128,36 +128,36 @@ local to this machine.
 > `.env` at this machine instead: `PG_HOST=<new machine's LAN IP>`, and open port
 > 5432 in the new machine's firewall. Still one database.
 
-### 5. Copy the three reference files
+### 5. Copy the four reference files
 
 These are permanent master data. No code creates them and nothing downloads
-them — they are the only files that must be carried across by hand.
+them — they are the only files that must be carried across by hand. This
+includes `Book1.xlsx`: `.gitignore` excludes every `.xlsx` file from the repo
+on purpose (see the comment near the bottom of `.gitignore`), so it does
+**not** travel with `git clone` in Step 2 — it must be copied by hand like the
+other three.
 
 | File | Goes in |
 |---|---|
+| `Book1.xlsx` | repo root (`D:\CONSOLE\rms-copilot\`) |
 | `KAMBALA_ALLOCATION_LIST.xlsx` | `D:\CTCL VS NMASS\` |
 | `MAIL LIST.xlsx` | `D:\PROBABLE\MASTER\` |
 | `Branch_AND_Region_LIST.xlsx` | `D:\PROBABLE\MASTER\` |
 
-`Book1.xlsx` (the user roster) lives in the repo root, so it already came with
-Step 2 — nothing to do.
-
 Everything else arrives on the day: NMASS/NCDEX, TCS BANCS and the delivery
 margin file download themselves; you upload `Probable_Fullfile` by hand as usual.
 
-### 6. Fix the start script
+### 6. The start script needs no editing
 
-`START_SERVER.bat` line 3 hardcodes the repo path. It's already correct if you
-copied to `D:\CLAUDE\rms-copilot` — verify it reads:
-
-```bat
-cd /d D:\CLAUDE\rms-copilot
-```
+`START_SERVER.bat` used to hardcode `D:\CLAUDE\rms-copilot`. It now does
+`cd /d "%~dp0"` — it goes to whatever folder it is sitting in. The same file
+works on the dev machine and on the server with no per-machine edit, and a
+`git pull` can never re-break the path.
 
 ### 7. First manual start — before automating anything
 
 ```
-D:\CLAUDE\rms-copilot\START_SERVER.bat
+D:\CONSOLE\rms-copilot\START_SERVER.bat
 ```
 
 Open `http://localhost:8000`. Work through this list before going further:
