@@ -618,10 +618,21 @@
   var _orderFinishedAt = {};             // target -> ms when its run ended
   var _orderWasRunning = {};             // target -> was it running last tick
 
-  function _orderSection(target) {
+  // A box's movable "unit" = its .sec caption + the .sa-box itself.
+  //
+  // This used to be `box.closest('.sec')` — which always returned null, because
+  // .sec is NOT a wrapper around the box: it's a plain caption div sitting as
+  // the box's PREVIOUS SIBLING (see dashboard.html, e.g. `<div class="sec">CTCL
+  // vs NMASS</div><div class="sa-box" id="pxBox-ctcl">`). So every target
+  // resolved to null, `present.length < 2` bailed out on every tick, and the
+  // whole reordering feature silently did nothing — which is why PROBABLE sat
+  // at the bottom of the console all day despite running first at 08:00.
+  function _orderUnit(target) {
     var box = document.getElementById(target === 'sa' ? 'saBox' : 'pxBox-' + target);
     if (!box) return null;
-    return box.closest ? box.closest('.sec') : null;
+    var label = box.previousElementSibling;
+    if (!label || !label.classList || !label.classList.contains('sec')) label = null;
+    return { box: box, label: label };
   }
 
   // First run-window start for a box, as minutes-since-midnight, read from its
@@ -672,24 +683,43 @@
     return !!(box && box.querySelector('.lm-strip'));
   }
 
+  // Has this box finished everything it has to do today? True only when it has
+  // rendered at least one run tile and EVERY tile is marked done. A box with
+  // nothing left to do should sink below boxes that still have work pending —
+  // otherwise PROBABLE, whose 08:00 slot is the earliest of the day, would keep
+  // the top spot from 08:15 onwards while CTCL/MS15 still had runs to go.
+  function _orderAllDone(target) {
+    var box = document.getElementById(target === 'sa' ? 'saBox' : 'pxBox-' + target);
+    if (!box) return false;
+    var tiles = box.querySelectorAll('.sa-run');
+    if (!tiles.length) return false;
+    for (var i = 0; i < tiles.length; i++) {
+      if (!tiles[i].classList.contains('done')) return false;
+    }
+    return true;
+  }
+
   function _orderRank(target, now) {
     if (_orderIsRunning(target)) return 0;
     var fin = _orderFinishedAt[target];
     if (fin && (now - fin) < _ORDER_GRACE_MS) return 1;
     var box = document.getElementById(target === 'sa' ? 'saBox' : 'pxBox-' + target);
     if (box && box.classList.contains('due')) return 2;
+    // Everything done for the day → below anything still pending, but still
+    // ordered among its finished peers by that box's own first run time.
+    if (_orderAllDone(target)) return 4;
     return 3;
   }
 
   function _orderTick() {
-    var secs = {}, present = [];
+    var units = {}, present = [];
     _ORDER_TARGETS.forEach(function (t) {
-      var s = _orderSection(t);
-      if (s) { secs[t] = s; present.push(t); }
+      var u = _orderUnit(t);
+      if (u) { units[t] = u; present.push(t); }
     });
     if (present.length < 2) return;
 
-    var parent = secs[present[0]].parentNode;
+    var parent = units[present[0]].box.parentNode;
     if (!parent) return;
 
     // ── BASELINE = THE ORDER THE DAY ACTUALLY HAPPENS IN. ────────────────────
@@ -719,7 +749,7 @@
           anyUnknown = true;
           // Fall back to DOM position, pushed past any real time (24h = 1440)
           // so a box with a known time always sorts ahead of an unknown one.
-          _orderBaseline[t] = 1440 + kids.indexOf(secs[t]);
+          _orderBaseline[t] = 1440 + kids.indexOf(units[t].box);
         } else {
           _orderBaseline[t] = mins;
         }
@@ -746,11 +776,28 @@
     if (sig === _orderSig) return;    // nothing actually moved — leave the DOM alone
     _orderSig = sig;
 
+    // Re-insert IN PLACE, not appended to the end of the parent. The parent
+    // also holds Peak Margin and Processing & Reports, which come after these
+    // boxes and must stay there — appendChild would drag every pipeline box
+    // below them. So the units are re-inserted before whatever element
+    // currently follows the last of them.
+    var kidsNow = Array.prototype.slice.call(parent.children);
+    var lastIdx = -1;
+    present.forEach(function (t) {
+      var i = kidsNow.indexOf(units[t].box);
+      if (i > lastIdx) lastIdx = i;
+    });
+    var anchor = kidsNow[lastIdx + 1] || null;
+
     // Preserve scroll position relative to the box the user is most likely
     // looking at (the top-ranked one), so promoting it doesn't yank the page.
-    var top = secs[ranked[0]];
+    var top = units[ranked[0]].box;
     var before = top.getBoundingClientRect().top;
-    ranked.forEach(function (t) { parent.appendChild(secs[t]); });
+    ranked.forEach(function (t) {
+      var u = units[t];
+      if (u.label) parent.insertBefore(u.label, anchor);
+      parent.insertBefore(u.box, anchor);
+    });
     var after = top.getBoundingClientRect().top;
     var delta = after - before;
     if (delta) {
@@ -775,6 +822,97 @@
     return String(msg).slice(i + 1).replace(/[<>]/g, '').trim();
   }
 
+  // ── download strips auto-hide ────────────────────────────────────────────
+  // The "✓ NMASS/NCDEX downloaded …" / "✓ TCS BANCS downloaded …" lines are
+  // confirmations, not state — once read they are pure clutter sitting above
+  // the run tile for the rest of the day. Ten seconds after a SUCCESS the
+  // strip hides itself. Failures are NOT auto-hidden: an error must stay on
+  // screen until the operator has actually dealt with it.
+  var _stripHideTimers = {};
+  function _probableStripAutoHide(stripId, secs) {
+    if (_stripHideTimers[stripId]) clearTimeout(_stripHideTimers[stripId]);
+    _stripHideTimers[stripId] = setTimeout(function () {
+      var s = document.getElementById(stripId);
+      if (s) { s.style.display = 'none'; s.innerHTML = ''; }
+      delete _stripHideTimers[stripId];
+    }, (secs || 10) * 1000);
+  }
+  function _probableStripCancelHide(stripId) {
+    if (_stripHideTimers[stripId]) { clearTimeout(_stripHideTimers[stripId]); delete _stripHideTimers[stripId]; }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // RUN STEP CHAIN
+  //
+  // The pipeline prints "[FRIENDLY_MSG] …" at each phase boundary, which the
+  // backend turns into a 'note' event. Those used to REPLACE the running
+  // pill's text, so the screen only ever showed the CURRENT step — the moment
+  // reconciliation finished, every trace that it had finished was gone, and
+  // the operator couldn't tell "reconciliation done, now alerting" from
+  // "reconciliation never ran". This keeps the whole chain visible:
+  // every step already passed stays on screen with a green ✓, the current one
+  // shows a spinner, and on 'done' the last one is ticked too. Same mental
+  // model as the other boxes' step lists.
+  // ══════════════════════════════════════════════════════════════════════════
+  var _pbSteps = [];   // [{text, done}] — in the order the backend reported them
+
+  function _probableStepsRender() {
+    var el = document.getElementById('probableStepsStrip');
+    var wrap = document.getElementById('probableProgWrap');
+    if (!el) return;
+    if (!_pbSteps.length) {
+      el.style.display = 'none'; el.innerHTML = '';
+      if (wrap) wrap.style.display = '';   // nothing to show yet — pill stands in
+      return;
+    }
+    if (wrap) wrap.style.display = 'none'; // the chain replaces the pill
+    el.style.display = 'block';
+    el.innerHTML = _pbSteps.map(function (s) {
+      return s.done
+        ? '<div style="color:var(--green);opacity:.75">✓ ' + s.text + '</div>'
+        : '<div style="color:var(--blue);font-weight:700">⏳ ' + s.text + '</div>';
+    }).join('');
+  }
+
+  // A new stage means every earlier stage has, by definition, completed.
+  function _probableStepNote(msg) {
+    var text = String(msg || '').replace(/[<>]/g, '').trim();
+    if (!text) return;
+    // WhatsApp reports a live running COUNT under one logical step — replace
+    // that line in place rather than stacking one row per progress tick.
+    var isProgress = /^📱 WhatsApp: /.test(text);
+    var last = _pbSteps[_pbSteps.length - 1];
+    if (isProgress && last && /^📱 (WhatsApp|Sending WhatsApp)/.test(last.text) && !last.done) {
+      last.text = text;
+    } else {
+      _pbSteps.forEach(function (s) { s.done = true; });
+      _pbSteps.push({ text: text, done: false });
+    }
+    _probableStepsRender();
+  }
+
+  var _pbStepsClearTimer = null;
+  function _probableStepsReset() {
+    if (_pbStepsClearTimer) { clearTimeout(_pbStepsClearTimer); _pbStepsClearTimer = null; }
+    _pbSteps = []; _probableStepsRender();
+  }
+
+  function _probableStepsFinish(ok) {
+    _pbSteps.forEach(function (s) { s.done = true; });
+    if (_pbSteps.length) {
+      _pbSteps.push({ text: ok ? 'Run complete.' : 'Run finished with errors — see 🗂️ Logs.', done: true });
+    }
+    _probableStepsRender();
+    // The chain is a live progress view, not a permanent record — once the run
+    // is over it's history, and the full detail is still in 📋 View / 🗂️ Logs.
+    // One minute is long enough to read "what ran and did it finish", short
+    // enough that it isn't still sitting there pushing the run tile down.
+    if (_pbStepsClearTimer) clearTimeout(_pbStepsClearTimer);
+    _pbStepsClearTimer = setTimeout(function () {
+      _pbSteps = []; _probableStepsRender(); _pbStepsClearTimer = null;
+    }, 60 * 1000);
+  }
+
   function _pxEvtCancelTimers(pipe) {
     var t = _pxEvtTimers[pipe];
     if (!t) return;
@@ -785,8 +923,12 @@
 
   function _pxEvtScheduleCollapse(pipe, ok) {
     _pxEvtCancelTimers(pipe);
-    var COLLAPSE_MS = 60 * 1000;        // 1 minute — hide the detail
-    var CLEAR_MS = 5 * 60 * 1000;       // then 5 more — hide everything
+    // PROBABLE fires a LOT of per-email events (one per zone, per region, per
+    // branch — 40+ rows on a normal day), so leaving them up for six minutes
+    // buries the box. Here they collapse to one summary line after 15s and
+    // clear 15s later. Every other pipe keeps the original 1min/5min timing.
+    var COLLAPSE_MS = pipe === PIPE ? 15 * 1000 : 60 * 1000;
+    var CLEAR_MS    = pipe === PIPE ? 15 * 1000 : 5 * 60 * 1000;
     var t = {};
     t.collapse = setTimeout(function () {
       var box = document.getElementById('pxEvents-' + pipe);
@@ -804,6 +946,9 @@
       t.clear = setTimeout(function () {
         var b = document.getElementById('pxEvents-' + pipe);
         if (b) b.innerHTML = '';
+        // NOT clearing the step chain here — it runs on its own 60s timer set
+        // by _probableStepsFinish(), so the "what ran" summary outlives the
+        // per-message event rows rather than vanishing with them.
         delete _pxEvtTimers[pipe];
       }, CLEAR_MS);
     }, COLLAPSE_MS);
@@ -1189,7 +1334,28 @@
     };
   }
 
+  // ── keep this box's toolbar on ONE line ───────────────────────────────────
+  // .sa-tools is flex-wrap:wrap, so with 9 buttons (6 native + NMASS + TCS +
+  // the two injected ones) "🧪 Safe test run" fell onto a second row on its
+  // own. Scoped to #pxBox-probable only — every other box keeps the shared
+  // wrapping behaviour. If the window is genuinely too narrow for 9 buttons
+  // the row scrolls sideways rather than wrapping, which keeps the box height
+  // stable instead of jumping by a row as the viewport changes.
+  function injectProbableToolbarStyle() {
+    if (document.getElementById('probableToolbarStyle')) return;
+    var st = document.createElement('style');
+    st.id = 'probableToolbarStyle';
+    st.textContent =
+      '#pxBox-probable .sa-tools{flex-wrap:nowrap;overflow-x:auto;gap:6px;' +
+        'scrollbar-width:none;-ms-overflow-style:none}' +
+      '#pxBox-probable .sa-tools::-webkit-scrollbar{height:0;display:none}' +
+      '#pxBox-probable .sa-tools .sa-tool{flex:0 0 auto;white-space:nowrap;' +
+        'padding-left:9px;padding-right:9px;font-size:11.5px}';
+    document.head.appendChild(st);
+  }
+
   function buildBox(host) {
+    injectProbableToolbarStyle();
     var secTitle = document.createElement('div');
     secTitle.className = 'sec';
     secTitle.textContent = 'PROBABLE';
@@ -1220,6 +1386,11 @@
       '<div class="sa-ready" id="probableReady" style="display:none"></div>' +
       '<div id="probableNmassStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>' +
       '<div id="probableTcsStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>' +
+      // NOTE: the run's step chain is NOT here. It lives inside
+      // #pxStatus-probable, BELOW the run tile, standing in for the generic
+      // "running…" pill — see probableRunReal(). Up here (above the tile) it
+      // read as a header/banner rather than as this run's live progress.
+
       '<div class="sa-runs" id="pxRuns-probable"></div>' +
       '<div class="sa-status" id="pxStatus-probable"><div class="sa-status-empty">Run status — email/WhatsApp confirmations — appears here. Full output is saved to Logs.</div></div>';
     host.appendChild(box);
@@ -1453,8 +1624,18 @@
   function probableRunReal(marketTime) {
     window._pxRunning = true; window._pxRunningPipe = PIPE;
     _probableSetDlButtonsDisabled(true);
+    _probableStepsReset();   // fresh chain every run
     var st = document.getElementById('pxStatus-' + PIPE);
-    if (st) st.innerHTML = '<div class="sa-prog"><span class="sa-pill running" id="pxP-' + PIPE + '">running…</span></div><div id="pxEvents-' + PIPE + '"></div>';
+    // The step chain sits exactly where the generic "running…" pill would —
+    // it already conveys "running", and it says WHICH part is running, so the
+    // pill is redundant next to it. The pill element still EXISTS (hidden)
+    // because dashboard.html's pxStatus/pxStage and this file's own 'done'
+    // handler both address it by id; _probableStepsRender() toggles the
+    // wrapper's visibility as soon as the first step arrives.
+    if (st) st.innerHTML =
+      '<div class="sa-prog" id="probableProgWrap"><span class="sa-pill running" id="pxP-' + PIPE + '">running…</span></div>' +
+      '<div id="probableStepsStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.9"></div>' +
+      '<div id="pxEvents-' + PIPE + '"></div>';
     var url = API + '/px/run-stream?pipe=' + encodeURIComponent(PIPE) + '&market_time=' + encodeURIComponent(marketTime);
     var ev = new EventSource(url); _es = ev; window._pxES = ev;
     ev.onmessage = function (m) {
@@ -1471,6 +1652,7 @@
         if (typeof window.pxStatus === 'function') window.pxStatus(PIPE);
         var pp = document.getElementById('pxP-' + PIPE);
         if (pp) { pp.className = 'sa-pill ' + (d.ok === false ? 'error' : 'done'); pp.textContent = (d.ok === false ? 'finished with errors' : 'done'); }
+        _probableStepsFinish(d.ok !== false);
         probableLoadReady();
       }
     };
@@ -1509,6 +1691,7 @@
     _busyAct.nmass = true;
     _probableSetDlButtonsDisabled(true, 'probableNmassBtn', '⏳ Downloading…');
     var strip = document.getElementById('probableNmassStrip');
+    _probableStripCancelHide('probableNmassStrip');
     if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Downloading NMASS/NCDEX… (a captcha may appear)</div>'; }
     probableCaptchaStartPoller();
     // window._pxES (not just the local _es) is what platform/js/process-locks.js's
@@ -1526,6 +1709,9 @@
         ev.close(); _es = null; window._pxES = null; _busyAct.nmass = false;
         _probableSetDlButtonsDisabled(false, 'probableNmassBtn');
         if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ NMASS/NCDEX downloaded — CM/FO/CO ClientLevelCollaterals + ClientNetEffectiveDeposits saved.' : '✗ NMASS/NCDEX download failed — see 🗂️ Logs for details') + '</div>';
+        // Success is a confirmation, not state — clear it after 10s. A FAILURE
+        // stays up until it's been dealt with.
+        if (ok) _probableStripAutoHide('probableNmassStrip', 10);
         probableCaptchaStopPoller();
         probableLoadReady();
         if (typeof cb === 'function') cb(ok);
@@ -1551,6 +1737,7 @@
     _busyAct.tcs = true;
     _probableSetDlButtonsDisabled(true, 'probableTcsBtn', '⏳ Logging in…');
     var strip = document.getElementById('probableTcsStrip');
+    _probableStripCancelHide('probableTcsStrip');
     // Placeholder only — the first 'note' event from the Python side replaces
     // this within a second, and each stage replaces it again after that.
     if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Starting TCS BANCS download…</div>'; }
@@ -1580,6 +1767,7 @@
         _probableSetDlButtonsDisabled(false, 'probableTcsBtn');
         if (typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
         if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ TCS BANCS downloaded — RSK383 (Cash Collateral Deposit Limit) + RSK335 (Margin Utilization View / 90% file) saved.' : '✗ TCS BANCS download failed — see 🗂️ Logs for details') + '</div>';
+        if (ok) _probableStripAutoHide('probableTcsStrip', 10);
         probableLoadReady();
       }
     };
@@ -1882,6 +2070,10 @@
       var origPxHandle = window.pxHandle;
       var wrappedPxHandle = function (pipe, d) {
         _pxEvtCancelTimers(pipe);
+        // Stage notes for THIS box feed the cumulative step chain instead of
+        // overwriting a single line (dashboard.html's pxStage). Other pipes
+        // keep the original behaviour untouched.
+        if (pipe === PIPE && d && d.type === 'note') { _probableStepNote(d.msg); return; }
         var detail = _pxEvtDetail(d && d.msg);
         if (d && (d.type === 'email' || d.type === 'whatsapp') && detail && typeof window.pxEv === 'function') {
           var base = d.type === 'email'

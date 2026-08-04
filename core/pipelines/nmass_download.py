@@ -63,6 +63,17 @@ _PIPE_FOLDER = {
     "probable": ("PROBABLE_FOLDER",        r"D:\PROBABLE"),
 }
 
+# How stale the 4 NMASS/NCDEX files are allowed to be before a fresh download
+# is triggered. CTCL and MS15 run every 15–30 min all day, so the default
+# 4-minute window (NMASS_MAX_FILE_AGE_MIN env var) stays exactly as-is for
+# them — that's what makes each of their runs pull genuinely current data.
+# PROBABLE runs ONCE a day and downloads well ahead of the actual run, so a
+# 4-minute window there meant clicking the button again 10 minutes later
+# always re-downloaded even though nothing meaningful could have changed —
+# this is the "4-minute rule I haven't added here at all" the operator
+# flagged. 30 minutes for PROBABLE specifically; unrelated to the other pipes.
+_PIPE_MAX_AGE_MIN = {"probable": 30.0}
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # "ALREADY FRESH — SKIP THE LOGIN" PRE-CHECK
@@ -234,7 +245,7 @@ def stream_nmass_download(pipe="ctcl", force=False):
     # we must not take the shared NMASS login lock even briefly, or we'd stall a
     # colleague who genuinely needs it.
     if not force:
-        _fresh = check_nmass_files_fresh(_own_dir)
+        _fresh = check_nmass_files_fresh(_own_dir, max_age_min=_PIPE_MAX_AGE_MIN.get(pipe))
         for _d in _fresh["detail"]:
             yield {"type": "log", "msg": "  " + _d}
         if _fresh["fresh"]:

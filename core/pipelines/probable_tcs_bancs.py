@@ -103,6 +103,74 @@ def _mdd():
     return importlib.import_module("mcx_deposit_downloader")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# "ALREADY FRESH — SKIP THE LOGIN" PRE-CHECK
+#
+# Same precedent as core/pipelines/nmass_download.py's check_nmass_files_fresh()
+# (NMASS/NCDEX skips its login if today's 4 files are already on disk and
+# recent — 30 min for PROBABLE) and core/pipelines/mcx90_download.py's
+# _today_mcx_file() (CTCL/MS15's MCX 90% button skips if today's file is
+# already in its folder) — this file didn't have the equivalent, so clicking
+# TCS BANCS always re-logged-in and re-downloaded both reports even when both
+# were already sitting there from minutes ago. Every TCS BANCS round trip
+# costs a full login + RSA token prompt + minutes of waiting for the exchange
+# to generate the reports, so skipping it when nothing would actually change
+# is worth doing.
+#
+# 1 hour, not "any time today" — TCS BANCS margin figures move through the
+# day, so a file from first thing this morning being silently reused at 3pm
+# would be stale data wearing a fresh-looking filename. RSK383 carries its own
+# generation timestamp in the exported filename (<random>-YYYYMMDDHHMMSS.xlsx)
+# — same pattern read_mcx_file()/probable/readiness use to find it, so age is
+# read straight from that stamp. RSK335 is renamed to the fixed
+# Clientwise_mcx_margin.xlsx with no date in the name, so its age falls back
+# to the file's modified time (same fallback check_nmass_files_fresh() uses
+# for ClientNetEffectiveDeposits).
+# ═══════════════════════════════════════════════════════════════════════════
+
+_TCS_MAX_AGE_MIN = 60.0  # 1 hour
+
+_RSK383_STAMP_RE = re.compile(r"-(\d{8})(\d{6})\.xlsx$", re.I)
+
+
+def _fresh_rsk383_file(output_dir, max_age_min=_TCS_MAX_AGE_MIN):
+    """RSK383 file in output_dir generated within the last `max_age_min`
+    minutes (per its own filename stamp), or None."""
+    now = _dt.datetime.now()
+    try:
+        for f in os.listdir(output_dir):
+            if not f.lower().endswith(".xlsx") or f == "Clientwise_mcx_margin.xlsx":
+                continue
+            m = _RSK383_STAMP_RE.search(f)
+            if not m:
+                continue
+            try:
+                stamp = _dt.datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+            except ValueError:
+                continue
+            age_min = (now - stamp).total_seconds() / 60.0
+            if 0 <= age_min <= max_age_min:
+                return os.path.join(output_dir, f)
+    except Exception:
+        pass
+    return None
+
+
+def _fresh_rsk335_file(output_dir, max_age_min=_TCS_MAX_AGE_MIN):
+    """Clientwise_mcx_margin.xlsx in output_dir, if modified within the last
+    `max_age_min` minutes (no date in its own name, so age comes from mtime),
+    or None."""
+    path = os.path.join(output_dir, "Clientwise_mcx_margin.xlsx")
+    if not os.path.isfile(path):
+        return None
+    try:
+        mtime = _dt.datetime.fromtimestamp(os.path.getmtime(path))
+    except Exception:
+        return None
+    age_min = (_dt.datetime.now() - mtime).total_seconds() / 60.0
+    return path if 0 <= age_min <= max_age_min else None
+
+
 def _stage(msg):
     """Print a stage change for the dashboard status strip (see module
     docstring) AND the plain log line, so the saved log still reads normally."""
@@ -391,10 +459,18 @@ def _export_queue_page2_payload(rndaak, tab_id, trigger_time):
 
 # ── the one and only entry point ───────────────────────────────────────────
 
-def download_both(output_dir):
+def download_both(output_dir, force=False):
     """Log in ONCE, trigger BOTH exports, wait for both together (re-logging
     in automatically if the session dies mid-wait), download both.
     Returns {"rsk383": path|None, "rsk335": path|None}.
+
+    Skips the ENTIRE flow — no login, no RSA token prompt — if BOTH RSK383 and
+    RSK335 in output_dir were generated within the last hour (pass force=True
+    to override and re-download regardless). If only ONE of the two is fresh,
+    both are still re-downloaded anyway: they share one login and one
+    session, so there's no cheaper way to fetch just the missing/stale one,
+    and re-fetching the other costs nothing extra once you're already logged
+    in.
 
     Raises MCXDepositBusyError (from mcx_deposit_downloader) if another box
     is holding the shared TCS BANCS session lock right now — the caller
@@ -402,6 +478,22 @@ def download_both(output_dir):
     so the dashboard can show a clean "already in use" message."""
     mdd = _mdd()
     os.environ["MCX_DEPOSIT_CALLER"] = "probable"
+
+    if not force:
+        _have_383 = _fresh_rsk383_file(output_dir)
+        _have_335 = _fresh_rsk335_file(output_dir)
+        if _have_383 and _have_335:
+            print(f"✅ RSK383 already fresh (< {_TCS_MAX_AGE_MIN:.0f} min): {os.path.basename(_have_383)}")
+            print(f"✅ RSK335 already fresh (< {_TCS_MAX_AGE_MIN:.0f} min): {os.path.basename(_have_335)}")
+            _stage(f"✅ Both files already downloaded within the last hour — "
+                   f"skipping TCS BANCS login entirely.")
+            return {"rsk383": _have_383, "rsk335": _have_335}
+        elif _have_383 or _have_335:
+            _which = "RSK383" if _have_383 else "RSK335"
+            _missing = "RSK335" if _have_383 else "RSK383"
+            print(f"ℹ️ {_which} is fresh, but {_missing} is missing or older than "
+                  f"{_TCS_MAX_AGE_MIN:.0f} min — both share one login, so both "
+                  f"will be (re-)downloaded.")
 
     USER_ID  = os.getenv("SA_MCX_DEPOSIT_USER",     "56720CMMKR014139").strip()
     PASSWORD = os.getenv("SA_MCX_DEPOSIT_PASSWORD", "").strip()
@@ -677,7 +769,7 @@ def download_both(output_dir):
 
 if __name__ == "__main__":
     out_dir = sys.argv[1] if len(sys.argv) > 1 else os.getenv("PROBABLE_FOLDER", r"D:\PROBABLE")
-    result = download_both(out_dir)
+    result = download_both(out_dir, force="--force" in sys.argv)
     ok = bool(result.get("rsk383")) and bool(result.get("rsk335"))
     print(f"\n{'✅' if ok else '❌'} RSK383: {result.get('rsk383')}")
     print(f"{'✅' if ok else '❌'} RSK335: {result.get('rsk335')}")

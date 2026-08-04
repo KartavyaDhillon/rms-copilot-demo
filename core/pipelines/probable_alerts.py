@@ -59,6 +59,19 @@ def _base_folder():
     return d
 
 
+def _stage(msg):
+    """Announce the current stage to the dashboard's running pill.
+
+    core/pipeline_box.py's _status() turns a "[FRIENDLY_MSG] …" line into a
+    {"type":"note"} SSE event, which dashboard.html's pxHandle (see pxStage())
+    renders as live text on this box's pill — same convention now used by
+    core/pipelines/margin_shortage_15min.py and core/pipelines/probable_tcs_bancs.py.
+    Without this a Run showed a bare "running…" the whole way through, with no
+    sign of whether it was still reconciling, sending WhatsApp, or sending
+    emails."""
+    print(f"[FRIENDLY_MSG] {msg}")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SAFE TEST RUN — a ONE-SHOT, self-discarding rehearsal of a full real run.
 #
@@ -375,6 +388,19 @@ def _step_8_whatsapp(base_folder, updated_main_file, market_time, safe_test=Fals
         except Exception:
             return None
 
+    # ── retry policy ──────────────────────────────────────────────────────
+    # Ported from the reference D:\PHYSICAL DELIVERY\codes\FINAL_SMS_EMAIL_updated.PY
+    # (read-only reference — nothing there is modified). Retry ONLY on things
+    # that can plausibly succeed on a second try: transport failures (timeout,
+    # connection reset) and server-side/rate-limit HTTP codes. A 401 (bad
+    # token) or any other 4xx is a permanent, deterministic rejection —
+    # retrying it 10 times just wastes 10x the wall-clock and floods the log
+    # with the same rejection. Previous behaviour retried EVERY failure 5x
+    # including a bad token.
+    _WA_MAX_RETRIES = 10
+    _WA_RETRY_STATUS = {408, 429, 500, 502, 503, 504}
+    _WA_RETRY_SLEEP = 10
+
     def _send_or_simulate(client_code, mobile, shortage):
         mobile_n = str(mobile).replace("+91", "").strip()
         if not mobile_n.startswith("91"):
@@ -395,28 +421,69 @@ def _step_8_whatsapp(base_folder, updated_main_file, market_time, safe_test=Fals
                                     {"type": "text", "text": str(client_code)},
                                     {"type": "text", "text": str(shortage)},
                                     {"type": "text", "text": str(market_time)}]}]}}
-        for attempt in range(1, 6):
+        for attempt in range(1, _WA_MAX_RETRIES + 1):
             try:
                 res = requests.post(wa_url, headers=wa_headers, json=payload, timeout=30)
                 if res.status_code == 200:
                     _tag = " [TEST → not the client]" if safe_test else ""
-                    print(f"whatsapp submitted for {client_code} → {_mask_mobile(mobile_n)}{_tag}")
+                    # NOT "whatsapp submitted for" — that exact phrase is the
+                    # anchor core.pipeline_box._status()'s _WA_OK regex matches,
+                    # which used to turn THIS line into its own dashboard event
+                    # row. With 100–200 candidate clients that meant 100–200
+                    # identical "WhatsApp submitted successfully" rows flooding
+                    # the box, drowning out everything else and telling the
+                    # operator nothing (the frontend doesn't even show this
+                    # line's actual text — see dashboard.html's pxHandle). Still
+                    # printed for the saved log/audit trail, just no longer
+                    # matched into an event. The one event that fires for this
+                    # whole step is the single batch summary at the end below.
+                    print(f"  ✓ sent — {client_code} → {_mask_mobile(mobile_n)}{_tag}")
                     return "Sent [TEST]" if safe_test else "Sent"
-                raise Exception(f"HTTP {res.status_code}")
+                if res.status_code in _WA_RETRY_STATUS:
+                    print(f"  ⚠ send attempt {attempt}/{_WA_MAX_RETRIES} — {client_code}: "
+                          f"HTTP {res.status_code} (server/rate-limit) — retrying")
+                    if attempt < _WA_MAX_RETRIES:
+                        time.sleep(_WA_RETRY_SLEEP)
+                    continue
+                # Permanent rejection (401 bad token, 400 bad template/number,
+                # any other 4xx). Retrying cannot change the outcome.
+                _why = ("WhatsApp token rejected (401) — check PROBABLE_WA_TOKEN"
+                        if res.status_code == 401 else f"HTTP {res.status_code}")
+                print(f"  ✗ permanent failure — {client_code}: {_why}")
+                return "Failed"
+            except (requests.exceptions.Timeout,
+                    requests.exceptions.ConnectionError) as e:
+                # Transport-level — genuinely worth another try.
+                # NOT worded "whatsapp error for" (the _WA_BAD anchor in
+                # core/pipeline_box.py) — this fires per attempt, so under that
+                # wording one client could throw 10 red rows before going green.
+                print(f"  ⚠ send attempt {attempt}/{_WA_MAX_RETRIES} — {client_code}: "
+                      f"{type(e).__name__} — retrying")
+                if attempt < _WA_MAX_RETRIES:
+                    time.sleep(_WA_RETRY_SLEEP)
             except Exception as e:
-                print(f"whatsapp error for {client_code}: {e}")
-                if attempt < 5:
-                    time.sleep(15)
+                print(f"  ✗ permanent failure — {client_code}: {e}")
+                return "Failed"
+        print(f"  ✗ gave up after {_WA_MAX_RETRIES} attempts — {client_code}")
         return "Failed"
 
     token = _get_oauth_token()
     df = pd.read_excel(updated_main_file)
     df.columns = df.columns.str.strip()
-    log_rows = []
-    print(f"\n📱 WHATSAPP PROCESS STARTING — {len(df)} candidate clients, market time = {market_time}")
 
+    # ── build the candidate list FIRST, deduplicated ───────────────────────
+    # The old code iterated the sheet directly and sent one message per ROW.
+    # Probable_Fullfile_UPDATED can legitimately carry the same Account ID on
+    # more than one row (a client with positions in several segments), so a
+    # duplicated client got messaged twice — and Meta/Tata silently DROP a
+    # byte-identical template message re-sent to the same number within a short
+    # window. That is exactly the "94 sent but only 83 received" gap: the extras
+    # were accepted with HTTP 200 (hence counted as sent) and then deduplicated
+    # away before delivery. The reference script FINAL_SMS_EMAIL_updated.PY
+    # guards this with its own `sent_clients` set; same idea here, done up front
+    # so the reported total is the number of DISTINCT clients from the start.
+    candidates, seen, dup_skipped = [], set(), 0
     for _, row in df.iterrows():
-        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         client_code = str(row["Account ID"]).strip()
         initial_margin = pd.to_numeric(row["Initial Exp. Margin"], errors="coerce")
         other_margin = pd.to_numeric(row["Other Margin"], errors="coerce")
@@ -424,20 +491,105 @@ def _step_8_whatsapp(base_folder, updated_main_file, market_time, safe_test=Fals
             continue
         if (initial_margin + other_margin) <= 0:
             continue
-        shortage = row.get("Actual Shortage 4 sms/sqoff", 0)
+        if client_code in seen:
+            dup_skipped += 1
+            print(f"  ⚠ duplicate client skipped — {client_code}")
+            continue
+        seen.add(client_code)
+        candidates.append((client_code, row.get("Actual Shortage 4 sms/sqoff", 0)))
+
+    total_candidates = len(candidates)
+    print(f"\n📱 WHATSAPP PROCESS STARTING — {total_candidates} distinct clients "
+          f"({dup_skipped} duplicate rows skipped), market time = {market_time}")
+    if safe_test and total_candidates:
+        # Every message is redirected to ONE number in a rehearsal, which makes
+        # the dedupe above matter even more — and even distinct clients can
+        # produce identical text if their shortage happens to match. Say so
+        # rather than letting the tester count messages and think sends failed.
+        print("🧪 SAFE TEST — all messages go to one number. WhatsApp may drop "
+              "duplicates that are byte-identical, so the count you RECEIVE can "
+              "legitimately be lower than the count sent. Judge a test by the "
+              "log's per-client status, not by how many landed on your phone.")
+    _stage(f"📱 Sending WhatsApp alerts to {total_candidates} clients…")
+
+    # ── send in parallel ───────────────────────────────────────────────────
+    # Was strictly one-at-a-time with a 0.5s sleep between each — ~2 minutes of
+    # pure waiting for 200 clients, on top of the per-client mobile lookup.
+    # ThreadPoolExecutor pattern lifted from the reference
+    # FINAL_SMS_EMAIL_updated.PY (which uses 50 workers); 25 here because this
+    # box also hits the webpayout mobile-lookup API in the same worker and
+    # there's no reason to push either endpoint harder than needed. Override
+    # with PROBABLE_WA_WORKERS if the API ever starts rate-limiting.
+    try:
+        _WORKERS = max(1, int(os.getenv("PROBABLE_WA_WORKERS", "25")))
+    except Exception:
+        _WORKERS = 25
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from threading import Lock
+
+    log_rows = []
+    _counts = {"sent": 0, "failed": 0, "no_mobile": 0, "done": 0}
+    _lock = Lock()
+
+    def _one_client(client_code, shortage):
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         mobile = _get_client_mobile(client_code, token)
         if not mobile:
-            log_rows.append([ts, client_code, "N/A", "Mobile Not Found"])
-            continue
+            print(f"  ✗ no mobile on record — {client_code}")
+            return [ts, client_code, "N/A", "Mobile Not Found"]
         status = _send_or_simulate(client_code, mobile, shortage)
-        log_rows.append([ts, client_code, _mask_mobile(mobile), status])
-        time.sleep(0.5)
+        return [ts, client_code, _mask_mobile(mobile), status]
+
+    with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+        futures = {pool.submit(_one_client, cc, sh): cc for cc, sh in candidates}
+        for fut in as_completed(futures):
+            cc = futures[fut]
+            try:
+                row_out = fut.result()
+            except Exception as e:
+                print(f"  ✗ worker crashed — {cc}: {e}")
+                row_out = [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                           cc, "N/A", f"Failed - {e}"]
+            with _lock:
+                log_rows.append(row_out)
+                _counts["done"] += 1
+                st = str(row_out[3])
+                if st.startswith("Sent"):
+                    _counts["sent"] += 1
+                elif st == "Mobile Not Found":
+                    _counts["no_mobile"] += 1
+                else:
+                    _counts["failed"] += 1
+                # One stage update PER COMPLETED MESSAGE, not every 10. Cheap:
+                # it's a single print, and results land as workers finish, so
+                # the counter moves in bursts rather than a stall-then-jump.
+                _stage(f"📱 WhatsApp: {_counts['done']}/{total_candidates} — "
+                       f"{_counts['sent']} sent, {_counts['failed']} failed, "
+                       f"{_counts['no_mobile']} no mobile")
+
+    _sent_sf, _failed_sf, _no_mobile_sf = (_counts["sent"], _counts["failed"],
+                                            _counts["no_mobile"])
+    # Workers finish out of order — restore the sheet's own client order so the
+    # log is readable/diffable rather than shuffled by thread timing.
+    _order = {cc: i for i, (cc, _) in enumerate(candidates)}
+    log_rows.sort(key=lambda r: _order.get(r[1], 10 ** 9))
 
     log_df = pd.DataFrame(log_rows, columns=["Date-Time", "Client Code", "Mobile Number", "WhatsApp Status"])
     log_file_path = os.path.join(base_folder, "WhatsApp_Log.xlsx")
     log_df.to_excel(log_file_path, index=False)
     print(f"📄 STEP 8: WhatsApp log saved → {log_file_path} ({len(log_rows)} clients processed)")
-    print("all whatsapp messages processed")  # matched by core.pipeline_box._status()'s _WA_OK pattern
+
+    # THE one dashboard event for this whole step — everything above is now
+    # detail-log-only. Keeps the literal phrase "all whatsapp messages
+    # processed" (the anchor core.pipeline_box._status()'s _WA_OK regex
+    # matches), with the actual counts appended after an em-dash so
+    # process-probable-box.js's pxHandle wrapper (which looks for text after
+    # an em-dash — see _pxEvtDetail there) shows the real numbers instead of a
+    # generic "WhatsApp submitted successfully". Ends up on screen as:
+    # "WhatsApp submitted — 176 sent, 2 failed, 2 mobile not found (180 total)"
+    print(f"all whatsapp messages processed — {_sent_sf} sent, {_failed_sf} failed, "
+          f"{_no_mobile_sf} mobile not found ({len(log_rows)} distinct clients"
+          + (f", {dup_skipped} duplicate rows skipped" if dup_skipped else "") + ")")
     return log_file_path
 
 
@@ -763,15 +915,21 @@ def run_probable_alerts(market_time="9:30 AM", safe_test=False):
     date_str = datetime.datetime.now().strftime("%d%m%Y")
     print(f"Selected Market Time: {market_time}")
 
+    _stage("📧 Generating zone files & sending zone emails…")
     updated_main_file = _steps_1_to_4(base_folder, today_ddmmyyyy)
     zomumb_path, zochnd_path, delhi_path, ludh_path = _steps_5_to_6(base_folder, updated_main_file)
     _step_7_zone_emails(base_folder, zomumb_path, zochnd_path, delhi_path, ludh_path, date_str,
                         safe_test=safe_test)
+    # _step_8_whatsapp emits its own stage updates internally (live progress
+    # counter — see _stage() calls inside it), so no separate one is needed
+    # here; the next stage print happens once it returns.
     log_file_path = _step_8_whatsapp(base_folder, updated_main_file, market_time, safe_test=safe_test)
+    _stage("🏢 WhatsApp done — sending region/branch mail…")
     _step_9_region_branch(base_folder, updated_main_file)
     mail_log_file = _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path,
                                           zomumb_path, updated_main_file, log_file_path,
                                           safe_test=safe_test)
+    _stage("🔎 Validating output & sending the final summary email…")
     mismatch_output = _step_11_validation(base_folder, updated_main_file)
     _step_12_final_summary(base_folder, delhi_path, ludh_path, zochnd_path, zomumb_path,
                             updated_main_file, log_file_path, mail_log_file, mismatch_output,
@@ -786,6 +944,7 @@ def run_probable_alerts(market_time="9:30 AM", safe_test=False):
         print("🧪 SAFE TEST — backup & cleanup SKIPPED on purpose. Every file is still in "
               f"{base_folder}, so your next real run will find everything it needs.")
     else:
+        _stage("📦 Backing up & archiving today's files…")
         _step_13_backup(base_folder)
 
 

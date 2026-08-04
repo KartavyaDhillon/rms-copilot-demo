@@ -3395,7 +3395,10 @@ def probable_readiness():
     _today_yyyymmdd = _rdt.datetime.now().strftime("%Y%m%d")
     checks = [
         ("PROBABLE_FULLFILE", f"Probable_Fullfile_{_today_ddmmyyyy}*.xlsx"),
-        ("NCDEX",              f"ClientNetEffectiveDeposits_{_today_ddmmyyyy}*"),
+        # "NCDEX" alone was ambiguous — the NMASS/NCDEX download produces four
+        # files and this is only one of them. Name it the way it appears on
+        # disk so the banner points straight at the actual file.
+        ("CLIENTNET(NCDEX)",   f"ClientNetEffectiveDeposits_{_today_ddmmyyyy}*"),
         ("CM_CLIENT_LEVEL",    f"CM_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
         ("CO_CLIENT_LEVEL",    f"CO_ClientLevelCollaterals_{_today_ddmmyyyy}*"),
         ("FO_CLIENT_LEVEL",    f"FO_ClientLevelCollaterals_{_today_ddmmyyyy}*"),

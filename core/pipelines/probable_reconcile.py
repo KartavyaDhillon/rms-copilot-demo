@@ -194,6 +194,43 @@ def _check_required_files(base_folder, today_ddmmyyyy, today_yyyymmdd):
         raise SystemExit(1)
     print("✅ All required files are present.\n")
 
+    # ── FRESHNESS GATE ──────────────────────────────────────────────────
+    # Existence alone doesn't mean the data is CURRENT — a Run (or Safe Test)
+    # fired against yesterday's leftover downloads would sail straight
+    # through the check above. Flagged explicitly by the operator: "i ran
+    # the safe test with morning files and it ran so time check is not
+    # there." NMASS/NCDEX inputs (CM/CO/FO/ClientNetEffectiveDeposits) must
+    # be <=30 min old; TCS BANCS inputs (the MCX deposit file + the renamed
+    # Clientwise_mcx_margin.xlsx 90% file) must be <=1 hour old — the exact
+    # same windows already enforced on the download buttons themselves (see
+    # nmass_download.py's _PIPE_MAX_AGE_MIN and probable_tcs_bancs.py's
+    # _TCS_MAX_AGE_MIN, kept in sync with these two numbers on purpose).
+    from core.pipelines.nmass_download import check_nmass_files_fresh
+    from core.pipelines.probable_tcs_bancs import (
+        _fresh_rsk383_file, _fresh_rsk335_file, _TCS_MAX_AGE_MIN,
+    )
+    stale = []
+    _nm = check_nmass_files_fresh(base_folder, max_age_min=30.0)
+    if not _nm["fresh"]:
+        for d in _nm["detail"]:
+            if "too old" in d or "not present" in d or "unreadable" in d:
+                stale.append(f"NMASS/NCDEX — {d} (must be ≤30 min old)")
+    if not _fresh_rsk383_file(base_folder, _TCS_MAX_AGE_MIN):
+        stale.append(f"MCX File (TCS BANCS RSK383 deposit file) — older than "
+                      f"{_TCS_MAX_AGE_MIN:.0f} min, or its filename stamp is unreadable")
+    if not _fresh_rsk335_file(base_folder, _TCS_MAX_AGE_MIN):
+        stale.append(f"Clientwise_mcx_margin.xlsx (TCS BANCS RSK335 / 90% file) — older "
+                      f"than {_TCS_MAX_AGE_MIN:.0f} min")
+    if stale:
+        print("\nStale files (older than allowed time):")
+        for s in stale:
+            print(f"  - {s}")
+        print("Re-download NMASS/NCDEX and/or TCS BANCS from the PROBABLE box, then run again.")
+        print("Aborting execution.")
+        raise SystemExit(1)
+    print(f"✅ All required files are fresh enough (NMASS/NCDEX ≤30 min, "
+          f"TCS BANCS ≤{_TCS_MAX_AGE_MIN:.0f} min).\n")
+
 
 def _round_numeric(df, decimals=2):
     cols = df.select_dtypes(include=["float64", "int64"]).columns

@@ -141,6 +141,11 @@ def run_probable_full():
         print("=" * 78)
 
     print(f"🚀 Probable Defaulter — full run starting (market time: {market_time})")
+    # Each [FRIENDLY_MSG] is one STEP in the dashboard's step chain (see
+    # _probableStepNote in platform/js/process-probable-box.js). A new step
+    # implicitly ticks every earlier one, so these are phrased as the work
+    # being done — NOT as "X done, starting Y", which would double-report.
+    print("[FRIENDLY_MSG] 📊 Reconciling exchange margin vs internal exposure…")
     run_probable_reconcile(
         safe_test=safe_test,
         on_checks_passed=(disarm_safe_test if safe_test else None),
