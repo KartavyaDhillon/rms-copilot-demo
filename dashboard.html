@@ -3874,6 +3874,29 @@ async function saBkDelete(id, btn){
   }catch(e){ btn.textContent='🗑'; btn.disabled=false; alert('Error: '+e); }
 }
 
+// Shared "download finished" confirmation — used by both saBkDownloadSelected
+// (Short Allocation's Backup files) and pxBkDownloadSelected (every other
+// box's Backup files: CTCL, MS15, CLI, PROBABLE — same modal, same function).
+// Previously this was a single line of text ("✓ 1 file(s) saved to your
+// chosen folder.") written INSIDE the still-open file-listing modal, easy to
+// miss under the file list and the checkbox row you just clicked. Now it
+// REPLACES the modal outright with the same big-icon "✓ Saved" confirmation
+// already used for Credentials/Email — closing the file browser and putting
+// one unambiguous OK button in front of you, same convention throughout this
+// dashboard rather than a one-off style just for backups.
+function _bkDownloadResultModal(ok, fail, folderNote){
+  const allOk=fail===0 && ok>0, allFail=ok===0 && fail>0;
+  const icon=allOk?'✓':(allFail?'✕':'⚠');
+  const accent=allOk?'var(--green)':(allFail?'var(--red)':'var(--amber)');
+  const accentBg=allOk?'rgba(52,211,153,.12)':(allFail?'rgba(248,113,113,.12)':'rgba(251,191,36,.12)');
+  const accentBorder=allOk?'rgba(52,211,153,.45)':(allFail?'rgba(248,113,113,.45)':'rgba(251,191,36,.45)');
+  const title=allOk?'✓ Downloaded':(allFail?'✕ Download failed':'⚠ Partly downloaded');
+  const headline=allOk?`${ok} file${ok===1?'':'s'} saved`:(allFail?`All ${fail} file${fail===1?'':'s'} failed`:`${ok} saved, ${fail} failed`);
+  const btnBg=allOk?'var(--green)':(allFail?'var(--red)':'var(--amber)');
+  const btnFg=allOk?'var(--green-d)':(allFail?'#2b0a0a':'var(--amber-d)');
+  saShowModal(title, `<div style="text-align:center;padding:14px 0 4px"><div style="width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:grid;place-items:center;font-size:28px;background:${accentBg};border:1px solid ${accentBorder};color:${accent}">${icon}</div><div style="font-size:15px;color:var(--ink);font-weight:650;margin-bottom:6px">${headline}</div><div style="font-size:13px;color:var(--muted)">${folderNote}</div></div><button class="sa-save" style="width:100%;margin-top:18px;background:${btnBg};color:${btnFg}" onclick="saCloseModal()">OK</button>`);
+}
+
 async function saBkDownloadSelected(){
   const chks=[...document.querySelectorAll('.saBkChk:checked')];
   const msg=document.getElementById('saBkDlMsg');
@@ -3902,9 +3925,7 @@ async function saBkDownloadSelected(){
           ok++;
         }catch(e2){ fail++; }
       }
-      if(msg) msg.innerHTML=fail
-        ? `<span style="color:var(--amber)">${ok} saved, ${fail} failed.</span>`
-        : `<span style="color:var(--green)">✓ ${ok} file(s) saved to your chosen folder.</span>`;
+      _bkDownloadResultModal(ok, fail, 'Saved to the folder you chose.');
       return;
     }
   }
@@ -3918,7 +3939,7 @@ async function saBkDownloadSelected(){
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     await new Promise(r=>setTimeout(r,350));
   }
-  if(msg) msg.innerHTML=`<span style="color:var(--green)">✓ ${ids.length} download(s) triggered — check your Downloads folder.</span>`;
+  _bkDownloadResultModal(ids.length, 0, 'Check your browser\'s Downloads folder.');
 }
 
 async function saBackupCopy(){
@@ -4790,6 +4811,32 @@ function pxInjectViewBtn(pipe){
   row.innerHTML=`<button class="sa-tool" style="${info.hasError?'border-color:rgba(248,113,113,.5);color:var(--red)':''}" onclick="pxOpenView('${pipe}')" data-tip="See this run's outcome${info.hasError?' and exactly what went wrong':''}.">📋 View${info.hasError?' · Why it failed':''}${testTag}</button>`;
 }
 async function pxOpenView(pipe){
+  // Cross-check against the SERVER's own record of the last log actually
+  // written for this pipe. _pxRunLog[pipe] is fed ONLY by this browser tab's
+  // own localStorage, updated only when THIS tab was open and watched a run's
+  // SSE 'done' event fire — so a pipe that runs many times a day (MS15: 9x)
+  // shows whatever THIS browser last happened to see finish, which can be
+  // hours or days stale if today's runs happened on another screen or while
+  // this tab was closed/reloaded (reported: "View" on today's run-05 tile
+  // showing 8/3, 4:52 PM). /px/latest-log reads the actual log files on disk,
+  // so it's true regardless of which browser is asking. Only ever moves the
+  // shown info FORWARD in time — a fresher local capture (e.g. a run started
+  // from this very tab a second ago) is never overwritten by a slower server
+  // round-trip.
+  try{
+    const r=await fetch(API+'/px/latest-log?pipe='+encodeURIComponent(pipe));
+    const d=await r.json();
+    const svr=d&&d.log;
+    if(svr){
+      const cached=_pxRunLog[pipe];
+      const cachedMs=cached&&cached.ts?new Date(cached.ts).getTime():0;
+      if(svr.mtime_ms>cachedMs){
+        _pxRunLog[pipe]={log:svr.name, hasError:svr.ok===false, err:'', ts:new Date(svr.mtime_ms).toISOString()};
+        try{ localStorage.setItem('rms_lastlog_'+pipe, JSON.stringify(_pxRunLog[pipe])); }catch(e){}
+        pxInjectViewBtn(pipe);
+      }
+    }
+  }catch(e){ /* offline / backend hiccup — show whatever's cached rather than blocking the modal */ }
   const info=_pxRunLog[pipe]||{};
   const hasErr=!!info.hasError;
   const isTest=!!info.isTest;
@@ -5419,9 +5466,7 @@ async function pxBkDownloadSelected(){
           ok++;
         }catch(e2){ fail++; }
       }
-      if(msg) msg.innerHTML=fail
-        ? `<span style="color:var(--amber)">${ok} saved, ${fail} failed.</span>`
-        : `<span style="color:var(--green)">✓ ${ok} file(s) saved to your chosen folder.</span>`;
+      _bkDownloadResultModal(ok, fail, 'Saved to the folder you chose.');
       return;
     }
   }
@@ -5434,7 +5479,7 @@ async function pxBkDownloadSelected(){
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     await new Promise(r=>setTimeout(r,350));
   }
-  if(msg) msg.innerHTML=`<span style="color:var(--green)">✓ ${items.length} download(s) triggered — check your Downloads folder.</span>`;
+  _bkDownloadResultModal(items.length, 0, 'Check your browser\'s Downloads folder.');
 }
 // ── Run-filter chip helpers ─────────────────────────────────────────────────
 function _pxRunCount(pipe){ return pipe==='ms15'?9:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=9 runs/day

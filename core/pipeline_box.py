@@ -1004,6 +1004,59 @@ def _log_friendly_label(key, filename):
             return label
     return None
 
+def _log_probably_failed(text):
+    """Cheap ok/fail guess from a log's own tail — same _FAIL regex the live
+    'done' event already uses (see _stream_code's saw_fail), applied after the
+    fact to a saved file. Used only by list_logs()/latest_log() below, to give
+    the browser's "last run" summary a real pass/fail signal even for a run
+    this particular browser never watched live (see the long comment on
+    latest_log() for why that matters)."""
+    if not text:
+        return None
+    return bool(_FAIL.search(text[-4000:]))
+
+
+def latest_log(key):
+    """The single most-recently-written log for `key`, with a real mtime and a
+    best-effort ok/fail guess — the SERVER's own record of "what actually last
+    happened", independent of any one browser.
+
+    Why this exists: dashboard.html's "📋 View" (pxOpenView/_pxRunLog) is fed
+    entirely from this browser's own localStorage, written only when THIS TAB
+    was open and listening to a run's SSE 'done' event. A pipe that runs many
+    times a day (MS15: 9x) but was watched from a different tab/machine for
+    most of a day — or whose page got reloaded partway through — leaves that
+    cache holding whatever the LAST run THIS BROWSER happened to see finish
+    was, even if that was yesterday evening. The View modal then confidently
+    shows a stale date with no indication anything is wrong (reported: MS15's
+    "run summary" showing 8/3 4:52 PM while looking at today's run-05 tile).
+    dashboard.html's pxOpenView() now cross-checks against this endpoint on
+    every open and prefers it whenever it's newer than the cached value."""
+    p = PIPELINES.get(key)
+    if not p:
+        return None
+    d = os.path.join(LOG_BASE, p["logdir"])
+    try:
+        names = [f for f in os.listdir(d) if f.endswith(".log")]
+        if not names:
+            return None
+        names.sort(key=lambda f: os.path.getmtime(os.path.join(d, f)), reverse=True)
+        f = names[0]
+        full = os.path.join(d, f)
+        mtime = os.path.getmtime(full)
+        try:
+            text = open(full, encoding="utf-8", errors="replace").read()
+        except Exception:
+            text = ""
+        failed = _log_probably_failed(text)
+        return {"name": f, "mtime": mtime, "mtime_ms": int(mtime * 1000),
+                "display_time": _log_display_time(full, f),
+                "label": _log_friendly_label(key, f),
+                "ok": (not failed) if failed is not None else None}
+    except Exception:
+        return None
+
+
 def list_logs(key, limit=80):
     p = PIPELINES.get(key)
     if not p: return []

@@ -63,6 +63,22 @@
     removeMs15TestButton();
     purgeStaleMs15TestLog();
     injectMs15SafeTestButton();
+    // dashboard.html ALSO runs its own reorderProcessSections() every 3s
+    // (native, on-disk — sa/ctcl/cli only, running > due > declared-array-
+    // order, no time-of-day awareness, no ms15/probable). That is a DIFFERENT
+    // ranking from _orderTick below, so with both timers alive the two fought
+    // over the same DOM nodes every few seconds — one tick would place PROBABLE
+    // on top by run time, the next tick would put sa/ctcl/cli back in their
+    // static order, visibly yanking boxes around (this is what showed up as
+    // "the process moved to the bottom"). Its own setInterval callback already
+    // captured a fixed reference to the function, so reassigning
+    // window.reorderProcessSections here would NOT stop it — but _PROC_SPECS
+    // (a plain `var`, so a real global) is read fresh on every tick, and that
+    // function bails out the instant its list has fewer than 2 entries. So
+    // emptying it disarms the native loop without editing dashboard.html and
+    // without needing its interval id — _orderTick below becomes the one
+    // authority for all five boxes, a strict superset of what it did anyway.
+    if (window._PROC_SPECS && window._PROC_SPECS.length) window._PROC_SPECS.length = 0;
     // Keep whatever is running (or just finished) at the top of the page.
     // Polled rather than event-driven so it also reacts to runs started on
     // another screen; the DOM is only touched when the order actually changes.
@@ -777,17 +793,23 @@
     _orderSig = sig;
 
     // Re-insert IN PLACE, not appended to the end of the parent. The parent
-    // also holds Peak Margin and Processing & Reports, which come after these
-    // boxes and must stay there — appendChild would drag every pipeline box
-    // below them. So the units are re-inserted before whatever element
-    // currently follows the last of them.
-    var kidsNow = Array.prototype.slice.call(parent.children);
-    var lastIdx = -1;
-    present.forEach(function (t) {
-      var i = kidsNow.indexOf(units[t].box);
-      if (i > lastIdx) lastIdx = i;
-    });
-    var anchor = kidsNow[lastIdx + 1] || null;
+    // also holds Peak Margin and Processing & Reports, which must always stay
+    // BELOW every pipeline box. A "next sibling of wherever the units
+    // currently sit" anchor is unsafe: PROBABLE's box is injected by THIS
+    // script and lands as the parent's very LAST child (after Peak Margin and
+    // Processing & Reports), so on first run that computation resolved to
+    // "insert before null" — i.e. append to the very end, dragging every
+    // pipeline box below the sections that must stay pinned at the bottom.
+    // Anchor on the "Peak Margin" section instead (same fixed reference
+    // dashboard.html's own native reorderProcessSections() already uses for
+    // exactly this reason) — a stable landmark that is never one of our units
+    // and always sits right where the pipeline boxes should end.
+    var anchor = null;
+    var secLabels = parent.querySelectorAll(':scope > .sec');
+    for (var si = 0; si < secLabels.length; si++) {
+      if (secLabels[si].textContent.trim().indexOf('Peak Margin') === 0) { anchor = secLabels[si]; break; }
+    }
+    if (!anchor) return;   // no stable reference point — don't guess, don't move anything
 
     // Preserve scroll position relative to the box the user is most likely
     // looking at (the top-ranked one), so promoting it doesn't yank the page.

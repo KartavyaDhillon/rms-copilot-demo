@@ -1805,7 +1805,8 @@ def sa_db_restore(r: _SADbRestore):
 import json as _px_json
 from fastapi.responses import StreamingResponse as _PX_Stream
 from core.pipeline_box import (stream_pipeline as _px_stream, stop_pipeline as _px_stop,
-                               list_logs as _px_list_logs, read_log as _px_read_log)
+                               list_logs as _px_list_logs, read_log as _px_read_log,
+                               latest_log as _px_latest_log)
 
 @app.get("/px/run-stream")
 def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time: str = ""):
@@ -1853,6 +1854,14 @@ def px_stop(pipe: str = ""):
 @app.get("/px/logs")
 def px_logs(pipe: str = ""):
     return {"logs": _px_list_logs(pipe)}
+
+@app.get("/px/latest-log")
+def px_latest_log(pipe: str = ""):
+    """The server's own record of this pipe's most recently written log —
+    used by dashboard.html's pxOpenView() to catch a "📋 View" modal showing a
+    stale run (cached in THIS browser's localStorage from a run it actually
+    watched, possibly yesterday) when the server knows a newer one exists."""
+    return {"log": _px_latest_log(pipe)}
 
 @app.get("/px/log")
 def px_log(pipe: str = "", name: str = ""):
