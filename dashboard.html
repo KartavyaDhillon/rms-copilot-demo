@@ -5058,18 +5058,32 @@ function pxRenderRuns(pipe,s){
   // preemptive, over-broad UI greying-out; a real conflict just shows an
   // error after clicking instead of being blocked before.
   const anyBusy = _pxRunning;
+  // _pxRunning/_pxRunningPipe are GLOBAL — this browser tab tracks only ONE
+  // in-flight generic run at a time (one shared window._pxES), so anyBusy
+  // above is deliberately left as raw _pxRunning: it still needs to disable
+  // every OTHER pipe's Run button while one is in flight from this tab, or a
+  // second click would clobber the first run's tracking. But every place
+  // below that DECIDES WHAT TEXT TO SHOW used that same raw flag without ever
+  // checking _pxRunningPipe===pipe — so ANY pipe running made EVERY OTHER
+  // box's own next tile claim "▶ Running…" too (reported: PROBABLE's tile
+  // showed Running while only CTCL vs NMASS was actually running; the same
+  // bug could also mislabel CTCL's own retry-tracking branches whenever a
+  // DIFFERENT pipe happened to be running). _thisPipeRunning is "is the pipe
+  // THIS CALL is rendering the one actually running" — used everywhere below
+  // instead of raw _pxRunning for anything that claims a specific state.
+  const _thisPipeRunning = _pxRunning && _pxRunningPipe===pipe;
   let html='', due=null;
   for(let i=1;i<=runs;i++){
     const id=pipe.toUpperCase()+'-0'+i, w=wins[i]||wins[String(i)]||'', pw=pxParseWin(w);
     const done=i<=completed, isNext=(i===completed+1), afterStart=(!pw||now>=pw.s), enabled=isNext&&!done&&afterStart&&!anyBusy;
     // CTCL: active retry — show "Running" on the EXACT run being retried (even if backend says done)
-    if(pipe==='ctcl' && _pxRunning && i===_ctclRunCurrent){
+    if(pipe==='ctcl' && _thisPipeRunning && i===_ctclRunCurrent){
       html+=`<div class="sa-run locked"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">&#9654; Running&hellip;</div><button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button></div>`;
       continue;
     }
     // CTCL: done tile → clickable View button (logs); error on done tile → retry View button
     if(pipe==='ctcl' && done){
-      if(_ctclRunError===i && !_pxRunning){
+      if(_ctclRunError===i && !_thisPipeRunning){
         html+=`<div class="sa-run error"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">&#10007; Finished with errors</div><button class="sa-run-btn" onclick="ctclOpenView(${i})">&#8635; View</button></div>`;
       } else {
         html+=`<div class="sa-run done"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">&#10003; Done today</div><button class="sa-run-btn" onclick="ctclOpenView(${i},false)">&#128203; View</button></div>`;
@@ -5077,21 +5091,22 @@ function pxRenderRuns(pipe,s){
       continue;
     }
     // Error before counter was written (failure before completion): show on the isNext tile
-    if(pipe==='ctcl' && _ctclRunError===i && isNext && !_pxRunning){
+    if(pipe==='ctcl' && _ctclRunError===i && isNext && !_thisPipeRunning){
       html+=`<div class="sa-run error"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">&#10007; Finished with errors</div><button class="sa-run-btn" onclick="ctclOpenView(${i})">&#8635; View</button></div>`;
       continue;
     }
     let cls='sa-run', state='Locked';
     // For CTCL: when a retry is running on a different slot, don't show "Running" on isNext
-    const _isCtclRetryElsewhere = pipe==='ctcl' && _pxRunning && _ctclRunCurrent!==i;
+    const _isCtclRetryElsewhere = pipe==='ctcl' && _thisPipeRunning && _ctclRunCurrent!==i;
     if(done){ cls+=' done'; state='&#10003; Done today'; }
     else if(isNext){
       if(enabled){ cls+=' active-win pending'; state=(pw&&now>pw.e)?'&#11044; Overdue — run':'&#11044; Ready — run'; due=id; }
-      else if(_pxRunning&&!_isCtclRetryElsewhere){ cls+=' locked'; state='&#9654; Running&hellip;'; }
+      else if(_thisPipeRunning&&!_isCtclRetryElsewhere){ cls+=' locked'; state='&#9654; Running&hellip;'; }
+      else if(anyBusy){ cls+=' locked'; state='&#8987; Busy — another run in progress'; }
       else { cls+=' locked'; state=w?('Opens '+w.split('-')[0]):'Window not set'; }
     }
     else { cls+=' locked'; state='After '+pipe.toUpperCase()+'-0'+(i-1); }
-    const _isRunningNow=_pxRunning&&isNext&&!done&&!_isCtclRetryElsewhere;
+    const _isRunningNow=_thisPipeRunning&&isNext&&!done&&!_isCtclRetryElsewhere;
     // CLI: two real Run buttons (OLD + NEW, both live), same sa-run-btn pill style
     // as CTCL's View button, stacked vertically — plus a small tag showing which
     // variant last ran once the tile is Done.

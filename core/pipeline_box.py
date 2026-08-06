@@ -1253,15 +1253,16 @@ def _name_ok(name, globs):
     n = name.lower()
     return any(_pb_fn.fnmatch(n, g.lower()) for g in globs)
 
-def _pb_push_allocation_to_ftp(local_path, filename):
-    """Push a manually-uploaded Allocation_Detail file straight to the same FTP folder
-    Client Prudential Limit's Download step pulls it from — auto-creates the folder
-    path if it doesn't exist yet. Means nobody has to open an SFTP client by hand."""
+def _pb_push_file_to_ftp_folder(remote_folder, local_path, filename):
+    """Push one local file into ANY FTP folder, auto-creating the path if it
+    doesn't exist yet — generalised out of _pb_push_allocation_to_ftp() (which
+    always pushed to the one fixed ALLOCATION folder) so the Client Prudential
+    Limit evening/NEW flow can push into ALLOCATION(EVENING) too, using the
+    exact same create-if-missing logic instead of a second copy of it."""
     from ftplib import FTP
     ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
     ftp_user = os.getenv("FTP_USER", "TRADING")
     ftp_pass = os.getenv("FTP_PASS", "")
-    remote_folder = "/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION"
     ftp = FTP(ftp_host)
     ftp.login(ftp_user, ftp_pass)
     try:
@@ -1274,6 +1275,81 @@ def _pb_push_allocation_to_ftp(local_path, filename):
                 ftp.cwd(d)
         with open(local_path, "rb") as f:
             ftp.storbinary(f"STOR {filename}", f)
+    finally:
+        ftp.quit()
+
+
+def _pb_push_allocation_to_ftp(local_path, filename):
+    """Push a manually-uploaded Allocation_Detail file straight to the same FTP folder
+    Client Prudential Limit's Download step pulls it from — auto-creates the folder
+    path if it doesn't exist yet. Means nobody has to open an SFTP client by hand."""
+    _pb_push_file_to_ftp_folder("/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION", local_path, filename)
+
+
+def _pb_fetch_file_from_ftp_folder(remote_folder, local_path, filename):
+    """Plain RETR of one file from `remote_folder` — no cleanup, no folder
+    creation, no other side effect. _pb_fetch_allocation_detail() below always
+    also runs _pb_cleanup_allocation_ftp_folder() (deletes everything except
+    today's file) — exactly what must NOT happen when Client Prudential
+    Limit's evening/NEW run reads today's Allocation_Detail back out of the
+    still-plain ALLOCATION folder before it's been archived to
+    ALLOCATION(MORNING): that cleanup would wipe out everything Run 1 already
+    uploaded there (CLI_PRUDENTIAL_LIMIT.txt, MCX file, collaterals) before
+    there was any chance to preserve it under the archived name. This is the
+    side-effect-free primitive that flow uses instead."""
+    from ftplib import FTP
+    ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
+    ftp_user = os.getenv("FTP_USER", "TRADING")
+    ftp_pass = os.getenv("FTP_PASS", "")
+    ftp = FTP(ftp_host)
+    ftp.login(ftp_user, ftp_pass)
+    try:
+        ftp.cwd(remote_folder)
+        files = ftp.nlst()
+        if filename not in files:
+            raise RuntimeError(f"{filename} not found in {remote_folder} on FTP")
+        with open(local_path, "wb") as f:
+            ftp.retrbinary(f"RETR {filename}", f.write)
+    finally:
+        ftp.quit()
+
+
+def _pb_ftp_folder_exists(remote_folder):
+    """True if `remote_folder` exists on the FTP server, else False. Used by
+    the Client Prudential Limit evening/NEW flow to decide, at the start of
+    every evening Run NEW, whether ALLOCATION(EVENING) has already been set
+    up today (by an earlier click) or whether this is the first one."""
+    from ftplib import FTP
+    ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
+    ftp_user = os.getenv("FTP_USER", "TRADING")
+    ftp_pass = os.getenv("FTP_PASS", "")
+    ftp = FTP(ftp_host)
+    ftp.login(ftp_user, ftp_pass)
+    try:
+        ftp.cwd(remote_folder)
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            pass
+
+
+def _pb_ftp_rename_folder(old_remote_folder, new_remote_folder):
+    """Rename a folder on the FTP server in place (RNFR/RNTO) — every file
+    inside travels with it untouched. Used to archive Client Prudential
+    Limit's morning ALLOCATION folder as ALLOCATION(MORNING) once the
+    evening/NEW run has safely copied out the one file it needs."""
+    from ftplib import FTP
+    ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
+    ftp_user = os.getenv("FTP_USER", "TRADING")
+    ftp_pass = os.getenv("FTP_PASS", "")
+    ftp = FTP(ftp_host)
+    ftp.login(ftp_user, ftp_pass)
+    try:
+        ftp.rename(old_remote_folder, new_remote_folder)
     finally:
         ftp.quit()
 

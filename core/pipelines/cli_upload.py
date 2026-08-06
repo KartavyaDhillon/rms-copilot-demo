@@ -101,16 +101,42 @@ def run_cli_upload():
         print(msg, flush=True)
         _log_buffer.append(str(msg))
 
+    # ── Evening Run NEW hand-off (see core/pipelines/cli_allocation_new.py's
+    # module docstring for the full picture): that step, when it detects an
+    # evening run, writes a marker naming ALLOCATION(EVENING) as the upload
+    # target instead of the default ALLOCATION folder, and CLI_PRUDENTIAL_
+    # LIMIT.txt is legitimately absent (evening skips building it) — so it
+    # must not be flagged as a [MISSING_FILE]. Run OLD never writes this
+    # marker, so this whole block is a no-op for it, at any time of day.
+    _evening_marker_path = os.path.join(base_folder, ".cli_evening_upload")
+    _evening_target = None
+    if os.path.exists(_evening_marker_path):
+        try:
+            _evening_target = open(_evening_marker_path, encoding="utf-8").read().strip() or None
+        except Exception:
+            _evening_target = None
+        try:
+            os.remove(_evening_marker_path)
+        except OSError:
+            pass
+        if _evening_target:
+            _p(f"🌙 Evening Run NEW upload — target folder is {_evening_target} "
+               f"(not the default ALLOCATION folder), CLI_PRUDENTIAL_LIMIT.txt "
+               f"expected to be absent.")
+
     # ── STEP 1: FTP upload with a real missing-file check ────────────────────
     _p("🚀 STEP 1: FTP upload")
     expected = [
-        ("CLI_PRUDENTIAL_LIMIT",              "CLI_PRUDENTIAL_LIMIT.txt"),
         ("MCX_WebAllocationDeallocation",     "MCX_WebAllocationDeallocation.csv"),
         ("CM_ClientLevelCollaterals",         f"CM_ClientLevelCollaterals_{today_str}"),
         ("FO_ClientLevelCollaterals",         f"FO_ClientLevelCollaterals_{today_str}"),
         ("CO_ClientLevelCollaterals",         f"CO_ClientLevelCollaterals_{today_str}"),
         ("ClientNetEffectiveDeposits",        f"ClientNetEffectiveDeposits_{today_str}"),
     ]
+    if not _evening_target:
+        # Morning (or any Run OLD, any time) — CLI_PRUDENTIAL_LIMIT.txt IS
+        # expected, exactly as it always has been.
+        expected.insert(0, ("CLI_PRUDENTIAL_LIMIT", "CLI_PRUDENTIAL_LIMIT.txt"))
     valid_ext = (".txt", ".csv", ".xlsx")
     try:
         local_files = os.listdir(base_folder)
@@ -136,7 +162,7 @@ def run_cli_upload():
             ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
             ftp_user = os.getenv("FTP_USER", "TRADING")
             ftp_pass = os.getenv("FTP_PASS", "")
-            remote_folder = "/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION"
+            remote_folder = _evening_target or "/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION"
             ftp = FTP(ftp_host)
             ftp.login(ftp_user, ftp_pass)
             ftp.cwd("/")
