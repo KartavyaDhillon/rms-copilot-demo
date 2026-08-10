@@ -135,12 +135,37 @@ def main():
             plans.append((key, src, dst))
 
     # Two settings can point at the same folder; move it once.
-    seen, unique = set(), []
+    seen, deduped = set(), []
     for key, src, dst in plans:
         nc = os.path.normcase(src)
         if nc in seen:
             continue
         seen.add(nc)
+        deduped.append((key, src, dst))
+
+    # A setting can also point at a folder NESTED inside another one being
+    # moved (MARGIN_SHORTAGE_TEMP is .../15 minutes/codes/CAPTCHA & SESSION,
+    # inside MARGIN_SHORTAGE_FOLDER's .../15 minutes). Moving the parent's tree
+    # already carries the child along, so counting the child again overstated
+    # a dry-run's total and would just find nothing left once applied. Drop
+    # any entry whose source sits under another entry's source — but only when
+    # the destination relationship matches too (same relative sub-path), so
+    # this never skips a genuinely different folder that happens to share a
+    # path prefix by coincidence.
+    def _is_nested(inner_src, inner_dst, outer_src, outer_dst):
+        try:
+            rel = os.path.relpath(inner_src, outer_src)
+        except ValueError:
+            return False              # different drives
+        if rel == os.curdir or rel.startswith(os.pardir):
+            return False              # not actually inside it
+        return os.path.normcase(os.path.join(outer_dst, rel)) == os.path.normcase(inner_dst)
+
+    deduped.sort(key=lambda t: len(t[1]))   # shallowest source path first
+    unique = []
+    for key, src, dst in deduped:
+        if any(_is_nested(src, dst, osrc, odst) for _, osrc, odst in unique):
+            continue
         unique.append((key, src, dst))
 
     if not unique:
