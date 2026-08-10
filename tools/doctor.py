@@ -34,6 +34,12 @@ if _REPO not in sys.path:
 
 import core.env_boot as env_boot  # noqa: E402  (must run before anything reads config)
 
+# Same classifier make_env_local.py uses to decide what a path IS — imported so
+# the two can never disagree about which settings are data folders, which are
+# code inside the repo, and which are installed programs.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from make_env_local import _classify  # noqa: E402
+
 _ABS_PATH = re.compile(r"^[A-Za-z]:\\")
 _MARKER = "# keep-external:"
 
@@ -161,9 +167,42 @@ def check_folders(root):
         resolved = os.getenv(key, "")
         if not resolved:
             continue
+
+        # A setting can be a comma-separated list (CODE_FOLDERS). Classify each
+        # entry, because they can legitimately be different kinds.
+        parts = [p.strip() for p in resolved.split(",")] if "," in resolved else [resolved]
+        kinds = [_classify(p)[0] for p in parts]
+
+        # ── INSTALLED PROGRAM (e.g. SA_TESSERACT) ──────────────────────────
+        # An .exe is NEVER "created on first run" — saying so turned a missing
+        # Tesseract into a green tick, and the failure only surfaced later as a
+        # captcha that never solved. Check the file, and say so plainly.
+        if kinds and all(k == "program" for k in kinds):
+            if os.path.isfile(resolved):
+                check(_PASS, key, f"{resolved}  [installed program]")
+            else:
+                check(_FAIL, key, f"{resolved}  ← NOT INSTALLED HERE. "
+                                  f"Install it, or point this at its real location.")
+            continue
+
+        # ── CODE INSIDE THE REPO (SA_CODES_DIR, CODE_FOLDERS) ──────────────
+        # These arrive with `git clone`, so a missing one means the setting is
+        # pointing at the wrong place — not that it will appear later. They are
+        # also expected to sit OUTSIDE the data root, so the stray check below
+        # must not fire on them.
+        if "repo" in kinds:
+            missing = [p for p, k in zip(parts, kinds)
+                       if k == "repo" and not os.path.isdir(p)]
+            if missing:
+                check(_WARN, key, f"{resolved}  ← code folder(s) not found: "
+                                  f"{', '.join(missing)}. Re-run tools\\make_env_local.py.")
+            else:
+                check(_PASS, key, f"{resolved}  [code, follows the repo]")
+            continue
+
         exists = os.path.isdir(resolved)
-        # Folders auto-create on first use, so "missing" is informational, not
-        # an error — what matters is whether it resolved somewhere sensible.
+        # Data folders DO auto-create on first use, so "missing" here really is
+        # informational rather than an error.
         note = "" if exists else "(will be created on first run)"
 
         if root and key not in external:
