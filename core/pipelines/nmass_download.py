@@ -209,6 +209,13 @@ def stream_nmass_download(pipe="ctcl", force=False):
     _env_key, _default_dir = _PIPE_FOLDER.get(pipe, _PIPE_FOLDER["ctcl"])
     _own_dir = os.getenv(_env_key, _default_dir)
     os.makedirs(_own_dir, exist_ok=True)
+    # Says out loud what this SERVER PROCESS resolved the save folder to, right
+    # into the visible log — a folder mistake used to be invisible until someone
+    # went and checked the disk themselves. If this line ever disagrees with
+    # where the files actually land, the bug is inside NMASS_NCFE_API_MIX.PY
+    # (or downstream of it), not in this resolution step.
+    yield {"type": "log", "msg": f"[{pipe}] saving into: {_own_dir}"
+                                  f"  (from {_env_key}{'=' + os.environ[_env_key] if _env_key in os.environ else ' — NOT SET, using default'})"}
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"

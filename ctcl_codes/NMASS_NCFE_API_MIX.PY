@@ -23,7 +23,18 @@ pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tessera
 
 try:
     from dotenv import load_dotenv as _ld
-    _ld(os.getenv("CTCL_ENV_FILE", r"D:\CLAUDE\rms-copilot\.env"))
+    # CTCL_ENV_FILE lets a caller point this at a specific .env explicitly.
+    # The fallback used to be a hardcoded D:\CLAUDE\rms-copilot\.env — this
+    # machine's own repo path, which is wrong on any OTHER machine and,
+    # if that path happened to exist there too, could load a stranger's
+    # config. Now derived from where THIS script actually lives (its repo's
+    # own .env), so it's correct on every machine without needing an
+    # override — override=False anyway, so it can never clobber whatever
+    # the caller already put in this process's environment (e.g.
+    # NMASS_SAVE_DIR, set explicitly by core/pipelines/nmass_download.py
+    # before this subprocess is even started).
+    _default_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    _ld(os.getenv("CTCL_ENV_FILE", _default_env))
 except Exception:
     pass
 
@@ -39,7 +50,31 @@ CONSCODE = os.getenv("CTCL_NMASS_CONSCODE", "06436")
 DOWNLOAD_FOLDER = os.getenv("NMASS_SAVE_DIR", r"D:\CTCL VS NMASS")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-TEMP_FOLDER = r"D:\15 minutes\codes\CAPTCHA & SESSION"   # or any path you want
+
+# THE ACTUAL BUG a fresh-machine deploy hits: this used to be a bare literal,
+# r"D:\15 minutes\codes\CAPTCHA & SESSION" — no os.getenv() at all, so no
+# amount of fixing MARGIN_SHORTAGE_FOLDER/.env.local could ever move it. Every
+# login, on every pipe, on every machine, wrote the captcha image + session
+# cookie there regardless of any config — the one file this script touches
+# that .env.local's rebase could never reach.
+#
+# Deliberately still ONE FIXED path, not per-pipe (core/dl_lock.py's whole
+# job is guarding this exact shared file from ctcl/ms15/cli colliding at the
+# same instant) — just no longer a hardcoded drive letter. NMASS_SESSION_DIR
+# lets it be pointed anywhere explicitly; the default derives from
+# RMS_DATA_ROOT, which core/env_boot.py already puts in this process's
+# environment before ANY subprocess using this script is launched (see
+# core/pipelines/nmass_download.py / cli_download.py — both do
+# `env = os.environ.copy()`, so RMS_DATA_ROOT rides along automatically).
+# The literal old path is now only the last-resort fallback if RMS_DATA_ROOT
+# itself is somehow unset — matches this repo's own default-if-missing
+# convention (core/env_boot.py's own data_root()).
+_rms_data_root = os.getenv("RMS_DATA_ROOT")
+TEMP_FOLDER = os.getenv(
+    "NMASS_SESSION_DIR",
+    os.path.join(_rms_data_root, "15 minutes", "codes", "CAPTCHA & SESSION") if _rms_data_root
+    else r"D:\15 minutes\codes\CAPTCHA & SESSION",
+)
 os.makedirs(TEMP_FOLDER, exist_ok=True)
 COOKIE_FILE = os.path.join(TEMP_FOLDER, "session_cookies.pkl")
 
