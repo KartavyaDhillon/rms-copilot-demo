@@ -27,6 +27,29 @@ NAME so nothing else has to change.
 Re-run it after adding a process and it picks up the new keys automatically.
 Your existing answers are preserved (see --keep-external below).
 
+THREE KINDS OF PATH THIS MUST NOT BLINDLY REBASE
+────────────────────────────────────────────────
+Not every absolute path in .env is a data folder. Rebasing these under the data
+root produces a path that cannot exist, and the failure is silent until the
+feature that needs it is used:
+
+  CODE inside this repo   SA_CODES_DIR=D:\CLAUDE\rms-copilot\sa_codes
+                          These arrive with `git clone`; they live wherever the
+                          repo lives. Rebased naively you get
+                          <root>\CLAUDE\rms-copilot\sa_codes — a folder that
+                          will never exist. They are re-pointed at THIS repo
+                          (the one this script is running from) instead.
+
+  INSTALLED PROGRAMS      SA_TESSERACT=C:\Program Files\Tesseract-OCR\...
+                          Put there by an installer. Moving the setting does
+                          not move the program. Left exactly as-is.
+
+  MULTI-VALUE SETTINGS    CODE_FOLDERS=D:\CLAUDE\rms-copilot\core,D:\MY CODES
+                          A comma-separated list. Only the first entry looked
+                          like a path to the old single-value logic, so the
+                          rest were silently left pointing at the old machine.
+                          Each entry is now classified separately.
+
 INTEGRATION FOLDERS — THE IMPORTANT BIT
 ───────────────────────────────────────
 Some of these folders are not private scratch space; they are where ANOTHER
@@ -74,6 +97,53 @@ _NON_PATH_MACHINE_KEYS = [
 ]
 
 _MARKER = "# keep-external:"
+
+# Windows locations that belong to installed software, not to us. A path under
+# one of these is where an installer put something; rebasing the SETTING does
+# not move the PROGRAM, it just points at nothing. Matched case-insensitively
+# against the part after the drive letter.
+# Deliberately NOT including "users\" — a working folder can legitimately live
+# under a user profile, and treating those as untouchable would silently leave
+# them pointing at the old machine.
+_PROGRAM_DIRS = ("program files (x86)\\", "program files\\", "windows\\",
+                 "programdata\\")
+
+# Marks a path as living inside a checkout of this repo. Such paths travel with
+# `git clone`, so on this machine they belong under THIS repo, not under the
+# data root.
+_REPO_MARKER = "\\rms-copilot\\"
+
+
+def _classify(value):
+    """How should this one path be treated? Returns (kind, new_value).
+
+    kind is 'data' (rebase under the data root), 'repo' (re-point at this
+    checkout), 'program' (leave alone — installed software), or 'plain' (not an
+    absolute path at all, e.g. a bare filename; leave alone)."""
+    if not _ABS_PATH.match(value):
+        return "plain", value
+    tail = value[3:]                       # everything after "X:\"
+    low = tail.lower()
+    if low.startswith(_PROGRAM_DIRS):
+        return "program", value
+    marker_at = value.lower().find(_REPO_MARKER)
+    if marker_at != -1:
+        # …\rms-copilot\sa_codes  →  <this repo>\sa_codes
+        inner = value[marker_at + len(_REPO_MARKER):]
+        return "repo", (os.path.join(_REPO, inner) if inner else _REPO)
+    return "data", value
+
+
+def _rebase_value(value, root):
+    """Apply _classify() across a whole setting, which may be a comma-separated
+    list of paths (CODE_FOLDERS). Returns (new_value, kinds_used)."""
+    parts = [p.strip() for p in value.split(",")] if "," in value else [value]
+    out, kinds = [], []
+    for p in parts:
+        kind, v = _classify(p)
+        kinds.append(kind)
+        out.append(_rebase(v, root) if kind == "data" else v)
+    return ",".join(out), kinds
 
 
 def _read_env_pairs(path):
@@ -141,7 +211,10 @@ def main():
         external |= _previous_externals()
 
     pairs = _read_env_pairs(_ENV)
-    path_keys = [(k, v) for k, v in pairs if _ABS_PATH.match(v)]
+    # A multi-value setting only needs its FIRST entry to look like a path for
+    # the whole line to be ours to handle — CODE_FOLDERS is the live example.
+    path_keys = [(k, v) for k, v in pairs
+                 if _ABS_PATH.match(v) or any(_ABS_PATH.match(p.strip()) for p in v.split(","))]
     if not path_keys:
         print("WARNING: no absolute paths found in .env — nothing to rebase.")
 
@@ -184,11 +257,42 @@ def main():
         L.append(f"{key}={current}")
     L.append("")
 
-    L.append("# ── Working folders, rebased under the root above ───────────────────────")
+    # Classify everything first so each group can be written under its own
+    # heading — a reader should be able to see at a glance which settings moved
+    # under the data root and which deliberately did not.
+    repo_keys, program_keys, data_keys = [], [], []
+    new_values = {}
     for key in ordered:
         if key in external:
             continue
-        L.append(f"{key}={_rebase(seen[key], root)}")
+        nv, kinds = _rebase_value(seen[key], root)
+        new_values[key] = nv
+        if "repo" in kinds:
+            repo_keys.append(key)
+        elif kinds and all(k == "program" for k in kinds):
+            program_keys.append(key)
+        else:
+            data_keys.append(key)
+
+    L.append("# ── Working folders, rebased under the root above ───────────────────────")
+    for key in data_keys:
+        L.append(f"{key}={new_values[key]}")
+
+    if repo_keys:
+        L.append("")
+        L.append("# ── CODE INSIDE THIS REPO — follows the checkout, not the data root ─────")
+        L.append("# These arrive with `git clone`. Pointed at this repo automatically;")
+        L.append("# a future `git pull` cannot move them, so they never need editing.")
+        for key in repo_keys:
+            L.append(f"{key}={new_values[key]}")
+
+    if program_keys:
+        L.append("")
+        L.append("# ── INSTALLED PROGRAMS — left exactly as they were ──────────────────────")
+        L.append("# Put there by an installer. If one of these is wrong on this machine,")
+        L.append("# fix the path by hand to wherever it is actually installed here.")
+        for key in program_keys:
+            L.append(f"{key}={new_values[key]}")
 
     if external:
         L.append("")
@@ -202,10 +306,22 @@ def main():
 
     text = "\n".join(L) + "\n"
 
-    moved = len([k for k in ordered if k not in external])
-    print(f"\n  root            : {root}")
-    print(f"  paths rebased   : {moved}")
-    print(f"  left external   : {len(external)}" + (f"  ({', '.join(sorted(external))})" if external else ""))
+    print(f"\n  root              : {root}")
+    print(f"  rebased to root   : {len(data_keys)}")
+    print(f"  pointed at repo   : {len(repo_keys)}" + (f"  ({', '.join(repo_keys)})" if repo_keys else ""))
+    print(f"  installed programs: {len(program_keys)}" + (f"  ({', '.join(program_keys)})" if program_keys else ""))
+    print(f"  left external     : {len(external)}" + (f"  ({', '.join(sorted(external))})" if external else ""))
+    # Folders that came from a DIFFERENT drive than the data root are the ones
+    # most likely to be somebody else's drop point rather than ours — worth a
+    # second look before this gets written.
+    _root_drive = root[:2].lower()
+    cross = [k for k in data_keys if seen[k][:2].lower() != _root_drive]
+    if cross:
+        print(f"\n  NOTE: {len(cross)} folder(s) are moving onto another drive ({root[:2].upper()}) —")
+        print("  check none of these is a shared drop point somebody else writes into.")
+        print("  If one is, re-run with --keep-external <KEY> for it:")
+        for k in cross:
+            print(f"      {k:<38} {seen[k]}")
 
     if args.dry_run:
         print("\n--- .env.local (dry run, nothing written) ---\n")

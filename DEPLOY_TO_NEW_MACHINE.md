@@ -144,6 +144,61 @@ local to this machine.
 > `.env` at this machine instead: `PG_HOST=<new machine's LAN IP>`, and open port
 > 5432 in the new machine's firewall. Still one database.
 
+### 4b. Tell this machine where its folders are — **do not skip this**
+
+`.env` is a copy of the *old* machine's file, so every folder setting in it
+still points at the old machine's layout (`MARGIN_SHORTAGE_FOLDER=D:\15 minutes`
+and ~25 more like it). Nothing warns you about this. The console starts, the
+downloaders run, and the files land in the old paths — recreated at the drive
+root on this machine, where nobody is looking for them.
+
+`.env.local` is what fixes that: it is loaded **before** `.env` with
+`override=True`, so it wins. It is gitignored, so `git pull` will never bring
+it — it has to be generated here, once.
+
+From `D:\CONSOLE\rms-copilot`, preview first:
+
+```powershell
+python tools\make_env_local.py --root D:\CONSOLE\data --dry-run
+```
+
+Read the output. Every path should now start `D:\CONSOLE\data\`. If a folder in
+that list is a **shared drop point** — somewhere another person or tool writes
+files into — it must NOT be moved, or you break their workflow rather than just
+relocating your own data. Re-run naming each one:
+
+```powershell
+python tools\make_env_local.py --root D:\CONSOLE\data ^
+    --keep-external SA_COMMON_DIR
+```
+
+Then confirm it took:
+
+```powershell
+python tools\doctor.py
+```
+
+The `RMS_DATA_ROOT` line under Configuration should read `D:\CONSOLE\data`.
+
+> **If you already started the console before doing this**, some files will
+> have been written into the old paths (`D:\15 minutes`, `D:\PROBABLE`, …).
+> `tools\move_data_folders.py` moves them across — it works out old → new from
+> the two env files, never overwrites, and is a dry run unless you pass
+> `--apply`:
+>
+> ```powershell
+> python tools\move_data_folders.py
+> python tools\move_data_folders.py --apply
+> ```
+>
+> Do this before the next run. A pipeline that finds yesterday's file in one
+> place and today's in another will not tell you — it will just process
+> whichever it finds.
+
+> Re-run this after any future change that adds a process, so the new keys get
+> rebased too. `--reuse` keeps your `--keep-external` answers:
+> `python tools\make_env_local.py --root D:\CONSOLE\data --reuse`
+
 ### 5. Copy the four reference files
 
 These are permanent master data. No code creates them and nothing downloads
@@ -199,9 +254,9 @@ The `.bat` ends in `pause` — it needs a human. For an unattended box, use Task
 Scheduler:
 
 - **Trigger:** At startup, plus daily at 07:00
-- **Action:** `D:\CLAUDE\rms-copilot\START_SERVER.bat`
+- **Action:** `D:\CONSOLE\rms-copilot\START_SERVER.bat`
 - **Run whether user is logged on or not:** ticked
-- **Start in:** `D:\CLAUDE\rms-copilot`
+- **Start in:** `D:\CONSOLE\rms-copilot`
 - **Settings:** untick *"Stop the task if it runs longer than…"*
 
 > Windows Update rebooting overnight is the most common cause of a console that's
