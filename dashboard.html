@@ -2572,7 +2572,10 @@ async function ckptPoll(){
   try{
     // Never show the resume banner while a run is actively in progress —
     // the checkpoint is being written live and "running" just means mid-step.
-    if(_saRunning || _pxRunning){ ckptHideBanner(); return; }
+    // Deliberately "is ANY run in flight", not per-pipe: the resume banner is a
+    // global Short Allocation/LAS prompt, and mid-run is a bad time to offer it
+    // regardless of which pipeline is busy.
+    if(_saRunning || _pxAnyRunning()){ ckptHideBanner(); return; }
 
     // Poll both LAS and SA checkpoints in parallel
     const [las, sa] = await Promise.all([
@@ -3958,7 +3961,66 @@ async function saBackupCopy(){
   saShowModal(nBad?'Restore finished':'Success',html);
 }
 // ===== REUSABLE PIPELINE BOX (px) =====
-let _pxES=null, _pxRunning=false, _pxRunningPipe=null;  // _pxRunningPipe: 'ctcl'|'cli'|<pipe>|null — which box to show as RUNNING for reorder-to-top
+// ── Per-pipe run tracking ───────────────────────────────────────────────────
+// This USED to be a single slot (one _pxES + one boolean + one pipe name), which
+// meant this tab could only track ONE run at a time: starting CTCL vs NMASS made
+// every other box report "busy" and refuse to start, even though the backend is
+// perfectly happy to run different pipelines concurrently. The requirement is:
+//   - the SAME process must not be run twice at once (by anyone, any screen)
+//   - DIFFERENT processes must be runnable at the same time
+// The first half is enforced server-side by core/lock_manager.py + the lock strip
+// in platform/js/process-locks.js (per-process locks, "running on another screen
+// by <user>"), and that part already worked. The second half was broken purely by
+// this client-side single slot, so it's now a map keyed by pipe.
+//
+// _pxRunning / _pxRunningPipe are KEPT as derived mirrors, recomputed by
+// _pxMarkRunning()/_pxMarkDone() below, because several other files read them:
+//   platform/js/process-locks.js       — localBusy(), "is this MY action"
+//   platform/js/process-probable-box.js— its own busy checks
+//   reorderProcessSections()           — which box floats to the top
+// Nothing outside this block should ASSIGN to them any more — call the helpers,
+// or a second pipe finishing will wrongly clear the flag for one still running.
+var _pxRunMap = Object.create(null);   // pipe -> true while THIS TAB is running it
+var _pxESMap  = Object.create(null);   // pipe (or 'pipe:action') -> EventSource
+let _pxES=null, _pxRunning=false, _pxRunningPipe=null;  // derived mirrors — see above
+function _pxSyncRunMirrors(){
+  var first=null; for(var k in _pxRunMap){ first=k; break; }
+  _pxRunning = !!first;
+  // Mirrors can only name ONE pipe. When two are genuinely running, this reports
+  // whichever came out of the map first — fine for the mirror's only remaining
+  // consumers (reorder-to-top picks one box; process-locks.js compares against a
+  // specific target and falls through to the _pxES check when it doesn't match).
+  _pxRunningPipe = first;
+}
+// Claim the run slot for `pipe`. Returns false if THIS TAB is already running
+// that same pipe — callers use that as their re-entrancy guard (it replaces the
+// old `if(_pxRunning) return;`, which wrongly blocked other pipes too).
+function _pxMarkRunning(pipe){
+  if(!pipe) return false;
+  if(_pxRunMap[pipe]) return false;
+  _pxRunMap[pipe]=true; _pxSyncRunMirrors(); return true;
+}
+function _pxMarkDone(pipe){ if(pipe) delete _pxRunMap[pipe]; _pxSyncRunMirrors(); }
+function _pxIsRunning(pipe){ return !!(pipe && _pxRunMap[pipe]); }
+function _pxAnyRunning(){ for(var k in _pxRunMap) return true; return false; }
+// EventSource bookkeeping. The legacy _pxES mirror stays truthy while ANY stream
+// (run or one-off download action) is open in this tab — process-locks.js relies
+// on exactly that to avoid telling you your own click is "running on another
+// screen". Keys ending ':action' are one-off downloads, NOT runs.
+function _pxSyncESMirror(){ var f=null; for(var k in _pxESMap){ f=_pxESMap[k]; break; } _pxES=f; }
+function _pxSetES(key,ev){ if(key) _pxESMap[key]=ev; _pxSyncESMirror(); }
+function _pxClearES(key){ if(key) delete _pxESMap[key]; _pxSyncESMirror(); }
+// Close every stream belonging to a pipe — its run AND any of its one-off
+// download actions. Used by pxStop(pipe) so Stop on one box can never kill
+// another box's in-flight run (it would have, back when _pxES was one variable).
+function _pxCloseES(pipe){
+  Object.keys(_pxESMap).forEach(function(k){
+    if(k!==pipe && k.indexOf(pipe+':')!==0) return;
+    try{ _pxESMap[k].close(); }catch(e){}
+    delete _pxESMap[k];
+  });
+  _pxSyncESMirror();
+}
 // The one human-readable explanation captured for whichever stage fails during a CTCL run —
 // either the AI (Groq) plain-English translation, or a specific login-failed message. Shown
 // in the View summary instead of the raw terminal log (which now lives only in 🗂️ Logs).
@@ -4016,8 +4078,9 @@ var _ctclCurrentPhase='ctcl';  // tracks which phase we're in for email labellin
 
 async function ctclRunFull(opts){
   opts=opts||{};
-  if(_pxRunning) return;
-  _pxRunning=true; _pxRunningPipe='ctcl';
+  // Guard is now per-pipe: only a CTCL run already in flight FROM THIS TAB
+  // blocks another CTCL click. A running MS15/CLI/PROBABLE no longer does.
+  if(!_pxMarkRunning('ctcl')) return;
   _ctclRunError=0; _ctclTop20Seen=false; _ctclCurrentPhase='ctcl';
   let skipDownload=!!opts.skipDownload, top20Only=!!opts.top20Only, payoutOnly=!!opts.payoutOnly;
 
@@ -4052,7 +4115,7 @@ async function ctclRunFull(opts){
 
   const st=document.getElementById('pxStatus-ctcl');
   if(st) st.innerHTML=`<div class="sa-prog">${dlPill}${ctclPill}${top20Pill}${payPill}</div><div id="ctclEvents"></div>`;
-  // Don't call pxRenderRuns(null) — that shows "backend not reachable". Tiles stay locked via _pxRunning.
+  // Don't call pxRenderRuns(null) — that shows "backend not reachable". Tiles stay locked via _pxRunMap.
   document.getElementById('pxBox-ctcl')&&document.getElementById('pxBox-ctcl').classList.remove('due');
   document.getElementById('pxBanner-ctcl')&&document.getElementById('pxBanner-ctcl').classList.remove('show');
 
@@ -4062,16 +4125,16 @@ async function ctclRunFull(opts){
     captchaStartPoller();  // watch for NMASS captcha during download
     var _dlFailed=false;
     await new Promise(function(resolve){
-      var ev=new EventSource(API+'/ctcl/download/nmass-stream'); _pxES=ev;
+      var ev=new EventSource(API+'/ctcl/download/nmass-stream'); _pxSetES('ctcl',ev);
       ev.onmessage=function(m){
         var d; try{d=JSON.parse(m.data);}catch(e){return;}
         if(d.type==='error'){ _dlFailed=true; _ctclAddEv(false,d.msg||'NMASS error','nmass'); _ctclLastFriendlyMsg=d.msg||_ctclLastFriendlyMsg; }
         else if(d.type==='login_failed'){ _dlFailed=true; var _lfm='Login failed for '+(d.server||'a server')+' — the password may have changed. Click Credentials to update it.'; _ctclAddEv(false,_lfm,'nmass'); _ctclLastFriendlyMsg=_lfm; loginFailedPopup(d.server,d.reason); }
         else if(d.type==='note'){ _ctclAddEv(false, d.msg||'', 'note'); _ctclLastFriendlyMsg=d.msg||_ctclLastFriendlyMsg; }  // AI (Groq) plain-English fallback explanation
         else if(d.type==='stopped'){
-          ev.close();_pxES=null;_ctclSetPill('ctclPdl','error');
+          ev.close();_pxClearES('ctcl');_ctclSetPill('ctclPdl','error');
           _ctclAddEv(false,'⛔ Download stopped by user','stopped');
-          _pxRunning=false;_pxRunningPipe=null; resolve();
+          _pxMarkDone('ctcl'); resolve();
         }
         else if(d.type==='done'&&!d.ok){ _dlFailed=true; _ctclAddEv(false,d.msg||'NMASS warning','nmass'); _ctclLastFriendlyMsg=d.msg||_ctclLastFriendlyMsg; }
         else if(d.type==='done'&&d.ok){
@@ -4081,13 +4144,15 @@ async function ctclRunFull(opts){
           if(d.log) fetch(API+'/ctcl/run-log',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({run_no:_ctclRunCurrent,download_log:d.log,has_error:false,stage_status:{download:'done'}})}).catch(()=>{});
         }
-        else if(d.type==='end'){ ev.close();_pxES=null;_ctclSetPill('ctclPdl',_dlFailed?'error':'done');resolve(); }
+        else if(d.type==='end'){ ev.close();_pxClearES('ctcl');_ctclSetPill('ctclPdl',_dlFailed?'error':'done');resolve(); }
       };
-      ev.onerror=function(){ ev.close();_pxES=null;_ctclSetPill('ctclPdl','error');_dlFailed=true;_ctclAddEv(false,'NMASS download failed — connection error','nmass');_pxRunning=false;_pxRunningPipe=null;resolve(); };
+      ev.onerror=function(){ ev.close();_pxClearES('ctcl');_ctclSetPill('ctclPdl','error');_dlFailed=true;_ctclAddEv(false,'NMASS download failed — connection error','nmass');_pxMarkDone('ctcl');resolve(); };
     });
     captchaStopPoller();
-    if(!_pxRunning||_dlFailed){
-      _pxRunning=false;_pxRunningPipe=null;
+    // "Was the run cancelled out from under us?" — now asks about CTCL
+    // specifically, not "is anything running anywhere in this tab".
+    if(!_pxIsRunning('ctcl')||_dlFailed){
+      _pxMarkDone('ctcl');
       if(_dlFailed){
         // Download failed before the pipeline itself even started — persist that now, since
         // we're returning early and the normal end-of-run save below never runs otherwise.
@@ -4116,7 +4181,7 @@ async function ctclRunFull(opts){
   if(top20Only)  url=API+'/ctcl/retry/top20-stream';
   if(payoutOnly) url=API+'/ctcl/retry/payout-stream';
 
-  var ev2=new EventSource(url); _pxES=ev2;
+  var ev2=new EventSource(url); _pxSetES('ctcl',ev2);
   ev2.onmessage=function(m){
     var d; try{d=JSON.parse(m.data);}catch(e){return;}
     if(d.type==='email'){
@@ -4135,7 +4200,7 @@ async function ctclRunFull(opts){
     } else if(d.type==='note'){
       _ctclAddEv(false, d.msg||'', 'note'); _ctclLastFriendlyMsg=d.msg||_ctclLastFriendlyMsg;  // AI (Groq) plain-English fallback explanation
     } else if(d.type==='stopped'){
-      ev2.close();_pxES=null;_pxRunning=false;_pxRunningPipe=null;
+      ev2.close();_pxClearES('ctcl');_pxMarkDone('ctcl');
       _ctclAddEv(false,'⛔ Stopped by user','stopped');
       ['ctclPdl','ctclPctcl','ctclPtop20','ctclPpay'].forEach(function(id){
         var el=document.getElementById(id); if(el&&el.classList.contains('running')) _ctclSetPill(id,'error');
@@ -4171,7 +4236,7 @@ async function ctclRunFull(opts){
         _ctclAddEv(true,'Payout Processed','payout');
       }
     } else if(d.type==='done'||d.type==='end'){
-      ev2.close();_pxES=null;_pxRunning=false;_pxRunningPipe=null;
+      ev2.close();_pxClearES('ctcl');_pxMarkDone('ctcl');
       var ok=d.ok!==false&&!_ctclRunError;
       ['ctclPdl','ctclPctcl','ctclPtop20','ctclPpay'].forEach(function(id){
         var el=document.getElementById(id);
@@ -4247,8 +4312,8 @@ async function ctclRunFull(opts){
   };
   ev2.onerror=function(){
     // Only show "connection lost" if run was still active — not after a normal done/close
-    if(!_pxRunning){ ev2.close(); return; }
-    ev2.close();_pxES=null;_pxRunning=false;_pxRunningPipe=null;
+    if(!_pxIsRunning('ctcl')){ ev2.close(); return; }
+    ev2.close();_pxClearES('ctcl');_pxMarkDone('ctcl');
     _ctclAddEv(false,'Connection lost — is the backend running?','stream');
     pxStatus('ctcl');
   };
@@ -4476,15 +4541,14 @@ function ms15Mcx90Download(){
 // Streams through the generic pipeline runner so Stop/pxStop('ms15') can kill it,
 // and the live "would-send" lines show in the box status strip.
 function ms15TestRun(){
-  if(_pxRunning){ return; }
-  _pxRunning=true; _pxRunningPipe='ms15';
+  if(!_pxMarkRunning('ms15')){ return; }
   const btn=document.getElementById('ms15TestBtn');
   if(btn){ btn.disabled=true; btn.textContent='🧪 Testing…'; }
   const st=document.getElementById('pxStatus-ms15');
   if(st) st.innerHTML='<div class="sa-prog"><span class="sa-pill running" id="ms15TestPill">🧪 test run — no WhatsApp will be sent…</span></div><div id="pxEvents-ms15"></div>';
   pxStatus('ms15');  // re-render tiles so nothing else looks runnable meanwhile
   captchaStartPoller();  // NMASS/NCDEX login inside the run can still need a captcha
-  const ev=new EventSource(API+'/ms15/test-run-stream'); _pxES=ev;
+  const ev=new EventSource(API+'/ms15/test-run-stream'); _pxSetES('ms15',ev);
   ev.onmessage=m=>{
     let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
     if(d.type==='login_failed'){ loginFailedPopup(d.server,d.reason); }
@@ -4497,7 +4561,7 @@ function ms15TestRun(){
       pxInjectViewBtn('ms15');
     }
     if(d.type==='end'||d.type==='done'){
-      ev.close(); _pxES=null; _pxRunning=false; _pxRunningPipe=null;
+      ev.close(); _pxClearES('ms15'); _pxMarkDone('ms15');
       captchaStopPoller();
       if(btn){ btn.disabled=false; btn.textContent='🧪 Test run'; }
       const pp=document.getElementById('ms15TestPill');
@@ -4506,7 +4570,7 @@ function ms15TestRun(){
     }
   };
   ev.onerror=()=>{
-    ev.close(); _pxES=null; _pxRunning=false; _pxRunningPipe=null;
+    ev.close(); _pxClearES('ms15'); _pxMarkDone('ms15');
     captchaStopPoller();
     if(btn){ btn.disabled=false; btn.textContent='🧪 Test run'; }
     pxEv('ms15',false,'Connection lost — is the backend running?','stream');
@@ -4553,7 +4617,10 @@ function _cliRunOneStep(url, btnId, busyLabel, idleLabel, missingPopup){
     // nobody was ever shown) — same poller CTCL's own download button starts.
     captchaStartPoller();
     let ok=true; const missing=[];
-    const ev=new EventSource(url); _pxES=ev;
+    // 'cli:action' — a one-off download, deliberately NOT a run: it keeps the
+    // _pxES mirror truthy (so process-locks.js knows this click is ours) without
+    // claiming CLI's run slot, exactly as the old single-_pxES code did.
+    const ev=new EventSource(url); _pxSetES('cli:action',ev);
     ev.onmessage=m=>{
       let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
       if(d.type==='login_failed'){
@@ -4570,7 +4637,7 @@ function _cliRunOneStep(url, btnId, busyLabel, idleLabel, missingPopup){
         if(d.ok===false||d.type==='error') ok=false;
         if(strip && d.type==='done') strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+(d.ok?'✅ Done':'⚠️ Finished with errors')+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
       } else if(d.type==='end'){
-        ev.close(); _pxES=null;
+        ev.close(); _pxClearES('cli:action');
         captchaStopPoller();
         if(btn){ btn.disabled=false; btn.textContent=idleLabel; }
         if(missing.length && missingPopup) missingFilePopup(missing);
@@ -4579,7 +4646,7 @@ function _cliRunOneStep(url, btnId, busyLabel, idleLabel, missingPopup){
       }
     };
     ev.onerror=()=>{
-      ev.close(); _pxES=null;
+      ev.close(); _pxClearES('cli:action');
       captchaStopPoller();
       if(btn){ btn.disabled=false; btn.textContent=idleLabel; }
       if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>';
@@ -4616,14 +4683,14 @@ async function cliOldPwVerify(){
   const cb=window._cliOldPwCb; window._cliOldPwCb=null; if(cb) cb();
 }
 function cliRunOld(){
-  if(_pxRunning) return;
+  if(_pxIsRunning('cli')) return;
   cliAskOldRunPassword(_cliRunOldGo);
 }
 async function _cliRunOldGo(){
-  if(_pxRunning) return; _pxRunning=true; _pxRunningPipe='cli';
+  if(!_pxMarkRunning('cli')) return;
   // Re-render the run tiles immediately so the OLD/NEW buttons show disabled
   // "Running…" right away — otherwise they stay clickable-looking for the
-  // whole run because the 30s poll below skips itself while _pxRunning is true.
+  // whole run because the 30s poll below skips itself while CLI is running.
   pxStatus('cli');
   const st=document.getElementById('pxStatus-cli');
   if(st) st.innerHTML='<div class="sa-prog"><span class="sa-pill running" id="pxP-cli">running (OLD)…</span></div>';
@@ -4635,7 +4702,7 @@ async function _cliRunOldGo(){
   captchaStartPoller();
   const ok = await new Promise((resolve)=>{
     let ok2=true; const missing=[];
-    const ev=new EventSource(API+'/cli/run-old-stream'); _pxES=ev;
+    const ev=new EventSource(API+'/cli/run-old-stream'); _pxSetES('cli',ev);
     ev.onmessage=m=>{
       let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
       if(d.type==='login_failed'){ ok2=false; loginFailedPopup(d.server,d.reason); }
@@ -4647,24 +4714,24 @@ async function _cliRunOldGo(){
         if(d.ok===false) ok2=false;
         if(strip) strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+(d.ok?'✅ Run complete (OLD)':'⚠️ Run finished with errors (OLD)')+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
       } else if(d.type==='end'){
-        ev.close(); _pxES=null;
+        ev.close(); _pxClearES('cli');
         captchaStopPoller();
         if(missing.length) missingFilePopup(missing);
         resolve(ok2);
       }
     };
-    ev.onerror=()=>{ ev.close(); _pxES=null; captchaStopPoller(); if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>'; resolve(false); };
+    ev.onerror=()=>{ ev.close(); _pxClearES('cli'); captchaStopPoller(); if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>'; resolve(false); };
   });
   const pp=document.getElementById('pxP-cli');
   if(pp){ pp.className='sa-pill '+(ok?'done':'error'); pp.textContent=ok?'done (OLD)':'finished with errors (OLD)'; }
   try{ await fetch(API+'/cli/mark-variant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({variant:'OLD',ok})}); }catch(e){}
   if(ok){ try{ await fetch(API+'/cli/advance-run',{method:'POST'}); }catch(e){} }
-  _pxRunning=false;_pxRunningPipe=null;
+  _pxMarkDone('cli');
   await cliLoadLastVariant();
   pxStatus('cli'); cliLoadReady();
 }
 async function cliRunNew(){
-  if(_pxRunning) return; _pxRunning=true; _pxRunningPipe='cli';
+  if(!_pxMarkRunning('cli')) return;
   // Same fix as cliRunOld() — force an immediate re-render so the buttons
   // disable right away instead of staying clickable-looking for the whole run.
   pxStatus('cli');
@@ -4677,7 +4744,7 @@ async function cliRunNew(){
   captchaStartPoller();
   const ok = await new Promise((resolve)=>{
     let ok2=true; const missing=[];
-    const ev=new EventSource(API+'/cli/run-new-stream'); _pxES=ev;
+    const ev=new EventSource(API+'/cli/run-new-stream'); _pxSetES('cli',ev);
     ev.onmessage=m=>{
       let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
       if(d.type==='login_failed'){ ok2=false; loginFailedPopup(d.server,d.reason); }
@@ -4689,19 +4756,19 @@ async function cliRunNew(){
         if(d.ok===false) ok2=false;
         if(strip) strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+(d.ok?'✅ Run complete (NEW)':'⚠️ Run finished with errors (NEW)')+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
       } else if(d.type==='end'){
-        ev.close(); _pxES=null;
+        ev.close(); _pxClearES('cli');
         captchaStopPoller();
         if(missing.length) missingFilePopup(missing);
         resolve(ok2);
       }
     };
-    ev.onerror=()=>{ ev.close(); _pxES=null; captchaStopPoller(); if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>'; resolve(false); };
+    ev.onerror=()=>{ ev.close(); _pxClearES('cli'); captchaStopPoller(); if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>'; resolve(false); };
   });
   const pp=document.getElementById('pxP-cli');
   if(pp){ pp.className='sa-pill '+(ok?'done':'error'); pp.textContent=ok?'done (NEW)':'finished with errors (NEW)'; }
   try{ await fetch(API+'/cli/mark-variant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({variant:'NEW',ok})}); }catch(e){}
   if(ok){ try{ await fetch(API+'/cli/advance-run',{method:'POST'}); }catch(e){} }
-  _pxRunning=false;_pxRunningPipe=null;
+  _pxMarkDone('cli');
   await cliLoadLastVariant();
   pxStatus('cli'); cliLoadReady();
 }
@@ -4877,19 +4944,19 @@ function pxRun(pipe){
   if(pipe==='ctcl'){ ctclRunFull(); return; }  // CTCL uses 2-phase run (NMASS first)
   if(pipe==='cli'){ cliRunOld(); return; }  // CLI tile renders its own OLD/NEW buttons; this is a fallback
   if(pipe==='ms15'){ ms15RunSmart(); return; }  // auto-downloads NMASS/NCDEX first if missing, then runs
-  if(_pxRunning){ return; } _pxRunning=true; _pxRunningPipe=pipe;
+  if(!_pxMarkRunning(pipe)){ return; }
   _pxRunReal(pipe);
 }
 // The actual generic SSE run — factored out of pxRun() so ms15RunSmart() (and
 // any future pipe needing a pre-run step) can call straight into it after its
 // own check, instead of duplicating this SSE/pill/View-button wiring. Assumes
-// the caller has ALREADY set _pxRunning=true/_pxRunningPipe=pipe (pxRun() does
+// the caller has ALREADY claimed the slot via _pxMarkRunning(pipe) (pxRun() does
 // this itself for the plain case; ms15RunSmart() does it up front so the busy
 // flag stays set across its download-then-run sequence, not just the run part).
 function _pxRunReal(pipe){
   const st=document.getElementById('pxStatus-'+pipe);
   if(st) st.innerHTML=`<div class="sa-prog"><span class="sa-pill running" id="pxP-${pipe}">running…</span></div><div id="pxEvents-${pipe}"></div>`;
-  const ev=new EventSource(API+'/px/run-stream?pipe='+encodeURIComponent(pipe)); _pxES=ev;
+  const ev=new EventSource(API+'/px/run-stream?pipe='+encodeURIComponent(pipe)); _pxSetES(pipe,ev);
   ev.onmessage=m=>{ let d; try{ d=JSON.parse(m.data); }catch(_){ return; } pxHandle(pipe,d);
     if(d.type==='done'){
       // Generic View/Explain — capture this run's {log, err} regardless of which
@@ -4898,8 +4965,8 @@ function _pxRunReal(pipe){
       try{ localStorage.setItem('rms_lastlog_'+pipe, JSON.stringify(_pxRunLog[pipe])); }catch(e){}
       pxInjectViewBtn(pipe);
     }
-    if(d.type==='end'||d.type==='done'){ ev.close(); _pxES=null; _pxRunning=false;_pxRunningPipe=null; if(typeof pxStatus==='function') pxStatus(pipe); const pp=document.getElementById('pxP-'+pipe); if(pp){ pp.className='sa-pill '+(d.ok===false?'error':'done'); pp.textContent=(d.ok===false?'finished with errors':'done'); } } };
-  ev.onerror=()=>{ ev.close(); _pxES=null; _pxRunning=false;_pxRunningPipe=null; pxEv(pipe,false,'Connection lost — is the backend running?','stream'); };
+    if(d.type==='end'||d.type==='done'){ ev.close(); _pxClearES(pipe); _pxMarkDone(pipe); if(typeof pxStatus==='function') pxStatus(pipe); const pp=document.getElementById('pxP-'+pipe); if(pp){ pp.className='sa-pill '+(d.ok===false?'error':'done'); pp.textContent=(d.ok===false?'finished with errors':'done'); } } };
+  ev.onerror=()=>{ ev.close(); _pxClearES(pipe); _pxMarkDone(pipe); pxEv(pipe,false,'Connection lost — is the backend running?','stream'); };
 }
 // ── ms15's "Run" auto-downloads NMASS/NCDEX first if today's files aren't
 // already there, then runs — no separate manual download click needed. MCX
@@ -4907,8 +4974,7 @@ function _pxRunReal(pipe){
 // manual button — MCX needs an RSA token typed in by a person, so it can't be
 // silently auto-triggered the way a plain login-only download can).
 async function ms15RunSmart(){
-  if(_pxRunning) return;
-  _pxRunning=true; _pxRunningPipe='ms15';  // stays set through BOTH the auto-download and the run itself
+  if(!_pxMarkRunning('ms15')) return;  // stays claimed through BOTH the auto-download and the run itself
   const st=document.getElementById('pxStatus-ms15');
   if(st) st.innerHTML='<div class="sa-prog"><span class="sa-pill running" id="pxP-ms15">checking files…</span></div><div id="pxEvents-ms15"></div>';
   pxStatus('ms15');  // re-render tiles immediately so nothing else looks runnable meanwhile
@@ -4935,7 +5001,7 @@ async function ms15RunSmart(){
   if(strip){ strip.style.display='block'; strip.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Today\'s NMASS/NCDEX files aren\'t downloaded yet — fetching them automatically before running…</span></div>'; }
   ms15NmassDownload(function(ok){
     if(!ok){
-      _pxRunning=false; _pxRunningPipe=null; pxStatus('ms15');
+      _pxMarkDone('ms15'); pxStatus('ms15');
       pxEv('ms15', false, 'NMASS/NCDEX download failed — Run was not started. Check 🗂️ Logs or Credentials, then try again.', 'download');
       return;
     }
@@ -4943,7 +5009,10 @@ async function ms15RunSmart(){
   });
 }
 function pxStop(pipe){
-  try{ if(_pxES){ _pxES.close(); _pxES=null; } }catch(e){}
+  // Close only THIS pipe's streams (its run + its one-off download actions).
+  // This used to close the single shared _pxES, which meant Stop on one box
+  // silently killed whatever other box happened to be streaming at the time.
+  _pxCloseES(pipe);
   if(pipe==='ctcl'){
     try{ if(_ctclMcx90ES){ _ctclMcx90ES.close(); _ctclMcx90ES=null; const b=document.getElementById('ctclMcx90Btn'); if(b){b.disabled=false;b.textContent='📥 MCX 90%';} } }catch(e){}
     captchaStopPoller();
@@ -4963,7 +5032,7 @@ function pxStop(pipe){
     const strip=document.getElementById('cliStrip');
     if(strip){ strip.style.display='block'; strip.innerHTML='<div style="font-weight:700;color:var(--red)">⛔ Stopped by user</div>'; }
   }
-  _pxRunning=false;_pxRunningPipe=null;
+  _pxMarkDone(pipe);
   if(pipe==='ctcl'){
     // Mark any running pill as error
     ['ctclPdl','ctclPctcl','ctclPtop20','ctclPpay'].forEach(function(id){
@@ -5057,25 +5126,19 @@ function pxRenderRuns(pipe,s){
   // clear message — that safety is unaffected. This only removes the
   // preemptive, over-broad UI greying-out; a real conflict just shows an
   // error after clicking instead of being blocked before.
-  const anyBusy = _pxRunning;
-  // _pxRunning/_pxRunningPipe are GLOBAL — this browser tab tracks only ONE
-  // in-flight generic run at a time (one shared window._pxES), so anyBusy
-  // above is deliberately left as raw _pxRunning: it still needs to disable
-  // every OTHER pipe's Run button while one is in flight from this tab, or a
-  // second click would clobber the first run's tracking. But every place
-  // below that DECIDES WHAT TEXT TO SHOW used that same raw flag without ever
-  // checking _pxRunningPipe===pipe — so ANY pipe running made EVERY OTHER
-  // box's own next tile claim "▶ Running…" too (reported: PROBABLE's tile
-  // showed Running while only CTCL vs NMASS was actually running; the same
-  // bug could also mislabel CTCL's own retry-tracking branches whenever a
-  // DIFFERENT pipe happened to be running). _thisPipeRunning is "is the pipe
-  // THIS CALL is rendering the one actually running" — used everywhere below
-  // instead of raw _pxRunning for anything that claims a specific state.
-  const _thisPipeRunning = _pxRunning && _pxRunningPipe===pipe;
+  // Only THIS pipe's own run gates THIS pipe's tiles. Run tracking is per-pipe
+  // (_pxRunMap), so a CTCL run no longer disables PROBABLE's / MS15's / CLI's
+  // Run buttons — different processes are meant to be runnable at the same
+  // time. Running the SAME process twice at once is still prevented, in two
+  // independent places: _pxMarkRunning() refuses a second claim within this
+  // tab, and core/lock_manager.py + platform/js/process-locks.js block it
+  // across users/screens ("<process> is running on another screen by <name>",
+  // with that box's buttons greyed out).
+  const _thisPipeRunning = _pxIsRunning(pipe);
   let html='', due=null;
   for(let i=1;i<=runs;i++){
     const id=pipe.toUpperCase()+'-0'+i, w=wins[i]||wins[String(i)]||'', pw=pxParseWin(w);
-    const done=i<=completed, isNext=(i===completed+1), afterStart=(!pw||now>=pw.s), enabled=isNext&&!done&&afterStart&&!anyBusy;
+    const done=i<=completed, isNext=(i===completed+1), afterStart=(!pw||now>=pw.s), enabled=isNext&&!done&&afterStart&&!_thisPipeRunning;
     // CTCL: active retry — show "Running" on the EXACT run being retried (even if backend says done)
     if(pipe==='ctcl' && _thisPipeRunning && i===_ctclRunCurrent){
       html+=`<div class="sa-run locked"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">&#9654; Running&hellip;</div><button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button></div>`;
@@ -5102,7 +5165,6 @@ function pxRenderRuns(pipe,s){
     else if(isNext){
       if(enabled){ cls+=' active-win pending'; state=(pw&&now>pw.e)?'&#11044; Overdue — run':'&#11044; Ready — run'; due=id; }
       else if(_thisPipeRunning&&!_isCtclRetryElsewhere){ cls+=' locked'; state='&#9654; Running&hellip;'; }
-      else if(anyBusy){ cls+=' locked'; state='&#8987; Busy — another run in progress'; }
       else { cls+=' locked'; state=w?('Opens '+w.split('-')[0]):'Window not set'; }
     }
     else { cls+=' locked'; state='After '+pipe.toUpperCase()+'-0'+(i-1); }
@@ -5140,7 +5202,9 @@ function pxRenderRuns(pipe,s){
   // row 1 on wide screens and leaving an uneven 3 on row 2.
   wrap.style.gridTemplateColumns = pipe==='ms15' ? 'repeat(5, 1fr)' : 'repeat(auto-fit, minmax(165px, 1fr))';
   const box=document.getElementById('pxBox-'+pipe), ban=document.getElementById('pxBanner-'+pipe);
-  if(due&&!_pxRunning){ if(box)box.classList.add('due'); if(ban){ ban.classList.add('show'); const t=ban.querySelector('.t'); if(t)t.textContent=due+' is ready — please run it now.'; } }
+  // "…is ready — please run it now" is about THIS box, so it's suppressed only
+  // while THIS pipe is running, not while any unrelated one is.
+  if(due&&!_thisPipeRunning){ if(box)box.classList.add('due'); if(ban){ ban.classList.add('show'); const t=ban.querySelector('.t'); if(t)t.textContent=due+' is ready — please run it now.'; } }
   else { if(box)box.classList.remove('due'); if(ban)ban.classList.remove('show'); }
 }
 function pxConfig(pipe){ saAskPassword('Email recipients', function(pw){ pxOpenConfig(pipe,pw); }); }
@@ -5859,15 +5923,17 @@ function tipsToggle(){
 })();
 // Poll every 5s (not 30s) so a run started on ANOTHER screen shows up here —
 // disabled Run button + busy banner — within a few seconds, not half a minute.
-// Still calls pxStatus even while _pxRunning locally IS fine (it just re-renders
-// with the same data); the `!_pxRunning` guard here only skips it for the tab
-// that's actively streaming its OWN run (which already gets live SSE updates).
-pxStatus('ctcl'); setInterval(()=>{ if(!_pxRunning) pxStatus('ctcl'); },5000);
+// Still calls pxStatus even while a run is in flight locally IS fine (it just
+// re-renders with the same data); the guard here only skips the poll for a pipe
+// this tab is actively streaming (which already gets live SSE updates). Now
+// per-pipe: a CTCL run no longer freezes CLI's and MS15's status polling, which
+// is what used to make their boxes look stuck until CTCL finished.
+pxStatus('ctcl'); setInterval(()=>{ if(!_pxIsRunning('ctcl')) pxStatus('ctcl'); },5000);
 ctclLoadReady(); setInterval(()=>{ ctclLoadReady(); },30000);
 cliLoadLastVariant().then(()=>pxStatus('cli'));
-setInterval(()=>{ if(!_pxRunning) pxStatus('cli'); },5000);
+setInterval(()=>{ if(!_pxIsRunning('cli')) pxStatus('cli'); },5000);
 cliLoadReady(); setInterval(()=>{ cliLoadReady(); },30000);
-pxStatus('ms15'); setInterval(()=>{ if(!_pxRunning) pxStatus('ms15'); },5000);
+pxStatus('ms15'); setInterval(()=>{ if(!_pxIsRunning('ms15')) pxStatus('ms15'); },5000);
 ms15LoadReady(); setInterval(()=>{ ms15LoadReady(); },30000);
 // Restore the generic "View / Explain error" button for any pipe whose last run
 // (from this browser, possibly a previous page load) is still remembered.

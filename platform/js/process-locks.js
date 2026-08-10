@@ -52,10 +52,15 @@
     try {
       if (subsys === "sa") return typeof _saRunning !== "undefined" && _saRunning;
 
-      // Full pipeline runs set both flags, and _pxRunningPipe says WHICH box —
-      // so a local CTCL run no longer suppresses a genuine MS15 lock strip from
-      // another screen (it used to suppress every px box indiscriminately).
-      if (typeof _pxRunning !== "undefined" && _pxRunning) {
+      // dashboard.html now tracks runs PER PIPE (_pxRunMap + _pxIsRunning), so
+      // this is an exact "is THIS box's run mine" answer even when several
+      // pipelines are running at once — which is now allowed: the rule is one
+      // run per PROCESS, not one run per screen. Different processes running
+      // side by side must each still show their own lock strip correctly.
+      if (typeof window._pxIsRunning === "function" && target) {
+        if (window._pxIsRunning(target)) return true;
+      } else if (typeof _pxRunning !== "undefined" && _pxRunning) {
+        // Fallback for an older dashboard.html without the per-pipe helpers.
         if (typeof _pxRunningPipe !== "undefined" && _pxRunningPipe && target) {
           if (_pxRunningPipe === target) return true;
         } else {

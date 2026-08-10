@@ -44,6 +44,42 @@
   var _busyAct = { nmass: false, tcs: false };
   function _busyAny() { return _busyAct.nmass || _busyAct.tcs; }
 
+  // ── Per-pipe run tracking shims ──────────────────────────────────────────
+  // dashboard.html used to track runs in ONE slot per browser tab
+  // (window._pxRunning + window._pxRunningPipe + window._pxES), so this box
+  // set/read those globals directly. That slot is now a per-pipe map with
+  // helpers (_pxMarkRunning/_pxMarkDone/_pxIsRunning/_pxSetES/_pxClearES),
+  // because different pipelines are meant to run at the same time — a CTCL run
+  // must not make PROBABLE's box report itself busy.
+  //
+  // These wrappers prefer the helpers and fall back to the old globals, so this
+  // file still works if it's ever loaded against a dashboard.html that predates
+  // the change (it's injected at serve time and the two can drift).
+  function _pxClaim(pipe) {
+    if (typeof window._pxMarkRunning === 'function') return window._pxMarkRunning(pipe);
+    if (window._pxRunning) return false;
+    window._pxRunning = true; window._pxRunningPipe = pipe; return true;
+  }
+  function _pxRelease(pipe) {
+    if (typeof window._pxMarkDone === 'function') { window._pxMarkDone(pipe); return; }
+    window._pxRunning = false; window._pxRunningPipe = null;
+  }
+  function _pxBusy(pipe) {
+    if (typeof window._pxIsRunning === 'function') return window._pxIsRunning(pipe);
+    return !!window._pxRunning;
+  }
+  // key is the pipe for a real run, or 'probable:action' for a one-off download
+  // (which must NOT claim the run slot, but must still register an open stream
+  // so process-locks.js doesn't call our own click somebody else's run).
+  function _pxES_set(key, ev) {
+    if (typeof window._pxSetES === 'function') { window._pxSetES(key, ev); return; }
+    window._pxES = ev;
+  }
+  function _pxES_clear(key) {
+    if (typeof window._pxClearES === 'function') { window._pxClearES(key); return; }
+    window._pxES = null;
+  }
+
   // ── wait for the real DOM the rest of dashboard.html builds ──────────────
   function ready(fn) {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn);
@@ -91,7 +127,9 @@
     // on load (hardcoded), so this pipe needs its own kick-off, same idea.
     if (typeof window.pxStatus === 'function') {
       window.pxStatus(PIPE);
-      setInterval(function () { if (!window._pxRunning) window.pxStatus(PIPE); }, 5000);
+      // Per-pipe: only skip the poll while PROBABLE itself is streaming (it gets
+      // live SSE updates then). Another pipe's run must not freeze this box.
+      setInterval(function () { if (!_pxBusy(PIPE)) window.pxStatus(PIPE); }, 5000);
     }
     probableLoadReady();
     setInterval(probableLoadReady, 20000);
@@ -683,10 +721,14 @@
     try {
       if (target === 'sa') {
         if (typeof _saRunning !== 'undefined' && _saRunning) return true;
+      } else if (typeof window._pxIsRunning === 'function') {
+        // dashboard.html now tracks runs per-pipe (_pxRunMap), so this is an
+        // exact answer for `target` even when several pipes are running at
+        // once — no need to guess from the rendered tile text, which also
+        // matches "Running…" left over mid-render.
+        if (window._pxIsRunning(target)) return true;
       } else if (typeof _pxRunning !== 'undefined' && _pxRunning) {
-        // dashboard.html tracks WHICH box is running in _pxRunningPipe
-        // ('ctcl' | 'ms15' | 'cli' | …) — use it rather than guessing from the
-        // rendered tile text, which also matches "Running…" left over mid-render.
+        // Fallback for an older dashboard.html without the per-pipe helpers.
         if (typeof _pxRunningPipe !== 'undefined' && _pxRunningPipe) {
           if (_pxRunningPipe === target) return true;
         } else {
@@ -1644,7 +1686,7 @@
 
   // ── Run (market-time modal → generic SSE run, mirroring _pxRunReal) ──
   function probableRunReal(marketTime) {
-    window._pxRunning = true; window._pxRunningPipe = PIPE;
+    if (!_pxClaim(PIPE)) return;   // PROBABLE already running in this tab
     _probableSetDlButtonsDisabled(true);
     _probableStepsReset();   // fresh chain every run
     var st = document.getElementById('pxStatus-' + PIPE);
@@ -1659,7 +1701,7 @@
       '<div id="probableStepsStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.9"></div>' +
       '<div id="pxEvents-' + PIPE + '"></div>';
     var url = API + '/px/run-stream?pipe=' + encodeURIComponent(PIPE) + '&market_time=' + encodeURIComponent(marketTime);
-    var ev = new EventSource(url); _es = ev; window._pxES = ev;
+    var ev = new EventSource(url); _es = ev; _pxES_set(PIPE, ev);
     ev.onmessage = function (m) {
       var d; try { d = JSON.parse(m.data); } catch (e) { return; }
       if (typeof window.pxHandle === 'function') window.pxHandle(PIPE, d);
@@ -1669,7 +1711,7 @@
         if (typeof window.pxInjectViewBtn === 'function') window.pxInjectViewBtn(PIPE);
       }
       if (d.type === 'end' || d.type === 'done') {
-        ev.close(); _es = null; window._pxES = null; window._pxRunning = false; window._pxRunningPipe = null;
+        ev.close(); _es = null; _pxES_clear(PIPE); _pxRelease(PIPE);
         _probableSetDlButtonsDisabled(false);
         if (typeof window.pxStatus === 'function') window.pxStatus(PIPE);
         var pp = document.getElementById('pxP-' + PIPE);
@@ -1679,7 +1721,7 @@
       }
     };
     ev.onerror = function () {
-      ev.close(); _es = null; window._pxES = null; window._pxRunning = false; window._pxRunningPipe = null;
+      ev.close(); _es = null; _pxES_clear(PIPE); _pxRelease(PIPE);
       _probableSetDlButtonsDisabled(false);
       if (typeof window.pxEv === 'function') window.pxEv(PIPE, false, 'Connection lost — is the backend running?', 'stream');
     };
@@ -1689,11 +1731,15 @@
   // branch omits it entirely, a latent bug for any pipe past ctcl/cli/ms15) ──
   window.probableStop = function () {
     try { if (_es) { _es.close(); _es = null; } } catch (e) {}
-    try { if (window._pxES) { window._pxES.close(); window._pxES = null; } } catch (e) {}
+    // Close only PROBABLE's own streams (its run + its two download actions).
+    // This used to close the single shared window._pxES, which meant Stop here
+    // silently killed a CTCL/CLI/MS15 run that happened to be streaming.
+    if (typeof window._pxCloseES === 'function') { try { window._pxCloseES(PIPE); } catch (e) {} }
+    else { try { if (window._pxES) { window._pxES.close(); window._pxES = null; } } catch (e) {} }
     fetch(API + '/px/stop?pipe=' + PIPE, { method: 'POST' }).catch(function () {});
     _probableSetDlButtonsDisabled(false);
     _busyAct.nmass = false; _busyAct.tcs = false;
-    window._pxRunning = false; window._pxRunningPipe = null;
+    _pxRelease(PIPE);
     if (typeof window.pxEv === 'function') window.pxEv(PIPE, false, 'Process terminated by user', 'stopped');
     if (typeof window.pxStatus === 'function') window.pxStatus(PIPE);
     probableCaptchaStopPoller();
@@ -1709,26 +1755,29 @@
   // error/done events, never raw log noise). Full raw output still lands in
   // the 🗂️ Logs button for whoever actually needs to see it.
   window.probableNmassDownload = function (cb) {
-    if (_busyAct.nmass || window._pxRunning) return;
+    // Only PROBABLE's own run blocks its download buttons — another pipeline
+    // running is irrelevant to whether we can fetch NMASS/NCDEX for this box.
+    if (_busyAct.nmass || _pxBusy(PIPE)) return;
     _busyAct.nmass = true;
     _probableSetDlButtonsDisabled(true, 'probableNmassBtn', '⏳ Downloading…');
     var strip = document.getElementById('probableNmassStrip');
     _probableStripCancelHide('probableNmassStrip');
     if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Downloading NMASS/NCDEX… (a captcha may appear)</div>'; }
     probableCaptchaStartPoller();
-    // window._pxES (not just the local _es) is what platform/js/process-locks.js's
-    // localBusy() checks to recognize "this tab is the one that started this" —
-    // without it, the cross-viewer lock overlay can't tell this tab apart from
-    // anyone else's, and shows THIS SAME tab a "running on another screen" strip
-    // + greys out the whole box for the person who just clicked the button.
-    var ev = new EventSource(API + '/probable/download/nmass-stream'); _es = ev; window._pxES = ev;
+    // Registering the stream (not just the local _es) is what
+    // platform/js/process-locks.js's localBusy() checks to recognize "this tab
+    // is the one that started this" — without it, the cross-viewer lock overlay
+    // can't tell this tab apart from anyone else's, and shows THIS SAME tab a
+    // "running on another screen" strip + greys out the whole box for the person
+    // who just clicked the button. ':action' keeps it out of the RUN slot.
+    var ev = new EventSource(API + '/probable/download/nmass-stream'); _es = ev; _pxES_set(PIPE + ':action', ev);
     var ok = false;
     ev.onmessage = function (m) {
       var d; try { d = JSON.parse(m.data); } catch (e) { return; }
       if (d.type === 'done') { ok = !!d.ok; }
       if (d.type === 'error' && strip) strip.innerHTML = '<div style="font-weight:700;color:var(--red)">✗ ' + String(d.msg || 'Download failed').replace(/[<>]/g, '') + '</div>';
       if (d.type === 'end') {
-        ev.close(); _es = null; window._pxES = null; _busyAct.nmass = false;
+        ev.close(); _es = null; _pxES_clear(PIPE + ':action'); _busyAct.nmass = false;
         _probableSetDlButtonsDisabled(false, 'probableNmassBtn');
         if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ NMASS/NCDEX downloaded — CM/FO/CO ClientLevelCollaterals + ClientNetEffectiveDeposits saved.' : '✗ NMASS/NCDEX download failed — see 🗂️ Logs for details') + '</div>';
         // Success is a confirmation, not state — clear it after 10s. A FAILURE
@@ -1739,7 +1788,7 @@
         if (typeof cb === 'function') cb(ok);
       }
     };
-    ev.onerror = function () { ev.close(); _es = null; window._pxES = null; _busyAct.nmass = false; _probableSetDlButtonsDisabled(false, 'probableNmassBtn'); probableCaptchaStopPoller(); if (typeof cb === 'function') cb(false); };
+    ev.onerror = function () { ev.close(); _es = null; _pxES_clear(PIPE + ':action'); _busyAct.nmass = false; _probableSetDlButtonsDisabled(false, 'probableNmassBtn'); probableCaptchaStopPoller(); if (typeof cb === 'function') cb(false); };
   };
 
   // ── TCS BANCS RSK383+335 download (own strip; RSA token popup reuses the
@@ -1755,7 +1804,8 @@
   // like ms15Mcx90Download() already does for its own MCX 90% download,
   // fixes it. ──────────────────────────────────────────────────────────
   window.probableTcsBancsDownload = function () {
-    if (_busyAct.tcs || window._pxRunning) return;
+    // Same as NMASS above — only PROBABLE's own run gates this button.
+    if (_busyAct.tcs || _pxBusy(PIPE)) return;
     _busyAct.tcs = true;
     _probableSetDlButtonsDisabled(true, 'probableTcsBtn', '⏳ Logging in…');
     var strip = document.getElementById('probableTcsStrip');
@@ -1764,11 +1814,11 @@
     // this within a second, and each stage replaces it again after that.
     if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Starting TCS BANCS download…</div>'; }
     if (typeof window.captchaStartPoller === 'function') window.captchaStartPoller();
-    // window._pxES (not just the local _es) is what process-locks.js's
-    // localBusy() checks to recognize "this tab started this" — without it,
-    // the tab that clicked the button gets shown its OWN action back as
-    // "running on another screen by <name>".
-    var ev = new EventSource(API + '/probable/download/tcs-bancs-stream'); _es = ev; window._pxES = ev;
+    // Registering the stream (not just the local _es) is what process-locks.js's
+    // localBusy() checks to recognize "this tab started this" — without it, the
+    // tab that clicked the button gets shown its OWN action back as "running on
+    // another screen by <name>". ':action' keeps it out of the RUN slot.
+    var ev = new EventSource(API + '/probable/download/tcs-bancs-stream'); _es = ev; _pxES_set(PIPE + ':action', ev);
     var ok = false;
     ev.onmessage = function (m) {
       var d; try { d = JSON.parse(m.data); } catch (e) { return; }
@@ -1785,7 +1835,7 @@
       }
       if (d.type === 'error' && strip) strip.innerHTML = '<div style="font-weight:700;color:var(--red)">✗ ' + String(d.msg || 'Download failed').replace(/[<>]/g, '') + '</div>';
       if (d.type === 'end') {
-        ev.close(); _es = null; window._pxES = null; _busyAct.tcs = false;
+        ev.close(); _es = null; _pxES_clear(PIPE + ':action'); _busyAct.tcs = false;
         _probableSetDlButtonsDisabled(false, 'probableTcsBtn');
         if (typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
         if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ TCS BANCS downloaded — RSK383 (Cash Collateral Deposit Limit) + RSK335 (Margin Utilization View / 90% file) saved.' : '✗ TCS BANCS download failed — see 🗂️ Logs for details') + '</div>';
@@ -1794,7 +1844,7 @@
       }
     };
     ev.onerror = function () {
-      ev.close(); _es = null; window._pxES = null; _busyAct.tcs = false;
+      ev.close(); _es = null; _pxES_clear(PIPE + ':action'); _busyAct.tcs = false;
       _probableSetDlButtonsDisabled(false, 'probableTcsBtn');
       if (typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
     };
@@ -1853,7 +1903,7 @@
     if (typeof window.pxRun === 'function' && !window.pxRun.__probablePatched) {
       var orig = window.pxRun;
       var wrapped = function (pipe) {
-        if (pipe === PIPE) { if (window._pxRunning || _busyAny()) return; showMarketTimeModal(probableRunReal); return; }
+        if (pipe === PIPE) { if (_pxBusy(PIPE) || _busyAny()) return; showMarketTimeModal(probableRunReal); return; }
         return orig(pipe);
       };
       wrapped.__probablePatched = true;
