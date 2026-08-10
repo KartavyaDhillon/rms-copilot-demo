@@ -209,13 +209,19 @@ def stream_nmass_download(pipe="ctcl", force=False):
     _env_key, _default_dir = _PIPE_FOLDER.get(pipe, _PIPE_FOLDER["ctcl"])
     _own_dir = os.getenv(_env_key, _default_dir)
     os.makedirs(_own_dir, exist_ok=True)
-    # Says out loud what this SERVER PROCESS resolved the save folder to, right
-    # into the visible log — a folder mistake used to be invisible until someone
-    # went and checked the disk themselves. If this line ever disagrees with
-    # where the files actually land, the bug is inside NMASS_NCFE_API_MIX.PY
-    # (or downstream of it), not in this resolution step.
-    yield {"type": "log", "msg": f"[{pipe}] saving into: {_own_dir}"
-                                  f"  (from {_env_key}{'=' + os.environ[_env_key] if _env_key in os.environ else ' — NOT SET, using default'})"}
+    _folder_note = (f"[{pipe}] saving into: {_own_dir}  (from {_env_key}"
+                     f"{'=' + os.environ[_env_key] if _env_key in os.environ else ' — NOT SET, using default'})")
+    # Says out loud what this SERVER PROCESS resolved the save folder to. A
+    # folder mistake used to be invisible until someone went and checked the
+    # disk themselves — worse, it was invisible EVEN IN THE SAVED LOG, since
+    # this line used to only be yielded live (nothing here writes to _logpath
+    # until much further down, right before the subprocess starts) — so
+    # anyone checking after the fact via 🗂️ Logs would never see it. It's
+    # written to the log file (see "# saving into" below) as well as yielded
+    # here for the live strip, so it's there either way. If it ever disagrees
+    # with where the files actually land, the bug is inside
+    # NMASS_NCFE_API_MIX.PY (or downstream of it), not in this resolution step.
+    yield {"type": "log", "msg": _folder_note}
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -240,6 +246,17 @@ def stream_nmass_download(pipe="ctcl", force=False):
     _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     _logname = f"{pipe}_download__{_ts}.log"
     _logpath = os.path.join(_logdir, _logname)
+    # Write the header + the folder-resolution line into the log file RIGHT
+    # NOW, rather than waiting for the subprocess-reading loop further down to
+    # open the file — that loop uses "w" (truncate), so writing here FIRST and
+    # switching that later open to "a" (append) is what keeps this line in the
+    # saved log instead of only ever appearing in the live SSE stream.
+    try:
+        with open(_logpath, "w", encoding="utf-8", errors="replace") as _lf0:
+            _lf0.write(f"# NMASS Download  start={_ts}\n")
+            _lf0.write(f"# {_folder_note}\n")
+    except Exception:
+        pass  # never let a logging problem stop the actual download
 
     if not os.path.isfile(script):
         yield {"type": "log",   "msg": f"NMASS script not found: {script}"}
@@ -331,8 +348,10 @@ def stream_nmass_download(pipe="ctcl", force=False):
 
     rc = None
     try:
-        with open(_logpath, "w", encoding="utf-8", errors="replace") as _lf:
-            _lf.write(f"# NMASS Download  start={_ts}\n")
+        # "a" (append), not "w" — the header + folder-resolution line were
+        # already written above, before we even knew whether this run would
+        # get this far (freshness-skip / script-not-found return earlier).
+        with open(_logpath, "a", encoding="utf-8", errors="replace") as _lf:
             while True:
                 try:
                     kind, val = q.get(timeout=2)
