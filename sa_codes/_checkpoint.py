@@ -24,8 +24,19 @@ import json
 from datetime import datetime
 
 try:
+    # The fallback used to be a hardcoded D:\CLAUDE\rms-copilot\.env — one
+    # machine's repo path, so on any other machine this load quietly did
+    # nothing and _BASE_DIR below fell back to its C:\KARTAVYA default.
+    # Derived from this file's own location instead, so it follows the checkout.
+    _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     from dotenv import load_dotenv
-    load_dotenv(os.getenv("SA_ENV_FILE", r"D:\CLAUDE\rms-copilot\.env"))
+    # .env.local FIRST with override=True (machine layout wins), then .env
+    # filling gaps — the same order core/env_boot.py establishes. Loading only
+    # .env here would hand this module the wrong machine's folders.
+    _local = os.path.join(_repo, ".env.local")
+    if os.path.exists(_local):
+        load_dotenv(_local, override=True)
+    load_dotenv(os.getenv("SA_ENV_FILE", os.path.join(_repo, ".env")))
 except Exception:
     pass
 

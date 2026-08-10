@@ -83,6 +83,44 @@ def boot(verbose=False):
     _loaded = True
 
 
+def reload():
+    """Re-read BOTH files, in the correct precedence order, into the running
+    process. Use this — never a bare load_dotenv(override=True) — whenever code
+    needs to pick up values edited on disk since the server started (email
+    recipients changed from the dashboard, a test-mode flag, new credentials).
+
+    WHY A PLAIN RE-READ OF .env IS A BUG NOW
+    ────────────────────────────────────────
+    Before .env.local existed, `load_dotenv(".env", override=True)` was the
+    right way to refresh: there was only one file, so re-reading it could only
+    make things more current. Now .env is the LOWER-priority file, so doing that
+    silently INVERTS the precedence this module exists to establish — every
+    machine-specific path in .env.local gets overwritten by .env's shared
+    defaults, which on any machine other than the one .env was written on are
+    the WRONG paths. The process keeps running happily and writes a day's output
+    to the old machine's folders.
+
+    That is not hypothetical: it is exactly how NMASS downloads kept landing in
+    D:\\15 minutes on a machine whose .env.local correctly said
+    D:\\CONSOLE\\data\\15 minutes. Startup was right; the first /sa/status poll
+    called cfg() → a bare override=True re-read of .env → and every path in the
+    process reverted, minutes before anyone pressed Download.
+
+    Both stages use override=True here, so freshly-saved values genuinely do
+    win over what is already in memory — but .env.local goes SECOND, so the
+    machine's own layout still beats the shared defaults. Same end state as
+    boot(), just refreshed.
+    """
+    try:
+        from dotenv import load_dotenv
+    except Exception:
+        return
+    if os.path.exists(_ENV_SHARED):
+        load_dotenv(_ENV_SHARED, override=True)     # fresh shared values
+    if os.path.exists(_ENV_LOCAL):
+        load_dotenv(_ENV_LOCAL, override=True)      # machine layout wins, always
+
+
 def data_root():
     """The single folder every pipeline's working directory lives under.
 

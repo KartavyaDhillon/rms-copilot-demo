@@ -67,15 +67,25 @@ import requests
 from openpyxl import load_workbook
 from PIL import Image, ImageDraw, ImageFont
 
-# Re-read .env at import so a per-run subprocess picks up the CURRENT .env
+# Re-read config at import so a per-run subprocess picks up CURRENT values
 # (email recipients edited via the dashboard, MS15 test-mode, etc.) instead of
-# whatever the long-lived server process loaded at startup. override=True so the
-# freshly-saved values win over the stale ones already in the server's environ.
+# whatever the long-lived server process loaded at startup.
+#
+# Was: _load_dotenv(override=True) with no path — find_dotenv() walks up from
+# the cwd and lands on .env, the SHARED file. Overriding from it wipes out
+# .env.local, i.e. this machine's actual folder layout, replacing it with the
+# layout of whichever machine .env happened to be authored on. env_boot.reload()
+# reads both files in the correct order, so values are just as fresh but the
+# machine's own paths still win.
 try:
-    from dotenv import load_dotenv as _load_dotenv
-    _load_dotenv(override=True)
+    import core.env_boot as _eb
+    _eb.reload()
 except Exception:
-    pass
+    try:
+        from dotenv import load_dotenv as _load_dotenv
+        _load_dotenv(override=True)
+    except Exception:
+        pass
 
 warnings.filterwarnings("ignore", message="Workbook contains no default style")
 pl.Config.set_tbl_rows(0)

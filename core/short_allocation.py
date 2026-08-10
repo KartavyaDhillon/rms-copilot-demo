@@ -68,9 +68,20 @@ _SA = {"proc": None, "cancel": False, "running": False, "auth_seen": set()}
 
 
 def _load():
-    if load_dotenv:
-        try: load_dotenv(ENV_FILE, override=True)
-        except Exception: pass
+    # Was: load_dotenv(ENV_FILE, override=True) — a bare re-read of the SHARED
+    # .env, which since .env.local arrived means "throw away this machine's
+    # folder layout and replace it with the machine .env was written on".
+    # cfg() calls this, and /sa/status calls cfg() every few seconds, so within
+    # seconds of the dashboard opening every path in the server process silently
+    # reverted to the old machine's. env_boot.reload() re-reads both files in
+    # the right order instead. See the long note there.
+    try:
+        import core.env_boot as _eb
+        _eb.reload()
+    except Exception:
+        if load_dotenv:
+            try: load_dotenv(ENV_FILE, override=True)
+            except Exception: pass
 
 
 def cfg():
