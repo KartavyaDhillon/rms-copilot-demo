@@ -1473,6 +1473,11 @@ def _log_friendly_label(filename):
     if parts[0] == "BACKUP_RESTORE":
         return "♻️ Backup Restore"
     if len(parts) >= 3:
+        # Post-email recovery run — not in STAGE_LABEL (it's a standalone
+        # recovery script, not one of the four pipeline stages), but it still
+        # needs its own label or it shows up unlabelled in the Logs modal.
+        if parts[1] == "run_post_email_LAS4":
+            return "📊 Post-Email Steps"
         script_label = STAGE_LABEL.get(parts[1] + ".py")
         if script_label:
             icon = {"Download": "📥", "SA Processing": "⚙️", "LAS Funding": "💳"}.get(script_label, "")

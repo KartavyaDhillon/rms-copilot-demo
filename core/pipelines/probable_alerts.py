@@ -594,8 +594,30 @@ def _step_8_whatsapp(base_folder, updated_main_file, market_time, safe_test=Fals
 
 
 # =====================================================
-# STEP 9 — region/branch split (unchanged logic).
+# STEP 9 — region/branch split.
+# Region merge groups (which sub-regions get combined into one parent-named
+# REGION_<x>.xlsx file) used to be hardcoded here. They now live in the
+# COMBINED_REGION sheet of MASTER/MAIL LIST.xlsx, so ops can add/remove a
+# merge group by editing that sheet instead of needing a code change.
 # =====================================================
+def _load_region_merge_groups(base_folder):
+    mail_list_file = os.path.join(base_folder, "MASTER", "MAIL LIST.xlsx")
+    try:
+        df = pd.read_excel(mail_list_file, sheet_name="COMBINED_REGION")
+        df.columns = df.columns.str.strip()
+        groups = {}
+        for _, row in df.iterrows():
+            parent = str(row.get("PARENT_REGION", "")).strip()
+            member = str(row.get("MEMBER_CODE", "")).strip()
+            if parent and parent.lower() != "nan" and member and member.lower() != "nan":
+                groups.setdefault(parent, []).append(member)
+        return groups
+    except Exception as e:
+        print(f"⚠️ Could not read COMBINED_REGION sheet from {mail_list_file} ({e}) "
+              f"— no region merging applied this run")
+        return {}
+
+
 def _step_9_region_branch(base_folder, updated_main_file):
     output_region_folder = os.path.join(base_folder, "REGION")
     output_branch_folder = os.path.join(base_folder, "BRANCH")
@@ -605,10 +627,7 @@ def _step_9_region_branch(base_folder, updated_main_file):
 
     if "Region ID" in df.columns:
         unique_regions = df["Region ID"].dropna().unique()
-        merge_groups = {"RWA": ["RWA", "RWA1", "RWA2", "RWA3", "RBHUB"],
-                         "RHYD": ["RHYD", "RHYD2"],
-                         "RDLNA": ["RDLNA", "RHYD3", "RBGLR", "RCHAI"],
-                         "RCDRR": ["RCDRR", "RTTDZ", "BTTCH"]}
+        merge_groups = _load_region_merge_groups(base_folder)
         handled = set()
         for merged_name, group in merge_groups.items():
             merged_data = df[df["Region ID"].isin(group)]
@@ -733,6 +752,53 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
         if region and region.lower() != "nan":
             _send_mail(to_emails, cc_emails, region,
                        os.path.join(region_folder, f"REGION_{region}.xlsx"), region=region)
+
+    # ---------------------------------------------------
+    # CONTACT_AP fallback — any branch that HAS a shortage file today but has
+    # NO row in MAIL LIST.xlsx Sheet1 (e.g. a brand-new branch) falls through
+    # to the CONTACT_AP Details sheet (branch/AP contact directory) instead of
+    # being silently skipped. rms_del@mastertrust.co.in is always CC'd here.
+    # Safe-test override still applies, same as every other send in this step.
+    # ---------------------------------------------------
+    covered_branches = {
+        str(row.get("BRANCH", "")).strip()
+        for _, row in df_mail.iterrows()
+        if str(row.get("BRANCH", "")).strip() and str(row.get("BRANCH", "")).strip().lower() != "nan"
+    }
+    try:
+        contact_df = pd.read_excel(mail_list_file, sheet_name="CONTACT_AP Details")
+        contact_df.columns = contact_df.columns.str.strip()
+        contact_lookup = {
+            str(r.get("AP BO CODE", "")).strip(): str(r.get("email", "")).strip()
+            for _, r in contact_df.iterrows()
+            if str(r.get("AP BO CODE", "")).strip()
+            and str(r.get("email", "")).strip().lower() not in ("", "nan")
+        }
+    except Exception as e:
+        print(f"⚠️ Could not read CONTACT_AP Details sheet ({e}) — no branch fallback available")
+        contact_lookup = {}
+
+    if os.path.isdir(branch_folder):
+        for fname in sorted(os.listdir(branch_folder)):
+            if not (fname.startswith("BRANCH_") and fname.endswith(".xlsx")):
+                continue
+            branch = fname[len("BRANCH_"):-len(".xlsx")]
+            if branch in covered_branches:
+                continue
+            fallback_email = contact_lookup.get(branch)
+            if not fallback_email:
+                log_data.append([datetime.datetime.now(), branch, None,
+                                  "NO EMAIL", "SKIPPED (not in MAIL LIST or CONTACT_AP)",
+                                  os.path.join(branch_folder, fname)])
+                print(f"⏭ SKIPPED (no MAIL LIST entry, not in CONTACT_AP either): {branch}")
+                continue
+            if override_to:
+                to_emails, cc_emails = override_to, override_cc
+            else:
+                to_emails = [e.strip() for e in fallback_email.split(",") if e.strip()]
+                cc_emails = ["rms_del@mastertrust.co.in"]
+            _send_mail(to_emails, cc_emails, branch,
+                       os.path.join(branch_folder, fname), branch=branch)
 
     pd.DataFrame(log_data, columns=["Timestamp", "Branch", "Region", "To", "Status", "Attachment"]).to_csv(
         log_file, index=False)

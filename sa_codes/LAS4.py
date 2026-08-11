@@ -2225,7 +2225,12 @@ def send_email_infinite_retry(
                 else:
                     print(f"⚠️ Missing attachment: {fp}")
 
-            if files_attached == 0:
+            # Only treat "0 files attached" as a problem worth retrying over
+            # when the caller actually asked for attachments (a real file went
+            # missing). An explicit attachments=[] call (e.g. the Tentative
+            # Obligation email, sent deliberately without its attachment) must
+            # not trip this guard, or it retries forever.
+            if attachments and files_attached == 0:
                 print("❌ No attachments — retrying in 3 seconds...")
                 time.sleep(3)
                 continue
@@ -2384,11 +2389,16 @@ for n, v in summary_rows:
     summary_html += f"<tr><td>{n}</td><td>{v}</td></tr>"
 summary_html += "</table>"
 
+# Tentative Obligation File email — the email itself still goes out (CEO
+# flagged that recipients need this), but the attachment is removed: it was
+# going out unpassworded with every client's data, which is the actual
+# problem. tentative_file is still built above and left on disk, just not
+# attached to this email anymore.
 send_email_infinite_retry(
     subject=f"Tentative Obligation File-{EMAIL_DATE}",
     body=f"""
 <p>Dear Sir,</p>
-<p>Please find the attachment of Tentative Obligation File Summary:-</p>
+<p>Please find the Tentative Obligation File Summary below:-</p>
 {summary_html}
 <p>Best regards,<br>
 Sandeep Kumar<br>
@@ -2396,7 +2406,7 @@ Sandeep Kumar<br>
 """,
     to_recipients=_SALIST("SA_MAIL_TENTATIVE_TO", ["kartavya.dhillon@mastertrust.co.in"]),
     cc_recipients=_SALIST("SA_MAIL_TENTATIVE_CC", ["kartavya.dhillon@mastertrust.co.in"]),
-    attachments=[tentative_file],
+    attachments=[],
     is_html=True
 )
 

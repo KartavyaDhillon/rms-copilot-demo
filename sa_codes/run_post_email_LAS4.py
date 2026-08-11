@@ -107,7 +107,11 @@ def send_email_infinite_retry(subject, body, to_recipients, cc_recipients,
                         print(f"📎 Attached: {fp}")
                 else:
                     print(f"⚠️ Missing attachment: {fp}")
-            if files_attached == 0:
+            # Only retry-loop when attachments were actually expected and came
+            # up empty (a real missing file) -- an intentional attachments=[]
+            # call must not trip this, or it retries forever. Matches the same
+            # fix applied in LAS4.py's copy of this function.
+            if attachments and files_attached == 0:
                 print("❌ No attachments — retrying in 3 seconds...")
                 time.sleep(3)
                 continue
@@ -163,6 +167,95 @@ def clean_to_int(series):
             errors="coerce"
         ).fillna(0).round(0).astype(int)
     )
+
+# ════════════════════════════════════════════════════════════════════
+# TENTATIVE OBLIGATION SUMMARY EMAIL — resume point.
+# This is the email step LAS4.py was stuck on (infinite "No attachments"
+# retry, now fixed). It's re-derived entirely from the Tentative Obligation
+# File that LAS4.py already built and left on disk earlier in the SAME run
+# (Step 5.3, well before the email section) -- nothing here needs WhatsApp,
+# the zone emails, or any other earlier step to be re-run. If that file is
+# missing (e.g. this is being run on a day LAS4.py never got that far),
+# this block just sends an empty-looking summary rather than failing --
+# check the file exists before trusting the output.
+# ════════════════════════════════════════════════════════════════════
+print("\n📊 Preparing Tentative Obligation Summary (resume point)")
+
+tentative_file = os.path.join(BASE_FOLDER, f"Tentative Obligation File_{EMAIL_DATE}.xlsx")
+
+pretty_names = {
+    "DayNetPremium": "Day Net Premium",
+    "EquityAmount": "Equity Amount",
+    "FuturesMTM": "Future MTM",
+}
+reverse_sign_sheets = {"DayNetPremium", "EquityAmount"}
+
+
+def format_indian(n: int) -> str:
+    s = str(int(round(abs(n))))
+    if len(s) <= 3:
+        out = s
+    else:
+        last3 = s[-3:]
+        rest = s[:-3]
+        parts = []
+        while rest:
+            parts.insert(0, rest[-2:])
+            rest = rest[:-2]
+        out = ",".join(parts + [last3])
+    return f"{'-' if n < 0 else ''}{out}/-"
+
+
+summary_rows = []
+if os.path.exists(tentative_file):
+    xls = pd.ExcelFile(tentative_file)
+    for sheet in xls.sheet_names:
+        df = xls.parse(sheet, dtype=str)
+        df.columns = df.columns.str.strip()
+        if "ClientID" not in df.columns:
+            continue
+        value_col = [c for c in df.columns if c != "ClientID"]
+        if not value_col:
+            continue
+        total_row = df[df["ClientID"].astype(str).str.upper() == "TOTAL"]
+        if total_row.empty:
+            continue
+        val = pd.to_numeric(total_row.iloc[-1][value_col[0]], errors="coerce")
+        val = 0 if pd.isna(val) else val
+        if sheet in reverse_sign_sheets:
+            val = -val
+        summary_rows.append((pretty_names.get(sheet, sheet), format_indian(int(val))))
+    xls.close()
+else:
+    print(f"⚠️ Tentative Obligation File not found: {tentative_file} — sending an empty summary")
+
+summary_html = """
+<table border="1" cellspacing="0" cellpadding="5"
+style="border-collapse:collapse; text-align:center;
+font-family:Arial; font-size:12px;">
+<tr style="background-color:#ADD8E6; font-weight:bold;">
+<th>Narration</th><th>Net Amount</th>
+</tr>
+"""
+for n, v in summary_rows:
+    summary_html += f"<tr><td>{n}</td><td>{v}</td></tr>"
+summary_html += "</table>"
+
+send_email_infinite_retry(
+    subject=f"Tentative Obligation File-{EMAIL_DATE}",
+    body=f"""
+<p>Dear Sir,</p>
+<p>Please find the Tentative Obligation File Summary below:-</p>
+{summary_html}
+<p>Best regards,<br>
+Sandeep Kumar<br>
+011-42111079</p>
+""",
+    to_recipients=_SALIST("SA_MAIL_TENTATIVE_TO", ["kartavya.dhillon@mastertrust.co.in"]),
+    cc_recipients=_SALIST("SA_MAIL_TENTATIVE_CC", ["kartavya.dhillon@mastertrust.co.in"]),
+    attachments=[],
+    is_html=True
+)
 
 # ════════════════════════════════════════════════════════════════════
 print("\n📊 Starting POST-EMAIL Scenario & LAS reference steps")

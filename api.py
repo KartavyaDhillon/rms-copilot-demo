@@ -2578,29 +2578,47 @@ def sa_sa_checkpoint():
 @app.get("/sa/post-email-stream")
 def sa_post_email_stream():
     """SSE: run run_post_email_LAS4.py and stream output line by line to dashboard.
-    Use after LAS4 emails were sent but the post-email Scenario/Top-100/backup steps crashed."""
-    import json as _pe_json, subprocess as _pe_sub, sys as _pe_sys
+    Use after LAS4 emails were sent but the post-email Scenario/Top-100/backup steps crashed.
+
+    Writes a real .log file (same LOG_DIR/naming convention as every other SA
+    step) and records run status for SA-04 on completion. Before this, the
+    output existed ONLY in the browser's SSE stream — so once the page moved
+    on there was no trace the run ever happened, the Logs modal showed nothing,
+    and the SA-04 tile stayed stuck on whatever the crashed LAS4 run left
+    behind ("LAS not recorded") even after a fully successful recovery."""
+    import json as _pe_json, subprocess as _pe_sub, sys as _pe_sys, datetime as _pe_dt
+    from core.short_allocation import (LOG_DIR as _PE_LOG_DIR, _record as _pe_record,
+                                        _archive_to_db as _pe_archive)
     sa_codes_dir = _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes")
     script = _sa_os.path.join(sa_codes_dir, "run_post_email_LAS4.py")
+    _tag = "SA-04"          # post-email steps only exist for run 4 (LAS4.py)
     def gen():
         _tail = []
+        _sa_os.makedirs(_PE_LOG_DIR, exist_ok=True)
+        _ts = _pe_dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        logp = _sa_os.path.join(_PE_LOG_DIR, f"{_tag}__run_post_email_LAS4__{_ts}.log")
         try:
             env = {**_sa_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
                    "PYTHONUNBUFFERED": "1"}
-            proc = _pe_sub.Popen(
-                [_pe_sys.executable, "-u", script],
-                cwd=sa_codes_dir, stdout=_pe_sub.PIPE, stderr=_pe_sub.STDOUT,
-                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,
-            )
-            for line in proc.stdout:
-                line = line.rstrip("\n")
-                if line:
-                    yield f"data: {_pe_json.dumps({'type':'log','msg':line})}\n\n"
-                    _tail.append(line)
-                    if len(_tail) > 20:
-                        _tail.pop(0)
-            proc.wait()
-            rc = proc.returncode
+            with open(logp, "w", encoding="utf-8", errors="replace") as lf:
+                lf.write(f"# run_post_email_LAS4.py  tag={_tag}  start={_ts}\n")
+                lf.flush()
+                proc = _pe_sub.Popen(
+                    [_pe_sys.executable, "-u", script],
+                    cwd=sa_codes_dir, stdout=_pe_sub.PIPE, stderr=_pe_sub.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,
+                )
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    if line:
+                        lf.write(line + "\n"); lf.flush()
+                        yield f"data: {_pe_json.dumps({'type':'log','msg':line})}\n\n"
+                        _tail.append(line)
+                        if len(_tail) > 20:
+                            _tail.pop(0)
+                proc.wait()
+                rc = proc.returncode
+                lf.write(f"\n# exit code: {rc}\n")
             if rc != 0:
                 # AI (Groq) plain-English fallback — same as every other pipeline now has,
                 # instead of just showing a bare exit code.
@@ -2611,8 +2629,34 @@ def sa_post_email_stream():
                     _ai_msg = None
                 if _ai_msg:
                     yield f"data: {_pe_json.dumps({'type':'note','msg':_ai_msg})}\n\n"
+            # Record status so the SA-04 tile / History reflect what actually
+            # happened. A successful post-email recovery means LAS is finished
+            # end-to-end (emails sent, Top-100/Top-15 built, backup done), so
+            # code4 is marked done and the stale failure state is cleared.
+            try:
+                if rc == 0:
+                    _pe_record(_tag, code4="done", overall="done",
+                               failed_step=None, failed_step_label=None,
+                               log_code4=_sa_os.path.basename(logp))
+                else:
+                    _pe_record(_tag, code4="error", overall="error",
+                               failed_step="run_post_email_LAS4.py",
+                               failed_step_label="LAS Funding (post-email steps)",
+                               log_code4=_sa_os.path.basename(logp))
+            except Exception as _re:
+                yield f"data: {_pe_json.dumps({'type':'log','msg':f'⚠️ Could not record run status: {_re}'})}\n\n"
+            try:
+                _pe_archive(_tag, "log", logp)
+            except Exception:
+                pass
+            yield f"data: {_pe_json.dumps({'type':'log','msg':f'📝 Log saved → {_sa_os.path.basename(logp)}'})}\n\n"
             yield f"data: {_pe_json.dumps({'type':'done','ok': rc == 0, 'msg': 'Post-email steps completed' if rc == 0 else f'Exit code {rc}'})}\n\n"
         except Exception as e:
+            try:
+                with open(logp, "a", encoding="utf-8", errors="replace") as lf:
+                    lf.write(f"\n# stream error: {e}\n")
+            except Exception:
+                pass
             yield f"data: {_pe_json.dumps({'type':'error','msg':str(e)})}\n\n"
         yield 'data: {"type":"end"}\n\n'
     return _SA_Stream(gen(), media_type="text/event-stream",
