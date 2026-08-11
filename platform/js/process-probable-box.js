@@ -1687,6 +1687,20 @@
   // ── Run (market-time modal → generic SSE run, mirroring _pxRunReal) ──
   function probableRunReal(marketTime) {
     if (!_pxClaim(PIPE)) return;   // PROBABLE already running in this tab
+    // Force the PROBABLE-01/02/... run TILE to re-render as locked/"Running…"
+    // right now, rather than waiting for the next poll tick. The periodic
+    // poller a few lines below this file (`if (!_pxBusy(PIPE)) pxStatus(PIPE)`)
+    // deliberately SKIPS re-rendering the tile for the whole duration of a run
+    // — that's correct for avoiding redundant fetches once SSE is already
+    // streaming progress, but it means nothing else ever tells the tile "you're
+    // running now" the instant the run starts. _probableSetDlButtonsDisabled()
+    // two lines down updates the download buttons synchronously and correctly;
+    // the run tile has no equivalent unless we call it here. ctclRunFull() in
+    // dashboard.html has the exact same line for the same reason — the run
+    // claim (_pxClaim, just above) already flipped _pxIsRunning('probable') to
+    // true, so this render picks it up immediately instead of leaving the tile
+    // showing its last pre-click state (enabled "Run") until the run ends.
+    if (typeof window.pxStatus === 'function') window.pxStatus(PIPE);
     _probableSetDlButtonsDisabled(true);
     _probableStepsReset();   // fresh chain every run
     var st = document.getElementById('pxStatus-' + PIPE);

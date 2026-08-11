@@ -702,22 +702,44 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     # for negative values and other default styling. pandas produces a plain xlsx that
     # matches the reference output exactly.
     import pandas as _pd_xl
-    final_pl.to_pandas().to_excel(OUTPUT_FILE, index=False)
 
-    from openpyxl import load_workbook
-    wb = load_workbook(OUTPUT_FILE); ws = wb.active
-    for col in ws.columns:
-        col_letter = col[0].column_letter
-        header = str(col[0].value)
-        if header == "CPCode":
-            ws.column_dimensions[col_letter].width = len(header) + 2
-            continue
-        max_length = len(header)
-        for cell in col[1:]:
-            if cell.value is not None:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = max_length + 2
-    wb.save(OUTPUT_FILE)
+    def _write_xlsx_autofit(df_pd, output_path, cpcode_header_only=False):
+        """Write a dataframe to xlsx with auto-fit column widths, in ONE pass.
+
+        Replaces a write → load_workbook → per-cell Python loop → re-save
+        round trip. That loop was the actual time sink here, not the CSV/xlsx
+        I/O itself: openpyxl's Cell object has real per-access overhead, so
+        walking every (row, col) one Python object at a time over a
+        several-thousand-row sheet is where the reported 3-4 min (main file)
+        and 1-2 min PER ZONE were going — 4 zones repeat the exact same
+        write+reopen+scan+resave on top of the main file's own pass, and it
+        all adds up to far more than the few seconds the actual computation
+        (already done earlier, in polars) takes.
+
+        pandas' .str.len() is vectorised (runs in C over the whole column at
+        once), so computing "longest value per column" costs about the same
+        as one column scan instead of one Python-level step per cell — and
+        because the width is computed BEFORE the write, the file is written
+        once, not written-then-rewritten.
+        """
+        # fillna("") before astype(str) — otherwise a genuinely empty/missing
+        # cell becomes the literal text "nan" (3 chars) and can nudge a
+        # mostly-blank column's width up for no real reason. The old
+        # cell-by-cell loop this replaces skipped None values outright for
+        # the same reason; this keeps that behaviour.
+        df_str = df_pd.fillna("").astype(str)
+        with _pd_xl.ExcelWriter(output_path, engine="openpyxl") as _xw:
+            df_pd.to_excel(_xw, index=False)
+            ws = _xw.sheets[_xw.book.sheetnames[0]]
+            for i, header in enumerate(df_pd.columns):
+                col_letter = ws.cell(row=1, column=i + 1).column_letter
+                if cpcode_header_only and header == "CPCode":
+                    ws.column_dimensions[col_letter].width = len(str(header)) + 2
+                    continue
+                body_max = int(df_str.iloc[:, i].str.len().max()) if len(df_str) else 0
+                ws.column_dimensions[col_letter].width = max(len(str(header)), body_max) + 2
+
+    _write_xlsx_autofit(final_pl.to_pandas(), OUTPUT_FILE, cpcode_header_only=True)
     print("✅ OUTPUT FILE created successfully")
 
     # COPY FULL_FILE_01
@@ -736,15 +758,7 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
         if zone_pl.is_empty():
             print(f"⚠️ No records found for {zone_key}"); continue
         output_path = os.path.join(BASE_DIR, f"FULL_FILE_CTCL_VS_NMASS_{zone_key}_{run_number:02d}.xlsx")
-        zone_pl.to_pandas().to_excel(output_path, index=False)
-        wb = load_workbook(output_path); ws = wb.active
-        for col in ws.columns:
-            max_length = len(str(col[0].value))
-            for cell in col[1:]:
-                if cell.value:
-                    max_length = max(max_length, len(str(cell.value)))
-            ws.column_dimensions[col[0].column_letter].width = max_length + 2
-        wb.save(output_path)
+        _write_xlsx_autofit(zone_pl.to_pandas(), output_path)
         ZONE_OUTPUT_FILES[zone_key] = output_path
         print(f"✅ {zone_key} file created: {output_path}")
 

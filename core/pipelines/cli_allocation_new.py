@@ -43,50 +43,71 @@ Tags printed for core.pipeline_box._status():
   [FRIENDLY_MSG] <text>   — plain-English AI fallback for an unrecognized failure
 
 ═══════════════════════════════════════════════════════════════════════════
-EVENING RUN (Run NEW only — Run OLD / core/pipelines/cli_allocation.py is
-NEVER touched by any of this, at any time of day, per explicit instruction:
-"we are not touching the old run here at all all these changes should be
-done inside the new run").
+THREE RUN WINDOWS (Run NEW only — Run OLD / core/pipelines/cli_allocation.py
+is NEVER touched by any of this, at any time of day, per explicit
+instruction: "we are not touching the old run here at all all these changes
+should be done inside the new run").
 
-CLI has two daily run windows (CLI_RUN1_WINDOW=08:00-09:00,
-CLI_RUN2_WINDOW=19:00-20:00 by default), but until now the pipeline code
-itself had NO idea which window it was being run under — Run NEW behaved
-identically at 08:30 and at 19:30. The evening slot needs different
-behaviour:
-  - it must NOT re-download a fresh Allocation_Detail from the exchange —
-    it reuses the SAME file the morning already fetched.
-  - it must NOT touch CLI_PRUDENTIAL_LIMIT.txt / Intermediate.csv at all —
-    that's a once-a-day, morning-only number.
-  - the FTP folder Client Prudential Limit reads from AND uploads to are the
+Client Prudential Limit now runs THREE times a day, and which window you are
+in decides what Run NEW actually does:
+
+  MORNING    07:30-10:00   FULL run. Pre-check (RISK_REPORT + Kambala),
+                           fetch a fresh Allocation_Detail, BUILD
+                           CLI_PRUDENTIAL_LIMIT.txt + Intermediate.csv,
+                           upload to the plain ALLOCATION folder.
+  AFTERNOON  15:30-17:00   Reuse the morning's Allocation_Detail. Do NOT
+                           rebuild CLI_PRUDENTIAL_LIMIT.txt. Upload to
+                           ALLOCATION(AFTERNOON).
+  EVENING    19:00-21:00   Same as afternoon, but uploads to
+                           ALLOCATION(EVENING).
+
+WHY THE NON-MORNING SLOTS ARE DIFFERENT
+───────────────────────────────────────
+  - They must NOT re-download a fresh Allocation_Detail from the exchange —
+    they reuse the SAME file the morning already fetched.
+  - They must NOT touch CLI_PRUDENTIAL_LIMIT.txt / Intermediate.csv at all —
+    that is a once-a-day, morning-only number.
+  - The FTP folder Client Prudential Limit reads from AND uploads to are the
     SAME physical folder (/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION — see
     core.pipeline_box._pb_cleanup_allocation_ftp_folder(), which deletes
-    everything else in it down to just today's Allocation_Detail file). If
-    the evening run touched that folder the normal way, its own cleanup
-    step would delete everything the morning run just uploaded there.
+    everything else in it down to just today's Allocation_Detail file). If a
+    later run touched that folder the normal way, its own cleanup step would
+    delete everything the morning run just uploaded there.
 
-_is_evening_run() below is the ONE switch: once CLI_RUN2_WINDOW's own start
-time has passed, Run NEW takes the evening branch. Deliberately reads that
-SAME env var (not a second hardcoded "6 PM") so the evening behaviour can
-never drift out of sync with the visible "opens after HH:MM" window the
-operator already sees on the CLI-02 tile.
+THE FOLDER CHAIN, IN ORDER
+──────────────────────────
+  morning    ALLOCATION                      ← fetched here, uploaded here
+  afternoon  ALLOCATION(AFTERNOON)  created, file COPIED in from ALLOCATION,
+             then ALLOCATION → ALLOCATION(MORNING) renamed (archived).
+             The copy happens BEFORE the rename, so the file this run needs
+             is already safe by the time the morning folder changes name.
+  evening    ALLOCATION(EVENING)    created, file copied in from
+             ALLOCATION(AFTERNOON) — deliberately NOT from ALLOCATION, which
+             no longer exists under that name by then, and NOT from
+             ALLOCATION(MORNING), so the chain always reads the most recent
+             copy and never depends on the archive name.
 
-The evening branch (_resolve_evening_allocation() below):
-  1. If /TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION(EVENING) already exists on
-     FTP (an earlier click already set it up today), just read today's
-     Allocation_Detail from there (local-first, same as always) — done.
-  2. Otherwise (first Run NEW click this evening): fetch today's
-     Allocation_Detail from the still-plain ALLOCATION folder (local-first;
-     a bare RETR only — NEVER _pb_fetch_allocation_detail(), whose cleanup
-     side-effect would delete the morning's uploads before they're archived),
-     COPY (not move) that file into a newly-created ALLOCATION(EVENING)
-     folder, THEN rename ALLOCATION -> ALLOCATION(MORNING) — by which point
-     the file this run needs is already safely sitting in ALLOCATION(EVENING),
-     so nothing is lost.
-  3. A marker file (.cli_evening_upload) tells cli_upload.py (which runs
-     later in the same Run NEW chain, unchanged code otherwise) to upload
-     into ALLOCATION(EVENING) instead of the default ALLOCATION, and to not
-     flag CLI_PRUDENTIAL_LIMIT.txt as a [MISSING_FILE] — it's SUPPOSED to be
-     absent on an evening run.
+The rename happens exactly ONCE per day, on the first afternoon run. Evening
+performs no rename at all — by then the archiving is already done.
+
+WINDOWS ARE STRICT
+──────────────────
+_current_window() returns "morning" / "afternoon" / "evening", or None if the
+clock is outside all three (e.g. 12:00 noon, or 22:30). Outside a window the
+run REFUSES and exits non-zero rather than guessing — a mistimed run that
+silently picked the "nearest" window would either overwrite the day's
+prudential-limit number or upload into the wrong slot folder, and neither is
+visible until someone goes looking on the FTP server.
+
+All three windows are read from env vars (CLI_RUN1_WINDOW / CLI_RUN2_WINDOW /
+CLI_RUN3_WINDOW) rather than hardcoded here, so the code can never drift out
+of sync with the "opens HH:MM" text the operator already sees on the CLI
+tiles.
+
+A marker file (.cli_slot_upload) tells cli_upload.py (which runs later in the
+same Run NEW chain) which folder to upload into, and to not flag
+CLI_PRUDENTIAL_LIMIT.txt as a [MISSING_FILE] — it is SUPPOSED to be absent on
+any non-morning run.
 
 Per explicit instruction, nothing pre-creates a fresh empty ALLOCATION
 folder after the rename — cli_allocation.py's / _pb_fetch_allocation_detail's
@@ -101,68 +122,156 @@ import shutil
 from core.error_translator import translate_error
 
 _ALLOC_REMOTE_BASE = "/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION"
-_EVENING_MARKER = ".cli_evening_upload"
+# Written by a non-morning run, read (and deleted) by cli_upload.py. Named
+# generically — it used to be ".cli_evening_upload" back when evening was the
+# only special slot. BOTH names are handled everywhere: the old one is still
+# accepted on read (so a marker left by a pre-upgrade run is not silently
+# ignored) and still cleared on write (so a stale one can never redirect a
+# later upload into the wrong folder).
+_SLOT_MARKER = ".cli_slot_upload"
+_ALL_MARKERS = (".cli_slot_upload", ".cli_evening_upload")
+
+# slot -> (env var, default window, FTP folder suffix). Order matters only for
+# the human-readable error message when the clock is outside all of them.
+_WINDOWS = [
+    ("morning",   "CLI_RUN1_WINDOW", "07:30-10:00", ""),
+    ("afternoon", "CLI_RUN2_WINDOW", "15:30-17:00", "(AFTERNOON)"),
+    ("evening",   "CLI_RUN3_WINDOW", "19:00-21:00", "(EVENING)"),
+]
 
 
-def _is_evening_run():
-    """True once CLI_RUN2_WINDOW's own configured start time has passed today
-    — see the long comment block above. Falls back to 18:00 if the env var is
-    missing or malformed, never crashes."""
-    win = os.getenv("CLI_RUN2_WINDOW", "19:00-20:00").strip()
-    start = (win.split("-", 1)[0].strip() if win else "") or "18:00"
-    try:
-        h, m = (int(x) for x in start.split(":", 1))
-    except Exception:
-        h, m = 18, 0
-    return datetime.datetime.now().time() >= datetime.time(h, m)
+def _parse_window(raw, fallback):
+    """'15:30-17:00' -> (datetime.time(15,30), datetime.time(17,0)).
+
+    Falls back to the hardcoded default rather than raising: a typo in .env
+    must not take the whole pipeline down, and the default is the documented
+    window anyway. Returns (start, end)."""
+    def _t(text, default_h, default_m):
+        try:
+            h, m = (int(x) for x in text.strip().split(":", 1))
+            return datetime.time(h, m)
+        except Exception:
+            return datetime.time(default_h, default_m)
+
+    fb_start, _, fb_end = fallback.partition("-")
+    raw = (raw or "").strip() or fallback
+    start_s, _, end_s = raw.partition("-")
+    fh, fm = (int(x) for x in fb_start.split(":"))
+    eh, em = (int(x) for x in fb_end.split(":"))
+    return _t(start_s, fh, fm), _t(end_s, eh, em)
 
 
-def _resolve_evening_allocation(base_folder, today_str, _p):
-    """Evening-only Run NEW allocation resolution — see the module docstring.
-    Returns the local Allocation_Detail path. Raises on failure (caller wraps
-    this in the same try/except pattern every other step here uses)."""
+def _current_window(now=None):
+    """Which run window are we in RIGHT NOW? Returns (slot, folder_suffix),
+    or (None, None) if the clock is outside all three.
+
+    Deliberately strict — see the module docstring. `now` is injectable so
+    this can be unit-tested at any hour without touching the system clock."""
+    t = (now or datetime.datetime.now()).time()
+    for slot, env_key, default, suffix in _WINDOWS:
+        start, end = _parse_window(os.getenv(env_key), default)
+        if start <= t <= end:
+            return slot, suffix
+    return None, None
+
+
+def _windows_description():
+    """Human-readable 'morning 07:30-10:00, afternoon 15:30-17:00, ...' using
+    the CURRENT env values — so the refusal message always names the windows
+    that were actually checked, not the defaults."""
+    parts = []
+    for slot, env_key, default, _suffix in _WINDOWS:
+        start, end = _parse_window(os.getenv(env_key), default)
+        parts.append(f"{slot} {start.strftime('%H:%M')}-{end.strftime('%H:%M')}")
+    return ", ".join(parts)
+
+
+def _resolve_slot_allocation(slot, suffix, base_folder, today_str, _p):
+    """Non-morning (afternoon / evening) Run NEW allocation resolution — see
+    the module docstring's folder-chain section. Returns the local
+    Allocation_Detail path. Raises on failure (caller wraps this in the same
+    try/except pattern every other step here uses).
+
+    The two non-morning slots differ in exactly two ways, both handled here:
+      - WHERE they read from. Afternoon reads the still-plain ALLOCATION;
+        evening reads ALLOCATION(AFTERNOON), because by evening the plain
+        folder has already been renamed away and the afternoon copy is the
+        most recent one.
+      - WHETHER they archive. Only afternoon renames ALLOCATION →
+        ALLOCATION(MORNING). Evening never renames anything — the archiving
+        was already done hours earlier.
+    """
     from core.pipeline_box import (_pb_ftp_folder_exists, _pb_fetch_file_from_ftp_folder,
                                     _pb_push_file_to_ftp_folder, _pb_ftp_rename_folder)
     alloc_filename = f"Allocation_Detail_{today_str}.csv"
     alloc_path = os.path.join(base_folder, alloc_filename)
-    morning_folder = _ALLOC_REMOTE_BASE
-    evening_folder = _ALLOC_REMOTE_BASE + "(EVENING)"
-    archived_folder = _ALLOC_REMOTE_BASE + "(MORNING)"
 
-    if _pb_ftp_folder_exists(evening_folder):
-        _p(f"✅ {evening_folder} already exists — not the first Run NEW this evening.")
+    target_folder = _ALLOC_REMOTE_BASE + suffix
+    archived_folder = _ALLOC_REMOTE_BASE + "(MORNING)"
+    if slot == "afternoon":
+        source_folder = _ALLOC_REMOTE_BASE                       # still plain at this hour
+        do_archive = True
+    else:                                                         # evening
+        source_folder = _ALLOC_REMOTE_BASE + "(AFTERNOON)"
+        do_archive = False
+
+    # Already set up by an earlier click in this same slot today — nothing to
+    # create, nothing to archive, just read the file back.
+    if _pb_ftp_folder_exists(target_folder):
+        _p(f"✅ {target_folder} already exists — not the first Run NEW this {slot}.")
         if os.path.exists(alloc_path):
             _p(f"⏭ Using existing local file: {alloc_filename} — skipping download")
         else:
-            _p(f"⬇️  Fetching {alloc_filename} from {evening_folder}")
-            _pb_fetch_file_from_ftp_folder(evening_folder, alloc_path, alloc_filename)
+            _p(f"⬇️  Fetching {alloc_filename} from {target_folder}")
+            _pb_fetch_file_from_ftp_folder(target_folder, alloc_path, alloc_filename)
             _p(f"✅ Downloaded: {alloc_filename}")
         return alloc_path
 
-    _p(f"🌙 First Run NEW this evening — {evening_folder} doesn't exist yet. Setting it up.")
+    _p(f"🕒 First Run NEW this {slot} — {target_folder} doesn't exist yet. Setting it up.")
+
     if os.path.exists(alloc_path):
         _p(f"⏭ Using existing local file: {alloc_filename} (already on disk)")
     else:
-        _p(f"⬇️  Fetching {alloc_filename} from {morning_folder} (this morning's folder — "
-           f"not yet archived)")
-        _pb_fetch_file_from_ftp_folder(morning_folder, alloc_path, alloc_filename)
-        _p(f"✅ Downloaded: {alloc_filename}")
+        _p(f"⬇️  Fetching {alloc_filename} from {source_folder}")
+        try:
+            _pb_fetch_file_from_ftp_folder(source_folder, alloc_path, alloc_filename)
+            _p(f"✅ Downloaded: {alloc_filename}")
+        except Exception as _fe:
+            # Evening's expected source is ALLOCATION(AFTERNOON) — if the
+            # afternoon run never happened today, that folder simply is not
+            # there. Say so plainly instead of surfacing a bare FTP error,
+            # and fall back to the archived morning folder so the evening
+            # upload is still possible rather than dead in the water.
+            if slot == "evening":
+                _p(f"⚠️ Could not read from {source_folder} ({_fe}) — this usually means "
+                   f"today's AFTERNOON run never ran. Falling back to {archived_folder}.")
+                _pb_fetch_file_from_ftp_folder(archived_folder, alloc_path, alloc_filename)
+                _p(f"✅ Downloaded from the archived morning folder: {alloc_filename}")
+            else:
+                raise
 
-    _p(f"📋 Copying {alloc_filename} into a new {evening_folder} "
-       f"(the copy in {morning_folder} is left exactly as it is)")
-    _pb_push_file_to_ftp_folder(evening_folder, alloc_path, alloc_filename)
-    _p(f"✅ {evening_folder} created with today's Allocation Detail")
+    _p(f"📋 Copying {alloc_filename} into a new {target_folder} "
+       f"(the copy in {source_folder} is left exactly as it is)")
+    _pb_push_file_to_ftp_folder(target_folder, alloc_path, alloc_filename)
+    _p(f"✅ {target_folder} created with today's Allocation Detail")
 
-    _p(f"🏷️  Archiving this morning's folder: {morning_folder} → {archived_folder} — "
-       f"everything Run 1 uploaded there (CLI_PRUDENTIAL_LIMIT.txt, MCX file, "
-       f"collaterals) stays exactly as it is, just under the archived name")
-    try:
-        _pb_ftp_rename_folder(morning_folder, archived_folder)
-        _p(f"✅ Renamed to {archived_folder}")
-    except Exception as _re:
-        _p(f"⚠️ Could not rename {morning_folder} → {archived_folder} (non-fatal — "
-           f"{evening_folder} is already correctly set up; only the archive-rename "
-           f"failed, safe to fix by hand on the FTP server): {_re}")
+    if do_archive:
+        # Only ever runs on the FIRST afternoon click of the day. The copy
+        # above has already succeeded by this point, so even if the rename
+        # fails the file this run needs is safe.
+        _p(f"🏷️  Archiving this morning's folder: {_ALLOC_REMOTE_BASE} → {archived_folder} — "
+           f"everything Run 1 uploaded there (CLI_PRUDENTIAL_LIMIT.txt, MCX file, "
+           f"collaterals) stays exactly as it is, just under the archived name")
+        try:
+            _pb_ftp_rename_folder(_ALLOC_REMOTE_BASE, archived_folder)
+            _p(f"✅ Renamed to {archived_folder}")
+        except Exception as _re:
+            _p(f"⚠️ Could not rename {_ALLOC_REMOTE_BASE} → {archived_folder} (non-fatal — "
+               f"{target_folder} is already correctly set up; only the archive-rename "
+               f"failed, safe to fix by hand on the FTP server): {_re}")
+    else:
+        _p(f"ℹ️  No folder rename this {slot} — the morning folder was already archived "
+           f"by today's afternoon run.")
 
     return alloc_path
 
@@ -178,31 +287,67 @@ def run_cli_allocation_new():
         print(msg, flush=True)
         _log_buffer.append(str(msg))
 
-    # ── EVENING RUN — everything below this block is the pre-existing morning
-    # behaviour, completely unchanged. See the long module-docstring comment
-    # for the full picture. ──────────────────────────────────────────────────
-    if _is_evening_run():
-        _p(f"🌙 Evening run detected (CLI_RUN2_WINDOW={os.getenv('CLI_RUN2_WINDOW', '19:00-20:00')}) "
-           f"— Run NEW's evening flow: reuse this morning's Allocation Detail, skip "
-           f"CLI_PRUDENTIAL_LIMIT.txt, upload to ALLOCATION(EVENING).")
+    # ── WHICH WINDOW ARE WE IN? ──────────────────────────────────────────────
+    # Strict by design — outside all three windows this refuses rather than
+    # guessing. See the module docstring.
+    slot, suffix = _current_window()
+    if slot is None:
+        _now = datetime.datetime.now().strftime("%H:%M")
+        _p(f"⛔ It is {_now} — outside every Client Prudential Limit run window.")
+        _p(f"   Valid windows: {_windows_description()}")
+        _p("   Nothing has been downloaded, built or uploaded. Run again inside a window.")
+        _p(f"[FRIENDLY_MSG] Client Prudential Limit can only run inside its scheduled "
+           f"windows ({_windows_description()}). It is currently {_now}, so the run was "
+           f"stopped before doing anything.")
+        raise SystemExit(1)
+
+    # ── AFTERNOON / EVENING — everything below this block is the pre-existing
+    # morning behaviour, completely unchanged. See the module docstring for
+    # the full picture. ──────────────────────────────────────────────────────
+    if slot != "morning":
+        _p(f"🕒 {slot.upper()} run detected — Run NEW's {slot} flow: reuse this morning's "
+           f"Allocation Detail, skip CLI_PRUDENTIAL_LIMIT.txt, upload to "
+           f"ALLOCATION{suffix}.")
         try:
-            _resolve_evening_allocation(base_folder, today_str, _p)
+            _resolve_slot_allocation(slot, suffix, base_folder, today_str, _p)
         except Exception as e:
-            _p(f"❌ Evening Allocation Detail step failed: {e}")
-            _ai = translate_error("Client Prudential Limit (NEW, evening) — Allocation Detail", _log_buffer)
-            _p(f"[FRIENDLY_MSG] {_ai or ('Evening Allocation Detail step failed: ' + str(e))}")
+            _p(f"❌ {slot.capitalize()} Allocation Detail step failed: {e}")
+            _ai = translate_error(f"Client Prudential Limit (NEW, {slot}) — Allocation Detail",
+                                  _log_buffer)
+            _p(f"[FRIENDLY_MSG] {_ai or (slot.capitalize() + ' Allocation Detail step failed: ' + str(e))}")
             raise SystemExit(1)
-        marker_path = os.path.join(base_folder, _EVENING_MARKER)
+        marker_path = os.path.join(base_folder, _SLOT_MARKER)
         try:
             with open(marker_path, "w", encoding="utf-8") as _mf:
-                _mf.write(_ALLOC_REMOTE_BASE + "(EVENING)")
+                _mf.write(_ALLOC_REMOTE_BASE + suffix)
         except Exception as _we:
-            _p(f"⚠️ Could not write evening marker file (non-fatal, but the upload step "
-               f"may not know to target ALLOCATION(EVENING)): {_we}")
-        _p("⏭ Skipping CLI_PRUDENTIAL_LIMIT.txt / Intermediate.csv — evening run only "
-           "reuses this morning's number, doesn't rebuild it.")
-        _p("✅ Allocation Detail (NEW, evening) step finished")
+            _p(f"⚠️ Could not write the {slot} marker file (non-fatal, but the upload step "
+               f"may not know to target ALLOCATION{suffix}): {_we}")
+        _p(f"⏭ Skipping CLI_PRUDENTIAL_LIMIT.txt / Intermediate.csv — the {slot} run only "
+           f"reuses this morning's number, doesn't rebuild it.")
+        _p(f"✅ Allocation Detail (NEW, {slot}) step finished")
         return
+
+    _p(f"🌅 MORNING run detected — full flow: pre-check, fresh Allocation Detail, "
+       f"rebuild CLI_PRUDENTIAL_LIMIT.txt, upload to {_ALLOC_REMOTE_BASE}.")
+
+    # Clear any leftover slot marker before doing anything else. Normally
+    # cli_upload.py deletes the marker as it reads it, so there is nothing
+    # here — but if yesterday's evening chain died BETWEEN the allocation step
+    # and the upload step, the marker survives, and this morning's upload would
+    # then silently go to ALLOCATION(EVENING) instead of ALLOCATION. That is
+    # the single worst outcome available to this pipeline: the day's real
+    # prudential-limit file uploaded to a folder nobody reads.
+    for _stale in _ALL_MARKERS:
+        _stale_path = os.path.join(base_folder, _stale)
+        if os.path.exists(_stale_path):
+            try:
+                os.remove(_stale_path)
+                _p(f"🧹 Cleared a leftover slot marker ({_stale}) from a previous run — "
+                   f"this morning's upload goes to {_ALLOC_REMOTE_BASE}, as it should.")
+            except OSError as _oe:
+                _p(f"⚠️ Could not remove stale marker {_stale} ({_oe}) — check that "
+                   f"today's upload lands in {_ALLOC_REMOTE_BASE}, not a slot folder.")
 
     # ── STEP 0: pre-file check — RISK_REPORT + Kambala must exist for TODAY ───
     _p("🚀 STEP 0: Pre-file check (RISK_REPORT + Kambala)")

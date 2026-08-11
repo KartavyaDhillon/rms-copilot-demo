@@ -101,28 +101,42 @@ def run_cli_upload():
         print(msg, flush=True)
         _log_buffer.append(str(msg))
 
-    # ── Evening Run NEW hand-off (see core/pipelines/cli_allocation_new.py's
-    # module docstring for the full picture): that step, when it detects an
-    # evening run, writes a marker naming ALLOCATION(EVENING) as the upload
-    # target instead of the default ALLOCATION folder, and CLI_PRUDENTIAL_
-    # LIMIT.txt is legitimately absent (evening skips building it) — so it
-    # must not be flagged as a [MISSING_FILE]. Run OLD never writes this
-    # marker, so this whole block is a no-op for it, at any time of day.
-    _evening_marker_path = os.path.join(base_folder, ".cli_evening_upload")
-    _evening_target = None
-    if os.path.exists(_evening_marker_path):
+    # ── Afternoon / evening Run NEW hand-off (see cli_allocation_new.py's
+    # module docstring for the full picture): that step, when it detects a
+    # NON-MORNING run, writes a marker naming ALLOCATION(AFTERNOON) or
+    # ALLOCATION(EVENING) as the upload target instead of the default
+    # ALLOCATION folder, and CLI_PRUDENTIAL_LIMIT.txt is legitimately absent
+    # (those slots skip building it) — so it must not be flagged as a
+    # [MISSING_FILE]. Run OLD never writes this marker, so this whole block is
+    # a no-op for it, at any time of day.
+    #
+    # Two filenames are checked: the current generic one, and the older
+    # evening-only name. A marker written by a pre-upgrade run (or by a
+    # half-upgraded pair of machines) would otherwise be silently ignored and
+    # the upload would go to the WRONG folder — the exact failure this whole
+    # marker mechanism exists to prevent.
+    _slot_target = None
+    for _marker_name in (".cli_slot_upload", ".cli_evening_upload"):
+        _marker_path = os.path.join(base_folder, _marker_name)
+        if not os.path.exists(_marker_path):
+            continue
+        if _slot_target is None:
+            try:
+                _slot_target = open(_marker_path, encoding="utf-8").read().strip() or None
+            except Exception:
+                _slot_target = None
+        # Remove BOTH regardless of which one was read — a stale leftover
+        # would otherwise redirect tomorrow morning's upload.
         try:
-            _evening_target = open(_evening_marker_path, encoding="utf-8").read().strip() or None
-        except Exception:
-            _evening_target = None
-        try:
-            os.remove(_evening_marker_path)
+            os.remove(_marker_path)
         except OSError:
             pass
-        if _evening_target:
-            _p(f"🌙 Evening Run NEW upload — target folder is {_evening_target} "
-               f"(not the default ALLOCATION folder), CLI_PRUDENTIAL_LIMIT.txt "
-               f"expected to be absent.")
+    if _slot_target:
+        _slot_name = ("afternoon" if "AFTERNOON" in _slot_target.upper()
+                      else "evening" if "EVENING" in _slot_target.upper() else "non-morning")
+        _p(f"🕒 {_slot_name.capitalize()} Run NEW upload — target folder is {_slot_target} "
+           f"(not the default ALLOCATION folder), CLI_PRUDENTIAL_LIMIT.txt "
+           f"expected to be absent.")
 
     # ── STEP 1: FTP upload with a real missing-file check ────────────────────
     _p("🚀 STEP 1: FTP upload")
@@ -133,7 +147,7 @@ def run_cli_upload():
         ("CO_ClientLevelCollaterals",         f"CO_ClientLevelCollaterals_{today_str}"),
         ("ClientNetEffectiveDeposits",        f"ClientNetEffectiveDeposits_{today_str}"),
     ]
-    if not _evening_target:
+    if not _slot_target:
         # Morning (or any Run OLD, any time) — CLI_PRUDENTIAL_LIMIT.txt IS
         # expected, exactly as it always has been.
         expected.insert(0, ("CLI_PRUDENTIAL_LIMIT", "CLI_PRUDENTIAL_LIMIT.txt"))
@@ -162,7 +176,7 @@ def run_cli_upload():
             ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
             ftp_user = os.getenv("FTP_USER", "TRADING")
             ftp_pass = os.getenv("FTP_PASS", "")
-            remote_folder = _evening_target or "/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION"
+            remote_folder = _slot_target or "/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION"
             ftp = FTP(ftp_host)
             ftp.login(ftp_user, ftp_pass)
             ftp.cwd("/")

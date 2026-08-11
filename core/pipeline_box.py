@@ -61,12 +61,18 @@ PIPELINES = {
                  (r"STARTING PAYOUT DOWNLOAD",          {"type": "phase", "name": "payout"}),
                  (r"PAYOUT CHECKING COMPLETED",         {"type": "phase", "name": "payout_done"}),
              ]},
-    # Client Prudential Limit — runs twice a day (morning/evening). Two independent
-    # steps (Download, Upload) rather than CTCL's single chained pipeline; the
-    # frontend runs both in sequence for the slot tiles' Run button (cliRunFull())
-    # and also exposes them as standalone buttons for manual re-run of just one step.
+    # Client Prudential Limit — runs THREE times a day (morning / afternoon /
+    # evening). Two independent steps (Download, Upload) rather than CTCL's single
+    # chained pipeline; the frontend runs both in sequence for the slot tiles' Run
+    # button (cliRunFull()) and also exposes them as standalone buttons for manual
+    # re-run of just one step.
+    # Only the MORNING slot rebuilds CLI_PRUDENTIAL_LIMIT.txt; afternoon and
+    # evening reuse it and upload into ALLOCATION(AFTERNOON) / ALLOCATION(EVENING).
+    # The window times and the whole slot chain live in
+    # core/pipelines/cli_allocation_new.py's module docstring — read that before
+    # changing `runs` here, since the two must agree.
     # See core/pipelines/cli_download.py + core/pipelines/cli_upload.py.
-    "cli": {"name": "Client Prudential Limit", "logdir": "cli", "runs": 2,
+    "cli": {"name": "Client Prudential Limit", "logdir": "cli", "runs": 3,
             "state_dir_env": "CLI_FOLDER", "state_default": r"D:\CLI_PRUDENTIAL_LIMIT",
             "state_file": "run_counter.txt",
             "email_keys": {},
