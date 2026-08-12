@@ -484,9 +484,40 @@ def run_cli_allocation_new():
 
         # 5) save
         df_final.to_csv(os.path.join(base_folder, "Intermediate.csv"), index=False)
+
+        # 🛑 NO NEGATIVE LIMITS — final gate before the file is written.
+        # Mirrors the identical clamp in the manual script
+        # (CLI_PRUDENTIAL_LIMIT\codes\WORKING\ALLOCATION_CLI_NMASS_NCDEX.py) so
+        # the console and the manual run can never produce different files.
+        #
+        # A negative prudential limit is meaningless, so anything below 0 is
+        # raised to 0 at the last point before the values become the .txt that
+        # gets uploaded. Formatting is unchanged: the values were already
+        # rounded to 2dp above, and clamping preserves that exactly — a clamped
+        # -0.02 is written as 0.0, same style as every other value.
+        #
+        # Intermediate.csv above is deliberately left UNCLAMPED: it is the
+        # working file, and the true computed value is what lets anyone work
+        # out afterwards WHY a code went negative.
+        df_out = df_final.copy()
+        _neg = df_out[df_out["Sum"] < 0]
+        if not _neg.empty:
+            _p(f"🛑 {len(_neg)} negative value(s) clamped to 0 in CLI_PRUDENTIAL_LIMIT.txt:")
+            for _, _nr in _neg.iterrows():
+                _p(f"   {_nr['AccountID']}: {_nr['Sum']} → 0.0")
+            _p("   (Intermediate.csv still holds the original computed values)")
+        else:
+            _p("✅ No negative values found — nothing needed clamping")
+        # The trailing "+ 0.0" is NOT decorative. A tiny negative like -0.001
+        # rounds to NEGATIVE ZERO, which is not < 0 and so slips straight
+        # through clip() — but Python writes it as the string "-0.0", putting a
+        # minus sign in the uploaded file anyway. Adding 0.0 turns -0.0 into
+        # 0.0 (IEEE-754) and leaves every other value untouched.
+        df_out["Sum"] = df_out["Sum"].clip(lower=0).round(2) + 0.0
+
         with open(os.path.join(base_folder, "CLI_PRUDENTIAL_LIMIT.txt"), "w") as f:
             f.write("ClientPrudentialLimit\n")
-            for _, row in df_final.iterrows():
+            for _, row in df_out.iterrows():
                 f.write(f"{row['AccountID']},{row['Sum']}\n")
         _p("✅ Processing done — Intermediate.csv + CLI_PRUDENTIAL_LIMIT.txt written")
     except Exception as e:

@@ -278,7 +278,8 @@ def _steps_5_to_6(base_folder, updated_main_file):
 # STEP 7 — zone emails (raj.kumari sender account, per-zone recipients).
 # =====================================================
 def _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
-                      subject, body, to_list, cc_list, file_paths, max_tries=6):
+                      subject, body, to_list, cc_list, file_paths, max_tries=6,
+                      is_html=False):
     valid_files = [f for f in file_paths if f and os.path.exists(f)]
     if not valid_files:
         print(f"⏭ SKIPPED: {subject} (no attachment found)")
@@ -297,7 +298,7 @@ def _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
                 msg["To"] = ", ".join(to_list)
                 msg["Cc"] = ", ".join(cc_list)
                 msg["Subject"] = subject
-                msg.attach(MIMEText(body, "plain"))
+                msg.attach(MIMEText(body, "html" if is_html else "plain"))
                 for file_path in valid_files:
                     with open(file_path, "rb") as attachment:
                         part = MIMEBase("application", "octet-stream")
@@ -326,7 +327,7 @@ def _step_7_zone_emails(base_folder, zomumb_path, zochnd_path, delhi_path, ludh_
     smtp_email  = os.getenv("PROBABLE_ALERTS_SMTP_EMAIL", "")
     smtp_pass   = os.getenv("PROBABLE_ALERTS_SMTP_PASSWORD", "")
     body = ("Dear Team,\n\nPlease Find the attachment of Probable Margin File.\n\n"
-            "Best regards,\nRMS Copilot — Probable Defaulter\n")
+            "Best regards,\nRaj Kumari\n011-66331033 / 37 / 38\n")
     if safe_test:
         body = ("*** THIS IS A TEST RUN — PLEASE IGNORE ***\n\n" + body)
 
@@ -659,6 +660,210 @@ def _step_9_region_branch(base_folder, updated_main_file):
     print("🎉 STEP 9: region & branch files created")
 
 
+MAIL_LOG_COLUMNS = ["Timestamp", "Branch", "Region", "Zone", "File", "To", "CC",
+                    "Email Source", "Status", "Detail"]
+
+
+def _load_zone_lookup(base_folder, updated_main_file):
+    """Branch ID / Region ID -> Zone ID, so the mail log can show which zone
+    each branch/region belongs to instead of just a bare code.
+
+    PRIMARY SOURCE: today's own updated_main_file (Probable_Fullfile_K) — the
+    exact same file _step_9_region_branch split every BRANCH_/REGION_ file
+    from. It carries Zone ID for every row of every branch/region that could
+    possibly appear in today's run, across ALL zones (Delhi, CDR, MT, Ludhiana,
+    Mumbai, Chandigarh, CSD...) — not a scoped subset.
+    FALLBACK: MASTER/Branch_AND_Region_LIST.xlsx, a static reference snapshot,
+    used only for a code that genuinely isn't in today's file at all (e.g. it
+    was deliberately built filtered to just Delhi/CDR/MT/Ludhiana, so it can
+    fill a gap today's file doesn't have but never override it).
+
+    Earlier version sourced from the static file FIRST, which was wrong: any
+    branch/region outside that file's original scope (a Mumbai branch, say)
+    came back blank even though its zone was sitting in today's data the
+    whole time — that's what was happening in production.
+
+    MERGED REGIONS: a REGION_<parent>.xlsx (see _load_region_merge_groups) is
+    logged under its parent's name, but the parent code can have ZERO rows of
+    its own today even though the merged file has real data — e.g. "RHYD" has
+    0 rows today, all the data came from its group-mate "RHYD2" (187 rows,
+    ZODELH). A literal lookup on "RHYD" would come back blank despite the file
+    being real and its true zone being obvious from RHYD2. So after building
+    region_zone, every merge group's parent is backfilled from the first
+    member that actually has a zone.
+
+    None of this is fatal if it fails — sending must never be blocked by a
+    Zone lookup — worst case the column just prints blank.
+    """
+    branch_zone, region_zone, branch_region = {}, {}, {}
+
+    try:
+        df = pd.read_excel(updated_main_file)
+        df.columns = df.columns.str.strip()
+        if "Branch ID" in df.columns and "Zone ID" in df.columns:
+            branch_zone = {
+                str(r["Branch ID"]).strip(): str(r["Zone ID"]).strip()
+                for _, r in df.dropna(subset=["Branch ID", "Zone ID"])
+                              .drop_duplicates(subset=["Branch ID"]).iterrows()
+            }
+        if "Region ID" in df.columns and "Zone ID" in df.columns:
+            region_zone = {
+                str(r["Region ID"]).strip(): str(r["Zone ID"]).strip()
+                for _, r in df.dropna(subset=["Region ID", "Zone ID"])
+                              .drop_duplicates(subset=["Region ID"]).iterrows()
+            }
+        # Branch -> its own Region, so a BRANCH row in the mail log can show
+        # which region it sits under instead of leaving the column empty.
+        # Verified 1:1 against live data — every branch maps to exactly one
+        # region, no branch spans two.
+        if "Branch ID" in df.columns and "Region ID" in df.columns:
+            branch_region = {
+                str(r["Branch ID"]).strip(): str(r["Region ID"]).strip()
+                for _, r in df.dropna(subset=["Branch ID", "Region ID"])
+                              .drop_duplicates(subset=["Branch ID"]).iterrows()
+            }
+    except Exception as e:
+        print(f"⚠️ Could not read Zone ID from {updated_main_file} ({e}) "
+              f"— falling back to the static reference file for zone lookup")
+
+    reference_file = os.path.join(base_folder, "MASTER", "Branch_AND_Region_LIST.xlsx")
+    try:
+        ref = pd.read_excel(reference_file)
+        ref.columns = ref.columns.str.strip()
+        for _, r in ref.dropna(subset=["Branch ID", "Zone ID"]).iterrows():
+            branch_zone.setdefault(str(r["Branch ID"]).strip(), str(r["Zone ID"]).strip())
+        for _, r in ref.dropna(subset=["Region ID", "Zone ID"]).iterrows():
+            region_zone.setdefault(str(r["Region ID"]).strip(), str(r["Zone ID"]).strip())
+        for _, r in ref.dropna(subset=["Branch ID", "Region ID"]).iterrows():
+            branch_region.setdefault(str(r["Branch ID"]).strip(), str(r["Region ID"]).strip())
+    except Exception as e:
+        print(f"⚠️ Could not read {reference_file} either ({e}) — some Zone values may stay blank")
+
+    merge_groups = _load_region_merge_groups(base_folder)
+    for parent, members in merge_groups.items():
+        if region_zone.get(parent):
+            continue
+        for member in members:
+            if region_zone.get(member):
+                region_zone[parent] = region_zone[member]
+                break
+
+    return branch_zone, region_zone, branch_region
+
+# Status → (row fill, font colour). Anything not listed falls through unstyled.
+# "NOT SENT - NO FILE" is gone by design: a branch/region with no shortage file
+# today is a non-event (nothing to send, nobody to tell), and logging ~20 of
+# them per run buried the rows that actually need action.
+_MAIL_LOG_FILLS = {
+    "SENT":                ("C6EFCE", "006100"),   # green
+    "NOT SENT - NO EMAIL": ("FFC7CE", "9C0006"),   # red
+    "NOT SENT - FAILED":   ("FFC7CE", "9C0006"),   # red
+}
+
+# CC list for CONTACT_AP FALLBACK branch sends, keyed by the branch's zone.
+# Applies ONLY to fallback sends — a branch that HAS a MAIL LIST row keeps the
+# exact TO/CC typed in the spreadsheet, untouched, per explicit instruction
+# ("check mail list if found there than thats ok otherwise CONTACT AP").
+# Note these zone lists REPLACE rms_del rather than adding to it — again per
+# explicit instruction ("in the CC only the one which i have told").
+_ZONE_FALLBACK_CC = {
+    "ZOCHND": ["vipin@mastertrust.co.in", "nitingupta@mastertrust.co.in"],
+    "ZOLUDH": ["kuljit.singh@mastertrust.co.in"],
+}
+_DEFAULT_FALLBACK_CC = ["rms_del@mastertrust.co.in"]
+
+
+def _fallback_cc_for_zone(zone):
+    """CC list for a CONTACT_AP fallback send in this zone."""
+    return list(_ZONE_FALLBACK_CC.get((zone or "").strip(), _DEFAULT_FALLBACK_CC))
+
+
+def _write_mail_log(log_data, base_folder):
+    """Write the Step 10 mail log as both mail_log.csv (unchanged filename, so
+    anything that already looks for it keeps working) and a formatted
+    mail_log.xlsx with a SUMMARY sheet + colour-coded DETAIL sheet.
+
+    Returns the path that should be attached to the Step 12 summary email —
+    the xlsx if it was written, otherwise the csv.
+    """
+    csv_path  = os.path.join(base_folder, "mail_log.csv")
+    xlsx_path = os.path.join(base_folder, "mail_log.xlsx")
+
+    df = pd.DataFrame(log_data, columns=MAIL_LOG_COLUMNS)
+    df.to_csv(csv_path, index=False)
+
+    # Summary counts, in a fixed order so the sheet reads the same every day
+    # even when a category happens to be empty.
+    order = ["SENT", "NOT SENT - NO EMAIL", "NOT SENT - FAILED"]
+    counts = df["Status"].value_counts().to_dict() if not df.empty else {}
+    summary_rows = [[s, int(counts.get(s, 0))] for s in order]
+    for s, n in counts.items():                      # anything unexpected
+        if s not in order:
+            summary_rows.append([s, int(n)])
+    summary_rows.append(["TOTAL FILES LOGGED", len(df)])
+    df_summary = pd.DataFrame(summary_rows, columns=["Status", "Count"])
+
+    try:
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.utils import get_column_letter
+
+        with pd.ExcelWriter(xlsx_path, engine="openpyxl") as xw:
+            df_summary.to_excel(xw, sheet_name="SUMMARY", index=False)
+            df.to_excel(xw, sheet_name="DETAIL", index=False)
+
+            head_fill = PatternFill("solid", fgColor="1F4E78")
+            head_font = Font(bold=True, color="FFFFFF")
+
+            for sheet_name in ("SUMMARY", "DETAIL"):
+                ws = xw.book[sheet_name]
+                for cell in ws[1]:
+                    cell.fill = head_fill
+                    cell.font = head_font
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                ws.freeze_panes = "A2"
+                if ws.max_row > 1:
+                    ws.auto_filter.ref = ws.dimensions
+                # Auto-width, capped so the Detail column can't run off-screen.
+                for col in ws.columns:
+                    width = max((len(str(c.value)) for c in col if c.value is not None),
+                                default=0)
+                    ws.column_dimensions[get_column_letter(col[0].column)].width = \
+                        min(max(width + 2, 10), 70)
+
+            # Colour-code the DETAIL rows by Status.
+            ws = xw.book["DETAIL"]
+            status_col = MAIL_LOG_COLUMNS.index("Status") + 1
+            for r in range(2, ws.max_row + 1):
+                style = _MAIL_LOG_FILLS.get(ws.cell(row=r, column=status_col).value)
+                if not style:
+                    continue
+                fill = PatternFill("solid", fgColor=style[0])
+                font = Font(color=style[1], bold=style[0] != "C6EFCE")
+                for c in range(1, len(MAIL_LOG_COLUMNS) + 1):
+                    ws.cell(row=r, column=c).fill = fill
+                    ws.cell(row=r, column=c).font = font
+
+            # Make the SUMMARY numbers pop the same way.
+            ws = xw.book["SUMMARY"]
+            for r in range(2, ws.max_row + 1):
+                style = _MAIL_LOG_FILLS.get(ws.cell(row=r, column=1).value)
+                if style:
+                    for c in (1, 2):
+                        ws.cell(row=r, column=c).fill = PatternFill("solid", fgColor=style[0])
+                        ws.cell(row=r, column=c).font = Font(color=style[1], bold=True)
+            ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+            ws.cell(row=ws.max_row, column=2).font = Font(bold=True)
+
+        not_sent = sum(int(counts.get(s, 0)) for s in order[1:])
+        print(f"📑 STEP 10: mail log saved → {xlsx_path} "
+              f"({int(counts.get('SENT', 0))} sent, {not_sent} NOT sent)")
+        return xlsx_path
+    except Exception as e:
+        print(f"⚠️ Could not write formatted mail_log.xlsx ({e}) — "
+              f"falling back to {csv_path}")
+        return csv_path
+
+
 # =====================================================
 # STEP 10 — dynamic branch/region mail engine, driven by
 # PROBABLE_FOLDER/MASTER/MAIL LIST.xlsx (a reference spreadsheet the ops
@@ -692,20 +897,57 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
     if not os.path.exists(mail_list_file):
         print(f"⚠️ STEP 10 skipped — {mail_list_file} not found. Place the MAIL LIST.xlsx "
               f"reference file there to enable the dynamic branch/region mail engine.")
-        return log_file
+        return _write_mail_log([], base_folder)
     df_mail = pd.read_excel(mail_list_file)
     df_mail.columns = df_mail.columns.str.strip()
     log_data = []
+    branch_zone, region_zone, branch_region = _load_zone_lookup(base_folder, updated_main_file)
 
-    def _send_mail(to_emails, cc_emails, code, path, branch=None, region=None):
+    # One row per file we actually had something to say about. Status vocabulary
+    # is deliberately tiny so the log answers, at a glance, "did every file we
+    # generated actually reach somebody?":
+    #   SENT                 — email accepted by the SMTP server
+    #   NOT SENT - NO EMAIL  — file exists, but nobody is mapped to receive it
+    #   NOT SENT - FAILED    — recipient + file both fine, SMTP refused it
+    #
+    # There is deliberately NO "no file" status. A branch/region with no
+    # shortage file today is a non-event — nothing to send and nobody to tell —
+    # and logging ~20 of those per run buried the rows that need action.
+    def _log(branch, region, zone, path, to_emails, cc_emails, source, status, detail):
+        log_data.append([
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            branch or "", region or "", zone or "",
+            os.path.basename(path) if path else "",
+            "; ".join(to_emails) if to_emails else "",
+            "; ".join(cc_emails) if cc_emails else "",
+            source, status, detail,
+        ])
+
+    def _send_mail(to_emails, cc_emails, code, path, branch=None, region=None,
+                   source="MAIL LIST"):
+        _type = "BRANCH" if branch else "REGION"
+        _code = branch or region
+        if _type == "BRANCH":
+            _zone = branch_zone.get(_code, "")
+            # A branch row now also carries the region it sits under, so the
+            # Region column isn't empty on every branch line.
+            _log_region = branch_region.get(_code, "")
+        else:
+            _zone = region_zone.get(_code, "")
+            _log_region = region
+        if override_to:
+            source = f"{source} (TEST OVERRIDE)"
+        # No file today = nothing to report. Silently skipped, not logged.
         if not path or not os.path.exists(path):
-            log_data.append([datetime.datetime.now(), branch, region, ";".join(to_emails), "NO FILE", path])
-            print(f"⏭ SKIPPED (no file): {branch or region}")
+            print(f"⏭ SKIPPED (no file): {_code}")
             return
         if not to_emails:
-            log_data.append([datetime.datetime.now(), branch, region, "NO EMAIL", "INVALID EMAIL", path])
-            print(f"⏭ SKIPPED (no email): {branch or region}")
+            _log(branch, _log_region, _zone, path, [], cc_emails, source, "NOT SENT - NO EMAIL",
+                 f"File was created but no email address was found to send it to — "
+                 f"please check MAIL LIST for {_code}.")
+            print(f"⏭ SKIPPED (no email): {_code}")
             return
+        _last_err = "unknown error"
         for attempt in range(1, 6):
             try:
                 msg = MIMEMultipart()
@@ -715,7 +957,7 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
                 msg["Subject"] = subject_line
                 body = (("*** THIS IS A TEST RUN — PLEASE IGNORE ***\n\n" if safe_test else "") +
                         f"Dear Team,\n\nPlease find the attached PROBABLE SHORTAGE report for "
-                        f"{branch or region}.\n\nBest regards,\nRMS Copilot — Probable Defaulter\n")
+                        f"{branch or region}.\n\nBest regards,\nRaj Kumari\n011-66331033 / 37 / 38\n")
                 msg.attach(MIMEText(body, "plain"))
                 with open(path, "rb") as f:
                     part = MIMEBase("application", "octet-stream")
@@ -728,15 +970,20 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
                     server.ehlo(); server.starttls(); server.ehlo()
                     server.login(smtp_email, smtp_pass)
                     server.sendmail(smtp_email, recipients, msg.as_string())
-                log_data.append([datetime.datetime.now(), branch, region, ";".join(to_emails), "SUCCESS", path])
-                print(f"✅ email sent successfully: {branch or region} — {os.path.basename(path)} "
+                _log(branch, _log_region, _zone, path, to_emails, cc_emails, source, "SENT",
+                     f"{_type.title()} file delivered to {len(recipients)} recipient(s) "
+                     f"on attempt {attempt}.")
+                print(f"✅ email sent successfully: {_code} — {os.path.basename(path)} "
                       f"({len(recipients)} recipients)")
                 return
             except Exception as e:
-                print(f"❌ FAILED: {branch or region} → {e}")
+                _last_err = e
+                print(f"❌ FAILED: {_code} → {e}")
                 if attempt < 5:
                     time.sleep(15)
-        log_data.append([datetime.datetime.now(), branch, region, ";".join(to_emails), "FAILED", path])
+        _log(branch, _log_region, _zone, path, to_emails, cc_emails, source, "NOT SENT - FAILED",
+             f"Email address was found, but the mail server refused the message "
+             f"after 5 attempts: {_last_err}")
 
     for _, row in df_mail.iterrows():
         if override_to:
@@ -765,6 +1012,11 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
         for _, row in df_mail.iterrows()
         if str(row.get("BRANCH", "")).strip() and str(row.get("BRANCH", "")).strip().lower() != "nan"
     }
+    covered_regions = {
+        str(row.get("REGIONS", "")).strip()
+        for _, row in df_mail.iterrows()
+        if str(row.get("REGIONS", "")).strip() and str(row.get("REGIONS", "")).strip().lower() != "nan"
+    }
     try:
         contact_df = pd.read_excel(mail_list_file, sheet_name="CONTACT_AP Details")
         contact_df.columns = contact_df.columns.str.strip()
@@ -787,23 +1039,50 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
                 continue
             fallback_email = contact_lookup.get(branch)
             if not fallback_email:
-                log_data.append([datetime.datetime.now(), branch, None,
-                                  "NO EMAIL", "SKIPPED (not in MAIL LIST or CONTACT_AP)",
-                                  os.path.join(branch_folder, fname)])
+                _log(branch, branch_region.get(branch, ""), branch_zone.get(branch, ""),
+                     os.path.join(branch_folder, fname), [], [],
+                     "NONE", "NOT SENT - NO EMAIL",
+                     "File was created but no email address was found to send it to — "
+                     f"{branch} has no row in MAIL LIST and no email in CONTACT_AP "
+                     "Details. Please add it to one of the two.")
                 print(f"⏭ SKIPPED (no MAIL LIST entry, not in CONTACT_AP either): {branch}")
                 continue
             if override_to:
                 to_emails, cc_emails = override_to, override_cc
             else:
                 to_emails = [e.strip() for e in fallback_email.split(",") if e.strip()]
-                cc_emails = ["rms_del@mastertrust.co.in"]
+                # CC depends on the branch's zone — Chandigarh and Ludhiana have
+                # their own owners; everyone else goes to rms_del.
+                cc_emails = _fallback_cc_for_zone(branch_zone.get(branch, ""))
             _send_mail(to_emails, cc_emails, branch,
-                       os.path.join(branch_folder, fname), branch=branch)
+                       os.path.join(branch_folder, fname), branch=branch,
+                       source="CONTACT_AP FALLBACK")
 
-    pd.DataFrame(log_data, columns=["Timestamp", "Branch", "Region", "To", "Status", "Attachment"]).to_csv(
-        log_file, index=False)
-    print(f"📑 STEP 10: mail log saved → {log_file}")
-    return log_file
+    # ---------------------------------------------------
+    # Orphan REGION sweep — log-only, and it stays that way by design.
+    # CONTACT_AP Details holds branch codes only (verified: 0 of its 485 rows
+    # match a Region ID), so there is no fallback address to fall back TO. More
+    # importantly a REGION file contains every branch's clients in that region,
+    # so it must never be auto-sent to a branch-level contact. Per explicit
+    # instruction: branches receive branch files only. These are reported so
+    # someone can add a proper MAIL LIST row, never guessed at.
+    # ---------------------------------------------------
+    if os.path.isdir(region_folder):
+        for fname in sorted(os.listdir(region_folder)):
+            if not (fname.startswith("REGION_") and fname.endswith(".xlsx")):
+                continue
+            region = fname[len("REGION_"):-len(".xlsx")]
+            if region in covered_regions:
+                continue
+            _log(None, region, region_zone.get(region, ""),
+                 os.path.join(region_folder, fname), [], [],
+                 "NONE", "NOT SENT - NO EMAIL",
+                 "File was created but no email address was found to send it to — "
+                 f"no MAIL LIST row has {region} in REGIONS. Please add a row, or "
+                 "fold it into a parent region via the COMBINED_REGION sheet.")
+            print(f"⏭ SKIPPED (region file with no MAIL LIST entry): {region}")
+
+    return _write_mail_log(log_data, base_folder)
 
 
 # =====================================================
@@ -904,6 +1183,86 @@ def _step_11_validation(base_folder, updated_main_file):
     return mismatch_output
 
 
+def _build_summary_body(base_folder, safe_test=False):
+    """HTML body for the Step 12 summary email.
+
+    Reads back the mail log Step 10 just wrote and turns it into something a
+    person can act on without opening an attachment: how many branch/region
+    files went out, and a table of every one that did NOT, with the reason.
+
+    Deliberately defensive — a summary email that fails to build is worse than
+    a plain one, so any problem here falls back to the original short text
+    rather than losing the email (and its attachments) entirely.
+    """
+    banner = ("<p style='background:#c00;color:#fff;padding:10px;font-weight:bold;"
+              "border-radius:4px;'>*** THIS IS A TEST RUN — PLEASE IGNORE ***</p>"
+              if safe_test else "")
+    fallback = (banner + "<p>Dear Team,</p><p>PFA</p>"
+                "<p>Best regards,<br>Raj Kumari<br>011-66331033 / 37 / 38</p>")
+    try:
+        csv_path = os.path.join(base_folder, "mail_log.csv")
+        if not os.path.exists(csv_path):
+            return fallback
+        df = pd.read_csv(csv_path).fillna("")
+        if df.empty:
+            return fallback
+
+        not_sent = df[df["Status"] != "SENT"]
+
+        rows = []
+        for _, r in not_sent.iterrows():
+            is_branch = bool(str(r["Branch"]).strip())
+            rows.append(
+                "<tr>"
+                f"<td style='{_TD}text-align:center;'>{'B' if is_branch else 'R'}</td>"
+                f"<td style='{_TD}'>{r['Branch'] or ''}</td>"
+                f"<td style='{_TD}'>{r['Region'] or ''}</td>"
+                f"<td style='{_TD}'>{r['Zone'] or ''}</td>"
+                f"<td style='{_TD}'>Email not found for "
+                f"{'Branch' if is_branch else 'Region'}</td>"
+                "</tr>")
+
+        if rows:
+            table = (
+                "<p><b>The following files were created but "
+                "<span style='color:#c00;'>could not be emailed</span>:</b></p>"
+                "<table style='border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;"
+                "font-size:13px;'>"
+                "<tr style='background:#1F4E78;color:#fff;'>"
+                f"<th style='{_TH}'>Branch/Region Tag</th><th style='{_TH}'>Branch</th>"
+                f"<th style='{_TH}'>Region</th><th style='{_TH}'>Zone</th>"
+                f"<th style='{_TH}'>Reason</th></tr>"
+                + "".join(rows) + "</table>"
+                "<div style='margin-top:18px;padding:12px 14px;background:#FFF8E1;"
+                "border-left:4px solid #F0A500;font-size:13px;color:#5a4300;'>"
+                "<b>Action required:</b> please add an email address for the entries above "
+                "in <b>MAIL LIST.xlsx</b> (or <b>CONTACT_AP Details</b> for branches) "
+                "before the next run. Until they are added, these reports will keep being "
+                "generated every day and reaching nobody.</div>")
+        else:
+            table = ("<div style='padding:12px 14px;background:#E8F5E9;"
+                     "border-left:4px solid #2E7D32;font-size:13px;color:#1b5e20;'>"
+                     "<b>All clear:</b> every file created today was emailed successfully. "
+                     "No addresses are missing.</div>")
+
+        return f"""{banner}
+<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222;">
+<p>Dear Team,</p>
+<p>Please find today's Probable Margin Shortage files attached.</p>
+{table}
+<p style="margin-top:20px;">Best regards,<br>Raj Kumari<br>011-66331033 / 37 / 38</p>
+</div>"""
+    except Exception as e:
+        print(f"⚠️ Could not build the HTML summary body ({e}) — sending the plain version")
+        return fallback
+
+
+# Shared inline cell styles (email clients ignore <style> blocks, so these have
+# to live on every cell).
+_TH = "border:1px solid #ccc;padding:6px 10px;text-align:left;"
+_TD = "border:1px solid #ccc;padding:5px 10px;"
+
+
 # =====================================================
 # STEP 12 — final summary mail.
 # =====================================================
@@ -915,13 +1274,12 @@ def _step_12_final_summary(base_folder, delhi_path, ludh_path, zochnd_path, zomu
     smtp_email  = os.getenv("PROBABLE_ALERTS_SMTP_EMAIL", "")
     smtp_pass   = os.getenv("PROBABLE_ALERTS_SMTP_PASSWORD", "")
     to_list, cc_list = _emails("PROBABLE_FINAL_TO", "PROBABLE_FINAL_CC", safe_test)
-    body = (("*** THIS IS A TEST RUN — PLEASE IGNORE ***\n\n" if safe_test else "") +
-            "Dear Team,\n\nPFA\n\nBest regards,\nRMS Copilot — Probable Defaulter\n")
+    body = _build_summary_body(base_folder, safe_test=safe_test)
     file_paths = [delhi_path, ludh_path, zochnd_path, zomumb_path, updated_main_file,
                   log_file_path, mail_log_file, mismatch_output]
     _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
                       _subj("Probable_Fullfile_UPDATED", safe_test),
-                      body, to_list, cc_list, file_paths)
+                      body, to_list, cc_list, file_paths, is_html=True)
 
 
 # =====================================================
