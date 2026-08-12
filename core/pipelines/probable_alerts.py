@@ -331,21 +331,42 @@ def _step_7_zone_emails(base_folder, zomumb_path, zochnd_path, delhi_path, ludh_
     if safe_test:
         body = ("*** THIS IS A TEST RUN — PLEASE IGNORE ***\n\n" + body)
 
-    chnd_to, chnd_cc = _emails("PROBABLE_CHND_TO", "PROBABLE_CHND_CC", safe_test)
-    _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
-                      _subj(f"Probable_SHORTAGE_CHND_{date_str}", safe_test),
-                      body, chnd_to, chnd_cc, [zochnd_path])
+    # Every zone send is recorded and handed back so Step 10 can put it in the
+    # SAME mail log as the branch/region sends. Without this the zone emails
+    # were the one part of the run with no written record at all — you could
+    # see that 130 branches got their file, but not whether Chandigarh,
+    # Ludhiana and Mumbai got theirs.
+    zone_results = []
 
-    ludh_to, ludh_cc = _emails("PROBABLE_LUDH_TO", "PROBABLE_LUDH_CC", safe_test)
-    _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
-                      _subj(f"Probable_SHORTAGE_LUDH_{date_str}", safe_test),
-                      body, ludh_to, ludh_cc, [ludh_path])
+    def _zone(zone_code, env_to, env_cc, subject, path):
+        to, cc = _emails(env_to, env_cc, safe_test)
+        if not path or not os.path.exists(path):
+            zone_results.append((zone_code, path, to, cc, "NOT SENT - FAILED",
+                                 "Zone file was not generated — nothing to attach."))
+            print(f"⏭ SKIPPED zone {zone_code} (no file)")
+            return
+        if not to:
+            zone_results.append((zone_code, path, [], cc, "NOT SENT - NO EMAIL",
+                                 f"No recipients configured — check {env_to} in .env."))
+            print(f"⏭ SKIPPED zone {zone_code} (no recipients configured)")
+            return
+        ok = _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
+                              _subj(subject, safe_test), body, to, cc, [path])
+        if ok:
+            zone_results.append((zone_code, path, to, cc, "SENT",
+                                 f"Zone file delivered to {len(to) + len(cc)} recipient(s)."))
+        else:
+            zone_results.append((zone_code, path, to, cc, "NOT SENT - FAILED",
+                                 "Mail server refused the message after several attempts."))
 
-    mumb_to, mumb_cc = _emails("PROBABLE_MUMB_TO", "PROBABLE_MUMB_CC", safe_test)
-    _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
-                      _subj(f"Probable_SHORTAGE_MUMB_{date_str}", safe_test),
-                      body, mumb_to, mumb_cc, [zomumb_path])
+    _zone("ZOCHND", "PROBABLE_CHND_TO", "PROBABLE_CHND_CC",
+          f"Probable_SHORTAGE_CHND_{date_str}", zochnd_path)
+    _zone("ZOLUDH", "PROBABLE_LUDH_TO", "PROBABLE_LUDH_CC",
+          f"Probable_SHORTAGE_LUDH_{date_str}", ludh_path)
+    _zone("ZOMUMB", "PROBABLE_MUMB_TO", "PROBABLE_MUMB_CC",
+          f"Probable_SHORTAGE_MUMB_{date_str}", zomumb_path)
     print("📧 STEP 7: all zone emails processed")
+    return zone_results
 
 
 # =====================================================
@@ -875,7 +896,8 @@ def _write_mail_log(log_data, base_folder):
 # spreadsheet rather than a fixed .env TO/CC pair).
 # =====================================================
 def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomumb_path,
-                           updated_main_file, log_file_path, safe_test=False):
+                           updated_main_file, log_file_path, safe_test=False,
+                           zone_results=None):
     smtp_server = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
     smtp_port   = int(os.getenv("SMTP_PORT", "587"))
     smtp_email  = os.getenv("PROBABLE_ALERTS_SMTP_EMAIL", "")
@@ -894,13 +916,32 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
     override_to, override_cc = _emails("PROBABLE_MAILLIST_OVERRIDE_TO",
                                        "PROBABLE_MAILLIST_OVERRIDE_CC", safe_test)
 
+    log_data = []
+
+    def _log_zone_results():
+        """Step 7's zone emails (Chandigarh / Ludhiana / Mumbai), recorded in
+        this same log so one file answers 'did everything that was generated
+        actually reach someone?' for zones as well as branches and regions.
+        These rows carry a Zone but no Branch/Region, which is what marks them
+        as zone-level."""
+        for zone_code, path, to, cc, status, detail in (zone_results or []):
+            log_data.append([
+                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "", "", zone_code,
+                os.path.basename(path) if path else "",
+                "; ".join(to) if to else "",
+                "; ".join(cc) if cc else "",
+                "ZONE EMAIL (.env)", status, detail,
+            ])
+
     if not os.path.exists(mail_list_file):
         print(f"⚠️ STEP 10 skipped — {mail_list_file} not found. Place the MAIL LIST.xlsx "
               f"reference file there to enable the dynamic branch/region mail engine.")
-        return _write_mail_log([], base_folder)
+        _log_zone_results()
+        return _write_mail_log(log_data, base_folder)
     df_mail = pd.read_excel(mail_list_file)
     df_mail.columns = df_mail.columns.str.strip()
-    log_data = []
+    _log_zone_results()
     branch_zone, region_zone, branch_region = _load_zone_lookup(base_folder, updated_main_file)
 
     # One row per file we actually had something to say about. Status vocabulary
@@ -1211,15 +1252,24 @@ def _build_summary_body(base_folder, safe_test=False):
 
         rows = []
         for _, r in not_sent.iterrows():
-            is_branch = bool(str(r["Branch"]).strip())
+            # Branch filled -> B, else Region filled -> R, else it's a
+            # zone-level email from Step 7 -> Z.
+            if str(r["Branch"]).strip():
+                tag, kind = "B", "Branch"
+            elif str(r["Region"]).strip():
+                tag, kind = "R", "Region"
+            else:
+                tag, kind = "Z", "Zone"
+            reason = (f"Email not found for {kind}"
+                      if r["Status"] == "NOT SENT - NO EMAIL"
+                      else f"Sending failed for {kind}")
             rows.append(
                 "<tr>"
-                f"<td style='{_TD}text-align:center;'>{'B' if is_branch else 'R'}</td>"
+                f"<td style='{_TD}text-align:center;'>{tag}</td>"
                 f"<td style='{_TD}'>{r['Branch'] or ''}</td>"
                 f"<td style='{_TD}'>{r['Region'] or ''}</td>"
                 f"<td style='{_TD}'>{r['Zone'] or ''}</td>"
-                f"<td style='{_TD}'>Email not found for "
-                f"{'Branch' if is_branch else 'Region'}</td>"
+                f"<td style='{_TD}'>{reason}</td>"
                 "</tr>")
 
         if rows:
@@ -1342,8 +1392,8 @@ def run_probable_alerts(market_time="9:30 AM", safe_test=False):
     _stage("📧 Generating zone files & sending zone emails…")
     updated_main_file = _steps_1_to_4(base_folder, today_ddmmyyyy)
     zomumb_path, zochnd_path, delhi_path, ludh_path = _steps_5_to_6(base_folder, updated_main_file)
-    _step_7_zone_emails(base_folder, zomumb_path, zochnd_path, delhi_path, ludh_path, date_str,
-                        safe_test=safe_test)
+    zone_results = _step_7_zone_emails(base_folder, zomumb_path, zochnd_path, delhi_path,
+                                       ludh_path, date_str, safe_test=safe_test)
     # _step_8_whatsapp emits its own stage updates internally (live progress
     # counter — see _stage() calls inside it), so no separate one is needed
     # here; the next stage print happens once it returns.
@@ -1352,7 +1402,7 @@ def run_probable_alerts(market_time="9:30 AM", safe_test=False):
     _step_9_region_branch(base_folder, updated_main_file)
     mail_log_file = _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path,
                                           zomumb_path, updated_main_file, log_file_path,
-                                          safe_test=safe_test)
+                                          safe_test=safe_test, zone_results=zone_results)
     _stage("🔎 Validating output & sending the final summary email…")
     mismatch_output = _step_11_validation(base_folder, updated_main_file)
     _step_12_final_summary(base_folder, delhi_path, ludh_path, zochnd_path, zomumb_path,
