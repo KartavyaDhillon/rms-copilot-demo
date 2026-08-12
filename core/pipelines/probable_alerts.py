@@ -1421,6 +1421,25 @@ def run_probable_alerts(market_time="9:30 AM", safe_test=False):
         _stage("📦 Backing up & archiving today's files…")
         _step_13_backup(base_folder)
 
+        # Mark today's run as DONE so the console stops offering a re-run.
+        # PROBABLE is a once-a-day process ("runs": 1 in core/pipeline_box.py)
+        # and every other pipeline (CTCL / MS15 / CLI) already writes this
+        # file — PROBABLE was configured to READ it but nothing ever WROTE it,
+        # so _read_counter() returned 0 forever and the Run tile stayed
+        # available all day. A second real run would re-send every branch,
+        # region and zone email and re-run the WhatsApp blast.
+        #
+        # Written ONLY on the live path — a safe test must never consume the
+        # day's run, or the rehearsal would block the real thing.
+        try:
+            _today = datetime.datetime.now().strftime("%Y-%m-%d")
+            with open(os.path.join(base_folder, "run_counter.txt"), "w",
+                      encoding="utf-8") as _cf:
+                _cf.write(f"{_today}|1")
+            print("✅ run_counter.txt updated — today's PROBABLE run is marked complete")
+        except Exception as e:
+            print(f"⚠️ Could not update run_counter.txt: {e}")
+
 
 if __name__ == "__main__":
     import sys

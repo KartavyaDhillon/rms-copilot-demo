@@ -618,6 +618,19 @@ def _clear_if_stale(pipe):
 _PB_LOCKS = {k: threading.Lock() for k in PIPELINES}
 
 
+def _safe_test_armed_for(key):
+    """True when THIS pipe has a safe test armed for its next run. Only
+    PROBABLE has a safe-test facility today; anything else is always False.
+    Never raises — a broken check here must not be able to block a run."""
+    if key != "probable":
+        return False
+    try:
+        from core.pipelines.probable_alerts import is_safe_test_armed
+        return bool(is_safe_test_armed())
+    except Exception:
+        return False
+
+
 def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
     p = PIPELINES.get(key)
     pb = _PB.get(key)
@@ -625,6 +638,26 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
         yield {"type": "error", "msg": f"Unknown pipeline '{key}'"}
         return
     lock_key = f"px_{key}"
+
+    # ── ONCE-A-DAY GUARD ──────────────────────────────────────────────────
+    # A pipeline declared "runs": 1 that has already completed a LIVE run
+    # today must not be startable again. PROBABLE is the case this exists
+    # for: a second run re-sends every branch, region and zone email and
+    # re-fires the client WhatsApp blast, and the day's input files have
+    # already been moved into the backup folder by then, so the re-run
+    # works from nothing.
+    #
+    # An armed safe test is deliberately exempt — a rehearsal must stay
+    # possible after the real run, and it never writes the counter itself.
+    if p and p.get("runs") == 1 and not _safe_test_armed_for(key):
+        if _read_counter(p) >= 1:
+            yield {"type": "error",
+                   "msg": f"⛔ {p.get('name', key)} has already completed its run for "
+                          f"today. It is a once-a-day process — running it again would "
+                          f"re-send every email and WhatsApp message. If you genuinely "
+                          f"need to re-run it, clear run_counter.txt in the process "
+                          f"folder first."}
+            return
 
     _clear_if_stale(key)
     with _PB_LOCKS[key]:
