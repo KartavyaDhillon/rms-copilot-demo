@@ -118,17 +118,23 @@ def is_extracted_present(filename_gz):
 
 def copy_to_eodsar_folder(file_path):
     filename = os.path.basename(file_path).upper()
+    # ===== CHANGED (ported from the manual script): added MCX_MARGIN_ — it was
+    # being downloaded but never reached either EODSAR folder because it didn't
+    # match any prefix below. =====
     if (filename.startswith("X_CC02_") or filename.startswith("C_CC02_") or
             filename.startswith("O_CC02_") or filename.startswith("F_CC02_") or
-            "01292_MGN_" in filename):
+            "01292_MGN_" in filename or
+            filename.startswith("MCX_MARGIN_")):
         eodsar_dir = os.path.join(os.path.dirname(CM_DIR), "MCX & NCDEX EODSAR")
         os.makedirs(eodsar_dir, exist_ok=True)
-        shutil.copy2(file_path, os.path.join(eodsar_dir, os.path.basename(file_path)))
-        if "01292" in filename:
-            shutil.copy2(file_path, os.path.join(NCDEX_EODSAR_DIR, os.path.basename(file_path)))
-        else:
-            shutil.copy2(file_path, os.path.join(MCX_EODSAR_DIR, os.path.basename(file_path)))
-        print(f"📁 EODSAR COPY: {filename}")
+        base_name = os.path.basename(file_path)
+        shutil.copy2(file_path, os.path.join(eodsar_dir, base_name))
+        # ===== CHANGED (ported from the manual script): no more MCX-vs-NCDEX
+        # split on "01292". Every file that qualifies above goes into BOTH
+        # MCX_EODSAR and NCDEX_EODSAR. =====
+        shutil.copy2(file_path, os.path.join(MCX_EODSAR_DIR, base_name))
+        shutil.copy2(file_path, os.path.join(NCDEX_EODSAR_DIR, base_name))
+        print(f"📁 EODSAR COPY (MCX + NCDEX): {filename}")
 
 
 def copy_to_rajeev_folder(file_path):
@@ -142,7 +148,11 @@ def copy_to_rajeev_folder(file_path):
 
 def handle_sa_file(extracted_file_path):
     filename = os.path.basename(extracted_file_path)
-    if filename.startswith(("C_SA", "F_SA")):
+    # ===== CHANGED (ported from the manual script): added "O_SA" so the
+    # O_SA01_P_06436_*_i01-i08.lis (NSE COMM) files also reach MCX_INTRA_SAR —
+    # MCX_INTRSAR_final.py reads these for the NSE COMM DEPOSIT column and was
+    # getting nothing because this check only recognized C_SA/F_SA. =====
+    if filename.startswith(("C_SA", "F_SA", "O_SA")):
         shutil.copy2(extracted_file_path, os.path.join(SA_CM_DIR, filename))
         shutil.copy2(extracted_file_path, os.path.join(SA_FO_DIR, filename))
         shutil.copy2(extracted_file_path, os.path.join(MCX_INTRA_SAR_DIR, filename))
@@ -162,6 +172,12 @@ def organize_base_folder(file_path):
     elif filename.startswith("F_"): target = FO_DIR
     elif filename.startswith("O_"): target = CO_DIR
     elif filename.startswith("X_"): target = CD_DIR
+    # ===== ADDED: Delivery_NCL_CM_EquityT1_... downloads fine (segment="CM"
+    # in the call) but never matched any prefix above, so it was left sitting
+    # in the base backup folder instead of CM_DIR — "Could not find moved
+    # file" plus a re-download on every single run (is_extracted_present only
+    # checks CM_DIR/FO_DIR/CO_DIR/CD_DIR/MCX_DIR, never the base folder).
+    elif filename.startswith("Delivery_"): target = CM_DIR
     else: return
     shutil.move(file_path, os.path.join(target, filename))
     print(f"📂 Moved → {target}\\{filename}")
@@ -538,6 +554,369 @@ def download_epi_file(trade_date):
     print(f"📦 EPI copied to BOTH SA folders: {filename}")
 
 
+# =====================================================
+# NCDEX PEAK FILES 01-08   (requests based - NO SELENIUM)
+# =====================================================
+# Ported verbatim from the manual script (new.py), which had this and the
+# console did not — the console's 70-files run was silently ending after the
+# EPI step with the eight NCCL_MARGIN_REP peak files never downloaded.
+#
+# Two notes vs the older Selenium version this replaced:
+#   1. No chromedriver. Pure requests + BeautifulSoup, same ASP.NET
+#      postback flow as ncdex.py.
+#   2. Downloads snapshots 01-08 instead of 01-05. The exchange does
+#      publish 06/07/08.
+#
+# Downloaded files are distributed to exactly the same folders the
+# Selenium version used: NCDEX_DIR, SA_CM_DIR, SA_FO_DIR, Rajeev,
+# EODSAR and MCX_INTRA_SAR.
+
+NCDEX_WEB_BASE  = "https://webextranet.ncdex.com"
+NCDEX_WEB_LOGIN = NCDEX_WEB_BASE + "/Login.aspx"
+NCDEX_WEB_DNLD  = NCDEX_WEB_BASE + "/LoginSuccessDnld.aspx"
+
+NCDEX_PEAK_SNAPSHOTS = ["01", "02", "03", "04", "05", "06", "07", "08"]
+NCDEX_MAX_LOGIN_TRIES = 5
+
+_NCDEX_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/149.0.0.0 Safari/537.36"
+)
+_NCDEX_HEADS = {
+    "User-Agent": _NCDEX_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_NCDEX_POST_H = {
+    **_NCDEX_HEADS,
+    "Content-Type": "application/x-www-form-urlencoded",
+    "Origin": "null",
+}
+
+_NCDEX_POSTBACK_RE = re.compile(r"__doPostBack\('([^']+)'", re.I)
+
+
+def _ncdex_aes(password, hdn):
+    """AES-128-CBC encrypt the password using the KEY:IV from the hdn field."""
+    k, iv = hdn.split(":", 1)
+    cipher = AES.new(k.encode(), AES.MODE_CBC, iv.encode())
+    return base64.b64encode(cipher.encrypt(pad(password.encode(), 16))).decode()
+
+
+def _ncdex_val(soup, name):
+    tag = soup.find("input", {"id": name}) or soup.find("input", {"name": name})
+    return (tag.get("value") or "") if tag else ""
+
+
+def _ncdex_field_name(soup, elem_id, default=None):
+    """ASP.NET posts by `name`, often ctl00$...$id. Resolve id -> name."""
+    tag = soup.find(attrs={"id": elem_id})
+    if tag and tag.get("name"):
+        return tag["name"]
+    return default or elem_id
+
+
+def _ncdex_hidden(soup):
+    keys = [
+        "_AntiForgeryToken", "__ANTIFORGERY",
+        "__EVENTTARGET", "__EVENTARGUMENT",
+        "__VIEWSTATE", "__VIEWSTATEGENERATOR",
+        "__VIEWSTATEENCRYPTED", "__EVENTVALIDATION",
+        "__RequestVerificationToken",
+    ]
+    d = {k: _ncdex_val(soup, k) for k in keys}
+    d.setdefault("__EVENTTARGET", "")
+    d.setdefault("__EVENTARGUMENT", "")
+    d.setdefault("__VIEWSTATEENCRYPTED", "")
+    return d
+
+
+def _ncdex_find_link(soup, text):
+    for a in soup.find_all("a", href=True):
+        if text.lower() in a.get_text(strip=True).lower():
+            m = _NCDEX_POSTBACK_RE.search(a["href"])
+            if m:
+                return m.group(1)
+    return None
+
+
+def _ncdex_all_file_links(soup):
+    seen, out = set(), []
+    for a in soup.find_all("a", href=True):
+        txt = a.get_text(strip=True)
+        m = _NCDEX_POSTBACK_RE.search(a["href"])
+        if m and txt and txt not in seen:
+            seen.add(txt)
+            out.append((txt, m.group(1)))
+    return out
+
+
+def _ncdex_nav(sess, soup, target):
+    data = {**_ncdex_hidden(soup), "__EVENTTARGET": target}
+    r = sess.post(NCDEX_WEB_DNLD, data=data,
+                  headers={**_NCDEX_POST_H, "Referer": NCDEX_WEB_DNLD}, timeout=45)
+    return BeautifulSoup(r.text, "html.parser")
+
+
+def _ncdex_looks_like_csv(content):
+    """A timed-out session returns an HTML error page with HTTP 200.
+    Without this guard that page gets saved as a perfectly valid-looking .csv."""
+    if len(content) < 40:
+        return False
+    head = content[:400].lstrip().lower()
+    if head.startswith(b"<!doctype") or head.startswith(b"<html") or b"<head" in head:
+        return False
+    return True
+
+
+def _ncdex_captcha(image_bytes):
+    """Reuse the existing captcha_popup() by writing the image to disk first."""
+    os.makedirs(CAPTCHA_DIR, exist_ok=True)
+    path = os.path.join(CAPTCHA_DIR, "captcha_ncdex_web.png")
+    with open(path, "wb") as f:
+        f.write(image_bytes)
+    return captcha_popup(path)
+
+
+def _ncdex_login(sess):
+    """Login -> security question -> download landing page."""
+    for attempt in range(1, NCDEX_MAX_LOGIN_TRIES + 1):
+        print(f"🔐 NCDEX web login attempt {attempt}")
+
+        r = sess.get(NCDEX_WEB_LOGIN, headers=_NCDEX_HEADS, timeout=30)
+
+        # Bot-fingerprint challenge, if the site asks for it
+        if "__verify/fp" in r.text:
+            sess.post(
+                NCDEX_WEB_BASE + "/__verify/fp?url=%2FLogin.aspx",
+                json={"version": 1, "src": "", "userAgent": _NCDEX_UA, "checks": {}},
+                headers=_NCDEX_HEADS, timeout=15,
+            )
+            r = sess.get(NCDEX_WEB_LOGIN, headers=_NCDEX_HEADS, timeout=30)
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        hdn_raw = _ncdex_val(soup, "hdn")
+        cap_val = _ncdex_val(soup, "hdnCaptchaVal")
+
+        if not hdn_raw or ":" not in hdn_raw:
+            print("⚠️ Could not read AES key from NCDEX login page")
+            time.sleep(2)
+            continue
+
+        cap_r = sess.get(
+            f"{NCDEX_WEB_BASE}/Captcha2.aspx?cpt={cap_val}&t={int(time.time()*1000)}",
+            headers=_NCDEX_HEADS, timeout=20,
+        )
+        captcha = _ncdex_captcha(cap_r.content)
+        if not captcha:
+            print("❌ Captcha cancelled")
+            return False
+
+        payload = {
+            **_ncdex_hidden(soup),
+            "hdn": "",
+            "hdnCaptchaVal": cap_val,
+            "txtUserNm": NCDEX_USERNAME,
+            "txtPassword": _ncdex_aes(NCDEX_PASSWORD, hdn_raw),
+            "txtCaptcha": captcha,
+            "cmdSubmit": "Login",
+        }
+        lr = sess.post(NCDEX_WEB_LOGIN, data=payload,
+                       headers={"User-Agent": _NCDEX_UA},
+                       allow_redirects=False, timeout=30)
+        redir = lr.headers.get("Location", "")
+
+        if "AuthenticateQs.aspx" not in redir:
+            err = BeautifulSoup(lr.text, "html.parser")
+            msg = err.find(id="lblMsgBox") or err.find(id="lblMessage")
+            note = msg.get_text(strip=True) if msg else "(no message)"
+            print(f"⚠️ NCDEX login rejected: {note}")
+            if "lock" in note.lower():
+                print("🔴 ACCOUNT LOCKED — stopping NCDEX peak download")
+                return False
+            continue
+
+        # ---- security question ----
+        ar = sess.get(NCDEX_WEB_BASE + "/AuthenticateQs.aspx",
+                      headers=_NCDEX_HEADS, timeout=30)
+        asup = BeautifulSoup(ar.text, "html.parser")
+        sr = sess.post(
+            NCDEX_WEB_BASE + "/AuthenticateQs.aspx",
+            data={
+                **_ncdex_hidden(asup),
+                "__EVENTTARGET": "btnSubmit",
+                "txtanswers0": NCDEX_SECURITY_ANSWER,
+                "hdnType": "ACTIVE",
+                "hidDate": "",
+                "hdnCounter": "",
+                "Hidden1": "",
+            },
+            headers={**_NCDEX_POST_H,
+                     "Referer": NCDEX_WEB_BASE + "/AuthenticateQs.aspx"},
+            allow_redirects=False, timeout=30,
+        )
+        if "LoginSuccessDnld.aspx" not in sr.headers.get("Location", ""):
+            print("❌ NCDEX security answer rejected")
+            return False
+
+        print("✅ NCDEX web login successful")
+        return True
+
+    print("❌ NCDEX login: out of attempts")
+    return False
+
+
+def _ncdex_open_dnld(sess):
+    """LoginSuccessDnld.aspx -> Reports -> dnld. Returns soup or None."""
+    dr = sess.get(NCDEX_WEB_DNLD, headers=_NCDEX_HEADS, timeout=30)
+    soup = BeautifulSoup(dr.text, "html.parser")
+
+    tgt = _ncdex_find_link(soup, "reports")
+    if not tgt:
+        print("❌ 'Reports' folder not found")
+        return None
+    soup = _ncdex_nav(sess, soup, tgt)
+
+    tgt = _ncdex_find_link(soup, "dnld")
+    if not tgt:
+        print("❌ 'dnld' subfolder not found")
+        return None
+    return _ncdex_nav(sess, soup, tgt)
+
+
+def _ncdex_apply_date(sess, soup, trade_date):
+    """Re-post the date filter. Returns the file-listing soup, or None."""
+    if not soup or not soup.find(attrs={"id": "txtDate"}):
+        return None
+
+    dmy = trade_date.strftime("%d-%b-%Y")
+    n_from = _ncdex_field_name(soup, "txtDate", "txtDate")
+    n_to = _ncdex_field_name(soup, "txtToDate", "txtToDate")
+
+    form = {**_ncdex_hidden(soup), n_from: dmy, n_to: dmy}
+
+    btn = soup.find(attrs={"id": "btnShowFiles"})
+    if btn is not None and (btn.get("type") or "").lower() in ("submit", "button", "image"):
+        form[_ncdex_field_name(soup, "btnShowFiles", "btnShowFiles")] = btn.get("value", "Show Files")
+        form["__EVENTTARGET"] = ""
+    else:
+        form["__EVENTTARGET"] = _ncdex_field_name(soup, "btnShowFiles", "btnShowFiles")
+
+    r = sess.post(NCDEX_WEB_DNLD, data=form,
+                  headers={**_NCDEX_POST_H, "Referer": NCDEX_WEB_DNLD}, timeout=60)
+    return BeautifulSoup(r.text, "html.parser")
+
+
+def _ncdex_distribute(src):
+    """Same fan-out the Selenium version did for every NCDEX peak file."""
+    fname = os.path.basename(src)
+    try:
+        shutil.copy2(src, os.path.join(SA_CM_DIR, fname))
+        shutil.copy2(src, os.path.join(SA_FO_DIR, fname))
+        shutil.copy2(src, os.path.join(MCX_INTRA_SAR_DIR, fname))
+        copy_to_rajeev_folder(src)
+        copy_to_eodsar_folder(src)
+        print(f"📦 NCDEX peak distributed: {fname}")
+    except Exception as e:
+        print(f"⚠️ NCDEX distribute failed for {fname}: {e}")
+
+
+def download_ncdex_peak_files(trade_date):
+    """
+    Download NCDEX peak margin files 01-08 for trade_date into NCDEX_DIR,
+    then copy them to the SA / Rajeev / EODSAR / MCX_INTRA_SAR folders.
+
+    Skips entirely if all eight are already on disk.
+    Logs and continues if the exchange has not published a snapshot.
+    """
+    yyyymmdd = trade_date.strftime("%Y%m%d")
+
+    expected = {
+        snap: f"NCCL_MARGIN_REP_01292_{yyyymmdd}_{snap}.csv"
+        for snap in NCDEX_PEAK_SNAPSHOTS
+    }
+
+    os.makedirs(NCDEX_DIR, exist_ok=True)
+
+    missing = {
+        snap: name for snap, name in expected.items()
+        if not os.path.exists(os.path.join(NCDEX_DIR, name))
+    }
+
+    if not missing:
+        print("⏭️ All 8 NCDEX peak files already exist — skipping FULL login")
+        # still make sure the copies exist elsewhere
+        for name in expected.values():
+            src = os.path.join(NCDEX_DIR, name)
+            if os.path.exists(src):
+                _ncdex_distribute(src)
+        return
+
+    print(f"\n📦 NCDEX PEAK DOWNLOAD — need {', '.join(sorted(missing))}\n")
+
+    sess = requests.Session()
+
+    if not _ncdex_login(sess):
+        print("❌ NCDEX peak download aborted (login failed)")
+        return
+
+    soup = _ncdex_open_dnld(sess)
+    if soup is None:
+        print("❌ NCDEX peak download aborted (could not open Reports\\dnld)")
+        return
+
+    listing = _ncdex_apply_date(sess, soup, trade_date)
+    if listing is None:
+        print("❌ No date filter on the NCDEX download page")
+        return
+
+    links = {t.strip().lower(): g for t, g in _ncdex_all_file_links(listing)}
+
+    got, absent = [], []
+
+    for snap in sorted(missing):
+        fname = missing[snap]
+        tgt = links.get(fname.lower())
+
+        if not tgt:
+            absent.append(fname)
+            print(f"   ⏭️ not published by exchange: {fname}")
+            continue
+
+        try:
+            dl = sess.post(
+                NCDEX_WEB_DNLD,
+                data={**_ncdex_hidden(listing), "__EVENTTARGET": tgt},
+                headers={**_NCDEX_POST_H, "Referer": NCDEX_WEB_DNLD},
+                timeout=120,
+            )
+            content = dl.content
+
+            if not _ncdex_looks_like_csv(content):
+                print(f"   ❌ {fname}: server returned a page, not a file")
+                continue
+
+            dest = os.path.join(NCDEX_DIR, fname)
+            with open(dest, "wb") as fh:
+                fh.write(content)
+
+            print(f"   ✅ {fname}  ({len(content)/1024:.1f} KB)")
+            _ncdex_distribute(dest)
+            got.append(fname)
+
+        except Exception as e:
+            print(f"   ❌ {fname}: {e}")
+
+        # Refresh the listing so the next postback has a live viewstate.
+        refreshed = _ncdex_apply_date(sess, soup, trade_date)
+        if refreshed is not None:
+            listing = refreshed
+            links = {t.strip().lower(): g for t, g in _ncdex_all_file_links(listing)}
+
+    print(f"\n📊 NCDEX peak: {len(got)} downloaded, {len(absent)} not published")
+
+
 def run_files_downloader_70(trade_date_str: str):
     """Download all 70 files (NSE + MCX + NCDEX + EPI) for the given trade date.
     trade_date_str: YYYY-MM-DD format (e.g. '2026-06-06')
@@ -607,6 +986,12 @@ def run_files_downloader_70(trade_date_str: str):
             token = safe_download_and_extract("FO", "Reports/Standard report", f"Margin_NCL_FO_0_CM_06436_{yyyymmdd}_P_{slot}.csv.gz", token)
         for f in [f"F_SA01_06436_{ddmmyyyy}.lis.gz"] + [f"F_SA01_P_06436_{ddmmyyyy}_i0{i}.lis.gz" for i in range(1,5)] + [f"F_SA04_06436_{ddmmyyyy}.lis.gz"]:
             token = safe_download_and_extract("FO", "Reports", f, token)
+        # ⚠️ Delivery_NCL_CM_EquityT1 lives under folderPath "Reports", NOT
+        # "Reports/Standard report". The manual script had it under the latter
+        # and got a daily 404 ("File not found") for this one file while the
+        # console fetched it fine — this line is the working value and the
+        # manual script has now been corrected to match it. Do not "fix" this
+        # to Standard report to match the other Margin_NCL_* files.
         for f in [f"C_CC02_06436_{ddmmyyyy}.csv.gz", f"Delivery_NCL_CM_EquityT1_CM_06436_{yyyymmdd}_P_0000.csv.gz",
                   f"C_06436_SEC_PLEDGE_{ddmmyyyy}_01.csv.gz", f"C_06436_SEC_PLEDGE_{ddmmyyyy}_02.csv.gz", f"C_MG13_06436_{ddmmyyyy}.lis.gz"]:
             token = safe_download_and_extract("CM", "Reports", f, token)
@@ -637,6 +1022,13 @@ def run_files_downloader_70(trade_date_str: str):
     # ── NCDEX + EPI ───────────────────────────────────────────────────────
     download_ncdex_file(trade_date)
     download_epi_file(trade_date)
+
+    # ── NCDEX PEAK 01-08 ──────────────────────────────────────────────────
+    # ===== ADDED (ported from the manual script): the console used to end
+    # right after EPI, so the eight NCCL_MARGIN_REP peak files were never
+    # fetched — this is the step the run appeared to "stop in between" at. =====
+    print("\n\n📦 STARTING NCDEX PEAK 01-08 DOWNLOAD...\n")
+    download_ncdex_peak_files(trade_date)
 
     print("\n\n🎉 ALL CO + CM + FO + CD + MCX + NCDEX FILES DOWNLOADED, EXTRACTED & CLEANED SUCCESSFULLY")
     return {"status": "ok", "trade_date": trade_date_str}

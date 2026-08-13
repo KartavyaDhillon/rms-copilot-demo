@@ -55,40 +55,30 @@ in decides what Run NEW actually does:
                            fetch a fresh Allocation_Detail, BUILD
                            CLI_PRUDENTIAL_LIMIT.txt + Intermediate.csv,
                            upload to the plain ALLOCATION folder.
-  AFTERNOON  15:30-17:00   Reuse the morning's Allocation_Detail. Do NOT
-                           rebuild CLI_PRUDENTIAL_LIMIT.txt. Upload to
-                           ALLOCATION(AFTERNOON).
-  EVENING    19:00-21:00   Same as afternoon, but uploads to
-                           ALLOCATION(EVENING).
+  AFTERNOON  15:30-17:00   Collateral files ONLY (NSCCL/NCDEX + MCX).
+                           Upload to ALLOCATION(AFTERNOON).
+  EVENING    19:00-21:00   Same as afternoon, but ALLOCATION(EVENING).
 
-WHY THE NON-MORNING SLOTS ARE DIFFERENT
-───────────────────────────────────────
-  - They must NOT re-download a fresh Allocation_Detail from the exchange —
-    they reuse the SAME file the morning already fetched.
-  - They must NOT touch CLI_PRUDENTIAL_LIMIT.txt / Intermediate.csv at all —
-    that is a once-a-day, morning-only number.
-  - The FTP folder Client Prudential Limit reads from AND uploads to are the
-    SAME physical folder (/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION — see
-    core.pipeline_box._pb_cleanup_allocation_ftp_folder(), which deletes
-    everything else in it down to just today's Allocation_Detail file). If a
-    later run touched that folder the normal way, its own cleanup step would
-    delete everything the morning run just uploaded there.
+ALLOCATION_DETAIL IS MORNING-ONLY, END TO END
+─────────────────────────────────────────────
+The afternoon and evening runs do not download it, do not read it, and do not
+upload it anywhere. It exists purely as the input to CLI_PRUDENTIAL_LIMIT.txt,
+and that is a once-a-day morning number — so on the later two slots there is
+nothing for it to feed and no reason to move it around.
+
+Consequently THIS step does nothing on the later slots beyond writing the
+upload-target marker. The Run NEW chain then continues to cli_download.py
+(NSCCL/NCDEX) -> cli_mcx_download.py -> cli_upload.py as normal.
 
 THE FOLDER CHAIN, IN ORDER
 ──────────────────────────
-  morning    ALLOCATION                      ← fetched here, uploaded here
-  afternoon  ALLOCATION(AFTERNOON)  created, file COPIED in from ALLOCATION,
-             then ALLOCATION → ALLOCATION(MORNING) renamed (archived).
-             The copy happens BEFORE the rename, so the file this run needs
-             is already safe by the time the morning folder changes name.
-  evening    ALLOCATION(EVENING)    created, file copied in from
-             ALLOCATION(AFTERNOON) — deliberately NOT from ALLOCATION, which
-             no longer exists under that name by then, and NOT from
-             ALLOCATION(MORNING), so the chain always reads the most recent
-             copy and never depends on the archive name.
+  morning    ALLOCATION             ← Allocation_Detail fetched here, and the
+                                      morning's outputs uploaded here
+  afternoon  ALLOCATION(AFTERNOON)  ← this slot's collateral + MCX files only
+  evening    ALLOCATION(EVENING)    ← same, for the evening slot
 
-The rename happens exactly ONCE per day, on the first afternoon run. Evening
-performs no rename at all — by then the archiving is already done.
+Each folder is independent — nothing is copied from one into the next, and
+there is no archive rename of ALLOCATION -> ALLOCATION(MORNING) any more.
 
 WINDOWS ARE STRICT
 ──────────────────
@@ -187,7 +177,16 @@ def _windows_description():
 
 
 def _resolve_slot_allocation(slot, suffix, base_folder, today_str, _p):
-    """Non-morning (afternoon / evening) Run NEW allocation resolution — see
+    """⚠️ DEAD CODE — NOT CALLED ANY MORE. Kept only for reference.
+
+    Allocation_Detail is now morning-only end to end: the afternoon and
+    evening runs never download it, read it or upload it, so there is no
+    copy-forward chain between slot folders and no archive rename. This
+    function implemented that old chain.
+
+    Original docstring follows.
+
+    Non-morning (afternoon / evening) Run NEW allocation resolution — see
     the module docstring's folder-chain section. Returns the local
     Allocation_Detail path. Raises on failure (caller wraps this in the same
     try/except pattern every other step here uses).
@@ -301,21 +300,19 @@ def run_cli_allocation_new():
            f"stopped before doing anything.")
         raise SystemExit(1)
 
-    # ── AFTERNOON / EVENING — everything below this block is the pre-existing
-    # morning behaviour, completely unchanged. See the module docstring for
-    # the full picture. ──────────────────────────────────────────────────────
+    # ── AFTERNOON / EVENING — nothing to do in THIS step. Everything below
+    # this block is the pre-existing morning behaviour, unchanged. The later
+    # slots go straight on to cli_download.py (NSCCL/NCDEX) → cli_mcx_download
+    # → cli_upload in the Run NEW chain. ─────────────────────────────────────
     if slot != "morning":
-        _p(f"🕒 {slot.upper()} run detected — Run NEW's {slot} flow: reuse this morning's "
-           f"Allocation Detail, skip CLI_PRUDENTIAL_LIMIT.txt, upload to "
-           f"ALLOCATION{suffix}.")
-        try:
-            _resolve_slot_allocation(slot, suffix, base_folder, today_str, _p)
-        except Exception as e:
-            _p(f"❌ {slot.capitalize()} Allocation Detail step failed: {e}")
-            _ai = translate_error(f"Client Prudential Limit (NEW, {slot}) — Allocation Detail",
-                                  _log_buffer)
-            _p(f"[FRIENDLY_MSG] {_ai or (slot.capitalize() + ' Allocation Detail step failed: ' + str(e))}")
-            raise SystemExit(1)
+        _p(f"🕒 {slot.upper()} run detected — Run NEW's {slot} flow: collateral files "
+           f"only. Allocation Detail is NOT downloaded, read or uploaded, and "
+           f"CLI_PRUDENTIAL_LIMIT.txt is not rebuilt. Upload target: ALLOCATION{suffix}.")
+        # NOTE: _resolve_slot_allocation() is deliberately NOT called any more.
+        # It used to fetch this morning's Allocation_Detail and copy it into
+        # ALLOCATION(AFTERNOON)/(EVENING), archiving the morning folder on the
+        # way. Allocation_Detail is now morning-only end to end — it feeds
+        # nothing on these slots — so there is nothing to copy forward.
         marker_path = os.path.join(base_folder, _SLOT_MARKER)
         try:
             with open(marker_path, "w", encoding="utf-8") as _mf:
@@ -323,9 +320,9 @@ def run_cli_allocation_new():
         except Exception as _we:
             _p(f"⚠️ Could not write the {slot} marker file (non-fatal, but the upload step "
                f"may not know to target ALLOCATION{suffix}): {_we}")
-        _p(f"⏭ Skipping CLI_PRUDENTIAL_LIMIT.txt / Intermediate.csv — the {slot} run only "
-           f"reuses this morning's number, doesn't rebuild it.")
-        _p(f"✅ Allocation Detail (NEW, {slot}) step finished")
+        _p(f"⏭ Skipping Allocation Detail, CLI_PRUDENTIAL_LIMIT.txt and Intermediate.csv "
+           f"— all three are morning-only. This slot uploads collateral + MCX files only.")
+        _p(f"✅ Allocation step (NEW, {slot}) finished — nothing to do")
         return
 
     _p(f"🌅 MORNING run detected — full flow: pre-check, fresh Allocation Detail, "
@@ -356,14 +353,19 @@ def run_cli_allocation_new():
     risk_path = os.path.join(base_folder, risk_name)
     kambala_path = os.path.join(base_folder, kambala_name)
 
-    if not os.path.exists(risk_path):
-        common_risk_path = os.path.join(common_dir, risk_name)
-        if os.path.exists(common_risk_path):
-            try:
-                shutil.copy2(common_risk_path, risk_path)
-                _p(f"✅ Found: {risk_name} (copied from COMMON FILES)")
-            except Exception as _ce:
-                _p(f"⚠️ Found {risk_name} in COMMON FILES but couldn't copy it in: {_ce}")
+    # RISK_REPORT is sourced from COMMON FILES ONLY — never trusted from
+    # whatever might already be sitting in the CLI base folder (that could be
+    # a stale leftover from a previous day). Every morning run pulls a fresh
+    # copy in from common_dir, overwriting anything already at risk_path.
+    common_risk_path = os.path.join(common_dir, risk_name)
+    if os.path.exists(common_risk_path):
+        try:
+            shutil.copy2(common_risk_path, risk_path)
+            _p(f"✅ Found: {risk_name} (copied fresh from COMMON FILES)")
+        except Exception as _ce:
+            _p(f"⚠️ Found {risk_name} in COMMON FILES but couldn't copy it in: {_ce}")
+    else:
+        _p(f"⚠️  {risk_name} not found in COMMON FILES ({common_dir})")
 
     if not os.path.exists(kambala_path):
         _p(f"ℹ️  {kambala_name} not found locally — checking FTP (KAMB/DEPO)")
