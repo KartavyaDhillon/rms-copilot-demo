@@ -73,6 +73,50 @@ class Goal(BaseModel): goal: str
 class Approval(BaseModel): token: str
 
 
+# ── STOP-BUTTON OWNERSHIP ─────────────────────────────────────────────────
+# Only the person who started a run (or an admin) may Stop it. Before this,
+# every Stop endpoint force-killed the tracked subprocess unconditionally —
+# anyone with the dashboard open could stop anyone else's run.
+def _actor(request: Request):
+    """(identity, is_admin) for THIS request. Identity uses the exact same
+    'name (employee_id)' format lock_manager.on_start() stores as a lock's
+    "by" field (see /px/run-stream, /sa/run-stream) so the two compare
+    directly. Falls back to the free-text rms_user cookie when not signed in
+    (RMS_AUTH_REQUIRED=false, or auth not used) — never admin in that case,
+    since admin comes only from a real signed session."""
+    try:
+        from core.auth import current_user as _cu
+        u = _cu(request)
+        if u:
+            return f"{u.get('name') or u.get('sub')} ({u.get('sub')})", bool(u.get("is_admin"))
+    except Exception:
+        pass
+    try:
+        from urllib.parse import unquote as _uq
+        return (_uq(request.cookies.get("rms_user", "")).strip() or None), False
+    except Exception:
+        return None, False
+
+
+def _can_stop(lock_key, request: Request):
+    """(allowed, denial_message). Ownership comes from
+    core.lock_manager._META[lock_key]["by"] — set when the run started (see
+    on_start()). If nobody's identity is known on EITHER side (no signed-in
+    users at all, or the lock has no "by" recorded), this allows the stop —
+    an unenforceable rule must never wedge a run nobody can then stop."""
+    by, admin = _actor(request)
+    if admin:
+        return True, None
+    try:
+        from core.lock_manager import _META
+        owner = (_META.get(lock_key) or {}).get("by")
+    except Exception:
+        owner = None
+    if not owner or not by or owner == by:
+        return True, None
+    return False, f"Only {owner} (who started this run) or an admin can stop it."
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "auto_send": AUTO_SEND}
@@ -230,7 +274,7 @@ async def auth_login(request: Request):
     res = _a.authenticate(body.get("employee_id", ""), body.get("password", ""))
     if not res.get("ok"):
         return JSONResponse(res, status_code=401)
-    token = _a.make_session(res["employee_id"], res["display_name"])
+    token = _a.make_session(res["employee_id"], res["display_name"], res.get("is_admin", False))
     out = JSONResponse({"ok": True, "redirect": "/",
                         "display_name": res["display_name"],
                         "must_change": res.get("must_change", False)})
@@ -287,7 +331,7 @@ async def auth_change_password(request: Request):
     sheet_res = _sheet.mark_changed(eid, new_password=new)
 
     out = JSONResponse({"ok": True, "sheet": sheet_res})
-    token = _a.make_session(eid, u["display_name"])
+    token = _a.make_session(eid, u["display_name"], u.get("is_admin", False))
     out.set_cookie(_a.COOKIE_NAME, token, max_age=int(_a.session_hours() * 3600),
                    httponly=True, samesite="lax", path="/")
     return out
@@ -450,17 +494,31 @@ def ops_ask(a: _OpsAsk):
 
 @app.middleware("http")
 async def _lock_identity_middleware(request, call_next):
-    """Notes WHO (rms_user cookie, set in platform Settings) and from WHERE
-    (client IP) issued each run-starting request, so the lock a pipeline claims
-    moments later can be attributed. Read-only; never blocks a request."""
+    """Notes WHO and from WHERE issued each run-starting request, so the lock a
+    pipeline claims moments later — and the log file it writes — can both be
+    attributed. Read-only; never blocks a request.
+
+    Prefers the SIGNED session identity (a real sign-in, cannot be forged
+    client-side) and only falls back to the free-text rms_user cookie, which
+    anyone can type into. Same 'name (employee_id)' format _actor()/_can_stop()
+    and /px/run-stream use, so a log header, a lock strip and a Stop-ownership
+    check all show and compare the same string."""
     try:
         path = request.url.path
         if path.endswith("-stream") or path.endswith("/run-stream"):
             from core import lock_manager as _lm
             from urllib.parse import unquote
-            _lm.note_request(unquote(request.cookies.get("rms_user", "")),
-                             request.client.host if request.client else "",
-                             path)
+            _who = ""
+            try:
+                from core.auth import current_user as _cu2
+                _u2 = _cu2(request)
+                if _u2:
+                    _who = f"{_u2.get('name') or _u2.get('sub')} ({_u2.get('sub')})"
+            except Exception:
+                pass
+            if not _who:
+                _who = unquote(request.cookies.get("rms_user", ""))
+            _lm.note_request(_who, request.client.host if request.client else "", path)
     except Exception:
         pass
     return await call_next(request)
@@ -1302,7 +1360,10 @@ def _sa_clear_popup_state():
         except OSError: pass
 
 @app.post("/sa/stop")
-def sa_stop():
+def sa_stop(request: Request):
+    allowed, why = _can_stop("sa", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
     _r = _sa_stop()
     _sa_clear_popup_state()
     return _r
@@ -1846,9 +1907,12 @@ def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 @app.post("/px/stop")
-def px_stop(pipe: str = ""):
+def px_stop(request: Request, pipe: str = ""):
     if not pipe:
         return {"ok": False, "error": "pipe is required"}
+    allowed, why = _can_stop(f"px_{pipe}", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
     return _px_stop(pipe)
 
 @app.get("/px/logs")
@@ -2726,10 +2790,14 @@ def ctcl_mcx90_download_stream():
 
 
 @app.post("/ctcl/stop")
-def ctcl_stop():
+def ctcl_stop(request: Request):
     """Stop any running CTCL pipeline or download (NMASS, MCX90, main run).
     Sets CTCL's own _PB['ctcl'] cancel flag and terminates its tracked
-    subprocess if one is running — never touches MS15 or CLI's independent slots."""
+    subprocess if one is running — never touches MS15 or CLI's independent slots.
+    Only the run's own starter or an admin may do this — see _can_stop()."""
+    allowed, why = _can_stop("px_ctcl", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
     from core.pipeline_box import stop_pipeline as _ctcl_sp
     _ctcl_sp("ctcl")
     _ctcl_clear_popup_state()
@@ -2968,9 +3036,13 @@ def ms15_mcx90_download_stream():
 
 
 @app.post("/ms15/stop")
-def ms15_stop():
+def ms15_stop(request: Request):
     """Stop any running Margin Shortage download or the main pipeline run —
-    only MS15's own independent slot, never CTCL's or CLI's."""
+    only MS15's own independent slot, never CTCL's or CLI's. Only the run's
+    own starter or an admin may do this — see _can_stop()."""
+    allowed, why = _can_stop("px_ms15", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
     from core.pipeline_box import stop_pipeline as _ms15_sp
     _ms15_sp("ms15")
     _ms15_clear_popup_state()
@@ -3518,17 +3590,21 @@ def probable_safe_test_disarm():
 
 @app.get("/probable/mcx-lock-status")
 def probable_mcx_lock_status():
-    """Live status of the shared TCS BANCS session lock (RSK383/RSK335 here,
-    same lock Short Allocation's MCX Deposit and Client Prudential Limit's MCX
-    Web Allocation buttons already use) — same shape as /sa/mcx-deposit/lock-status,
-    used by process-probable-box.js to grey out the TCS BANCS download button
-    live if another box is using it right now."""
+    """Live status of PROBABLE's OWN TCS BANCS download lock — used by
+    process-probable-box.js to grey out this box's TCS BANCS button while
+    ITS OWN download is running.
+
+    Scoped to owner="probable" on purpose. The lock used to be shared across
+    Short Allocation / Client Prudential Limit / PROBABLE, so any one of them
+    downloading greyed out (and hard-refused) the other two. They fetch
+    different files and each handles TCS session-expiry itself, so per explicit
+    instruction they now run independently — this only ever reports PROBABLE."""
     try:
         import sys as _ls, os as _lo
         _ls.path.insert(0, _lo.path.join(_lo.path.dirname(__file__), "sa_codes"))
         import importlib as _limp
         _lmdd = _limp.import_module("mcx_deposit_downloader")
-        return _lmdd.mcx_lock_status()
+        return _lmdd.mcx_lock_status("probable")
     except Exception as e:
         return {"busy": False, "error": str(e)}
 
@@ -3680,10 +3756,14 @@ def cli_last_variant():
 
 
 @app.post("/cli/stop")
-def cli_stop():
+def cli_stop(request: Request):
     """Stop any running CLI download/upload subprocess (e.g. the NMASS_NCFE_API_MIX.PY
     subprocess launched by cli_download.py's Step 3) — only CLI's own independent
-    slot, never CTCL's or MS15's."""
+    slot, never CTCL's or MS15's. Only the run's own starter or an admin may
+    do this — see _can_stop()."""
+    allowed, why = _can_stop("px_cli", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
     from core.pipeline_box import stop_pipeline as _cli_sp, _PB
     was_cli = bool(_PB.get("cli", {}).get("running"))
     _cli_sp("cli")
@@ -3811,19 +3891,29 @@ def sa_mcx_deposit_stop():
 
 @app.get("/sa/mcx-deposit/lock-status")
 def sa_mcx_deposit_lock_status():
-    """Live status of the shared MCX-deposit lock (see
+    """Live PER-BOX status of the MCX-deposit locks (see
     sa_codes/mcx_deposit_downloader.py's _acquire_mcx_lock/mcx_lock_status) —
-    polled by the dashboard so Short Allocation's "MCX Deposit" button AND
-    Client Prudential Limit's "MCX Web Allocation" button can grey themselves
-    out THE INSTANT either one starts, on every connected screen, instead of
-    only finding out it's busy after clicking and getting an error back.
-    Returns {"busy": false} or {"busy": true, "owner": "sa"|"cli", "started_at": ...}."""
+    polled by the dashboard so each button greys itself out THE INSTANT ITS OWN
+    box starts, on every connected screen, instead of only finding out after a
+    click.
+
+    The lock used to be SHARED, so Short Allocation downloading also greyed out
+    (and hard-refused) Client Prudential Limit's and PROBABLE's buttons. They
+    download different files and each handles TCS session-expiry itself, so per
+    explicit instruction they now run independently.
+
+    Returns each box separately, plus a legacy top-level {"busy","owner"} —
+    the first busy box — so any older caller keeps working unchanged:
+      {"busy": bool, "owner": ..., "boxes": {"sa": {...}, "cli": {...}, "probable": {...}}}
+    """
     try:
         import sys as _ls
         _ls.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
         import importlib as _limp
         _lmdd = _limp.import_module("mcx_deposit_downloader")
-        return _lmdd.mcx_lock_status()
+        boxes = {o: _lmdd.mcx_lock_status(o) for o in _lmdd._MCX_OWNERS}
+        legacy = _lmdd.mcx_lock_status()
+        return {**legacy, "boxes": boxes}
     except Exception as e:
         return {"busy": False, "error": str(e)}
 

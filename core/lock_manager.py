@@ -262,8 +262,16 @@ def snapshot():
     except Exception:
         pass
 
-    # MCX Deposit TCS BANCS session (file-based resource lock, cross-process,
-    # already has stale-expiry + owner tagging in sa_codes/mcx_deposit_downloader.py)
+    # MCX Deposit / TCS BANCS download (file-based, cross-process, with
+    # stale-expiry + PID-liveness + owner tagging in
+    # sa_codes/mcx_deposit_downloader.py).
+    #
+    # NOT a shared mutex any more: SA, CLI and PROBABLE each hold their OWN
+    # lock and can all download at the same time (different files; each
+    # handles TCS session-expiry itself). This row is therefore INFORMATIONAL
+    # only — affects: [] already meant it greys out nothing, which is now
+    # also the accurate description rather than a convenient exception.
+    # mcx_lock_status() with no owner reports the first busy box.
     try:
         import sys, importlib
         sa_dir = os.path.join(REPO, "sa_codes")

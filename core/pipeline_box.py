@@ -10,6 +10,61 @@ import os, re, sys, glob, queue, threading, subprocess, datetime, shutil
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_BASE = os.path.join(REPO, "logs")
 
+
+# ── LOG ATTRIBUTION HEADER / FOOTER ──────────────────────────────────────────
+# Every log file this module writes opens with the same block, so the answer to
+# "who ran this, from where, and did it actually finish?" is IN THE LOG rather
+# than only in the live lock metadata and the rolling audit trail — both of
+# which are gone or overwritten by the time anyone opens a log days later
+# asking that question.
+#
+# The footer matters as much as the header: without it there is no way to tell
+# a run that COMPLETED from one that was killed or crashed halfway, because
+# both just... stop. A log with no "ended" line was interrupted.
+def _log_identity(explicit_by=None, explicit_ip=None, lock_key=None):
+    """(by, ip) for a log header, best source first:
+        1. what the caller passed in (read from that request's signed session)
+        2. the live lock metadata for this run, if it has already claimed one
+        3. lock_manager's 15-second "most recent -stream request" note
+    Never raises — a log header must not be able to break a run."""
+    if explicit_by:
+        return explicit_by, (explicit_ip or "-")
+    try:
+        from core import lock_manager as _lmi
+        if lock_key:
+            _m = _lmi._META.get(lock_key) or {}
+            if _m.get("by"):
+                return _m["by"], (_m.get("ip") or "-")
+        _r = _lmi._consume_request()
+        return (_r.get("by") or "unknown user"), (_r.get("ip") or "-")
+    except Exception:
+        return "unknown user", "-"
+
+
+def _log_header(title, started_dt, by=None, ip=None, trigger="manual (dashboard)"):
+    import socket
+    try:
+        host = socket.gethostname()
+    except Exception:
+        host = "-"
+    bar = "# " + "=" * 68 + "\n"
+    return (bar +
+            f"# RMS Copilot — {title}\n" +
+            f"# Started : {started_dt.strftime('%Y-%m-%d %H:%M:%S')}\n" +
+            f"# By      : {by or 'unknown user'}\n" +
+            f"# From    : {ip or '-'}\n" +
+            f"# Host    : {host}\n" +
+            f"# Trigger : {trigger}\n" +
+            bar)
+
+
+def _log_footer(started_dt, outcome="finished"):
+    end = datetime.datetime.now()
+    secs = max(0, int((end - started_dt).total_seconds()))
+    dur = f"{secs // 60}m {secs % 60}s" if secs >= 60 else f"{secs}s"
+    return (f"\n# {'-' * 68}\n"
+            f"# Ended   : {end.strftime('%Y-%m-%d %H:%M:%S')}  ·  took {dur}  ·  outcome={outcome}\n")
+
 # ── pipeline registry (extend this per pipeline) ─────────────────────────────
 PIPELINES = {
     "ctcl": {"name": "CTCL vs NMASS", "module": "core.pipelines.ctcl_vs_nmass",
@@ -711,13 +766,8 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
             # Stamp WHO started this into the log file itself. The lock metadata
             # and audit trail already know, but those are live/rolling — the log
             # is the thing anyone opens weeks later asking "who ran this one?"
-            _who_line = ""
-            try:
-                from core import lock_manager as _lmw
-                _wm = _lmw._META.get(lock_key, {})
-                _who_line = f"# by={_wm.get('by') or 'unknown user'} ip={_wm.get('ip') or '-'}\n"
-            except Exception:
-                pass
+            _started_dt = datetime.datetime.now()
+            _by, _ip = _log_identity(by, ip, lock_key)
             q.put({"type": "log", "msg": f"Starting {p['name']}…"})
             # For CTCL, optionally pass run_number_override so retries use the correct run slot
             if run_no and key == "ctcl":
@@ -728,9 +778,7 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
                    "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO, **(extra_env or {})}
             saw_fail = False; last_exc = ""
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
-                lf.write(f"# {p['name']}  start={ts}\n")
-                if _who_line:
-                    lf.write(_who_line)
+                lf.write(_log_header(p["name"], _started_dt, _by, _ip))
                 # CREATE_NEW_PROCESS_GROUP (Windows only) — isolate this subprocess
                 # from the FastAPI server's own console/process group, so a
                 # `uvicorn --reload` restart (triggered by any code edit while a
@@ -775,6 +823,13 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
         except Exception as e:
             q.put({"type": "error", "msg": str(e)})
         finally:
+            # Close the log with the outcome. Without this a killed run and a
+            # clean one look identical — both just stop mid-file.
+            try:
+                with open(logp, "a", encoding="utf-8", errors="replace") as _lf2:
+                    _lf2.write(_log_footer(_started_dt, _outcome))
+            except Exception:
+                pass
             pb["running"] = False; pb["proc"] = None
             try:
                 from core import lock_manager as _lm2
@@ -845,8 +900,10 @@ def _stream_code(code, logdir_key, logname_prefix):
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
                    "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO}
             saw_fail = False
+            _started_dt = datetime.datetime.now()
+            _by, _ip = _log_identity(lock_key=lock_key)
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
-                lf.write(f"# {logname_prefix}  start={ts}\n")
+                lf.write(_log_header(logname_prefix.replace("_", " "), _started_dt, _by, _ip))
                 proc = subprocess.Popen([sys.executable, "-u", "-c", code], cwd=REPO, env=env,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding="utf-8", errors="replace", bufsize=1)
@@ -874,6 +931,11 @@ def _stream_code(code, logdir_key, logname_prefix):
         except Exception as e:
             q.put({"type": "error", "msg": str(e)})
         finally:
+            try:
+                with open(logp, "a", encoding="utf-8", errors="replace") as _lf2:
+                    _lf2.write(_log_footer(_started_dt, _outcome))
+            except Exception:
+                pass
             pb["running"] = False; pb["proc"] = None
             try:
                 from core import lock_manager as _lm2
@@ -931,8 +993,11 @@ def _stream_code_act(code, pipe, action, logname_prefix):
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
                    "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO}
             saw_fail = False
+            _started_dt = datetime.datetime.now()
+            _by, _ip = _log_identity()
+            _outcome = "error"
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
-                lf.write(f"# {logname_prefix}  start={ts}\n")
+                lf.write(_log_header(logname_prefix.replace("_", " "), _started_dt, _by, _ip))
                 proc = subprocess.Popen([sys.executable, "-u", "-c", code], cwd=REPO, env=env,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, encoding="utf-8", errors="replace", bufsize=1)
@@ -947,14 +1012,22 @@ def _stream_code_act(code, pipe, action, logname_prefix):
                     if ev: q.put(ev)
                 rc = proc.wait(); slot["proc"] = None
             if slot.get("cancel"):
+                _outcome = "stopped"
                 q.put({"type": "stopped", "msg": "⛔ Stopped by user.", "log": os.path.basename(logp)})
             elif rc != 0 or saw_fail:
+                _outcome = "failed"
                 q.put({"type": "done", "ok": False, "log": os.path.basename(logp)})
             else:
+                _outcome = "completed"
                 q.put({"type": "done", "ok": True, "log": os.path.basename(logp)})
         except Exception as e:
             q.put({"type": "error", "msg": str(e)})
         finally:
+            try:
+                with open(logp, "a", encoding="utf-8", errors="replace") as _lf2:
+                    _lf2.write(_log_footer(_started_dt, _outcome))
+            except Exception:
+                pass
             slot["running"] = False
             slot["proc"] = None
             slot["started_at"] = None

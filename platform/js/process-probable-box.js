@@ -1952,13 +1952,47 @@
             var body = document.getElementById('saModalBody');
             if (!body) return;
             var label = (typeof window._pipeBoxLabel === 'function' ? window._pipeBoxLabel(pipe) : pipe).toUpperCase();
-            body.innerHTML = body.innerHTML.split('CTCL VS NMASS').join(label);
+            // Both casings: the buttons/footer say "CTCL VS NMASS" but the
+            // red warning line says "CTCL vs NMASS will not run without these
+            // files". The old uppercase-only replace missed that one, so every
+            // non-CTCL box's Upload modal still warned about CTCL vs NMASS.
+            body.innerHTML = body.innerHTML
+              .split('CTCL VS NMASS').join(label)
+              .split('CTCL vs NMASS').join(label);
             // ── PROBABLE-only: a THIRD destination, MASTER (MAIL LIST.xlsx /
             // Branch_AND_Region_LIST.xlsx — updated by hand roughly once a
             // month, per core.pipeline_box PIPELINES["probable"]["master_*"]).
             // dashboard.html's native modal only ever offers 2 buttons
             // (main/common), so it's spliced in here. ─────────────────────
             if (pipe === 'probable') {
+              // ── Drop the COMMON FILES destination. ────────────────────────
+              // dashboard.html's pxUpload() renders it for every pipe, but
+              // PROBABLE never reads that folder: its only consumer is
+              // RISK_REPORT, which belongs to Client Prudential Limit and CTCL.
+              // /probable/readiness lists 7 files and every one of them lives
+              // in PROBABLE_FOLDER — so a file uploaded to COMMON FILES from
+              // this box silently goes nowhere useful. Offering the button was
+              // an invitation to put a required file in the wrong place.
+              var _btns = body.querySelectorAll('button');
+              for (var _b = 0; _b < _btns.length; _b++) {
+                var _oc = _btns[_b].getAttribute('onclick') || '';
+                if (_oc.indexOf("pxPickFiles('common')") !== -1) {
+                  _btns[_b].parentNode.removeChild(_btns[_b]);
+                }
+              }
+              // Footer path hint: "PROBABLE → D:\PROBABLE · COMMON FILES → C:\..."
+              // and the trailing "RISK_REPORT ... belongs in COMMON FILES" note
+              // both now describe a destination this box doesn't have.
+              var _divs = body.querySelectorAll('div');
+              for (var _d = 0; _d < _divs.length; _d++) {
+                var _t = _divs[_d].textContent || '';
+                if (_t.indexOf('COMMON FILES →') !== -1 && _divs[_d].children.length === 0) {
+                  _divs[_d].textContent = _t.split('COMMON FILES →')[0]
+                    .replace(/[\s·|]+$/, '');
+                } else if (_t.indexOf('RISK_REPORT') !== -1 && _t.indexOf('Greyed names') !== -1) {
+                  _divs[_d].textContent = _t.split('RISK_REPORT')[0].trim();
+                }
+              }
               var row = body.querySelector('div[style*="flex-wrap:wrap"]');
               if (row && !row.querySelector('.probable-master-btn')) {
                 var mbtn = document.createElement('button');

@@ -107,9 +107,32 @@ def _current_window_index(pipe):
     return None
 
 
-def _today_mcx_file(folder):
-    """Find today's MCX 90% file in `folder` (random-name-with-YYYYMMDD
-    pattern the underlying script produces), or None if not present."""
+# How old today's MCX 90% file may be and still count as usable. Beyond this
+# it is deleted and a fresh one downloaded.
+#
+# WHY: the check used to be "is there a file with TODAY's date?" with no age
+# test at all — so a file pulled at 09:51 blocked the 11:30 run from
+# downloading, and the run then computed off a nearly-two-hour-old snapshot of
+# the exchange's numbers. Same-day is not the same as current.
+_MCX90_MAX_AGE_MIN = float(os.getenv("MCX90_MAX_AGE_MIN", "45"))
+
+
+def _file_age_min(path):
+    """Age of `path` in minutes, or None if it can't be determined."""
+    try:
+        return (datetime.datetime.now()
+                - datetime.datetime.fromtimestamp(os.path.getmtime(path))).total_seconds() / 60.0
+    except Exception:
+        return None
+
+
+def _today_mcx_file(folder, max_age_min=None):
+    """Newest MCX 90% file for TODAY in `folder` (random-name-with-YYYYMMDD
+    pattern the underlying script produces), or None.
+
+    max_age_min: when given (or when it defaults via _today_mcx_file_fresh),
+    a file older than this is treated as NOT present, so the caller
+    re-downloads instead of silently reusing a stale snapshot."""
     today = datetime.datetime.now().strftime("%Y%m%d")
     try:
         candidates = [f for f in glob.glob(os.path.join(folder, "*.xlsx")) if today in f]
@@ -118,7 +141,41 @@ def _today_mcx_file(folder):
     if not candidates:
         return None
     candidates.sort(key=os.path.getmtime, reverse=True)
-    return candidates[0]
+    newest = candidates[0]
+    if max_age_min is not None:
+        age = _file_age_min(newest)
+        if age is None or age > max_age_min:
+            return None
+    return newest
+
+
+def _purge_stale_mcx_files(folder, max_age_min=_MCX90_MAX_AGE_MIN):
+    """Delete today's MCX 90% files that are older than `max_age_min`, so the
+    "already present" check can't be satisfied by an out-of-date file and the
+    download proceeds. Returns a list of human-readable log lines.
+
+    Only ever touches files matching today's date — yesterday's files are left
+    alone entirely (they're already excluded by the date filter and are somebody
+    else's business), and nothing outside `folder` is considered."""
+    lines = []
+    today = datetime.datetime.now().strftime("%Y%m%d")
+    try:
+        candidates = [f for f in glob.glob(os.path.join(folder, "*.xlsx")) if today in f]
+    except Exception:
+        return lines
+    for f in candidates:
+        age = _file_age_min(f)
+        if age is None or age <= max_age_min:
+            continue
+        try:
+            os.remove(f)
+            lines.append(f"Removed stale MCX 90% file {os.path.basename(f)} "
+                         f"({age:.0f} min old, limit {max_age_min:.0f} min) — "
+                         f"downloading a fresh one.")
+        except Exception as e:
+            lines.append(f"Could not remove stale MCX 90% file "
+                         f"{os.path.basename(f)} ({age:.0f} min old): {e}")
+    return lines
 
 
 def _maybe_share_with_sibling(pipe, downloaded_file):
@@ -134,14 +191,19 @@ def _maybe_share_with_sibling(pipe, downloaded_file):
         return []
     sib_pipe, sib_idx = pair
     sib_folder = _pipe_folder(sib_pipe)
-    if _today_mcx_file(sib_folder):
-        return [f"Sibling folder ({sib_pipe}) already has today's MCX 90% file - no copy needed."]
+    # Age-aware: a sibling holding a STALE file used to count as "already has
+    # it" and the fresh copy was withheld, leaving the sibling to run off the
+    # old snapshot. Clear its stale copies first, then only skip if what's
+    # left is genuinely current.
+    stale_lines = _purge_stale_mcx_files(sib_folder)
+    if _today_mcx_file(sib_folder, _MCX90_MAX_AGE_MIN):
+        return stale_lines + [f"Sibling folder ({sib_pipe}) already has a current MCX 90% file - no copy needed."]
     try:
         dest = os.path.join(sib_folder, os.path.basename(downloaded_file))
         shutil.copy2(downloaded_file, dest)
-        return [f"Shared MCX 90% file with {sib_pipe} (run #{sib_idx} window) -> {dest}"]
+        return stale_lines + [f"Shared MCX 90% file with {sib_pipe} (run #{sib_idx} window) -> {dest}"]
     except Exception as e:
-        return [f"Could not share MCX 90% file with {sib_pipe}: {e}"]
+        return stale_lines + [f"Could not share MCX 90% file with {sib_pipe}: {e}"]
 
 
 def _friendly_auth_msg(server, reason):
@@ -176,9 +238,18 @@ def stream_mcx90_download(pipe="ctcl"):
     python = os.getenv("CTCL_PYTHON", os.getenv("SA_PYTHON", "python"))
 
     own_dir = _pipe_folder(pipe)
-    _existing = _today_mcx_file(own_dir)
+    # Clear out anything from today that is already too old to use, BEFORE the
+    # "already present" check — otherwise a stale file satisfies that check and
+    # blocks the download, which is exactly what happened when a 09:51 file
+    # stopped the 11:30 run from fetching current numbers.
+    for _pl in _purge_stale_mcx_files(own_dir):
+        yield {"type": "log", "msg": _pl}
+    _existing = _today_mcx_file(own_dir, _MCX90_MAX_AGE_MIN)
     if _existing:
-        _msg1 = "Today's MCX 90% file already present (" + os.path.basename(_existing) + ") - skipping download."
+        _age = _file_age_min(_existing)
+        _agetxt = f", {_age:.0f} min old" if _age is not None else ""
+        _msg1 = ("Today's MCX 90% file already present (" + os.path.basename(_existing)
+                 + _agetxt + ") - skipping download.")
         yield {"type": "log", "msg": _msg1}
         yield {"type": "done", "ok": True, "msg": "MCX 90% file already available"}
         yield {"type": "end"}

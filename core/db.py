@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS app_users (
     password_hash   TEXT    NOT NULL,
     is_active       INTEGER DEFAULT 1,
     must_change     INTEGER DEFAULT 1,
+    is_admin        INTEGER DEFAULT 0,   -- can Stop ANY run, not just their own
     created_at      TEXT    NOT NULL,
     last_login_at   TEXT
 );
@@ -197,6 +198,15 @@ def _init_db():
     """Create tables if they don't exist yet. Safe to call every startup."""
     with _conn() as conn:
         conn.executescript(_CREATE_SQL)
+        # CREATE TABLE IF NOT EXISTS never touches an ALREADY-EXISTING table, so
+        # a column added to the schema after go-live (is_admin) needs its own
+        # migration here. SQLite has no "ADD COLUMN IF NOT EXISTS", so this just
+        # tries the ALTER and swallows the "duplicate column" error on every
+        # later startup once it has already been added.
+        try:
+            conn.execute("ALTER TABLE app_users ADD COLUMN is_admin INTEGER DEFAULT 0")
+        except Exception:
+            pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────

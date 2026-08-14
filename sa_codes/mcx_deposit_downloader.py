@@ -182,36 +182,116 @@ class MCXDepositBusyError(Exception):
         super().__init__(f"MCX Deposit download already in progress (started by '{owner}')")
 
 
-def _mcx_lock_path():
+# Every box that can drive a TCS BANCS download. Each gets its OWN lock file.
+_MCX_OWNERS = ("sa", "cli", "probable")
+
+
+def _mcx_lock_path(owner="sa"):
+    """PER-OWNER lock file: .mcx_deposit_lock_sa / _cli / _probable.
+
+    WAS a single shared .mcx_deposit_lock, which made the three boxes mutually
+    exclusive — Short Allocation downloading meant PROBABLE's TCS button failed
+    outright with "already in progress". Per explicit instruction that is no
+    longer wanted: the three download DIFFERENT files, and the TCS
+    session-expiry path is already handled in each downloader, so they may run
+    at the same time.
+
+    The lock is still worth keeping PER BOX: it stops the same button being
+    double-clicked (from two tabs, or two people on the same box) into two
+    concurrent downloads writing the same output file."""
     _dir = os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
     os.makedirs(_dir, exist_ok=True)
-    return os.path.join(_dir, _MCX_LOCK_FILE)
+    return os.path.join(_dir, f"{_MCX_LOCK_FILE}_{(owner or 'sa').strip().lower()}")
+
+
+def _pid_alive(pid):
+    """Is this PID still running? Used to spot an ORPHANED lock instantly.
+
+    Time-based staleness alone was not enough: a killed/crashed owner left the
+    lock behind and every other box was refused for the full 10-minute window
+    even though nothing was actually downloading. Checking the recorded PID
+    answers "is the owner really still there?" directly.
+
+    Fails SAFE (returns True) if it can't tell — an unknown state must be
+    treated as "still held", never silently stolen from a live download."""
+    try:
+        pid = int(pid)
+    except Exception:
+        return True          # no/bad PID recorded — fall back to time-based staleness
+    if pid <= 0:
+        return True
+    try:
+        if os.name == "nt":
+            import ctypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            h = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not h:
+                return False          # can't open → process is gone
+            code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+            ctypes.windll.kernel32.CloseHandle(h)
+            # STILL_ACTIVE (259) means running; anything else means it exited
+            return bool(ok) and code.value == 259
+        os.kill(pid, 0)               # POSIX: signal 0 = existence check only
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                   # exists, just not ours to signal
+    except Exception:
+        return True                   # unknown → assume held
+
+
+def _lock_is_dead(path):
+    """True when the lock file exists but its owner clearly isn't running:
+    either the recorded PID is gone, or the file is older than the stale
+    window. Either way it is safe to remove and re-claim."""
+    try:
+        if not os.path.isfile(path):
+            return False
+        if (time.time() - os.path.getmtime(path)) > _MCX_LOCK_STALE_SECS:
+            return True
+        data = _mcx_json.load(open(path, encoding="utf-8"))
+        return not _pid_alive(data.get("pid"))
+    except Exception:
+        return False                  # unreadable → leave it alone, fail safe
 
 
 def _acquire_mcx_lock(owner):
-    path = _mcx_lock_path()
+    """Claim THIS box's own lock. Only ever conflicts with the SAME box — a
+    Short Allocation download no longer blocks PROBABLE or CLI."""
+    path = _mcx_lock_path(owner)
+    # One-time cleanup of the pre-per-owner shared lock file. If an old build
+    # left it behind it is now meaningless, but leaving it on disk is untidy
+    # and confusing to anyone looking in the folder.
     try:
-        if os.path.isfile(path) and (time.time() - os.path.getmtime(path)) > _MCX_LOCK_STALE_SECS:
+        _legacy = os.path.join(os.path.dirname(path), _MCX_LOCK_FILE)
+        if os.path.isfile(_legacy):
+            os.remove(_legacy)
+    except OSError:
+        pass
+    try:
+        if _lock_is_dead(path):
             os.remove(path)
     except OSError:
         pass
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
-        other_owner = "sa"
-        try:
-            other_owner = _mcx_json.load(open(path, encoding="utf-8")).get("owner", "sa")
-        except Exception:
-            pass
-        raise MCXDepositBusyError(other_owner)
+        raise MCXDepositBusyError(owner)
     with os.fdopen(fd, "w") as f:
         _mcx_json.dump({"owner": owner, "pid": os.getpid(),
                          "started_at": datetime.now().isoformat()}, f)
 
 
-def _release_mcx_lock():
+def _release_mcx_lock(owner=None):
+    """Release THIS box's lock. `owner` defaults to whatever this process was
+    invoked as (MCX_DEPOSIT_CALLER), so the existing no-arg call sites in
+    download_mcx_deposit()'s finally still release the right file."""
+    if owner is None:
+        owner = os.getenv("MCX_DEPOSIT_CALLER", "sa")
     try:
-        os.remove(_mcx_lock_path())
+        os.remove(_mcx_lock_path(owner))
     except OSError:
         pass
 
@@ -222,37 +302,51 @@ def force_release_mcx_lock_if_owner(owner):
     never gets to run its own `finally`/_release_mcx_lock() — without this, a
     Stop click would leave the lock file behind and the NEXT click of the same
     button would wrongly report "already in use" for up to _MCX_LOCK_STALE_SECS,
-    even though nothing is actually running anymore. Only removes the lock if
-    its recorded owner matches what's being stopped, so stopping CLI can never
-    accidentally clear a lock SA is legitimately still holding right now (or
-    vice versa) — a real race, since Stop and a fresh claim can land close
-    together."""
-    path = _mcx_lock_path()
+    even though nothing is actually running anymore.
+
+    Now that locks are per-owner the "is it really theirs?" check is inherent —
+    each box has its own file and can only ever delete its own."""
     try:
-        existing = _mcx_json.load(open(path, encoding="utf-8"))
-        if existing.get("owner") == owner:
-            os.remove(path)
-    except FileNotFoundError:
-        pass
-    except Exception:
+        os.remove(_mcx_lock_path(owner))
+    except OSError:
         pass
 
 
-def mcx_lock_status():
-    """Read-only peek at the lock — used by the dashboard to poll and disable
-    the MCX Deposit / MCX Web Allocation buttons live on EVERY screen the
-    instant either one starts, instead of only finding out after a click."""
-    path = _mcx_lock_path()
-    try:
-        st = os.stat(path)
-        if (time.time() - st.st_mtime) > _MCX_LOCK_STALE_SECS:
+def mcx_lock_status(owner=None):
+    """Read-only peek — used by the dashboard to grey out a button live while
+    ITS OWN box is mid-download.
+
+    owner given  → status of just that box's lock.
+    owner=None   → first busy box found (back-compat for core.lock_manager's
+                   snapshot(), which reports one 'TCS BANCS session' row).
+
+    Since the lock became per-box, a busy result here means "THIS box is
+    downloading", not "somebody somewhere is" — the three no longer block each
+    other (they fetch different files and each handles TCS session-expiry on
+    its own)."""
+    def _one(o):
+        path = _mcx_lock_path(o)
+        try:
+            os.stat(path)
+            # Same liveness test _acquire_mcx_lock() uses, so the dashboard never
+            # greys a button out for a lock that acquiring would have just cleared.
+            if _lock_is_dead(path):
+                return {"busy": False}
+            data = _mcx_json.load(open(path, encoding="utf-8"))
+            return {"busy": True, "owner": data.get("owner", o),
+                    "started_at": data.get("started_at")}
+        except FileNotFoundError:
             return {"busy": False}
-        data = _mcx_json.load(open(path, encoding="utf-8"))
-        return {"busy": True, "owner": data.get("owner", "sa"), "started_at": data.get("started_at")}
-    except FileNotFoundError:
-        return {"busy": False}
-    except Exception:
-        return {"busy": False}
+        except Exception:
+            return {"busy": False}
+
+    if owner:
+        return _one(owner)
+    for o in _MCX_OWNERS:
+        st = _one(o)
+        if st.get("busy"):
+            return st
+    return {"busy": False}
 
 
 # ── main download function ────────────────────────────────────────────────────

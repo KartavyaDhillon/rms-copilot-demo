@@ -184,6 +184,7 @@ CREATE TABLE IF NOT EXISTS app_users (
     password_hash   TEXT      NOT NULL,      -- bcrypt
     is_active       BOOLEAN   DEFAULT TRUE,  -- disable a leaver, keep their history
     must_change     BOOLEAN   DEFAULT TRUE,  -- force a reset on first sign-in
+    is_admin        BOOLEAN   DEFAULT FALSE, -- can Stop ANY run, not just their own
     created_at      TIMESTAMP NOT NULL,
     last_login_at   TIMESTAMP
 );
@@ -209,6 +210,11 @@ def setup_db():
     try:
         with conn.cursor() as cur:
             cur.execute(_CREATE_SQL)
+            # CREATE TABLE IF NOT EXISTS never touches an ALREADY-EXISTING table,
+            # so a column added to the schema after go-live (is_admin) needs its
+            # own migration — unlike SQLite, Postgres 9.6+ supports "IF NOT
+            # EXISTS" directly on ADD COLUMN, so this is safe to run every boot.
+            cur.execute("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE")
         conn.commit()
         print("✅ PostgreSQL tables created / verified.")
     finally:

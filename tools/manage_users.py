@@ -14,6 +14,8 @@ USAGE  (from the rms-copilot folder)
     python tools\manage_users.py reset M0214478
     python tools\manage_users.py disable M0214478
     python tools\manage_users.py enable  M0214478
+    python tools\manage_users.py admin   M0214478   (grant admin — can Stop ANY run)
+    python tools\manage_users.py unadmin M0214478   (revoke admin)
     python tools\manage_users.py list
     python tools\manage_users.py bulk employees.csv
 
@@ -115,6 +117,21 @@ def cmd_enable(args):
     print("  ✓ Enabled" if r["ok"] else "  ✕ No such account")
 
 
+def cmd_admin(args):
+    r = auth.set_admin(args.employee_id, True)
+    if r["ok"]:
+        print(f"  ✓ {args.employee_id.upper()} is now an admin — can Stop ANY run, not just their own.")
+        print("    They must sign out and back in for this to take effect (it's baked")
+        print("    into the signed session token, not checked against the DB per request).")
+    else:
+        print("  ✕ No such account")
+
+
+def cmd_unadmin(args):
+    r = auth.set_admin(args.employee_id, False)
+    print(f"  ✓ Admin revoked for {args.employee_id.upper()}" if r["ok"] else "  ✕ No such account")
+
+
 def cmd_list(_args):
     users = auth.list_users()
     if not users:
@@ -122,14 +139,14 @@ def cmd_list(_args):
         print('    python tools\\manage_users.py add MT01234 "Name Here"\n')
         return
     print()
-    print(f"  {'EMPLOYEE ID':<16}{'NAME':<26}{'STATUS':<12}{'LAST SIGN-IN'}")
-    print(f"  {'-'*16}{'-'*26}{'-'*12}{'-'*20}")
+    print(f"  {'EMPLOYEE ID':<16}{'NAME':<26}{'STATUS':<14}{'ADMIN':<7}{'LAST SIGN-IN'}")
+    print(f"  {'-'*16}{'-'*26}{'-'*14}{'-'*7}{'-'*20}")
     for u in users:
         status = "active" if u["is_active"] else "DISABLED"
         if u["is_active"] and u["must_change"]:
             status = "must change"
         print(f"  {u['employee_id']:<16}{(u['display_name'] or '')[:24]:<26}"
-              f"{status:<12}{u['last_login_at'] or '—'}")
+              f"{status:<14}{('yes' if u.get('is_admin') else ''):<7}{u['last_login_at'] or '—'}")
     print(f"\n  {len(users)} account(s)\n")
 
 
@@ -203,6 +220,12 @@ def main():
 
     e = sub.add_parser("enable", help="re-enable a disabled account")
     e.add_argument("employee_id"); e.set_defaults(fn=cmd_enable)
+
+    ga = sub.add_parser("admin", help="grant admin — can Stop ANY run, not just their own")
+    ga.add_argument("employee_id"); ga.set_defaults(fn=cmd_admin)
+
+    ua = sub.add_parser("unadmin", help="revoke admin")
+    ua.add_argument("employee_id"); ua.set_defaults(fn=cmd_unadmin)
 
     l = sub.add_parser("list", help="show all accounts")
     l.set_defaults(fn=cmd_list)

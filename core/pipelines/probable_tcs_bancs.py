@@ -764,7 +764,8 @@ def download_both(output_dir, force=False):
         print(f"❌ TCS BANCS download failed: {exc}")
         return {"rsk383": None, "rsk335": None}
     finally:
-        mdd._release_mcx_lock()
+        # Explicit owner — locks are per-box now, so release PROBABLE's own.
+        mdd._release_mcx_lock("probable")
 
 
 if __name__ == "__main__":

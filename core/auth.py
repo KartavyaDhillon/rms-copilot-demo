@@ -146,14 +146,14 @@ def get_user(employee_id):
     try:
         conn = _conn(); cur = conn.cursor()
         cur.execute(
-            f"SELECT employee_id, display_name, password_hash, is_active, must_change "
+            f"SELECT employee_id, display_name, password_hash, is_active, must_change, is_admin "
             f"FROM app_users WHERE UPPER(employee_id) = {_ph()}", (eid,))
         row = cur.fetchone()
         conn.close()
         if not row:
             return None
         return {"employee_id": row[0], "display_name": row[1], "password_hash": row[2],
-                "is_active": bool(row[3]), "must_change": bool(row[4])}
+                "is_active": bool(row[3]), "must_change": bool(row[4]), "is_admin": bool(row[5])}
     except Exception as e:
         print(f"[auth] user lookup failed for {eid}: {type(e).__name__}: {e}", flush=True)
         return None
@@ -196,6 +196,21 @@ def update_display_name(employee_id, display_name):
     return {"ok": n > 0, "changed": n}
 
 
+def set_admin(employee_id, admin):
+    """Grant/revoke admin — an admin can Stop ANY run, not just their own
+    (see current_user()/is_admin_request() and api.py's _can_stop()). Everyone
+    else can only stop a run they themselves started."""
+    conn = _conn(); cur = conn.cursor(); p = _ph()
+    val = True if admin else False
+    if not _use_postgres():
+        val = 1 if admin else 0
+    cur.execute(f"UPDATE app_users SET is_admin={p} WHERE UPPER(employee_id)={p}",
+                (val, (employee_id or "").strip().upper()))
+    n = cur.rowcount
+    conn.commit(); conn.close()
+    return {"ok": n > 0, "changed": n}
+
+
 def set_active(employee_id, active):
     conn = _conn(); cur = conn.cursor(); p = _ph()
     val = True if active else False
@@ -212,10 +227,11 @@ def list_users():
     try:
         conn = _conn(); cur = conn.cursor()
         cur.execute("SELECT employee_id, display_name, is_active, must_change, "
-                    "last_login_at FROM app_users ORDER BY employee_id")
+                    "last_login_at, is_admin FROM app_users ORDER BY employee_id")
         rows = cur.fetchall(); conn.close()
         return [{"employee_id": r[0], "display_name": r[1], "is_active": bool(r[2]),
-                 "must_change": bool(r[3]), "last_login_at": r[4]} for r in rows]
+                 "must_change": bool(r[3]), "last_login_at": r[4],
+                 "is_admin": bool(r[5])} for r in rows]
     except Exception as e:
         print(f"[auth] list_users failed: {type(e).__name__}: {e}", flush=True)
         return []
@@ -241,8 +257,8 @@ def _b64d(s):
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def make_session(employee_id, display_name):
-    payload = {"sub": employee_id, "name": display_name,
+def make_session(employee_id, display_name, is_admin=False):
+    payload = {"sub": employee_id, "name": display_name, "is_admin": bool(is_admin),
                "exp": (datetime.datetime.now()
                        + datetime.timedelta(hours=session_hours())).timestamp()}
     body = _b64e(json.dumps(payload, separators=(",", ":")).encode())
@@ -283,8 +299,8 @@ def authenticate(employee_id, password):
     if not verify_password(password, u["password_hash"]):
         return {"ok": False, "error": generic}
     _touch_login(u["employee_id"])
-    return {"ok": True, "employee_id": u["employee_id"],
-            "display_name": u["display_name"], "must_change": u["must_change"]}
+    return {"ok": True, "employee_id": u["employee_id"], "display_name": u["display_name"],
+            "must_change": u["must_change"], "is_admin": u.get("is_admin", False)}
 
 
 def current_user(request):
@@ -293,3 +309,14 @@ def current_user(request):
         return read_session(request.cookies.get(COOKIE_NAME, ""))
     except Exception:
         return None
+
+
+def is_admin_request(request):
+    """True if THIS request's signed-in session carries the admin flag. False
+    for a non-admin, a not-signed-in caller, or any error — an admin check
+    must fail closed, never open."""
+    try:
+        u = current_user(request)
+        return bool(u and u.get("is_admin"))
+    except Exception:
+        return False

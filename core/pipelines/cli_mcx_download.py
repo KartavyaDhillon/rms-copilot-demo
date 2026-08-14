@@ -44,8 +44,46 @@ _MCX_DEPOSIT_RE = re.compile(r"^MCX_DEPOSIT_.*\.xlsx$", re.I)
 _MCX_RANDOM_RE = re.compile(r"^[A-Za-z0-9]+-\d{14}\.xlsx$", re.I)
 
 
-def _find_existing_mcx_file(base_folder):
-    today = datetime.datetime.now().date()
+# How old an existing export may be and still be reused instead of re-fetched.
+# Same reasoning (and same default) as mcx90_download.py's _MCX90_MAX_AGE_MIN:
+# "from today" is not the same as "current" — a file pulled hours ago would
+# otherwise be silently reused for a much later run.
+_MCX_MAX_AGE_MIN = float(os.getenv("MCX90_MAX_AGE_MIN", "45"))
+
+
+def _purge_stale_mcx_exports(base_folder, _p=None, max_age_min=_MCX_MAX_AGE_MIN):
+    """Delete today's MCX exports that are older than `max_age_min`, so a stale
+    one can't satisfy the "already present" check and block a fresh download.
+    Only touches files matching the two known export name patterns AND dated
+    today — nothing else in the folder is considered."""
+    now = datetime.datetime.now()
+    for f in os.listdir(base_folder):
+        if not (_MCX_DEPOSIT_RE.match(f) or _MCX_RANDOM_RE.match(f)):
+            continue
+        full = os.path.join(base_folder, f)
+        if not os.path.isfile(full):
+            continue
+        try:
+            mt = datetime.datetime.fromtimestamp(os.path.getmtime(full))
+        except OSError:
+            continue
+        if mt.date() != now.date():
+            continue
+        age = (now - mt).total_seconds() / 60.0
+        if age <= max_age_min:
+            continue
+        try:
+            os.remove(full)
+            if _p:
+                _p(f"🗑 Removed stale MCX export {f} ({age:.0f} min old, limit "
+                   f"{max_age_min:.0f} min) — fetching a fresh one.")
+        except Exception as e:
+            if _p:
+                _p(f"⚠️ Could not remove stale MCX export {f}: {e}")
+
+
+def _find_existing_mcx_file(base_folder, max_age_min=_MCX_MAX_AGE_MIN):
+    now = datetime.datetime.now()
     candidates = []
     for f in os.listdir(base_folder):
         if not (_MCX_DEPOSIT_RE.match(f) or _MCX_RANDOM_RE.match(f)):
@@ -54,13 +92,17 @@ def _find_existing_mcx_file(base_folder):
         if not os.path.isfile(full):
             continue
         # Only reuse it if it's from today — an old leftover export from a
-        # previous day shouldn't be silently fed into today's conversion.
+        # previous day shouldn't be silently fed into today's conversion —
+        # AND only if it's still current (see _MCX_MAX_AGE_MIN).
         try:
-            mtime_date = datetime.datetime.fromtimestamp(os.path.getmtime(full)).date()
+            mt = datetime.datetime.fromtimestamp(os.path.getmtime(full))
         except OSError:
             continue
-        if mtime_date == today:
-            candidates.append(full)
+        if mt.date() != now.date():
+            continue
+        if max_age_min is not None and (now - mt).total_seconds() / 60.0 > max_age_min:
+            continue
+        candidates.append(full)
     if not candidates:
         return None
     candidates.sort(key=os.path.getmtime, reverse=True)
@@ -82,6 +124,9 @@ def run_cli_mcx_download():
         _p("⏭ MCX_WebAllocationDeallocation.csv already present — skipping TCS BANCS login")
         return
 
+    # Clear out today's too-old exports BEFORE the "already present" check, so
+    # a stale one can't block the download (see _purge_stale_mcx_exports).
+    _purge_stale_mcx_exports(base_folder, _p)
     xlsx_path = _find_existing_mcx_file(base_folder)
     if xlsx_path:
         _p(f"⏭ Existing MCX export found: {os.path.basename(xlsx_path)} — skipping TCS BANCS login")

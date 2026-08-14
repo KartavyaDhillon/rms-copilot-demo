@@ -541,7 +541,7 @@ body {
         <div class="sa-modal-card" style="width:min(420px,94vw)">
           <div class="sa-modal-head" style="display:flex;align-items:center;justify-content:space-between">
             <h3 class="token-title">🔐 MCX Authentication</h3>
-            <button onclick="tokenHideModal()" style="background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;line-height:1;padding:0 2px" data-tip="Close without entering a token.">✕</button>
+            <button onclick="tokenCancel()" style="background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;line-height:1;padding:0 2px" title="Cancel and stop this run" data-tip="Cancel and stop this run.">✕</button>
           </div>
           <div class="sa-modal-body">
             <p class="token-attempt" style="color:var(--muted);font-size:12px;margin-bottom:14px">RSA SecurID Token — Attempt 1 of 3</p>
@@ -2486,6 +2486,22 @@ function tokenHideModal(){
     }
   }
 }
+async function tokenCancel(){
+  // User-initiated bail-out (✕ button) — hide the modal AND stop the run.
+  // Without this, closing the modal only ever changed _tokenVisible client-
+  // side: the backend's .token_state file stayed PENDING forever (the
+  // subprocess is blocked waiting for an answer), so the very next 2s poll
+  // tick saw pending:true again and reshowed the modal immediately. Mirrors
+  // captchaCancel() exactly — /ctcl/stop, /ms15/stop and /sa/stop all clear
+  // their pipe's popup state as part of stopping, and /sa/stop covers CLI
+  // and PROBABLE too since they share the SA token file/route.
+  tokenHideModal();
+  try{
+    if(_tokenSource==='ctcl'){ await fetch(API+'/ctcl/stop',{method:'POST'}); }
+    else if(_tokenSource==='ms15'){ await fetch(API+'/ms15/stop',{method:'POST'}); }
+    else { await fetch(API+'/sa/stop',{method:'POST'}); }
+  }catch(e){}
+}
 async function tokenSubmit(){
   const m=document.getElementById('tokenModal');
   if(!m) return;
@@ -3410,10 +3426,16 @@ async function saImportPaths(names, target){
   }
 }
 async function saStop(){
+  // Ownership check happens SERVER-side (api.py's _can_stop()) — ask first and
+  // bail out without touching any UI state if denied, so a rejected Stop can
+  // never make this browser's screen claim the run stopped when it didn't.
+  try{
+    const r=await fetch(API+'/sa/stop',{method:'POST'});
+    if(r.status===403){ const d=await r.json().catch(()=>({})); alert(d.error||"You didn't start this run, so you can't stop it. Ask the person who started it, or an admin."); return; }
+  }catch(e){}
   try{ if(_saES){ _saES.close(); _saES=null; } }catch(e){}
   // Also stop MCX Deposit download if running
   try{ _mcxDepositReset(document.getElementById('saMcxDepositBtn')); }catch(e){}
-  try{ await fetch(API+'/sa/stop',{method:'POST'}); }catch(e){}
   try{ await fetch(API+'/sa/mcx-deposit-stop',{method:'POST'}); }catch(e){}
   _saRunning=false; window._saActiveTag=null;
   // Flip whichever pill was still showing "⏳ Downloading…"/"SA Processing…"/"LAS
@@ -5008,7 +5030,15 @@ async function ms15RunSmart(){
     _pxRunReal('ms15');
   });
 }
-function pxStop(pipe){
+async function pxStop(pipe){
+  // Ownership check happens SERVER-side (api.py's _can_stop()) — ask first and
+  // bail out without touching any UI state if denied, so a rejected Stop can
+  // never make this browser's screen claim the run stopped when it didn't.
+  var _su=pipe==='ctcl'?'/ctcl/stop':(pipe==='cli'?'/cli/stop':(pipe==='ms15'?'/ms15/stop':'/px/stop'));
+  try{
+    const r=await fetch(API+_su,{method:'POST'});
+    if(r.status===403){ const d=await r.json().catch(()=>({})); alert(d.error||"You didn't start this run, so you can't stop it. Ask the person who started it, or an admin."); return; }
+  }catch(e){}
   // Close only THIS pipe's streams (its run + its one-off download actions).
   // This used to close the single shared _pxES, which meant Stop on one box
   // silently killed whatever other box happened to be streaming at the time.
@@ -5021,7 +5051,6 @@ function pxStop(pipe){
     try{ if(_ms15Mcx90ES){ _ms15Mcx90ES.close(); _ms15Mcx90ES=null; const b=document.getElementById('ms15Mcx90Btn'); if(b){b.disabled=false;b.textContent='📥 MCX 90%';} } }catch(e){}
     captchaStopPoller();
   }
-  var _su=pipe==='ctcl'?'/ctcl/stop':(pipe==='cli'?'/cli/stop':(pipe==='ms15'?'/ms15/stop':'/px/stop')); fetch(API+_su,{method:'POST'}).catch(()=>{});
   // /cli/stop kills the tracked subprocess (taskkill /F /T) instantly, regardless of
   // which step (FTP transfer, TCS BANCS login, pandas processing) it's currently in.
   if(pipe==='cli'){
@@ -5949,6 +5978,37 @@ async function mcxLockPollTick(){
   let d; try{ d = await (await fetch(API+'/sa/mcx-deposit/lock-status')).json(); }catch(e){ return; }
   const saBtn = document.getElementById('saMcxDepositBtn');
   const cliBtn = document.getElementById('cliMcxBtn');
+  // ── PER-BOX from here ──────────────────────────────────────────────────
+  // These locks are no longer shared: Short Allocation, Client Prudential
+  // Limit and PROBABLE each hold their OWN, and may all download at once
+  // (different files; each handles TCS session-expiry itself). So a button
+  // only ever greys out for ITS OWN box's download — started from another
+  // tab or by another person — never because a different box is busy.
+  if(d && d.boxes){
+    const _busy = (o) => !!(d.boxes[o] && d.boxes[o].busy);
+    if(saBtn && !_saMcxLocalRunning){
+      if(_busy('sa')){
+        saBtn.disabled = true; saBtn.dataset.mcxLockGreyed = '1';
+        saBtn.textContent = '⏳ Downloading…';
+        saBtn.title = 'An MCX Deposit download is already running for this box.';
+      } else if(saBtn.dataset.mcxLockGreyed === '1'){
+        saBtn.disabled = false; saBtn.textContent = '📥 MCX Deposit';
+        saBtn.dataset.mcxLockGreyed = ''; saBtn.title = '';
+      }
+    }
+    if(cliBtn && !_cliMcxLocalRunning){
+      if(_busy('cli')){
+        cliBtn.disabled = true; cliBtn.dataset.mcxLockGreyed = '1';
+        cliBtn.textContent = '⏳ Downloading…';
+        cliBtn.title = 'An MCX Web Allocation download is already running for this box.';
+      } else if(cliBtn.dataset.mcxLockGreyed === '1'){
+        cliBtn.disabled = false; cliBtn.textContent = '📥 MCX Web Allocation';
+        cliBtn.dataset.mcxLockGreyed = ''; cliBtn.title = '';
+      }
+    }
+    return;
+  }
+  // Legacy fallback — only reached if the server predates the per-box payload.
   if(d && d.busy){
     // Was a hardcoded cli/else-"Short Allocation" ternary, written back when
     // "sa" and "cli" were the only two possible owners of this shared lock.
@@ -5963,13 +6023,20 @@ async function mcxLockPollTick(){
     // it already shows its own accurate spinner/label via saMcxDepositDownload()/
     // _cliRunOneStep(). Only greys out the OTHER box's button (or this same
     // box's button from a DIFFERENT tab's perspective).
+    // Label reads "⏳ Downloading…" to match every other in-progress button in
+    // the console, instead of the old "🔒 In use by <box>" which was the only
+    // button anywhere that phrased a busy state as a lock. WHO holds it is
+    // still surfaced — as the hover tooltip — so the information isn't lost,
+    // it's just no longer the headline.
     if(saBtn && !_saMcxLocalRunning && d.owner !== 'sa'){
       saBtn.disabled = true; saBtn.dataset.mcxLockGreyed = '1';
-      saBtn.textContent = '🔒 In use by ' + ownerLabel;
+      saBtn.textContent = '⏳ Downloading…';
+      saBtn.title = 'TCS BANCS session in use by ' + ownerLabel;
     }
     if(cliBtn && !_cliMcxLocalRunning && d.owner !== 'cli'){
       cliBtn.disabled = true; cliBtn.dataset.mcxLockGreyed = '1';
-      cliBtn.textContent = '🔒 In use by ' + ownerLabel;
+      cliBtn.textContent = '⏳ Downloading…';
+      cliBtn.title = 'TCS BANCS session in use by ' + ownerLabel;
     }
   } else {
     // Only restore a button THIS poller greyed out — never touch one that's
