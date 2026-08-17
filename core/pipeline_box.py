@@ -371,6 +371,34 @@ _WA_BAD    = re.compile(r"whatsapp (api error|error) for", re.I)
 _TEST_TAG  = re.compile(r"\[test\]", re.I)
 _FAIL      = re.compile(r"pre-run file check failed|aborting execution|traceback \(most recent", re.I)
 _EXC_LINE  = re.compile(r"^(?:[A-Za-z]+\.)*[A-Za-z]*(Error|Exception):\s+.{3,}", re.I)
+# A traceback mid-log is NOT automatically a run-level failure — several
+# pipelines (margin_shortage_15min.py's send_email is the known case, 2026-08-17
+# incident: an SMTP "Server not connected" traceback fired, then the code's own
+# `time.sleep(5)` + retry succeeded 6s later, exit code 0, "RUN N COMPLETED
+# SUCCESSFULLY" printed) catch a transient error, log the traceback for
+# diagnostics, retry, and recover. Previously `saw_fail` was sticky — ANY
+# traceback anywhere in the output permanently flagged the whole run
+# outcome=failed even though it fully completed. That false "failed" tag is
+# what led an operator to manually re-trigger an already-successful run,
+# duplicating every email/WhatsApp alert and burning a run-counter slot meant
+# for the next scheduled window. Now: a _FAIL match is only fatal if no
+# recovery evidence (an explicit "✅ ... sent successfully"/"✅ ... completed"
+# line, which every pipeline's retry-success path already prints) appears
+# afterward. A FRESH _FAIL after a recovery still correctly fails the run.
+#
+# The recovery marker alone (_RECOVERED) is deliberately NOT sufficient on its
+# own — an unrelated LATER success line elsewhere in a long run (e.g. "✅
+# WhatsApp Alert Process Completed" in a totally different section) must not
+# be able to paper over a DIFFERENT step that genuinely failed and was never
+# retried. Every pipeline's own retry loops explicitly print a "retrying"
+# line (🔁 Retrying in Ns..., "Retrying in 5 seconds...", etc. — checked
+# across core/pipelines/*.py) right after catching the error and before
+# trying again, so recovery only counts when that explicit signal appears
+# BETWEEN the failure and the success line — i.e. the pipeline's own code
+# said "I am retrying this," not just "something else happened to succeed
+# afterward."
+_RECOVERED   = re.compile(r"✅.*(sent successfully|completed)", re.I)
+_RETRY_SIGNAL = re.compile(r"retrying", re.I)
 # Explicit tags printed by ctcl_codes/*.py on a confirmed wrong password
 # (confirmed via test_nmass_login.py / test_mcx90_login.py diagnostics), plus
 # the NCFE (NCDEX-side) tags for wrong password / locked account, plus
@@ -686,7 +714,7 @@ def _safe_test_armed_for(key):
         return False
 
 
-def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
+def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None, force=False):
     p = PIPELINES.get(key)
     pb = _PB.get(key)
     if pb is None:
@@ -713,6 +741,40 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
                           f"need to re-run it, clear run_counter.txt in the process "
                           f"folder first."}
             return
+
+    # ── DUPLICATE-RUN COOLDOWN (2026-08-17 incident) ────────────────────────
+    # Multi-run-per-day pipes (ctcl/ms15/cli — anything with "runs" > 1) had no
+    # protection against firing the SAME slot's worth of alerts twice in quick
+    # succession. What actually happened: MS15's 11:55 run completed fully
+    # (all emails/WhatsApp sent, files archived) but got tagged outcome=failed
+    # by a since-fixed bug (a transient SMTP retry's traceback was mistaken for
+    # a fatal error). The operator, trusting that false "failed" tag, manually
+    # re-ran it 10 minutes later — which resent all 7 WhatsApp margin images,
+    # all zone/main emails, and every client alert a second time, and burned a
+    # run-counter slot meant for the next real scheduled window.
+    #
+    # The outcome-flag bug is fixed at the source now, but this is cheap,
+    # independent insurance for the NEXT time a run looks wrong for some other
+    # reason: block a same-pipe run that starts within COOLDOWN_MIN of the
+    # previous run's clean completion, with a clear explanation instead of
+    # silently duplicating every client-facing message. `force=True` (not
+    # currently wired to any UI button — call /px/run-stream?...&force=1
+    # directly if a fast genuine re-run is ever needed) bypasses it.
+    COOLDOWN_MIN = 5
+    if p and p.get("runs", 1) > 1 and not force:
+        _last = pb.get("last_completed_at")
+        if _last:
+            _mins = (datetime.datetime.now() - _last).total_seconds() / 60.0
+            if _mins < COOLDOWN_MIN:
+                yield {"type": "error",
+                       "msg": f"⛔ {p.get('name', key)} already completed a run "
+                              f"{_mins:.1f} min ago. Running again now would resend every "
+                              f"email/WhatsApp alert from that run a second time. If this "
+                              f"really is a genuine next run (not a retry of the one that "
+                              f"just finished), wait {COOLDOWN_MIN - _mins:.1f} more min, or "
+                              f"check 🗂️ Logs first to confirm the last run actually needs "
+                              f"redoing."}
+                return
 
     _clear_if_stale(key)
     with _PB_LOCKS[key]:
@@ -776,7 +838,7 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
                 code = f"from {p['module']} import {p['func']} as _f; _f()"
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
                    "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO, **(extra_env or {})}
-            saw_fail = False; last_exc = ""
+            saw_fail = False; last_exc = ""; recovered_after_fail = False; retry_signaled = False
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
                 lf.write(_log_header(p["name"], _started_dt, _by, _ip))
                 # CREATE_NEW_PROCESS_GROUP (Windows only) — isolate this subprocess
@@ -802,7 +864,9 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
                                 # lost in a buffer that never gets flushed
                     ls = line.strip()
                     _touch(pb)   # proof of life for _clear_if_stale
-                    if _FAIL.search(ls): saw_fail = True
+                    if _FAIL.search(ls): saw_fail = True; recovered_after_fail = False; retry_signaled = False
+                    elif saw_fail and _RETRY_SIGNAL.search(ls): retry_signaled = True
+                    elif saw_fail and retry_signaled and _RECOVERED.search(ls): recovered_after_fail = True
                     if saw_fail and _EXC_LINE.match(ls): last_exc = ls[:250]
                     ev = _status(line)
                     if ev: q.put(ev)
@@ -814,7 +878,7 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
             if pb["cancel"]:
                 _outcome = "stopped"
                 q.put({"type": "stopped", "msg": "⛔ Stopped by user.", "log": os.path.basename(logp)})
-            elif rc != 0 or saw_fail:
+            elif rc != 0 or (saw_fail and not recovered_after_fail):
                 _outcome = "failed"
                 q.put({"type": "done", "ok": False, "log": os.path.basename(logp), "err": last_exc})
             else:
@@ -831,6 +895,11 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None):
             except Exception:
                 pass
             pb["running"] = False; pb["proc"] = None
+            # Feeds the duplicate-run cooldown above — only stamped on a genuine
+            # clean completion, never on failed/stopped/error, so a bad run never
+            # blocks the operator from immediately retrying it.
+            if _outcome == "completed":
+                pb["last_completed_at"] = datetime.datetime.now()
             try:
                 from core import lock_manager as _lm2
                 _lm2.on_end(lock_key, _outcome)
@@ -899,7 +968,7 @@ def _stream_code(code, logdir_key, logname_prefix):
         try:
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
                    "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO}
-            saw_fail = False
+            saw_fail = False; recovered_after_fail = False; retry_signaled = False
             _started_dt = datetime.datetime.now()
             _by, _ip = _log_identity(lock_key=lock_key)
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
@@ -915,14 +984,16 @@ def _stream_code(code, logdir_key, logname_prefix):
                                 # whatever was already printed is preserved instead of sitting
                                 # lost in a buffer that never gets flushed
                     _touch(pb)   # proof of life for _clear_if_stale
-                    if _FAIL.search(line): saw_fail = True
+                    if _FAIL.search(line): saw_fail = True; recovered_after_fail = False; retry_signaled = False
+                    elif saw_fail and _RETRY_SIGNAL.search(line): retry_signaled = True
+                    elif saw_fail and retry_signaled and _RECOVERED.search(line): recovered_after_fail = True
                     ev = _status(line)
                     if ev: q.put(ev)
                 rc = proc.wait(); pb["proc"] = None
             if pb["cancel"]:
                 _outcome = "stopped"
                 q.put({"type": "stopped", "msg": "⛔ Stopped by user.", "log": os.path.basename(logp)})
-            elif rc != 0 or saw_fail:
+            elif rc != 0 or (saw_fail and not recovered_after_fail):
                 _outcome = "failed"
                 q.put({"type": "done", "ok": False, "log": os.path.basename(logp)})
             else:
@@ -992,7 +1063,7 @@ def _stream_code_act(code, pipe, action, logname_prefix):
         try:
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
                    "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO}
-            saw_fail = False
+            saw_fail = False; recovered_after_fail = False; retry_signaled = False
             _started_dt = datetime.datetime.now()
             _by, _ip = _log_identity()
             _outcome = "error"
@@ -1007,14 +1078,16 @@ def _stream_code_act(code, pipe, action, logname_prefix):
                     lf.write(f"[{_ts2}] {line}" if not line.startswith("[") else line)
                     lf.flush()
                     _touch(slot)
-                    if _FAIL.search(line): saw_fail = True
+                    if _FAIL.search(line): saw_fail = True; recovered_after_fail = False; retry_signaled = False
+                    elif saw_fail and _RETRY_SIGNAL.search(line): retry_signaled = True
+                    elif saw_fail and retry_signaled and _RECOVERED.search(line): recovered_after_fail = True
                     ev = _status(line)
                     if ev: q.put(ev)
                 rc = proc.wait(); slot["proc"] = None
             if slot.get("cancel"):
                 _outcome = "stopped"
                 q.put({"type": "stopped", "msg": "⛔ Stopped by user.", "log": os.path.basename(logp)})
-            elif rc != 0 or saw_fail:
+            elif rc != 0 or (saw_fail and not recovered_after_fail):
                 _outcome = "failed"
                 q.put({"type": "done", "ok": False, "log": os.path.basename(logp)})
             else:

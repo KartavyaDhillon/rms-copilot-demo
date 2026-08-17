@@ -1870,7 +1870,7 @@ from core.pipeline_box import (stream_pipeline as _px_stream, stop_pipeline as _
                                latest_log as _px_latest_log)
 
 @app.get("/px/run-stream")
-def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time: str = ""):
+def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time: str = "", force: bool = False):
     # Identity comes straight off THIS request's signed session — not a shared
     # global guessed from "whatever -stream request landed most recently"
     # (that guess broke when two people's browsers were both making -stream
@@ -1900,7 +1900,7 @@ def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time
     _extra_env = {"PROBABLE_MARKET_TIME": market_time.strip()} if (pipe == "probable" and market_time.strip()) else None
     def gen():
         for ev in _px_stream(pipe, run_no=run_no if run_no else None, extra_env=_extra_env,
-                              by=_by, ip=_ip):
+                              by=_by, ip=_ip, force=force):
             yield f"data: {_px_json.dumps(ev)}\n\n"
         yield 'data: {"type":"end"}\n\n'
     return _PX_Stream(gen(), media_type="text/event-stream",
