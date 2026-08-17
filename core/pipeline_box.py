@@ -5,7 +5,7 @@ Runs a pipeline's existing function as a subprocess (no logic change), captures 
 FULL output to a per-process log file, surfaces ONLY email/WhatsApp status to the UI,
 and is killable. Add a pipeline by adding one entry to PIPELINES — nothing else.
 """
-import os, re, sys, glob, queue, threading, subprocess, datetime, shutil
+import os, re, sys, glob, queue, threading, subprocess, datetime, shutil, json
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_BASE = os.path.join(REPO, "logs")
@@ -1348,6 +1348,64 @@ def _read_counter(p):
     except Exception:
         return 0
 
+def _overrides_path(p):
+    base = os.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))
+    return os.path.join(base, "run_overrides.json")
+
+def _read_overrides(p):
+    """Today's manual-override records for this pipe: {run_num_str: {...}}.
+
+    2026-08-17 incident #2: MS15's tile 06 (13:20) showed "Done today" with a
+    working-looking View button, but nothing was ever run for it and no log
+    existed — because "Mark run done" (Manual overrides) only ever recorded
+    the override in the acting browser's localStorage. Anyone viewing the
+    dashboard from a DIFFERENT machine/browser/session (the normal case here —
+    several people share this console) saw a completely normal "done" tile
+    with no indication it was skipped, and a View click that led nowhere.
+    This file is the server-side counterpart: written by /px/advance-run
+    (api.py) whenever the counter is pushed forward, so every viewer — not
+    just whoever clicked the button — sees which runs were genuinely executed
+    versus manually marked done. Superset of the client-side record; the
+    frontend now prefers this and falls back to localStorage only for entries
+    created before this existed."""
+    fp = _overrides_path(p)
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    try:
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+        if data.get("date") != today:
+            return {}
+        return data.get("runs", {})
+    except Exception:
+        return {}
+
+def _write_override(p, run_num, info):
+    """Record run `run_num` as manually overridden today. Merges with any
+    existing entries for today (e.g. mark_done then later backfill for the
+    same run) rather than clobbering them. Never raises — a failure to write
+    this audit record must not be able to block the actual override action
+    (advance-run/backfill) it's describing."""
+    fp = _overrides_path(p)
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    data = {"date": today, "runs": {}}
+    try:
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            existing = json.load(f)
+        if existing.get("date") == today:
+            data = existing
+    except Exception:
+        pass
+    key = str(run_num)
+    entry = dict(data["runs"].get(key) or {})
+    entry.update(info)
+    data["runs"][key] = entry
+    try:
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "w", encoding="utf-8", errors="replace") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
 def _busy_label_for(key):
     if not key:
         return key
@@ -1377,7 +1435,11 @@ def pb_status(pipe):
             "now": datetime.datetime.now().strftime("%H:%M"),
             "server_busy": _running_here, "server_busy_pipe": pipe if _running_here else None,
             "server_busy_label": _busy_label_for(pipe) if _running_here else None,
-            "server_busy_since": pb.get("started_at")}
+            "server_busy_since": pb.get("started_at"),
+            # Server-side override records (see _read_overrides docstring) — lets
+            # EVERY viewer, not just whoever clicked the button, tell a genuinely
+            # executed run apart from one that was only marked done manually.
+            "overrides": _read_overrides(p)}
 
 def pb_get_config(pipe):
     p = PIPELINES.get(pipe, {}); g = os.getenv

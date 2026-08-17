@@ -154,6 +154,18 @@
   // ══════════════════════════════════════════════════════════════════════════
   var _OVERRIDE_PREFIX = 'rms_override_';
 
+  // Server-side override records, keyed by pipe → {runNum: {type,at,by}} —
+  // refreshed every time pxRenderRuns() runs (i.e. on every status poll,
+  // ~every 5s). Populated from /px/status's "overrides" field
+  // (core.pipeline_box._read_overrides). This is the FIX for the 2026-08-17
+  // incident where a colleague's "Mark run done" (on a different machine)
+  // was only visible in THEIR browser's localStorage — every other viewer
+  // saw a plain "Done today" tile with no indication it was overridden and a
+  // View click that led nowhere. Server data is now checked FIRST in
+  // _overrideInfo(); localStorage remains as a fallback for entries written
+  // before this existed (or if /px/status is briefly unreachable).
+  var _serverOverridesCache = {};
+
   function _overrideKey(pipe, runNum) {
     var d = new Date();
     var ds = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
@@ -173,21 +185,35 @@
 
   // Check if a given run was manually overridden (mark_done and/or backfill).
   // Returns { mark_done: {...}|null, backfill: {...}|null, isOverride: bool }.
+  // SERVER record wins when present (visible to every viewer, carries `by`);
+  // localStorage is only consulted as a fallback for pre-fix entries or a
+  // momentarily-unreachable backend.
   function _overrideInfo(pipe, runNum) {
     var md = null, bf = null;
+    try {
+      var serverEntry = _serverOverridesCache[pipe] && _serverOverridesCache[pipe][String(runNum)];
+      if (serverEntry) {
+        if (serverEntry.type === 'mark_done') md = serverEntry;
+        else if (serverEntry.type === 'backfill') bf = serverEntry;
+      }
+    } catch (e) {}
     try {
       var d = new Date();
       var ds = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
       var base = _OVERRIDE_PREFIX + ds + '_' + pipe + '_' + runNum;
-      var raw1 = localStorage.getItem(base);
-      if (raw1) {
-        var parsed = JSON.parse(raw1);
-        if (parsed.type === 'mark_done') md = parsed;
-        else if (parsed.type === 'backfill') bf = parsed;
+      if (!md) {
+        var raw1 = localStorage.getItem(base);
+        if (raw1) {
+          var parsed = JSON.parse(raw1);
+          if (parsed.type === 'mark_done') md = parsed;
+          else if (parsed.type === 'backfill') bf = parsed;
+        }
       }
       // Also check with _backfill suffix (when both exist)
-      var raw2 = localStorage.getItem(base + '_backfill');
-      if (raw2) bf = JSON.parse(raw2);
+      if (!bf) {
+        var raw2 = localStorage.getItem(base + '_backfill');
+        if (raw2) bf = JSON.parse(raw2);
+      }
     } catch (e) {}
     return { mark_done: md, backfill: bf, isOverride: !!(md || bf) };
   }
@@ -521,7 +547,8 @@
     return m ? parseInt(m[1], 10) : 0;
   }
 
-  function _pxOverrideTiles(pipe) {
+  function _pxOverrideTiles(pipe, s) {
+    if (s && s.overrides) { _serverOverridesCache[pipe] = s.overrides; }
     var wrap = document.getElementById('pxRuns-' + pipe);
     if (!wrap) return;
 
@@ -595,6 +622,7 @@
     if (typeof window.saShowModal !== 'function') return;
     var label = runId || pipe.toUpperCase();
     var mdAt = (ov.mark_done && ov.mark_done.at) ? ov.mark_done.at : '';
+    var mdBy = (ov.mark_done && ov.mark_done.by) ? ov.mark_done.by : '';
     var bfAt = (ov.backfill && ov.backfill.at) ? ov.backfill.at : '';
     var bfFiles = (ov.backfill && ov.backfill.files) || 0;
 
@@ -605,7 +633,8 @@
       '</div>' +
       '<div style="font-size:13px;color:var(--muted);line-height:1.65;margin-bottom:16px">' +
         'This run was <b style="color:var(--ink)">not executed from this console</b>. It was marked done ' +
-        'through Manual overrides' + (mdAt ? ' at <b style="color:var(--ink)">' + mdAt + '</b>' : '') + ', ' +
+        'through Manual overrides' + (mdAt ? ' at <b style="color:var(--ink)">' + mdAt + '</b>' : '') +
+        (mdBy ? ' by <b style="color:var(--ink)">' + mdBy + '</b>' : '') + ', ' +
         'which only unlocks the next tile — so there is <b style="color:var(--ink)">no log and no output</b> ' +
         'stored here for it.' +
       '</div>';
@@ -2145,8 +2174,10 @@
         try { _pxFixRunIdPadding(pipe); } catch (e) {}
         if (pipe !== 'ctcl' && pipe !== 'cli') { try { _pxViewOnTile(pipe); } catch (e) {} }
         // Override tiles — runs for ALL pipes (including ctcl/cli) AFTER the
-        // native View buttons, so overrides win when they apply.
-        try { _pxOverrideTiles(pipe); } catch (e) {}
+        // native View buttons, so overrides win when they apply. `s` (this
+        // poll's /px/status response) carries the server-side override
+        // records — see _serverOverridesCache above.
+        try { _pxOverrideTiles(pipe, s); } catch (e) {}
         return ret;
       };
       wrappedRenderRuns.__viewTilePatched = true;

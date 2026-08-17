@@ -1975,7 +1975,7 @@ def px_config_get(pipe: str = ""):
 
 
 @app.post("/px/advance-run")
-def px_advance_run(pipe: str = "", to: int = 0, password: str = ""):
+def px_advance_run(request: Request, pipe: str = "", to: int = 0, password: str = ""):
     """Manually mark today's run counter forward for ANY pipe — generalizes
     the existing /cli/advance-run (which only ever did this for CLI). Needed
     when a run was genuinely completed OUTSIDE this dashboard (e.g. someone
@@ -1997,12 +1997,23 @@ def px_advance_run(pipe: str = "", to: int = 0, password: str = ""):
     (SA_CONFIG_PASSWORD, checked via the identical core.short_allocation.
     check_password() every /px/config save already uses) — checked here
     server-side, not just hidden behind the frontend's saAskPassword() modal,
-    so this can't be bypassed by calling the endpoint directly."""
+    so this can't be bypassed by calling the endpoint directly.
+
+    Also writes a SERVER-SIDE override record (core.pipeline_box._write_override)
+    for every run number this pushes the counter past — e.g. advancing 4→6
+    tags BOTH 5 and 6, since the tile logic marks both "done" the moment the
+    counter passes them. 2026-08-17 incident #2: this used to only be recorded
+    in the acting browser's own localStorage, so a colleague using this same
+    button from a different machine left every OTHER viewer of the dashboard
+    seeing a normal-looking "Done today" tile with a working View button and
+    silently no log behind it — nothing on screen said it had been overridden.
+    Now every viewer sees the same "ran elsewhere" state and who/when it was
+    marked, regardless of whose browser did it."""
     from core.short_allocation import check_password as _ar_pw
     if not _ar_pw(password):
         return {"ok": False, "error": "Wrong password"}
     import os as _aro, datetime as _ard
-    from core.pipeline_box import PIPELINES as _arP
+    from core.pipeline_box import PIPELINES as _arP, _write_override as _ar_wo
     p = _arP.get(pipe)
     if not p:
         return {"ok": False, "error": f"unknown pipe '{pipe}'"}
@@ -2019,10 +2030,21 @@ def px_advance_run(pipe: str = "", to: int = 0, password: str = ""):
                 n = int(existing_n)
     except Exception:
         pass
+    old_n = n
     n = int(to) if to else (n + 1)
     n = max(0, min(n, p.get("runs", n)))
     with open(fp, "w", encoding="utf-8") as f:
         f.write(f"{today}|{n}")
+    if n > old_n:
+        try:
+            from core.auth import current_user as _ar_cu
+            _u = _ar_cu(request)
+            _by = f"{_u.get('name') or _u.get('sub')} ({_u.get('sub')})" if _u else None
+        except Exception:
+            _by = None
+        _at = _ard.datetime.now().strftime("%H:%M")
+        for _rn in range(old_n + 1, n + 1):
+            _ar_wo(p, _rn, {"type": "mark_done", "at": _at, "by": _by})
     return {"ok": True, "run_state": n, "folder": base}
 
 
