@@ -9,6 +9,7 @@ AUTO_SEND in .env:
   true  -> send automatically after a successful run (for the scheduler).
 """
 import os
+import re
 import json
 import uuid
 import traceback
@@ -98,12 +99,37 @@ def _actor(request: Request):
         return None, False
 
 
+_ACTOR_ID_RE = re.compile(r"\(([^)]+)\)\s*$")
+
+def _actor_id(s):
+    """Pull the stable employee-id portion out of a '(name (id))'-style
+    identity string, e.g. 'Abhishek (M0214483)' -> 'm0214483'. Lowercased so
+    the comparison in _can_stop() is case-insensitive. Returns None if the
+    string doesn't match the expected shape (falls back to full-string
+    comparison in that case, unchanged from before)."""
+    if not s:
+        return None
+    m = _ACTOR_ID_RE.search(s.strip())
+    return m.group(1).strip().lower() if m else None
+
 def _can_stop(lock_key, request: Request):
     """(allowed, denial_message). Ownership comes from
     core.lock_manager._META[lock_key]["by"] — set when the run started (see
     on_start()). If nobody's identity is known on EITHER side (no signed-in
     users at all, or the lock has no "by" recorded), this allows the stop —
-    an unenforceable rule must never wedge a run nobody can then stop."""
+    an unenforceable rule must never wedge a run nobody can then stop.
+
+    2026-08-18 fix: the owner comparison used to be a raw `owner == by`
+    string equality on the full "Name (ID)" text. That broke the one case
+    this check exists to protect — the actual starter being unable to stop
+    their own run — whenever the display name changed even slightly between
+    starting the run and clicking Stop (a roster edit, trailing whitespace,
+    different casing coming through the Book1.xlsx name-sync that runs on
+    every server start). The employee ID inside the parentheses is the
+    stable, canonical identifier — it doesn't change — so that's compared
+    first now, case-insensitively. Full-string equality remains as a
+    fallback for the (now rare) case where either side doesn't parse into
+    the expected 'Name (ID)' shape at all."""
     by, admin = _actor(request)
     if admin:
         return True, None
@@ -112,7 +138,10 @@ def _can_stop(lock_key, request: Request):
         owner = (_META.get(lock_key) or {}).get("by")
     except Exception:
         owner = None
-    if not owner or not by or owner == by:
+    if not owner or not by:
+        return True, None
+    owner_id, by_id = _actor_id(owner), _actor_id(by)
+    if (owner_id and by_id and owner_id == by_id) or owner == by:
         return True, None
     return False, f"Only {owner} (who started this run) or an admin can stop it."
 

@@ -877,40 +877,59 @@ def _attempt_mcx_download(file_name, download_dir, today_display, today_date):
     try:
         if _mcx_login():
             _csrf = _mcx_init_session()
-            # navigate into date folder first (Serv-U requirement) — the real
-            # listing used to be fetched and thrown away here, so a retry
-            # always re-requested the SAME hardcoded guessed filename
-            # (MCX_PeakMargin<user>_<date>_<NN>.csv) no matter how many times
-            # the operator clicked "Wait" — if the file the exchange actually
-            # placed used a different NN/suffix or any other small naming
-            # difference, every retry would 404 forever even though the file
-            # was genuinely sitting in the folder. Now the listing is used:
-            # if the exact guessed name isn't in it, fall back to any file
-            # that at least matches member+date, and rename it locally to the
-            # expected name so every downstream step still finds it.
+            # ══════════════════════════════════════════════════════════════
+            # EXACT FILENAME ONLY — NO SUBSTITUTION, EVER.
+            #
+            # Run NN downloads MCX_PeakMargin<user>_<date>_<NN>.csv and nothing
+            # else. If that exact file is not on the exchange, it is reported
+            # missing and we WAIT for it. That is the only correct behaviour.
+            #
+            # Why this is written so emphatically — 2026-08-18 incident:
+            # this block used to "helpfully" fall back to any file matching
+            # member+date when the exact name wasn't in the listing, with the
+            # run number deliberately left OUT of the match. SA-03 ran, the
+            # exchange had only published _01, and the code silently:
+            #   1. downloaded MCX_PeakMargin56720_20260818_01.csv, then
+            #   2. RENAMED it locally to ..._03.csv (os.replace),
+            #   3. reported "🎉 MCX file ready" and carried on.
+            # Run 01's intraday snapshot was then used as run 03's data through
+            # every calculation, email, WhatsApp alert and DB archive — with a
+            # filename on disk that said _03. It was undetectable after the
+            # fact. The rename is what made it undetectable; the loose match is
+            # what made it happen.
+            #
+            # Each _NN is a DIFFERENT point-in-time snapshot of peak margin.
+            # A different run number is not a naming quirk, a near-enough
+            # match, or a usable stand-in — it is different data. There is no
+            # scenario in which substituting one for another is preferable to
+            # waiting, because waiting is visible and wrong numbers are not.
+            #
+            # DO NOT reintroduce a fallback here. If a future exchange-side
+            # naming change breaks this, fix the expected-name construction
+            # (file_name, above) so it is exact again — never widen the match.
+            # ══════════════════════════════════════════════════════════════
             _remote_files = _mcx_list_folder(today_display, _csrf)
-            remote_name = file_name
             if _remote_files and file_name not in _remote_files:
-                _prefix = f"MCX_PeakMargin{_mcx_username}_{today_date}"
-                _candidates = [f for f in _remote_files if f.upper().startswith(_prefix.upper())]
-                if _candidates:
-                    remote_name = _candidates[0]
-                    print(f"⚠️  Expected '{file_name}' not in MCX folder listing — found "
-                          f"'{remote_name}' instead (same member/date) — using that.")
-                else:
-                    print(f"📂 MCX folder has {len(_remote_files)} file(s), none matching "
-                          f"'{_prefix}*' — file genuinely not on the exchange yet.")
-            print(f"⬇️  Downloading MCX: {remote_name}" +
-                  (f" (will save locally as {file_name})" if remote_name != file_name else ""))
-            _mcx_dl_ok = _mcx_download_file(today_display, remote_name, _csrf, download_dir)
-            if _mcx_dl_ok and remote_name != file_name:
-                try:
-                    _actual_dest = os.path.join(download_dir, remote_name)
-                    _expected_dest = os.path.join(download_dir, file_name)
-                    if os.path.exists(_actual_dest) and _actual_dest != _expected_dest:
-                        os.replace(_actual_dest, _expected_dest)
-                except Exception as _rne:
-                    print(f"⚠️  Downloaded {remote_name} but could not rename to expected {file_name}: {_rne}")
+                _same_day = sorted(
+                    f for f in _remote_files
+                    if f.upper().startswith(
+                        f"MCX_PeakMargin{_mcx_username}_{today_date}".upper())
+                )
+                print(f"📂 MCX folder has {len(_remote_files)} file(s), but run {mcx_i}'s "
+                      f"file '{file_name}' is NOT among them — not published by the "
+                      f"exchange yet.")
+                if _same_day:
+                    print(f"   Other runs present today: {', '.join(_same_day)}")
+                    print(f"   These are NOT used — a different run number is a different "
+                          f"intraday snapshot, not a substitute. Waiting for run {mcx_i}'s "
+                          f"own file.")
+                _mcx_dl_ok = False
+            else:
+                # Either the exact file is listed, or the listing itself was
+                # unavailable — in both cases request the EXACT expected name
+                # and let the server 404 if it isn't there.
+                print(f"⬇️  Downloading MCX: {file_name}")
+                _mcx_dl_ok = _mcx_download_file(today_display, file_name, _csrf, download_dir)
         else:
             print("❌ MCX login failed — all passwords exhausted")
     except Exception as _ex:
