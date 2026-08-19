@@ -37,10 +37,15 @@ body {
     radial-gradient(760px 520px at -6% 108%, rgba(167,139,250,.06), transparent 55%);
 }
 ::selection { background:rgba(96,165,250,.28); }
+/* Was --line-2 (a near-invisible divider color, same low contrast issue as
+   the newer platform pages had) — now derived from --ink, the one color
+   guaranteed visible against this page's dark background, matching the
+   fix applied to tokens.css/app.css for the rest of the platform. */
+* { scrollbar-color: rgba(232,238,245,.38) transparent; scrollbar-width: thin; }
 ::-webkit-scrollbar { width:10px; height:10px; }
 ::-webkit-scrollbar-track { background:transparent; }
-::-webkit-scrollbar-thumb { background:var(--line-2); border-radius:20px; border:3px solid transparent; background-clip:content-box; }
-::-webkit-scrollbar-thumb:hover { background:#3a434f; background-clip:content-box; }
+::-webkit-scrollbar-thumb { background:rgba(232,238,245,.38); border-radius:20px; border:3px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-thumb:hover { background:rgba(232,238,245,.6); background-clip:content-box; }
 
 /* ── SHELL ─────────────────────────────────────────────────── */
 .shell { display:grid; grid-template-columns:var(--side) 1fr; height:100vh; }

@@ -22,9 +22,13 @@ body {
   overflow: hidden;
 }
 ::selection { background: var(--accent-soft-2); }
+/* Firefox — no equivalent to the ::-webkit-scrollbar-thumb hover trick below,
+   so it gets the plain (non-hover) visible color throughout. */
+* { scrollbar-color: var(--scrollbar) transparent; scrollbar-width: thin; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 20px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 input, select { font: inherit; color: inherit; }

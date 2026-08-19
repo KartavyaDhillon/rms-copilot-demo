@@ -44,7 +44,6 @@
   --sh-1: 0 1px 2px rgba(0,0,0,.45);
   --sh-2: 0 6px 22px -6px rgba(0,0,0,.55);
   --sh-3: 0 22px 60px -14px rgba(0,0,0,.75);
-  --scrollbar: #2d3444;
 }
 
 html[data-theme="light"] {
@@ -65,7 +64,6 @@ html[data-theme="light"] {
   --sh-1: 0 1px 2px rgba(23,32,46,.06);
   --sh-2: 0 8px 24px -8px rgba(23,32,46,.14);
   --sh-3: 0 24px 60px -18px rgba(23,32,46,.22);
-  --scrollbar: #cbd5e3;
   --ok: #0ea371; --warn: #d97706; --err: #dc2626; --info: #2f6df6;
 }
 
@@ -87,7 +85,6 @@ html[data-theme="amoled"] {
   --sh-1: 0 1px 2px rgba(0,0,0,.7);
   --sh-2: 0 8px 26px -8px rgba(0,0,0,.85);
   --sh-3: 0 26px 70px -16px rgba(0,0,0,.95);
-  --scrollbar: #29303e;
 }
 
 html[data-theme="ocean"] {
@@ -108,7 +105,6 @@ html[data-theme="ocean"] {
   --sh-1: 0 1px 2px rgba(0,10,20,.5);
   --sh-2: 0 8px 26px -8px rgba(0,10,20,.6);
   --sh-3: 0 26px 66px -16px rgba(0,10,20,.8);
-  --scrollbar: #25455e;
 }
 
 html[data-theme="emerald"] {
@@ -129,7 +125,6 @@ html[data-theme="emerald"] {
   --sh-1: 0 1px 2px rgba(0,12,6,.5);
   --sh-2: 0 8px 26px -8px rgba(0,12,6,.6);
   --sh-3: 0 26px 66px -16px rgba(0,12,6,.8);
-  --scrollbar: #274736;
 }
 
 html[data-theme="purple"] {
@@ -150,7 +145,6 @@ html[data-theme="purple"] {
   --sh-1: 0 1px 2px rgba(5,0,15,.5);
   --sh-2: 0 8px 26px -8px rgba(5,0,15,.65);
   --sh-3: 0 26px 66px -16px rgba(5,0,15,.85);
-  --scrollbar: #382c55;
 }
 
 html[data-theme="contrast"] {
@@ -170,7 +164,6 @@ html[data-theme="contrast"] {
   --accent-ink: #000000;
   --ok: #3dffa2; --warn: #ffd60a; --err: #ff5c5c; --info: #6cb8ff;
   --sh-1: none; --sh-2: none; --sh-3: none;
-  --scrollbar: #6e6e6e;
 }
 
 /* derived translucent tints — computed from whatever the active accent is */
@@ -181,4 +174,18 @@ html[data-theme="contrast"] {
   --warn-soft: color-mix(in srgb, var(--warn) 13%, transparent);
   --err-soft:  color-mix(in srgb, var(--err) 13%, transparent);
   --info-soft: color-mix(in srgb, var(--info) 13%, transparent);
+
+  /* Scrollbar thumb — was --line-2 in every theme below (a subtle DIVIDER
+     color, deliberately low-contrast against the background so borders
+     don't shout). Reusing that same low-contrast value for the scrollbar
+     THUMB — something a person needs to actually see and grab to scroll —
+     made it nearly invisible on the dark themes especially. --text is the
+     one color guaranteed to be clearly visible against its own theme's
+     background (that's its whole job), so the thumb is now derived from
+     that instead, at a real but not overpowering opacity, with a brighter
+     hover state so it's obvious it's interactive. This single rule (later
+     in the cascade, same specificity as the individual html[data-theme="x"]
+     blocks above) overrides all seven of their old --scrollbar lines. */
+  --scrollbar: color-mix(in srgb, var(--text) 38%, transparent);
+  --scrollbar-hover: color-mix(in srgb, var(--text) 60%, transparent);
 }

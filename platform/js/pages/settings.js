@@ -56,8 +56,8 @@
       '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("bell") + " Notifications</div></div>" +
       '<div class="set-row"><div class="s-l"><b>Success toasts</b><small>pop a toast when a run completes cleanly</small></div>' +
       '<span id="swNotifOk">' + sw(p.notifySuccess !== false) + "</span></div>" +
-      '<div class="set-row"><div class="s-l"><b>Failure toasts</b><small>always on — failures stay until clicked (opens the log)</small></div>' +
-      '<span class="badge err">always on</span></div>' +
+      '<div class="set-row"><div class="s-l"><b>Failure toasts</b><small>pop a sticky toast when a run fails — stays until clicked (opens the log)</small></div>' +
+      '<span id="swNotifFail">' + sw(p.notifyFailure !== false) + "</span></div>" +
       '<div class="set-row"><div class="s-l"><b>Notification history</b><small>recent completions & failures in the bell menu</small></div>' +
       '<button class="btn sm ghost" id="clearNotifs">Clear history</button></div></div>' +
 
@@ -105,6 +105,7 @@
     $("#radSlider").oninput = (e) => { $("#radVal").textContent = e.target.value + "px"; RMS.savePrefs({ radius: +e.target.value }); };
     $("#swCompact").onclick = () => { RMS.savePrefs({ compact: !RMS.prefs.compact }); refresh(el); };
     $("#swNotifOk").onclick = () => { RMS.savePrefs({ notifySuccess: RMS.prefs.notifySuccess === false }); refresh(el); };
+    $("#swNotifFail").onclick = () => { RMS.savePrefs({ notifyFailure: RMS.prefs.notifyFailure === false }); refresh(el); };
     $("#userName").onchange = (e) => {
       const name = e.target.value.trim().slice(0, 40);
       localStorage.setItem("rms_user_name", name);
