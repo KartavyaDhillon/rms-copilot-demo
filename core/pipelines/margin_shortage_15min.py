@@ -255,19 +255,47 @@ def export_tracker_json(path=None):
         return {"ok": False, "error": str(e), "path": path}
 
 
+def _read_run_counter_n(base_dir, today_str):
+    """Read the value currently in run_counter.txt (date|N — same file/format
+    core/pipeline_box.py's _read_counter() reads for the dashboard's tile
+    display). Returns 0 if missing, stale (not today), or unreadable.
+
+    Used as a FLOOR alongside the local backup-folder count when deriving
+    this run's own number: a manual "Ran elsewhere" override (dashboard
+    tiles) advances run_counter.txt to record that a run slot is done, but
+    — correctly — never creates a local backup folder, since nothing
+    actually ran on THIS machine for that slot (it ran on a different one,
+    or was skipped). Without this floor, a genuinely-executed run here would
+    only ever see its OWN machine's folder count, land back on a run number
+    already marked done via override, and overwrite run_counter.txt back
+    down — silently erasing every override that came before it."""
+    try:
+        content = open(os.path.join(base_dir, "run_counter.txt"), encoding="utf-8", errors="replace").read().strip()
+        d, n = content.split("|", 1)
+        return int(n) if d.strip() == today_str else 0
+    except Exception:
+        return 0
+
+
 def _count_todays_backup_runs(base_dir, today_str):
     """Count how many backup run subfolders already exist for today. Used to
     derive the CURRENT run number BEFORE backup_and_cleanup creates this run's
     folder (existing count + 1 = this run's number), so WhatsApp sends can be
     tagged with the run they went out in. Matches backup_and_cleanup's own
-    counting exactly, so the number is consistent with the backup folder name."""
+    counting exactly, so the number is consistent with the backup folder name.
+
+    Takes run_counter.txt's value as a floor too (see _read_run_counter_n) —
+    local disk alone isn't a reliable signal once manual overrides or a
+    different machine can also be responsible for earlier slots today."""
     date_root = os.path.join(base_dir, "BACKUPFILES AUTOMATED", today_str)
     try:
         existing = [d for d in os.listdir(date_root)
                     if os.path.isdir(os.path.join(date_root, d)) and d.isdigit()]
-        return (max(int(d) for d in existing) + 1) if existing else 1
+        disk_max = max(int(d) for d in existing) if existing else 0
     except Exception:
-        return 1
+        disk_max = 0
+    counter_n = _read_run_counter_n(base_dir, today_str)
+    return max(disk_max, counter_n) + 1
 
 
 def _archive_to_db(tag, kind, filepath, max_retries=3, retry_delay=2):
@@ -1521,11 +1549,14 @@ Master Capital Services Ltd<br>
             d for d in os.listdir(date_root)
             if os.path.isdir(os.path.join(date_root, d)) and d.isdigit()
         ]
-
-        if existing_runs:
-            run_number = max(int(d) for d in existing_runs) + 1
-        else:
-            run_number = 1
+        disk_max = max(int(d) for d in existing_runs) if existing_runs else 0
+        # Floor against run_counter.txt too — see _read_run_counter_n's
+        # docstring. Without this, a run whose earlier slots were manually
+        # overridden ("Ran elsewhere", never created a local folder) would
+        # land back on an already-used run number and silently wipe out
+        # those overrides by writing the counter back down below them.
+        counter_n = _read_run_counter_n(base_dir, today_str)
+        run_number = max(disk_max, counter_n) + 1
 
         run_folder = f"{run_number:02d}"
         backup_root = os.path.join(date_root, run_folder)
