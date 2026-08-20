@@ -1293,6 +1293,15 @@ cols = [
 
 # ---------- APPLY LAS / ROI ----------
 def apply_fixed(block, key):
+    # fixed_values holds a MIX of numbers and text labels (e.g. "LAS 1:2") per
+    # code. If the earlier numeric-conversion pass happened to turn LAS_RATIO/
+    # ROI fully float64 (e.g. all-blank at that point), writing a text label
+    # into a single cell used to silently widen the whole column to object —
+    # newer pandas raises TypeError("Invalid value ... for dtype 'float64'")
+    # instead. Force both columns to object dtype up front so they can hold
+    # whatever fixed_values actually has, exactly like the old behavior did.
+    block["LAS_RATIO"] = block["LAS_RATIO"].astype(object)
+    block["ROI"] = block["ROI"].astype(object)
     for i, r in block.iterrows():
         code = r["TRADINGCODE"]
         if code in fixed_values.get(key, {}):
