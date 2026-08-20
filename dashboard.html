@@ -5972,7 +5972,12 @@ ms15LoadReady(); setInterval(()=>{ ms15LoadReady(); },30000);
 // Restore the generic "View / Explain error" button for any pipe whose last run
 // (from this browser, possibly a previous page load) is still remembered.
 Object.keys(_pxRunLog).forEach(p=>pxInjectViewBtn(p));
-saLoadStatus(); saLoadLasDebit(); setInterval(()=>{ if(_saRunning){ saLoadReady(); } else{ saLoadStatus(); saLoadLasDebit(); } }, 5000);
+// saLoadLasDebit() runs on EVERY tick regardless of _saRunning — it used to
+// only run in the "not running" branch, so once a run started (e.g. SA-04),
+// the "LAS Debit ... not in folder" banner froze at whatever it last said and
+// never rechecked, even after the file showed up and the run had already
+// used it successfully. It's a cheap GET, harmless to call during a run.
+saLoadStatus(); saLoadLasDebit(); setInterval(()=>{ if(_saRunning){ saLoadReady(); } else{ saLoadStatus(); } saLoadLasDebit(); }, 5000);
 
 // ── MCX-deposit shared-lock poll ──────────────────────────────────────────
 // SA's "MCX Deposit" button and CLI's "MCX Web Allocation" button share one

@@ -1269,9 +1269,18 @@ df_v2   = normalize(df_v2)
 df_sect = normalize(df_sect)
 
 # ---------- NUMERIC CONVERSION ----------
+# pd.to_numeric(..., errors="ignore") was removed in newer pandas (this
+# machine's fresh `pip install` pulled a version where it no longer works —
+# raises "ValueError: invalid error value specified" instead of silently
+# leaving non-numeric columns alone like it used to). try/except reproduces
+# the exact old behavior: convert if the WHOLE column parses as numeric,
+# otherwise leave that column completely untouched.
 for df in [df_v1, df_v2, df_sect]:
     for col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="ignore")
+        try:
+            df[col] = pd.to_numeric(df[col])
+        except (ValueError, TypeError):
+            pass
 
 # ---------- FINAL COLUMN ORDER ----------
 cols = [
