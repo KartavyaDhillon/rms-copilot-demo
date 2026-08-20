@@ -2021,6 +2021,26 @@ def _pb_parse_date_part(part):
         except Exception: return None
     return None
 
+# Some pipelines archive their per-run output files to Postgres under a
+# DIFFERENT "pipeline" column value than the short key used everywhere else
+# in this file/the API (historical — the per-run archival call inside each
+# pipeline script predates the short "px" keys). The short key itself is
+# ALSO checked unconditionally below, since the generic upload/housekeeping
+# archival in this file (pb_upload, the BACKUPFILES housekeeping step) always
+# uses the short key. cli/probable have no separate long name.
+_PB_DB_PIPELINE_ALIASES = {
+    "ctcl": ["ctcl_vs_nmass"],
+    "ms15": ["margin_shortage"],
+    "sa":   ["short_allocation"],
+}
+
+def _pb_db_pipeline_names(pipe):
+    names, seen, out = [pipe] + _PB_DB_PIPELINE_ALIASES.get(pipe, []), set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n); out.append(n)
+    return out
+
 def pb_list_backups(pipe, from_date="", to_date="", types=None):
     globs = [g.strip().lower() for g in (types or []) if g and g.strip()]
     def pd(s):
@@ -2028,6 +2048,10 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None):
         except Exception: return None
     df, dt = pd(from_date), pd(to_date)
     res = []
+    seen_keys = set()   # (iso date, lowercase filename, size) — used to skip a
+                         # Postgres row when the exact same file was already
+                         # found on disk, so a machine that still has BOTH
+                         # (old machine, dual-writing) doesn't show duplicates
     for root in _pb_backup_roots(pipe):
         if not os.path.isdir(root): continue
         for dp, _d, files in os.walk(root):
@@ -2043,8 +2067,13 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None):
                 # a fixed daily name (e.g. "Update Limits<date>.xlsx") are otherwise
                 # indistinguishable in the archive view — same name every run, only
                 # size differs — so surface which run + what time produced each one.
+                # CLI uses a Morning/Afternoon/Evening word instead of a number
+                # (it can run up to 3x/day at fixed windows, not a numbered
+                # sequence) — same idea, so it gets the same "run" treatment.
                 p = part.strip()
                 if re.fullmatch(r"\d{1,2}", p):
+                    crun = p
+                elif p in ("Morning", "Afternoon", "Evening"):
                     crun = p
             for fn in files:
                 if globs and not any(_pb_fn.fnmatch(fn.lower(), g) for g in globs): continue
@@ -2061,17 +2090,81 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None):
                     "run": crun,
                     "time": datetime.datetime.fromtimestamp(st.st_mtime).strftime("%H:%M"),
                 })
+                seen_keys.add((fdate.isoformat(), fn.lower(), st.st_size))
+
+    # ── Postgres supplement ─────────────────────────────────────────────────
+    # Local BACKUPFILES AUTOMATED folders are being phased out in favour of
+    # Postgres as the single source of truth — a fresh/secondary machine (no
+    # exchange downloads run there) never populates these disk folders at all,
+    # so relying on disk alone means the search always comes back empty there.
+    # Every file archived via save_run_file() during a real run already lives
+    # in run_files regardless of which machine ran it, so pull those in too —
+    # skipping anything the disk scan above already found, so a machine that
+    # still has BOTH (the original/download machine, still dual-writing)
+    # doesn't show the same file twice.
+    try:
+        if os.getenv("USE_POSTGRES", "false").strip().lower() == "true":
+            from core.db_postgres import list_run_files as _pb_db_list_files
+            for db_pipe in _pb_db_pipeline_names(pipe):
+                for r in _pb_db_list_files(pipeline=db_pipe, from_date=(from_date or None),
+                                            to_date=(to_date or None), days=36500):
+                    fn = r.get("filename") or ""
+                    if not fn: continue
+                    if globs and not any(_pb_fn.fnmatch(fn.lower(), g) for g in globs): continue
+                    fdate = r.get("run_date")
+                    if not fdate: continue
+                    key = (fdate.isoformat(), fn.lower(), r.get("size_bytes") or 0)
+                    if key in seen_keys: continue
+                    seen_keys.add(key)
+                    tag = str(r.get("tag") or "")
+                    crun = None
+                    m = re.search(r"/(\d{1,2}|Morning|Afternoon|Evening)$", tag)  # "<date>/<run-or-slot>"
+                    if m: crun = m.group(1)
+                    elif re.fullmatch(r"\d{1,2}", tag): crun = tag  # bare run-number tag
+                    ran_at = r.get("ran_at")
+                    res.append({
+                        "path": f"db:{db_pipe}:{r['id']}",
+                        "name": fn,
+                        "date": fdate.strftime("%d-%m-%Y"),
+                        "size": r.get("size_bytes") or 0,
+                        "run": crun,
+                        "time": ran_at.strftime("%H:%M") if ran_at else "",
+                    })
+    except Exception as e:
+        print(f"[pb_list_backups] Postgres lookup skipped (non-fatal): {e}")
+
     res.sort(key=lambda x: (x["date"], x["name"]))
     return res[:3000]
 
 def pb_backup_file(pipe, path):
     """Return the absolute path if it is inside this pipeline's backup roots, else None.
-    Used by the per-file download endpoint."""
+    Used by the per-file download endpoint. Returns None (not an error) for
+    "db:..." paths — those are handled separately by pb_backup_db_file, since
+    they have no filesystem path at all."""
+    if str(path or "").startswith("db:"):
+        return None
     ap = os.path.abspath(path or "")
     roots = [os.path.abspath(r) for r in _pb_backup_roots(pipe)]
     if os.path.isfile(ap) and any(ap.startswith(r) for r in roots):
         return ap
     return None
+
+def pb_backup_db_file(path):
+    """Companion to pb_backup_file for Postgres-sourced entries — path looks
+    like 'db:<db_pipeline>:<run_files.id>' (as produced by pb_list_backups).
+    Returns (filename, content_bytes) or None if not a db: path / not found."""
+    s = str(path or "")
+    if not s.startswith("db:"):
+        return None
+    parts = s.split(":", 2)
+    if len(parts) != 3:
+        return None
+    try:
+        file_id = int(parts[2])
+    except ValueError:
+        return None
+    from core.db_postgres import get_run_file as _pb_db_get_file
+    return _pb_db_get_file(file_id)
 
 
 # ── client data lookup across backup runs (Polars-powered) ───────────────────
@@ -2419,6 +2512,24 @@ def pb_copy_backups(pipe, paths, dest):
     logp = os.path.join(logdir, f"RESTORE__{ts}.log")
     copied, failed, log_lines = [], [], [f"# RESTORE {pipe}  dest={dest}  time={ts}"]
     for pth in paths:
+        if str(pth or "").startswith("db:"):
+            # Postgres-sourced entry — no disk file to copy from, write the
+            # stored bytes straight to the destination instead.
+            got = pb_backup_db_file(pth)
+            if not got:
+                failed.append(f"{pth}: not found in Postgres")
+                log_lines.append(f"FAIL   {pth}: not found in Postgres")
+                continue
+            fname, content = got
+            try:
+                with open(os.path.join(dest, fname), "wb") as f:
+                    f.write(content)
+                copied.append(fname)
+                log_lines.append(f"OK     {pth} (from Postgres)")
+            except Exception as e:
+                failed.append(f"{fname}: {e}")
+                log_lines.append(f"FAIL   {pth}: {e}")
+            continue
         ap = os.path.abspath(pth)
         base = os.path.basename(ap)
         if not any(ap.startswith(r) for r in roots):

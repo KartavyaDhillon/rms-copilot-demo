@@ -2114,7 +2114,9 @@ def px_backfill_db(pipe: str = "", date: str = "", run: int = 0, subfolder: str 
     same shape and each needed its own backfill_*_to_db() written for its
     actual on-disk layout:
       - ctcl / ms15: BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\<NN>\\
-      - cli:         BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\   (no run subfolder)
+      - cli:         BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\<Morning|Afternoon|Evening>\\
+                     (older dates before this split may still be flat, no
+                     slot subfolder — backfill_date_to_db() handles both)
       - probable:    BACKUPFILES AUTOMATED\\<date>\\RECONCILIATION or SHORTAGE\\
                      (date format is "21 JUL 2026", NOT DD-MM-YYYY — different
                      from the other three)
@@ -2211,10 +2213,19 @@ def px_backup_copy(r: _PXRestore):
 
 @app.get("/px/backup/download")
 def px_backup_download(pipe: str = "", path: str = ""):
-    """Download a single backup file to the browser (path must be inside the
-    pipeline's backup roots)."""
-    from core.pipeline_box import pb_backup_file as _pbbf
-    from fastapi.responses import FileResponse as _PX_FileResp
+    """Download a single backup file to the browser. path is either a real
+    filesystem path inside the pipeline's backup roots, or a 'db:<pipeline>:<id>'
+    reference into Postgres run_files (used when this machine has no local
+    copy on disk — see pb_list_backups)."""
+    from core.pipeline_box import pb_backup_file as _pbbf, pb_backup_db_file as _pbbdf
+    from fastapi.responses import FileResponse as _PX_FileResp, Response as _PX_Resp
+    if str(path or "").startswith("db:"):
+        got = _pbbdf(path)
+        if not got:
+            return {"error": "file not found in Postgres"}
+        fname, content = got
+        return _PX_Resp(content=content, media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
     ap = _pbbf(pipe, path)
     if not ap:
         return {"error": "file not found or outside backup folder"}

@@ -15,7 +15,13 @@ STEP 1 — FTP upload: same ALWAYS_FILES + DATE_BASED_FILES rules as the origina
          file that's missing is reported by name (via [MISSING_FILE]) instead of being
          silently skipped, and the upload continues with whatever IS present.
 STEP 2 — backup + cleanup (move everything except .py/.bat into
-         BACKUPFILES AUTOMATED/<DD-MM-YYYY>/, same as the original script).
+         BACKUPFILES AUTOMATED/<DD-MM-YYYY>/<slot>/, where <slot> is
+         Morning/Afternoon/Evening based on the actual clock time this step
+         runs — CLI runs up to 3x/day (07:00-10:00, 15:30-17:00, 19:00-21:00),
+         and before this split every run of the day landed in the same flat
+         date folder, so a later same-day run silently overwrote an earlier
+         run's same-named files on disk (each was still archived to Postgres
+         separately, just not distinguishable on disk). See _cli_time_slot().
 
 FTP: FTP_HOST/FTP_USER/FTP_PASS (shared with the Download step and other downloaders).
 
@@ -29,6 +35,21 @@ import shutil
 import time
 
 from core.error_translator import translate_error
+
+
+def _cli_time_slot(dt=None):
+    """Classify a CLI run's time into Morning / Afternoon / Evening for the
+    backup folder + Postgres tag. The pipeline is actually scheduled to run
+    in three windows — 07:00-10:00, 15:30-17:00, 19:00-21:00 — and simple
+    noon / 6pm cutoffs happen to split cleanly around all three (07-10 is
+    all before noon, 15:30-17:00 is all between noon and 6pm, 19-21 is all
+    after 6pm), while still giving a sane bucket for a one-off manual run
+    outside those exact windows instead of erroring or falling back to a
+    4th "unknown" category."""
+    dt = dt or datetime.datetime.now()
+    if dt.hour < 12: return "Morning"
+    if dt.hour < 18: return "Afternoon"
+    return "Evening"
 
 
 def _archive_to_db(tag, kind, filepath, max_retries=3, retry_delay=2):
@@ -66,9 +87,12 @@ def backfill_date_to_db(date_str):
     """Push an ALREADY-backed-up CLI (Client Prudential Limit) date folder
     into the DB — for when the upload genuinely happened OUTSIDE this
     dashboard and its files were then copied by hand into this machine's
-    BACKUPFILES AUTOMATED\\<date> folder. Unlike ctcl/ms15, CLI's backup has
-    NO two-digit run subfolder — everything for a day lands directly in the
-    date folder — so this takes just a date, not a run number.
+    BACKUPFILES AUTOMATED\\<date> folder.
+
+    Handles both layouts: the current one (date\\Morning|Afternoon|Evening\\*,
+    since CLI runs up to 3x/day and each slot now gets its own subfolder —
+    see _cli_time_slot) and the older flat one (date\\* directly, from
+    before that split, still valid for old dates already on disk).
 
     `date_str` — folder name exactly as on disk, DD-MM-YYYY (e.g. "21-07-2026").
     Safe to call more than once — re-archiving just adds another row."""
@@ -76,16 +100,34 @@ def backfill_date_to_db(date_str):
     date_folder = os.path.join(base_folder, "BACKUPFILES AUTOMATED", date_str)
     if not os.path.isdir(date_folder):
         return {"ok": False, "error": f"Folder not found: {date_folder}"}
-    archived, skipped = [], []
-    for fname in sorted(os.listdir(date_folder)):
-        fpath = os.path.join(date_folder, fname)
-        if not os.path.isfile(fpath):
-            continue
-        if _archive_to_db(date_str, "backup", fpath):
-            archived.append(fname)
-        else:
-            skipped.append(fname)
-    return {"ok": True, "folder": date_folder, "tag": date_str, "archived": archived, "skipped": skipped}
+    archived, skipped, tags = [], [], []
+    slot_dirs = [d for d in sorted(os.listdir(date_folder))
+                 if d in ("Morning", "Afternoon", "Evening")
+                 and os.path.isdir(os.path.join(date_folder, d))]
+    if slot_dirs:
+        for slot in slot_dirs:
+            slot_path = os.path.join(date_folder, slot)
+            tag = f"{date_str}/{slot}"
+            tags.append(tag)
+            for fname in sorted(os.listdir(slot_path)):
+                fpath = os.path.join(slot_path, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                if _archive_to_db(tag, "backup", fpath):
+                    archived.append(f"{slot}/{fname}")
+                else:
+                    skipped.append(f"{slot}/{fname}")
+    else:
+        tags.append(date_str)
+        for fname in sorted(os.listdir(date_folder)):
+            fpath = os.path.join(date_folder, fname)
+            if not os.path.isfile(fpath):
+                continue
+            if _archive_to_db(date_str, "backup", fpath):
+                archived.append(fname)
+            else:
+                skipped.append(fname)
+    return {"ok": True, "folder": date_folder, "tags": tags, "archived": archived, "skipped": skipped}
 
 
 def run_cli_upload():
@@ -212,8 +254,10 @@ def run_cli_upload():
     _p("🚀 STEP 2: Backup + cleanup")
     try:
         today_folder = datetime.datetime.now().strftime("%d-%m-%Y")
-        backup_path = os.path.join(base_folder, "BACKUPFILES AUTOMATED", today_folder)
+        slot = _cli_time_slot()
+        backup_path = os.path.join(base_folder, "BACKUPFILES AUTOMATED", today_folder, slot)
         os.makedirs(backup_path, exist_ok=True)
+        tag = f"{today_folder}/{slot}"
         valid_ext2 = (".csv", ".txt", ".xlsx")
         exclude_ext = (".py", ".bat")
         moved = []
@@ -231,15 +275,18 @@ def run_cli_upload():
             # pipeline_box.py) — so the backup isn't only living on whichever
             # machine ran this. Local move above still happens regardless (the
             # exchange-login scripts need the local folder), this is additive.
+            # tag is "<date>/<slot>" (e.g. "20-08-2026/Afternoon") — same
+            # "<date>/<run-or-slot>" convention ctcl/ms15 use with their run
+            # number, so the Backup files browser can tell same-day runs apart.
             try:
                 use_pg = os.getenv("USE_POSTGRES", "false").strip().lower() == "true"
                 _sf = (__import__("core.db_postgres", fromlist=["save_run_file"]).save_run_file if use_pg
                        else __import__("core.db", fromlist=["save_run_file"]).save_run_file)
                 with open(dest, "rb") as fb:
-                    _sf("cli", "backup", f, fb.read(), tag=today_folder)
+                    _sf("cli", "backup", f, fb.read(), tag=tag)
             except Exception as _dbe:
                 _p(f"  DB archive skipped for {f}: {_dbe}")
-        _p(f"📦 Backup done — {len(moved)} file(s) moved to {backup_path} + Postgres/SQLite")
+        _p(f"📦 Backup done — {len(moved)} file(s) moved to {backup_path} ({slot}) + Postgres/SQLite")
     except Exception as e:
         _p(f"⚠️ Backup/cleanup failed: {e}")
 
