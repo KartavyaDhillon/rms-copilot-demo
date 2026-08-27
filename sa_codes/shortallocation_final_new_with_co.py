@@ -13,6 +13,7 @@ def _SALIST(_k, _d):
 # ---- end SA env shim ----
 
 import os
+import re
 import sys
 import glob
 import pandas as pd
@@ -282,11 +283,18 @@ def read_mcx_deposit(path):
     else:
         raw = pd.read_csv(path, header=None, dtype=str)
 
+    # Collapse any whitespace run (including an embedded newline from a header
+    # cell that visually wraps across two lines) to a single space before
+    # comparing — plain .str.strip() only trims the ends, so an internal
+    # line-break would otherwise make this exact-match search fail silently.
+    def _norm_header(s):
+        return re.sub(r"\s+", " ", str(s)).strip().upper()
+
     for i in range(10):
-        row = raw.iloc[i].astype(str).str.strip().str.upper()
+        row = raw.iloc[i].apply(_norm_header)
         if "UCC CODE" in row.values and "MARGIN LIMIT" in row.values:
             df = raw.iloc[i+1:].copy()
-            df.columns = raw.iloc[i]
+            df.columns = raw.iloc[i].apply(lambda s: re.sub(r"\s+", " ", str(s)).strip())
             return df
 
     raise Exception("❌ Header row not found in MCX DEPOSIT file")

@@ -2216,6 +2216,18 @@ def _pb_read_xlsx_pandas(path):
         except Exception:
             return None, str(e_pd)
 
+def _pb_norm_header(s):
+    """Collapse ANY run of whitespace (including embedded newlines from an
+    Excel cell that visually wraps a header across two lines, e.g. "Client
+    Margin\\nLimit") down to a single space, then strip. Plain .str.strip()
+    only trims the ends — it does nothing for an internal line-break, which
+    makes an exact-match header search silently fail even though the header
+    text looks identical to the human eye. Used on both sides of the
+    comparison (scanned row values AND required_columns) so either one being
+    written with a literal newline still matches."""
+    import re as _re
+    return _re.sub(r"\s+", " ", str(s)).strip()
+
 def _pb_read_xlsx_header_scan(path, required_columns, max_scan_rows=10):
     """Like _pb_read_xlsx_pandas, but for files (the MCX margin-limit export)
     whose real header row isn't reliably row 0 — scans the first
@@ -2223,17 +2235,22 @@ def _pb_read_xlsx_header_scan(path, required_columns, max_scan_rows=10):
     using that row as the header. Same header-detection approach
     core/pipelines/ctcl_vs_nmass.py's own detect_header_excel() already uses
     for the real pipeline run — which is why a real run picks up MCX deposits
-    correctly even for a file this lookup tool used to misread as header=0."""
+    correctly even for a file this lookup tool used to misread as header=0.
+    Whitespace-normalized on both sides (see _pb_norm_header) so a header
+    cell that wraps across two lines in Excel still matches."""
     import pandas as pd
     try:
         raw = pd.read_excel(path, header=None, dtype=str)
     except Exception as e:
         return None, str(e)
+    req_norm = [_pb_norm_header(c) for c in required_columns]
     for i in range(min(max_scan_rows, len(raw))):
-        row = raw.iloc[i].astype(str).str.strip()
-        if all(col in row.values for col in required_columns):
+        row_norm = [_pb_norm_header(v) for v in raw.iloc[i].tolist()]
+        if all(col in row_norm for col in req_norm):
             try:
-                return pd.read_excel(path, header=i, dtype=str), None
+                df = pd.read_excel(path, header=i, dtype=str)
+                df.columns = [_pb_norm_header(c) for c in df.columns]
+                return df, None
             except Exception as e:
                 return None, str(e)
     return None, f"header row with {required_columns} not found in first {max_scan_rows} rows"

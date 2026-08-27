@@ -527,15 +527,27 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
         else:
             return pl.read_csv(path, infer_schema_length=0, ignore_errors=True)
 
+    def _norm_header(s):
+        """Collapse any whitespace run (including an embedded newline from a
+        header cell that visually wraps across two lines, e.g. "Client
+        Margin\\nLimit") to a single space. Plain .str.strip() only trims the
+        ends — an internal line-break survives it and makes an exact-match
+        header search fail silently even though the text looks identical."""
+        import re as _re
+        return _re.sub(r"\s+", " ", str(s)).strip()
+
     def detect_header_excel(path, required_columns):
         """Scan first 10 rows to find the header, return a polars DataFrame.
         Uses pandas for the scan (identical to original logic that worked)."""
         import pandas as _pd
         raw = _pd.read_excel(path, header=None)
+        req_norm = [_norm_header(c) for c in required_columns]
         for i in range(10):
-            row = raw.iloc[i].astype(str).str.strip()
-            if all(col in row.values for col in required_columns):
-                return pl.from_pandas(_pd.read_excel(path, header=i))
+            row_norm = [_norm_header(v) for v in raw.iloc[i].tolist()]
+            if all(col in row_norm for col in req_norm):
+                df = _pd.read_excel(path, header=i)
+                df.columns = [_norm_header(c) for c in df.columns]
+                return pl.from_pandas(df)
         raise Exception(f"Header row not found in first 10 rows of {path}")
 
     def _num(df, col):

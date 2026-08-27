@@ -277,12 +277,17 @@ def _read_mcx_file(base_folder, today_yyyymmdd):
     temp_df = pd.read_excel(file, header=None)
     header_row = None
     for i in range(min(10, len(temp_df))):
-        row_values = temp_df.iloc[i].astype(str).str.strip().tolist()
+        # Collapse any whitespace run (including an embedded newline from a
+        # header cell that wraps across two lines in Excel) to one space —
+        # plain .str.strip() only trims the ends, so an internal line-break
+        # would otherwise make this exact-match search fail silently.
+        row_values = [re.sub(r"\s+", " ", str(v)).strip() for v in temp_df.iloc[i].tolist()]
         if "UCC Code" in row_values:
             header_row = i; break
     if header_row is None:
         raise Exception("MCX header row not found")
     df = pd.read_excel(file, header=header_row)
+    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
     df = df[["UCC Code", "Margin Utilization"]].copy()
     df.columns = ["Account Id", "MCX MARGIN"]
     df["MCX MARGIN"] = df["MCX MARGIN"].astype(str).str.replace(",", "", regex=False)
@@ -299,12 +304,16 @@ def _read_90_file(base_folder):
     temp_df = pd.read_excel(file, header=None)
     header_row = None
     for i in range(min(10, len(temp_df))):
-        row_values = temp_df.iloc[i].astype(str).str.strip().tolist()
+        # Same whitespace-normalization as _read_mcx_file above — a header
+        # cell that visually wraps across two lines in Excel often has an
+        # embedded newline, which plain .str.strip() doesn't remove.
+        row_values = [re.sub(r"\s+", " ", str(v)).strip() for v in temp_df.iloc[i].tolist()]
         if "Client Code" in row_values:
             header_row = i; break
     if header_row is None:
         raise Exception("90% file header row not found")
     df = pd.read_excel(file, header=header_row)
+    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
     df = df[["Client Code", "ELM", "Span Margin", "Other Margin", "Spread Margin"]].copy()
     for col in ["ELM", "Span Margin", "Other Margin", "Spread Margin"]:
         df[col] = df[col].astype(str).str.replace(",", "", regex=False)

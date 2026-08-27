@@ -472,12 +472,22 @@ def _run_margin_shortage_15min_impl():
     def read_any(path):
         return pd.read_excel(path) if path.endswith(".xlsx") else pd.read_csv(path)
 
+    def _norm_header(s):
+        """Collapse any whitespace run (including an embedded newline from a
+        header cell that visually wraps across two lines) to a single space —
+        plain .str.strip() only trims the ends, so an internal line-break
+        would otherwise make an exact-match header search fail silently."""
+        return re.sub(r"\s+", " ", str(s)).strip()
+
     def detect_header_excel(path, required_cols):
         raw = pd.read_excel(path, header=None)
+        req_norm = [_norm_header(c) for c in required_cols]
         for i in range(10):
-            row = raw.iloc[i].astype(str).str.strip()
-            if all(c in row.values for c in required_cols):
-                return pd.read_excel(path, header=i)
+            row_norm = [_norm_header(v) for v in raw.iloc[i].tolist()]
+            if all(c in row_norm for c in req_norm):
+                df = pd.read_excel(path, header=i)
+                df.columns = [_norm_header(c) for c in df.columns]
+                return df
         raise Exception("Header not found")
 
     # =====================================================
