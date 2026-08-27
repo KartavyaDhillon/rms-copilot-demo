@@ -2216,6 +2216,28 @@ def _pb_read_xlsx_pandas(path):
         except Exception:
             return None, str(e_pd)
 
+def _pb_read_xlsx_header_scan(path, required_columns, max_scan_rows=10):
+    """Like _pb_read_xlsx_pandas, but for files (the MCX margin-limit export)
+    whose real header row isn't reliably row 0 — scans the first
+    max_scan_rows rows for one containing ALL required_columns, then re-reads
+    using that row as the header. Same header-detection approach
+    core/pipelines/ctcl_vs_nmass.py's own detect_header_excel() already uses
+    for the real pipeline run — which is why a real run picks up MCX deposits
+    correctly even for a file this lookup tool used to misread as header=0."""
+    import pandas as pd
+    try:
+        raw = pd.read_excel(path, header=None, dtype=str)
+    except Exception as e:
+        return None, str(e)
+    for i in range(min(max_scan_rows, len(raw))):
+        row = raw.iloc[i].astype(str).str.strip()
+        if all(col in row.values for col in required_columns):
+            try:
+                return pd.read_excel(path, header=i, dtype=str), None
+            except Exception as e:
+                return None, str(e)
+    return None, f"header row with {required_columns} not found in first {max_scan_rows} rows"
+
 def _pb_sum_collateral_pl(df_pl, code_col, val_cols, codes):
     """Polars: filter rows for each code, sum val_cols. Returns {code: float}."""
     import polars as pl
@@ -2383,7 +2405,7 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                     and not any(fn.lower().startswith(p) for p in KNOWN_PREFIXES)]
         for fn, fpp in mcx_cand:
             try:
-                tdf, err = _pb_read_xlsx_pandas(fpp)
+                tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Client Margin Limit"])
                 if err or tdf is None: continue
                 cc = _pb_col(tdf, "Client Code"); ml = _pb_col(tdf, "Client Margin Limit")
                 if not cc or not ml: continue
