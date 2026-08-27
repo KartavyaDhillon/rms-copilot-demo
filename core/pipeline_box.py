@@ -2375,7 +2375,15 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                     for code in codes:
                         sub = tdf[cs == code]
                         if sub.empty: continue
-                        res[code] = round(float(sum(pd.to_numeric(sub[c], errors="coerce").fillna(0).sum() for c in vc)), 2)
+                        # Strip thousands-separator commas before converting —
+                        # same fix as the MCX block below (pd.to_numeric alone
+                        # silently turns "1,234.56" into NaN -> 0, it doesn't
+                        # know comma-grouped numbers).
+                        res[code] = round(float(sum(
+                            pd.to_numeric(sub[c].astype(str).str.replace(",", "", regex=False),
+                                          errors="coerce").fillna(0).sum()
+                            for c in vc
+                        )), 2)
                     return res
             except Exception as e:
                 warnings.append(f"{dl} R{run_n} {fn}: {e}"); return {}
@@ -2412,7 +2420,10 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                             for code in codes:
                                 sub = tdf[cs == code]
                                 if not sub.empty:
-                                    vals[code]["NCDEX"] = round(float(pd.to_numeric(sub[vc], errors="coerce").fillna(0).sum()), 2)
+                                    # Strip thousands-separator commas — same
+                                    # bug as MCX/CM/FO/CO below.
+                                    vc_clean = sub[vc].astype(str).str.replace(",", "", regex=False)
+                                    vals[code]["NCDEX"] = round(float(pd.to_numeric(vc_clean, errors="coerce").fillna(0).sum()), 2)
             except Exception as e:
                 warnings.append(f"{dl} R{run_n} NCDEX: {e}")
 
@@ -2430,7 +2441,18 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                 for code in codes:
                     sub = tdf[cs == code]
                     if not sub.empty:
-                        vals[code]["MCX"] = round(float(pd.to_numeric(sub[ml], errors="coerce").fillna(0).sum()), 2)
+                        # Values in this column are comma-formatted thousands
+                        # ("910,642,663.92") — pd.to_numeric doesn't strip
+                        # those on its own, it just silently coerces the whole
+                        # thing to NaN -> 0 on errors="coerce". Real pipeline
+                        # code (ctcl_vs_nmass.py's _num()) already strips
+                        # commas before casting; this path never did, which is
+                        # why MCX came back 0 here even for a client whose
+                        # real Client Margin Limit was in the hundreds of
+                        # millions — found and matched correctly, just parsed
+                        # as zero afterward.
+                        ml_clean = sub[ml].astype(str).str.replace(",", "", regex=False)
+                        vals[code]["MCX"] = round(float(pd.to_numeric(ml_clean, errors="coerce").fillna(0).sum()), 2)
                 break
             except Exception: continue
 
@@ -2476,7 +2498,15 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                         r = sub.iloc[0]
                         def _g(col, _r=r):
                             if not col: return 0
-                            v = pd.to_numeric(_r[col], errors="coerce")
+                            # These are pipeline-written output files, so the
+                            # cell is normally already a clean number — but
+                            # strip commas defensively too, same reasoning as
+                            # the raw-file reads above, in case a value ever
+                            # round-trips through a comma-formatted string.
+                            raw_v = _r[col]
+                            if isinstance(raw_v, str):
+                                raw_v = raw_v.replace(",", "")
+                            v = pd.to_numeric(raw_v, errors="coerce")
                             return 0 if pd.isna(v) else float(v)
                         outputs.append({
                             "date": dl, "run": ff_run, "client_code": code,
@@ -2513,7 +2543,15 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                         r = sub.iloc[0]
                         def _g(col, _r=r):
                             if not col: return 0
-                            v = pd.to_numeric(_r[col], errors="coerce")
+                            # These are pipeline-written output files, so the
+                            # cell is normally already a clean number — but
+                            # strip commas defensively too, same reasoning as
+                            # the raw-file reads above, in case a value ever
+                            # round-trips through a comma-formatted string.
+                            raw_v = _r[col]
+                            if isinstance(raw_v, str):
+                                raw_v = raw_v.replace(",", "")
+                            v = pd.to_numeric(raw_v, errors="coerce")
                             return 0 if pd.isna(v) else float(v)
                         outputs.append({
                             "date": dl, "run": ff_run, "client_code": code,
