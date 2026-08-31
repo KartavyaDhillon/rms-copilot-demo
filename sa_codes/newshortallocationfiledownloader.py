@@ -722,6 +722,10 @@ import time
 import os
 import requests as _mcx_requests
 import urllib3 as _mcx_urllib3
+import xml.etree.ElementTree as _mcx_ET
+# Requires: pip install pyotp — MCX now sits behind TOTP-based 2FA on top of
+# the password, same as MCX_BLOCKING_FINAL.py already handles.
+import pyotp as _pyotp
 
 _mcx_urllib3.disable_warnings(_mcx_urllib3.exceptions.InsecureRequestWarning)
 
@@ -732,8 +736,29 @@ _MCX_BASE      = "https://sftp.mcxindia.com"
 _mcx_username  = _SAENV("SA_MCX_USER", "56720")
 _mcx_passwords = _SALIST("SA_MCX_PASSWORDS", ["M56720@789", "M56720@123"])
 
+# Base32 secret from the MCX authenticator (TOTP) enrollment - the same
+# secret the Google Authenticator/Authy app already uses to show a 6-digit
+# code at manual login. Using it here does NOT disable or replace the phone
+# app; both always show the same code, since both are driven by this same
+# secret. Taken from MCX_BLOCKING_FINAL.py's MFA_TOTP_SECRET (that script
+# already had to solve this same 2FA requirement for its own MCX login).
+# Anyone with this string can generate valid MFA codes for this account
+# indefinitely - treat it like a password. If MFA is ever reset/re-enrolled
+# on the MCX portal, this value changes and must be updated here too.
+_mcx_totp_secret = _SAENV("SA_MCX_TOTP_SECRET", "Q5BDU3WFOB4OWY5G7ISD3KYTFPY2N2IY")
+
 download_dir = _SAENV("SA_OUTPUT_DIR", r"C:\KARTAVYA\SHORT ALLOCATION")
 os.makedirs(download_dir, exist_ok=True)
+
+def _parse_mcx_xml_field(xml_text, tag):
+    """Pull a single tag's text out of MCX's flat <response>...</response> XML
+    (same helper as MCX_BLOCKING_FINAL.py's parse_xml_field)."""
+    try:
+        root = _mcx_ET.fromstring(xml_text)
+        el = root.find(tag)
+        return el.text if el is not None else None
+    except _mcx_ET.ParseError:
+        return None
 
 # ===============================
 # CURRENT DATE LOGIC
@@ -762,6 +787,40 @@ def _attempt_mcx_download(file_name, download_dir, today_display, today_date):
 
     _mcx_session = _mcx_requests.Session()
 
+    # ---- TOTP (2FA) COMPLETION ----
+    def _mcx_complete_totp(login_csrf):
+        """Submit the TOTP code MCX now requires right after password
+        acceptance - mirrors MCX_BLOCKING_FINAL.py's complete_totp(), just
+        posting through this function's own _mcx_session instead of a
+        module-level one."""
+        if not _mcx_totp_secret:
+            print("❌ MCX now requires a TOTP code and SA_MCX_TOTP_SECRET is "
+                  "not set - fill it in (see the MCX CONFIG section above).")
+            return False
+        code = _pyotp.TOTP(_mcx_totp_secret).now()
+        print("🔑 MCX TOTP required — submitting code")
+        try:
+            res = _mcx_session.post(
+                _MCX_BASE + f"/Web%20Client/Login.xml?Command=TOTPPassin&Sync={int(time.time()*1000)}",
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Origin": _MCX_BASE,
+                    "Referer": _MCX_BASE + "/?command=logout",
+                    "X-Csrf-Token": login_csrf,
+                },
+                data={"passcode": code, "role": "validation"},
+                verify=False, timeout=15,
+            )
+        except Exception as _e:
+            print(f"⚠️ MCX TOTP submission error: {_e}")
+            return False
+        if "successful" not in res.text.lower():
+            print(f"❌ MCX TOTP validation failed: {res.text[:200]}")
+            return False
+        print("✅ MCX TOTP accepted")
+        return True
+
     # ---- LOGIN ----
     def _mcx_login():
         for pwd in _mcx_passwords:
@@ -779,6 +838,24 @@ def _attempt_mcx_download(file_name, download_dir, today_display, today_date):
                     verify=False, timeout=15,
                 )
                 if "successful" in res.text.lower():
+                    print("✅ MCX password accepted")
+                    # A successful password response no longer means the
+                    # session is fully authenticated by itself - MCX now
+                    # sits behind TOTP-based 2FA on top of it. Check
+                    # MFATOTPStatus the same way MCX_BLOCKING_FINAL.py does,
+                    # and complete the TOTP step if required before treating
+                    # this as a real login success.
+                    login_csrf = _parse_mcx_xml_field(res.text, "CsrfToken")
+                    mfa_status = _parse_mcx_xml_field(res.text, "MFATOTPStatus")
+                    tries_left = _parse_mcx_xml_field(res.text, "TOTPLoginTriesLeft")
+                    if mfa_status == "USES":
+                        print(f"🔑 MCX TOTP required (tries left: {tries_left})")
+                        if not _mcx_complete_totp(login_csrf):
+                            # Password was correct - a TOTP failure isn't
+                            # fixed by trying a different password, so stop
+                            # here rather than burning the next password
+                            # attempt on an already-known-good one.
+                            return False
                     print("✅ MCX login successful")
                     return True
                 print(f"   Response snippet: {res.text[:80]}")

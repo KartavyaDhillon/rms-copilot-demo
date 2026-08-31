@@ -472,6 +472,18 @@ def _run_margin_shortage_15min_impl():
     def read_any(path):
         return pd.read_excel(path) if path.endswith(".xlsx") else pd.read_csv(path)
 
+    def _num(series):
+        """pd.to_numeric() alone doesn't strip thousands-separator commas —
+        a value like "910,642,663.92" silently becomes NaN (then 0 after
+        fillna), not the real number. Exchange-exported CM/FO/CO/deposit
+        files use comma-formatted numbers, so every numeric column read
+        from them needs this before pd.to_numeric. Same fix already applied
+        in ctcl_vs_nmass.py's polars _num() and core/pipeline_box.py."""
+        return pd.to_numeric(
+            series.astype(str).str.replace(",", "", regex=False),
+            errors="coerce"
+        )
+
     def _norm_header(s):
         """Collapse any whitespace run (including an embedded newline from a
         header cell that visually wraps across two lines) to a single space —
@@ -631,11 +643,11 @@ def _run_margin_shortage_15min_impl():
     # =====================================================
     cm_df = read_any(find_file("CM_ClientLevelCollaterals", today_ddmmyyyy))
     cm_df["CM_SUM"] = (
-        pd.to_numeric(cm_df["Cash allocated (b)"], errors="coerce") +
-        pd.to_numeric(cm_df["Cash-Others (c)"], errors="coerce") +
-        pd.to_numeric(cm_df["Non-cash Securities (d)"], errors="coerce")
+        _num(cm_df["Cash allocated (b)"]) +
+        _num(cm_df["Cash-Others (c)"]) +
+        _num(cm_df["Non-cash Securities (d)"])
     )
-    cm_df["CM_MIN_MARGIN"] = pd.to_numeric(cm_df["Minimum Margins (a)"], errors="coerce")
+    cm_df["CM_MIN_MARGIN"] = _num(cm_df["Minimum Margins (a)"])
 
     cm_final = (
         cm_df
@@ -648,11 +660,11 @@ def _run_margin_shortage_15min_impl():
     # =====================================================
     fo_df = read_any(find_file("FO_ClientLevelCollaterals", today_ddmmyyyy))
     fo_df["FO_SUM"] = (
-        pd.to_numeric(fo_df["Cash allocated (b)"], errors="coerce") +
-        pd.to_numeric(fo_df["Cash-others (c)"], errors="coerce") +
-        pd.to_numeric(fo_df["Non-cash Securities (d)"], errors="coerce")
+        _num(fo_df["Cash allocated (b)"]) +
+        _num(fo_df["Cash-others (c)"]) +
+        _num(fo_df["Non-cash Securities (d)"])
     )
-    fo_df["FO_MIN_MARGIN"] = pd.to_numeric(fo_df["Minimum Margins (a)"], errors="coerce")
+    fo_df["FO_MIN_MARGIN"] = _num(fo_df["Minimum Margins (a)"])
 
     fo_final = (
         fo_df
@@ -665,13 +677,11 @@ def _run_margin_shortage_15min_impl():
     # =====================================================
     co_df = read_any(find_file("CO_ClientLevelCollaterals", today_ddmmyyyy))
     co_df["CO_SUM"] = (
-        pd.to_numeric(co_df["Cash allocated (b)"], errors="coerce") +
-        pd.to_numeric(co_df["Cash-others (c)"], errors="coerce") +
-        pd.to_numeric(co_df["Non-cash Securities (d)"], errors="coerce")
+        _num(co_df["Cash allocated (b)"]) +
+        _num(co_df["Cash-others (c)"]) +
+        _num(co_df["Non-cash Securities (d)"])
     )
-    co_df["CO_MIN_MARGIN"] = pd.to_numeric(
-        co_df["Minimum Margins (a)"], errors="coerce"
-    )
+    co_df["CO_MIN_MARGIN"] = _num(co_df["Minimum Margins (a)"])
 
     co_final = (
         co_df
@@ -683,10 +693,8 @@ def _run_margin_shortage_15min_impl():
     # CLIENT NET
     # =====================================================
     dep_df = read_any(find_file("ClientNetEffectiveDeposits", today_ddmmyyyy))
-    dep_df["DEP_SUM"] = pd.to_numeric(
-        dep_df["Total Collateral (Cash and Non Cash)"], errors="coerce"
-    )
-    dep_df["CLIENTNET_MARGIN"] = pd.to_numeric(dep_df["Margin"], errors="coerce")
+    dep_df["DEP_SUM"] = _num(dep_df["Total Collateral (Cash and Non Cash)"])
+    dep_df["CLIENTNET_MARGIN"] = _num(dep_df["Margin"])
 
     dep_final = (
         dep_df
