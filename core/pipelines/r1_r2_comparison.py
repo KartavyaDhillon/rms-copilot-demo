@@ -194,40 +194,54 @@ def detect_segment(filename, headers):
     return None
 
 
-def extract_from_file(path):
-    """Returns (segment, {client_code: amount}) or None if unreadable/unknown."""
+def extract_from_file(path, verbose=True):
+    """Returns (segment, {client_code: amount}) or None if unreadable/unknown.
+
+    verbose=False silences every print here - used by /r1r2/readiness (api.py),
+    which calls this indirectly via _scan_and_choose() on a tight poll (every
+    open dashboard tab, every few seconds) just to check file status. With
+    verbose defaulting to True, those passive polls were printing "[ok]"/
+    "[skip]" lines to the server's console continuously even with zero clicks -
+    real runs (Live Snapshot, Download, etc., captured into their own log file
+    via _stream_code) still get the full verbose output as before."""
     try:
         rows = read_raw_rows(path)
     except AbortRun:
         raise
     except Exception as exc:
-        print(f"  [skip] could not read {os.path.basename(path)}: {exc}")
+        if verbose:
+            print(f"  [skip] could not read {os.path.basename(path)}: {exc}")
         return None
 
     if not rows:
-        print(f"  [skip] empty or unreadable: {os.path.basename(path)}")
+        if verbose:
+            print(f"  [skip] empty or unreadable: {os.path.basename(path)}")
         return None
 
     header_idx = find_header_row(rows)
     if header_idx is None:
-        print(f"  [skip] no recognizable header row in: {os.path.basename(path)}")
+        if verbose:
+            print(f"  [skip] no recognizable header row in: {os.path.basename(path)}")
         return None
 
     headers = rows[header_idx]
     segment = detect_segment(path, headers)
     if segment is None:
-        print(f"  [skip] could not tell which segment this is: {os.path.basename(path)}")
+        if verbose:
+            print(f"  [skip] could not tell which segment this is: {os.path.basename(path)}")
         return None
 
     id_col = next((i for i, h in enumerate(headers) if is_client_id_header(h)), None)
     wanted_kind = {"NCDEX": "cash_equivalent", "MCX": "allocation_eod"}.get(segment, "cash_allocated")
     amt_col = next((i for i, h in enumerate(headers) if amount_kind(h) == wanted_kind), None)
     if id_col is None or amt_col is None:
-        print(f"  [skip] required columns not found in: {os.path.basename(path)}")
+        if verbose:
+            print(f"  [skip] required columns not found in: {os.path.basename(path)}")
         return None
 
-    print(f"  [ok] {os.path.basename(path)}  ->  {segment}, header row {header_idx + 1}, "
-          f"client col '{headers[id_col]}', amount col '{headers[amt_col]}'")
+    if verbose:
+        print(f"  [ok] {os.path.basename(path)}  ->  {segment}, header row {header_idx + 1}, "
+              f"client col '{headers[id_col]}', amount col '{headers[amt_col]}'")
 
     totals = {}
     for row in rows[header_idx + 1:]:
@@ -300,10 +314,14 @@ def list_files_in(folder):
     return out
 
 
-def _scan_and_choose(folder, today_only=False):
+def _scan_and_choose(folder, today_only=False, verbose=True):
     """Content-sniff every file in `folder`, pick the newest valid file per
     segment. Returns (chosen_totals, chosen_paths, missing_segments) - never
-    raises."""
+    raises.
+
+    verbose=False silences this function's own prints AND passes through to
+    extract_from_file() - see that function's docstring for why (used by
+    /r1r2/readiness's frequent passive polling, api.py)."""
     files = list_files_in(folder)
     if today_only:
         today = datetime.datetime.now().date()
@@ -316,15 +334,16 @@ def _scan_and_choose(folder, today_only=False):
             # file" check - cross-check the date embedded in the filename too.
             file_date_str, _, note = parse_file_stamp(f)
             if note != "file modified time" and file_date_str != today_str:
-                print(f"  [skip] {os.path.basename(f)} - filename date "
-                      f"({file_date_str}) does not match today ({today_str}), skipping")
+                if verbose:
+                    print(f"  [skip] {os.path.basename(f)} - filename date "
+                          f"({file_date_str}) does not match today ({today_str}), skipping")
                 continue
             kept.append(f)
         files = kept
 
     candidates = {}
     for path in files:
-        result = extract_from_file(path)
+        result = extract_from_file(path, verbose=verbose)
         if result is None:
             continue
         segment, totals = result
@@ -336,7 +355,8 @@ def _scan_and_choose(folder, today_only=False):
         _, path, totals = lst[0]
         chosen[segment] = totals
         chosen_paths[segment] = path
-        print(f"  [use] {segment:<5} {os.path.basename(path)}  ({len(totals)} clients)")
+        if verbose:
+            print(f"  [use] {segment:<5} {os.path.basename(path)}  ({len(totals)} clients)")
 
     missing = [s for s in SEGMENT_ORDER if s not in chosen]
     return chosen, chosen_paths, missing

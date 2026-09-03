@@ -3923,7 +3923,11 @@ def r1r2_readiness():
     from core.pipelines.r1_r2_comparison import BASE_FOLDER as _r1r2_dir, _scan_and_choose as _r1r2_scan
     import os as _r1r2_os
     _r1r2_os.makedirs(_r1r2_dir, exist_ok=True)
-    _, chosen_paths, missing = _r1r2_scan(_r1r2_dir, today_only=True)
+    # verbose=False: this endpoint is polled passively and frequently by every
+    # open dashboard tab (every few seconds) just to check file status - not a
+    # real run - so it must not spam "[ok]"/"[use]" lines into the server's
+    # console on every poll. See _scan_and_choose()'s docstring.
+    _, chosen_paths, missing = _r1r2_scan(_r1r2_dir, today_only=True, verbose=False)
     _examples = {
         "CM": "CM_ClientLevelCollaterals_<date>.csv",
         "FO": "FO_ClientLevelCollaterals_<date>.csv",
