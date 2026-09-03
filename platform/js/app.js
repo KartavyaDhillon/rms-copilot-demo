@@ -209,7 +209,12 @@
           const locks = snap.locks || [];
           locks.forEach((l) => {
             if (!known[l.key + l.started_at] && Object.keys(known).length) {
-              RMS.toast("info", l.label + " started",
+              // Was an unconditional RMS.toast() — every run start, anywhere on
+              // the console, by anyone, popped a toast for every viewer. With
+              // several pipelines running many times a day that made the toast
+              // stack essentially constant. Record it in the bell (history)
+              // only now; nothing pops up unless the user opens the bell menu.
+              RMS.pushNotif("info", l.label + " started",
                 "by " + (l.by || "unknown user") + (l.ip ? " · " + l.ip : ""));
             }
           });

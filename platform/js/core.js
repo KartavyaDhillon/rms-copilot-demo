@@ -56,7 +56,17 @@
     RMS._online = up;
     const dot = $("#serverDot"), up2 = $("#serverUp");
     if (dot) dot.className = "dot " + (up ? "ok" : "err");
-    if (up2 && !up) up2.textContent = "unreachable";
+    // Previously only wrote text on the DOWN transition ("unreachable"), never
+    // reset it back on the UP transition — so one flaky/slow request early on
+    // (e.g. during page load) would permanently latch the sidebar to
+    // "unreachable" even after the server was clearly responding again (dot
+    // back to green, live data flowing). Only the Dashboard page's own
+    // resource-strip poll (dashboard.js) ever overwrote it with "up <duration>",
+    // so any OTHER page (Process Center, etc.) stayed stuck on the stale label
+    // forever. Now every successful RMS.api() call clears it immediately,
+    // page-agnostic; dashboard.js's more detailed "up <duration>" text still
+    // overwrites this shortly after on pages that run that poll.
+    if (up2) up2.textContent = up ? "online" : "unreachable";
   };
 
   /* polling registry — pauses everything while the tab is hidden */

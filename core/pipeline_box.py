@@ -166,6 +166,41 @@ PIPELINES = {
                 ["RISK_REPORT", "RISK_REPORT_*.csv", "RISK_REPORT_<date>.csv"],
                 ["Kambala", "Kambala_Omny_Depo_Adhoc_All_level.txt_*.txt", "Kambala_Omny_Depo_Adhoc_All_level.txt_<DDMMYYYY>.txt"],
             ]},
+    # Segment-wise Collateral Movement Report — Live Snapshot / Afternoon /
+    # Evening. Same "not the generic numbered px runner" shape as CLI: Live
+    # Snapshot repeats any number of times with no fixed order relative to
+    # Afternoon/Evening, so the 3 buttons hit their own bespoke SSE endpoints
+    # (/r1r2/live-stream, /r1r2/afternoon-stream, /r1r2/evening-stream in
+    # api.py) instead of /px/run-stream?pipe=r1r2&run_no=N. This registry
+    # entry exists for the shared infra only — Backup Files browser, log
+    # viewer, credentials modal. See core/pipelines/r1_r2_comparison.py.
+    "r1r2": {"name": "Segment-wise Collateral Movement Report", "logdir": "r1r2", "runs": 1,
+             "state_dir_env": "R1R2_FOLDER", "state_default": r"D:\R1_R2_COMPARISON",
+             "state_file": "run_counter.txt",
+             "email_keys": {"Report": ["R1R2_EMAIL_TO", "R1R2_EMAIL_CC"]},
+             "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
+                       "pass_key": "SENDER_PASSWORD",
+                       "note": "same account every other pipe here sends reports from"},
+                      "NSCCL / NMASS login": {"user_key": "CTCL_NMASS_USER",
+                       "pass_key": "CTCL_NMASS_PASSWORD",
+                       "note": "connect2nsccl.com login (Live Snapshot only) — shared with CTCL vs NMASS"},
+                      "NCDEX / NCFE login": {"user_key": "CTCL_NCDEX_USER",
+                       "pass_key": "CTCL_NCDEX_PASSWORD",
+                       "note": "ncfe.ncdex.com login (Live Snapshot only) — shared with CTCL vs NMASS"},
+                      "MCX RSK383 (TCS BANCS) login": {"user_key": "SA_MCX_DEPOSIT_USER",
+                       "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
+                       "note": "eclear.mcxccl.com \"Query Detailed Limit\" login (Live Snapshot only) — "
+                               "shared with Short Allocation's MCX Deposit / CLI's MCX Web Allocation buttons"}},
+             "upload_dir_env": "R1R2_FOLDER", "upload_default": r"D:\R1_R2_COMPARISON",
+             "backup_root_env": "R1R2_FOLDER", "backup_subdir": "Backup",
+             "file_types": [
+                 ["CM Client Collaterals", "CM_ClientLevelCollaterals_*.csv,CM_ClientLevelCollaterals_*.txt,CM_ClientLevelCollaterals_*.xlsx", "CM_ClientLevelCollaterals_<date>.csv"],
+                 ["FO Client Collaterals", "FO_ClientLevelCollaterals_*.csv,FO_ClientLevelCollaterals_*.txt,FO_ClientLevelCollaterals_*.xlsx", "FO_ClientLevelCollaterals_<date>.csv"],
+                 ["CO Client Collaterals", "CO_ClientLevelCollaterals_*.csv,CO_ClientLevelCollaterals_*.txt,CO_ClientLevelCollaterals_*.xlsx", "CO_ClientLevelCollaterals_<date>.csv"],
+                 ["Client Net Effective Deposits", "ClientNetEffectiveDeposits_*.csv,ClientNetEffectiveDeposits_*.xlsx", "ClientNetEffectiveDeposits_<date>.csv"],
+                 ["MCX (RSK383 export / Web Allocation)", "*.xlsx,MCX_WebAllocationDeallocation.csv", "<random>-<YYYYMMDDHHMMSS>.xlsx"],
+                 ["Allocation Master (output)", "allocation_master.xlsx", "allocation_master.xlsx"],
+             ]},
     # Margin Shortage (15-min) — runs 11x/day, ported from 15minutesfinal_whatsapp.PY.
     # (Was 9; 16:30 and 16:50 added when the desk's shift extended. The night
     # shift after 16:50 still runs the original batch script on another machine —

@@ -3208,6 +3208,55 @@ async def ms15_token_answer(req: Request):
         return {"ok": False, "error": str(e)}
 
 
+_r1r2_last_answered_at: dict = {}
+
+@app.get("/r1r2/captcha/pending")
+def r1r2_captcha_pending():
+    """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
+    for the Segment-wise Collateral Movement Report's Live Snapshot download.
+    Same logic as /ms15/captcha/pending, scoped to R1R2_FOLDER."""
+    import base64 as _b64, json as _cj, os as _co, time as _ct
+    global _r1r2_last_answered_at
+    _dir = _co.getenv("R1R2_FOLDER", r"D:\R1_R2_COMPARISON")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _img = _co.path.join(_dir, ".captcha_nmass.png")
+    try:
+        _st = _cj.load(open(_sf, encoding="utf-8"))
+        if _st.get("state") != "PENDING":
+            return {"pending": False}
+        img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
+        reason = _st.get("reason", "")
+        source = _st.get("source", "nmass")
+        _last = _r1r2_last_answered_at.get(source, 0)
+        if not reason and _last and (_ct.time() - _last) < 90:
+            reason = "⚠️ Previous attempt failed — try again"
+        return {"pending": True, "image_b64": img_b64, "detected": _st.get("detected", ""), "reason": reason, "source": source}
+    except Exception:
+        return {"pending": False}
+
+@app.post("/r1r2/captcha/answer")
+def r1r2_captcha_answer(a: _CTCLCaptchaAnswer):
+    """Submit typed captcha text to the waiting NMASS/NCDEX script (R1/R2 box)."""
+    import os as _co, time as _ct, json as _cj
+    global _r1r2_last_answered_at
+    _dir = _co.getenv("R1R2_FOLDER", r"D:\R1_R2_COMPARISON")
+    _sf  = _co.path.join(_dir, ".captcha_state")
+    _af  = _co.path.join(_dir, ".captcha_answer")
+    try:
+        _source = "nmass"
+        try:
+            _source = _cj.load(open(_sf, encoding="utf-8")).get("source", "nmass")
+        except Exception:
+            pass
+        with open(_af, "w", encoding="utf-8") as f: f.write(a.text.strip())
+        with open(_sf, "w", encoding="utf-8") as f:
+            _cj.dump({"state": "ANSWERED"}, f)
+        _r1r2_last_answered_at[_source] = _ct.time()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @app.get("/ms15/readiness")
 def ms15_readiness():
     """Check whether all input files are present in MARGIN_SHORTAGE_FOLDER.
@@ -3783,6 +3832,147 @@ def cli_run_new_stream():
         "_a(); _d(); _m(); _u()"
     )
     return _cli_stream_endpoint(code, "cli_run_new")
+
+
+def _r1r2_stream_endpoint(code, logname_prefix):
+    """Same plumbing as _cli_stream_endpoint, tracked under its own "r1r2"
+    slot in _PB instead of "cli" — Live Snapshot/Afternoon/Evening are their
+    own independent runs, never blocked by (or blocking) CLI/CTCL/MS15/SA/
+    PROBABLE. See core/pipelines/r1_r2_comparison.py."""
+    import json as _r1r2_json
+    from core.pipeline_box import _stream_code
+    def gen():
+        try:
+            for ev in _stream_code(code, "r1r2", logname_prefix):
+                yield f"data: {_r1r2_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_r1r2_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/r1r2/live-stream")
+def r1r2_live_stream():
+    """SSE: Live Snapshot — no once-per-day limit, can be run any number of
+    times. See core/pipelines/r1_r2_comparison.py."""
+    return _r1r2_stream_endpoint(
+        "from core.pipelines.r1_r2_comparison import run_r1r2_live as _f; _f()",
+        "r1r2_live")
+
+
+@app.get("/r1r2/afternoon-stream")
+def r1r2_afternoon_stream():
+    """SSE: Afternoon — once per calendar day."""
+    return _r1r2_stream_endpoint(
+        "from core.pipelines.r1_r2_comparison import run_r1r2_afternoon as _f; _f()",
+        "r1r2_afternoon")
+
+
+@app.get("/r1r2/evening-stream")
+def r1r2_evening_stream():
+    """SSE: Evening — once per calendar day."""
+    return _r1r2_stream_endpoint(
+        "from core.pipelines.r1_r2_comparison import run_r1r2_evening as _f; _f()",
+        "r1r2_evening")
+
+
+@app.get("/r1r2/download-stream")
+def r1r2_download_stream():
+    """SSE: standalone CM/FO/CO/NCDEX download only — no MCX, no
+    reconciliation, no email. Same idea as CLI's dedicated "📥 Download"
+    button: lets that one leg be retried on its own instead of only ever
+    running inside a full Live Snapshot. Skips the login entirely if today's
+    4 files are already sitting in R1R2_FOLDER."""
+    return _r1r2_stream_endpoint(
+        "from core.pipelines.r1_r2_comparison import download_nmass_ncdex_only as _f; _f()",
+        "r1r2_download")
+
+
+@app.get("/r1r2/mcx-download-stream")
+def r1r2_mcx_download_stream():
+    """SSE: standalone MCX leg only. Same idea as CLI's dedicated "📥 MCX Web
+    Allocation" button. Skips the TCS BANCS login entirely if today's MCX
+    file is already sitting in R1R2_FOLDER."""
+    return _r1r2_stream_endpoint(
+        "from core.pipelines.r1_r2_comparison import download_mcx_only as _f; _f()",
+        "r1r2_mcx_download")
+
+
+@app.get("/r1r2/readiness")
+def r1r2_readiness():
+    """Check whether all 5 files (CM/FO/CO/NCDEX/MCX) are present in
+    R1R2_FOLDER, dated today. Reuses r1_r2_comparison's own
+    _scan_and_choose() so "present" here means the exact same thing it means
+    when Live Snapshot itself decides whether a download is needed — same
+    content-sniffing, same today-only + filename-date cross-check. Feeds the
+    box's missing-files banner and the Upload files modal's checklist."""
+    from core.pipelines.r1_r2_comparison import BASE_FOLDER as _r1r2_dir, _scan_and_choose as _r1r2_scan
+    import os as _r1r2_os
+    _r1r2_os.makedirs(_r1r2_dir, exist_ok=True)
+    _, chosen_paths, missing = _r1r2_scan(_r1r2_dir, today_only=True)
+    _examples = {
+        "CM": "CM_ClientLevelCollaterals_<date>.csv",
+        "FO": "FO_ClientLevelCollaterals_<date>.csv",
+        "CO": "CO_ClientLevelCollaterals_<date>.csv",
+        "NCDEX": "ClientNetEffectiveDeposits_<date>.csv",
+        "MCX": "<random>-<YYYYMMDDHHMMSS>.xlsx",
+    }
+    items = []
+    for seg in ("CM", "FO", "CO", "NCDEX", "MCX"):
+        ok = seg not in missing
+        items.append({"key": seg, "ok": ok, "example": _examples[seg],
+                      "file": _r1r2_os.path.basename(chosen_paths[seg]) if (ok and seg in chosen_paths) else ""})
+    return {"items": items, "folder": _r1r2_dir}
+
+
+@app.get("/r1r2/today-status")
+def r1r2_today_status():
+    """Read-only peek at today's meta (.reconciliation_meta.json) — which of
+    Afternoon/Evening have already run today (Live has no once-per-day limit
+    so it's never added here). Drives the box's 3 tiles. Deliberately does
+    NOT call rotate_if_new_day() — that function ARCHIVES yesterday's master
+    as a side effect, which must only ever happen from an actual run, never
+    from a passive dashboard poll."""
+    from core.pipelines.r1_r2_comparison import BASE_FOLDER as _r1r2_dir, load_meta as _r1r2_load_meta
+    import datetime as _r1r2_dt
+    today_str = _r1r2_dt.datetime.now().strftime("%d-%m-%Y")
+    meta = _r1r2_load_meta(_r1r2_dir)
+    modes_done = meta.get("modes_done", []) if meta.get("date") == today_str else []
+    return {"date": today_str, "modes_done": modes_done, "morning_done": "morning" in modes_done}
+
+
+@app.post("/r1r2/stop")
+def r1r2_stop(request: Request):
+    """Stop any running R1/R2 subprocess (Live Snapshot's NMASS/NCDEX or MCX
+    download, or the reconciliation/email step) — only this box's own
+    independent slot, never CLI's/CTCL's/MS15's/SA's/PROBABLE's. Mirrors
+    /cli/stop exactly, just for the "r1r2" pipe key."""
+    allowed, why = _can_stop("px_r1r2", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
+    from core.pipeline_box import stop_pipeline as _r1r2_sp, _PB
+    was_r1r2 = bool(_PB.get("r1r2", {}).get("running"))
+    _r1r2_sp("r1r2")
+    if was_r1r2:
+        # Same reasoning as /cli/stop — a force-killed subprocess never runs
+        # its own lock cleanup, so release both shared locks explicitly if
+        # THIS box was the one actually holding them.
+        try:
+            import sys as _cs
+            _cs.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+            import importlib as _cimp
+            _mdd = _cimp.import_module("mcx_deposit_downloader")
+            _mdd.force_release_mcx_lock_if_owner("r1r2")
+        except Exception:
+            pass
+        try:
+            from core import dl_lock as _cdl
+            if _cdl.status().get("owner") == "r1r2":
+                _cdl.release()
+        except Exception:
+            pass
+    return {"ok": True}
 
 
 @app.post("/cli/mark-variant")

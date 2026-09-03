@@ -61,6 +61,13 @@ _PIPE_FOLDER = {
     "ctcl":     ("CTCL_NMASS_FOLDER",     r"D:\CTCL VS NMASS"),
     "ms15":     ("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes"),
     "probable": ("PROBABLE_FOLDER",        r"D:\PROBABLE"),
+    # Segment-wise Collateral Movement Report (Live Snapshot's CM/FO/CO/NCDEX
+    # leg) - see core/pipelines/r1_r2_comparison.py. Default mirrors that
+    # module's own BASE_FOLDER default (repo/data/r1_r2_comparison) so the
+    # two agree even if R1R2_FOLDER is never set in .env.
+    "r1r2":     ("R1R2_FOLDER", os.path.join(
+                     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                     "data", "r1_r2_comparison")),
 }
 
 # How stale the 4 NMASS/NCDEX files are allowed to be before a fresh download

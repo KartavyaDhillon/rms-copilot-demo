@@ -511,6 +511,7 @@ body {
       <input type="file" id="saUploadInput" multiple style="display:none" onchange="saDoUpload(this)">
       <input type="file" id="pxUploadInput" multiple style="display:none" onchange="pxDoUpload(this)">
       <input type="file" id="cliUploadInput" multiple style="display:none" onchange="cliDoUpload(this)">
+      <input type="file" id="r1r2UploadInput" multiple style="display:none" onchange="r1r2DoUpload(this)">
       <div id="globalTip"></div>
       <div class="sa-modal" id="saModal"><div class="sa-modal-card">
         <div class="sa-modal-head"><h3 id="saModalTitle">…</h3><button class="sa-modal-x" onclick="saCloseModal()" data-tip="Close this without saving.">×</button></div>
@@ -697,6 +698,29 @@ body {
         <div id="cliStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>
         <div class="sa-runs" id="pxRuns-cli"></div>
         <div class="sa-status" id="pxStatus-cli"><div class="sa-status-empty">Run status appears here. Full output is saved to Logs.</div></div>
+      </div>
+
+      <!-- ===== Segment-wise Collateral Movement Report (Live Snapshot / Afternoon / Evening) ===== -->
+      <div class="sec">Segment-wise Collateral Movement Report</div>
+      <div class="sa-box" id="pxBox-r1r2">
+        <div class="sa-head" style="flex-direction:column;gap:10px">
+          <div class="sa-title-wrap"><div class="sa-logo">R2</div><div><div class="sa-title">Segment-wise Collateral Movement Report</div><div class="sa-sub">First 5 files are always today's CLI Morning backup (fixed baseline). Live Snapshot downloads/reuses the second 5 itself and can be run any number of times; Afternoon/Evening each pull from CLI's own backup for that slot and can only run once per day. Every run's diff is always vs this morning, never vs whatever ran last.</div></div></div>
+          <div class="sa-tools">
+            <button class="sa-tool" onclick="pxCredentials('r1r2')" data-tip="Change logins/passwords for NSCCL, NCDEX and MCX RSK383 — shared with CTCL vs NMASS / Short Allocation / CLI where the same accounts are used. Only needed for Live Snapshot's downloads.">🔑 Credentials</button>
+            <button class="sa-tool" id="r1r2DownloadBtn" onclick="r1r2Download()" data-tip="Downloads CM/FO/CO/ClientNetEffectiveDeposits only (shared NMASS/NCDEX login, same as CTCL/MS15/PROBABLE — never collides with them) — skips it if today's 4 files are already here. Same step Live Snapshot does automatically; this is for retrying it on its own." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download</button>
+            <button class="sa-tool" id="r1r2McxBtn" onclick="r1r2McxDownload()" data-tip="Logs in to TCS BANCS (RSK383) and downloads the MCX file — skips the login entirely if today's MCX file is already here. Same TCS BANCS session SA's MCX Deposit / CLI's MCX Web Allocation buttons use." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX Deposit</button>
+            <button class="sa-tool" onclick="r1r2UploadFiles()" data-tip="Manually add a file yourself into the base folder if the automatic download couldn't get it — only recognised filenames are accepted. If this machine can't reach the base folder, files go to a temp folder instead." style="border-color:rgba(52,211,153,.45);color:var(--green)">⬆️ Upload files</button>
+            <button class="sa-tool" onclick="pxBackup('r1r2')" data-tip="Browse/restore past runs' Morning + Live/Afternoon/Evening files and the allocation_master.xlsx snapshot, from Backup\\<date>\\<time>\\.">📦 Backup files</button>
+            <button class="sa-tool" onclick="pxStop('r1r2')" data-tip="Kills whatever is currently running for this box, immediately — no matter which step it's in." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
+            <button class="sa-tool" onclick="pxLogs('r1r2')" data-tip="View the full saved output of past Download/MCX/Live Snapshot/Afternoon/Evening attempts.">🗂️ Logs</button>
+          </div>
+        </div>
+        <div class="sa-banner" id="pxBanner-r1r2"><span class="dot"></span><span class="t"></span></div>
+        <!-- missing-file warning (hidden when all files present) -->
+        <div class="sa-ready" id="r1r2Ready" style="display:none"></div>
+        <div id="r1r2Strip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>
+        <div class="sa-runs" id="pxRuns-r1r2"></div>
+        <div class="sa-status" id="pxStatus-r1r2"><div class="sa-status-empty">Run status appears here. Full output is saved to Logs.</div></div>
       </div>
 
       <div class="sec">Peak Margin</div>
@@ -2276,7 +2300,7 @@ let _tokenCaller='sa';
 // the modal so it's never ambiguous WHICH box/screen a pending captcha or RSA
 // token belongs to when several pipes/people are active at once.
 function _pipeBoxLabel(src){
-  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit'}[src] || src;
+  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit', r1r2:'Segment-wise Collateral Movement Report'}[src] || src;
 }
 function captchaStartPoller(){
   if(_captchaPoller) return;
@@ -2335,6 +2359,21 @@ function captchaStartPoller(){
     if(!_captchaVisible&&!_tokenVisible){ try{
       const d=await (await fetch(API+'/ms15/token/pending')).json();
       if(d.pending){ _tokenSource='ms15'; tokenShowModal(d.label||'MCX 90%', d.attempt||1, d.max_attempts||3, d.error_msg||null); }
+    }catch(e){} }
+    // ── Segment-wise Collateral Movement Report — Live Snapshot NMASS/NCDEX captcha ──
+    // (its MCX RSA token reuses the already-generic /sa/token/pending block above,
+    // via MCX_DEPOSIT_CALLER="r1r2" — no separate token poll needed here.)
+    if(!_tokenVisible){ try{
+      const d=await (await fetch(API+'/r1r2/captcha/pending')).json();
+      if(d.pending && !_captchaVisible && !_tokenVisible){
+        _captchaSource='r1r2'; _captchaPortal=(d.source||'nmass'); _captchaChecking=false;
+        captchaShowModal(d.image_b64, d.detected||'', d.reason||'');
+      } else if(d.pending && _captchaVisible && _captchaSource==='r1r2' && _captchaChecking){
+        _captchaPortal=(d.source||_captchaPortal); _captchaChecking=false;
+        captchaUpdateModal(d.image_b64, d.detected||'', d.reason||'');
+      } else if(!d.pending && _captchaVisible && _captchaSource==='r1r2' && _captchaChecking){
+        captchaHideModal(); _captchaChecking=false;
+      }
     }catch(e){} }
     // ── Missing-file decision ──
     try{
@@ -2413,6 +2452,7 @@ async function captchaCancel(){
   try{
     if(_captchaSource==='ctcl'){ await fetch(API+'/ctcl/stop',{method:'POST'}); }
     else if(_captchaSource==='ms15'){ await fetch(API+'/ms15/stop',{method:'POST'}); }
+    else if(_captchaSource==='r1r2'){ await fetch(API+'/r1r2/stop',{method:'POST'}); }
     else { await fetch(API+'/sa/stop',{method:'POST'}); }
   }catch(e){}
 }
@@ -2428,11 +2468,11 @@ async function captchaSubmit(){
   if(inp) inp.disabled=true;
   if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
   try{
-    const _ep=_captchaSource==='ctcl'?'/ctcl/captcha/answer':(_captchaSource==='ms15'?'/ms15/captcha/answer':'/sa/captcha/answer');
+    const _ep=_captchaSource==='ctcl'?'/ctcl/captcha/answer':(_captchaSource==='ms15'?'/ms15/captcha/answer':(_captchaSource==='r1r2'?'/r1r2/captcha/answer':'/sa/captcha/answer'));
     const r=await fetch(API+_ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
     const d=await r.json();
     if(d.ok){
-      if(_captchaSource==='ctcl'||_captchaSource==='ms15'){
+      if(_captchaSource==='ctcl'||_captchaSource==='ms15'||_captchaSource==='r1r2'){
         // Don't hide — let the poller detect the result:
         //   • new PENDING with reason → captchaUpdateModal (shows retry reason)
         //   • no PENDING            → captchaHideModal   (answer accepted)
@@ -4689,6 +4729,207 @@ function cliMcxDownload(){
   return _cliRunOneStep(API+'/cli/mcx-download-stream','cliMcxBtn','⏳ MCX File Downloading…','📥 MCX Web Allocation',false)
     .finally(()=>{ _cliMcxLocalRunning = false; });
 }
+
+// ── Segment-wise Collateral Movement Report — Live Snapshot / Afternoon /
+// Evening (tiles) + standalone Download / MCX Deposit (toolbar buttons) ────
+// All five share ONE subprocess slot (core.pipeline_box._PB["r1r2"]) — unlike
+// CLI's Download/MCX (which only claim a lightweight ':action' ES key,
+// leaving Run OLD/NEW looking clickable until the backend itself rejects a
+// conflict), every r1r2 action here claims the real _pxMarkRunning('r1r2')
+// run slot. Nothing else in this box can genuinely run at the same time, so
+// nothing else should look clickable while one is running — simpler and more
+// honest than mirroring CLI's split for a box that has no OLD/NEW-style
+// independent variants.
+var _r1r2RunningKind=null;  // 'live'|'afternoon'|'evening'|'download'|'mcx' while busy
+function _r1r2Busy(){ return _pxIsRunning('r1r2'); }
+function _r1r2ToolbarBusy(dis){
+  ['r1r2DownloadBtn','r1r2McxBtn'].forEach(function(id){
+    const b=document.getElementById(id); if(b) b.disabled=dis;
+  });
+}
+function _r1r2RunOneStep(url, kind, busyBtnId, busyLabel, idleLabel){
+  return new Promise((resolve)=>{
+    if(!_pxMarkRunning('r1r2')){ resolve(false); return; }
+    _r1r2RunningKind=kind;
+    _r1r2ToolbarBusy(true);
+    if(busyBtnId){ const b=document.getElementById(busyBtnId); if(b) b.textContent=busyLabel; }
+    r1r2RenderTiles(_r1r2LastStatus);  // grey out the tiles immediately, don't wait for the next poll
+    const strip=document.getElementById('r1r2Strip');
+    if(strip){ strip.style.display='block'; strip.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Running — full output saved to 🗂️ Logs. Click Stop to cancel immediately.</span></div>'; }
+    // Live Snapshot / standalone Download can trigger the NMASS/NCDEX login
+    // (captcha) and/or the MCX TCS BANCS login (RSA token) — start the same
+    // shared poller every other box uses so those popups actually appear
+    // instead of the run looking hung.
+    captchaStartPoller();
+    let ok=true;
+    const ev=new EventSource(url); _pxSetES('r1r2',ev);
+    const _finish=()=>{
+      _pxMarkDone('r1r2'); _r1r2RunningKind=null;
+      _r1r2ToolbarBusy(false);
+      if(busyBtnId){ const b=document.getElementById(busyBtnId); if(b) b.textContent=idleLabel; }
+      r1r2Status(); r1r2LoadReady();
+    };
+    ev.onmessage=m=>{
+      let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
+      if(d.type==='login_failed'){
+        ok=false; loginFailedPopup(d.server,d.reason);
+        if(strip) strip.innerHTML='<div style="font-weight:700;color:var(--red)">🔒 Login failed for '+(d.server||'a server')+' — see popup</div>';
+      } else if(d.type==='note'){
+        if(strip) strip.innerHTML='<div style="font-weight:700;color:var(--amber)">'+String(d.msg||'').replace(/[<>]/g,s=>s==='<'?'&lt;':'&gt;')+'</div>';
+      } else if(d.type==='stopped'){
+        ok=false;
+        if(strip) strip.innerHTML='<div style="font-weight:700;color:var(--red)">⛔ Stopped</div>';
+      } else if(d.type==='done'||d.type==='error'){
+        if(d.ok===false||d.type==='error') ok=false;
+        if(strip && d.type==='done') strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+(d.ok?'✅ Done':'⚠️ Finished with errors')+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
+      } else if(d.type==='end'){
+        ev.close(); _pxClearES('r1r2');
+        captchaStopPoller();
+        _finish();
+        resolve(ok);
+      }
+    };
+    ev.onerror=()=>{
+      ev.close(); _pxClearES('r1r2');
+      captchaStopPoller();
+      _finish();
+      if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>';
+      resolve(false);
+    };
+  });
+}
+function r1r2Live(){
+  if(_r1r2Busy()) return;
+  return _r1r2RunOneStep(API+'/r1r2/live-stream','live',null,null,null);
+}
+function r1r2Afternoon(){
+  if(_r1r2Busy()) return;
+  return _r1r2RunOneStep(API+'/r1r2/afternoon-stream','afternoon',null,null,null);
+}
+function r1r2Evening(){
+  if(_r1r2Busy()) return;
+  return _r1r2RunOneStep(API+'/r1r2/evening-stream','evening',null,null,null);
+}
+function r1r2Download(){
+  if(_r1r2Busy()) return;
+  return _r1r2RunOneStep(API+'/r1r2/download-stream','download','r1r2DownloadBtn','⏳ Downloading…','📥 Download');
+}
+function r1r2McxDownload(){
+  if(_r1r2Busy()) return;
+  return _r1r2RunOneStep(API+'/r1r2/mcx-download-stream','mcx','r1r2McxBtn','⏳ Downloading…','📥 MCX Deposit');
+}
+// ── R1/R2 tiles (Live/Afternoon/Evening) — NOT pxRenderRuns(), which assumes
+// strictly sequential numbered runs. Live has no once-per-day limit and no
+// fixed window; Afternoon/Evening each have a once-per-day limit but no
+// fixed window either (they just read whichever CLI backup exists for that
+// slot) — so "ready" here means simply "not done today, and nothing else in
+// this box is running", not a time-of-day comparison.
+var _r1r2LastStatus=null;
+async function r1r2Status(){
+  let s=null;
+  try{ const r=await fetch(API+'/r1r2/today-status'); if(r.ok) s=await r.json(); }catch(e){}
+  _r1r2LastStatus=s;
+  r1r2RenderTiles(s);
+}
+function r1r2RenderTiles(s){
+  const wrap=document.getElementById('pxRuns-r1r2'); if(!wrap) return;
+  if(!s){ wrap.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--amber);font-size:12.5px;padding:14px;border:1px dashed rgba(251,191,36,.4);border-radius:10px;background:rgba(251,191,36,.06)">&#9888; Backend not reachable — start uvicorn.</div>'; return; }
+  const done=s.modes_done||[];
+  const busy=_r1r2Busy();
+  const tiles=[
+    {id:'live',      label:'LIVE',      win:'No daily limit', kind:'live',      fn:'r1r2Live()',      onceADay:false},
+    {id:'afternoon', label:'AFTERNOON', win:'Once per day',   kind:'afternoon', fn:'r1r2Afternoon()', onceADay:true},
+    {id:'evening',   label:'EVENING',   win:'Once per day',   kind:'evening',   fn:'r1r2Evening()',   onceADay:true},
+  ];
+  let html='';
+  tiles.forEach(function(t){
+    const isDoneToday = t.onceADay && done.indexOf(t.id)!==-1;
+    const isRunningThis = busy && _r1r2RunningKind===t.kind;
+    const isLockedByOther = busy && _r1r2RunningKind!==t.kind;
+    let cls='sa-run', state, btn;
+    if(isDoneToday){
+      cls+=' done'; state='&#10003; Done today';
+      btn='<button class="sa-run-btn" disabled style="opacity:.55;cursor:not-allowed">Done</button>';
+    } else if(isRunningThis){
+      cls+=' locked'; state='&#9654; Running&hellip;';
+      btn='<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button>';
+    } else if(isLockedByOther){
+      cls+=' locked'; state='Busy &mdash; another R1/R2 action is running';
+      btn='<button class="sa-run-btn" disabled>Wait&hellip;</button>';
+    } else {
+      cls+=' active-win pending'; state='&#11044; Ready &mdash; run';
+      btn='<button class="sa-run-btn" onclick="'+t.fn+'">&#9654; Run</button>';
+    }
+    html+='<div class="'+cls+'"><div class="sa-run-id">'+t.label+'</div><div class="sa-run-win">'+t.win+'</div><div class="sa-run-state">'+state+'</div>'+btn+'</div>';
+  });
+  wrap.innerHTML=html;
+  wrap.style.gridTemplateColumns='repeat(auto-fit, minmax(165px, 1fr))';
+}
+// Missing-file banner — no window-based deferral (unlike cliLoadReady()):
+// Live has no fixed window, so a missing file is worth flagging any time
+// nothing in this box is currently running.
+async function r1r2LoadReady(){
+  const box=document.getElementById('r1r2Ready'); if(!box) return;
+  if(_r1r2Busy()){ box.style.display='none'; return; }
+  let d; try{ d=await (await fetch(API+'/r1r2/readiness')).json(); }catch(e){ box.style.display='none'; return; }
+  const items=(d&&d.items)||[];
+  const missing=items.filter(it=>!it.ok);
+  if(!missing.length){ box.style.display='none'; return; }
+  const chips=missing.map(it=>'<span class="missing">'+it.key+'</span>').join('');
+  box.innerHTML='<b>&#9888; Not downloaded yet today</b><div class="sr-row"><span class="sr-label">R1/R2</span>'+chips+'</div>';
+  box.style.display='block';
+}
+// ── R1/R2 Upload files — single folder, no COMMON FILES split (unlike CLI/
+// CTCL/MS15, which also handle RISK_REPORT in a separate common folder).
+// Reuses the already-generic /px/upload?pipe=r1r2&target=main — see
+// core/pipeline_box.py's pb_upload(), driven by the "r1r2" PIPELINES entry's
+// upload_dir_env/upload_default/file_types.
+async function r1r2UploadFiles(){
+  window._pxUpPipe='r1r2';
+  saShowModal('Upload files', '<div style="color:var(--muted);font-size:12px">Checking what\'s already in the folder…</div>');
+  let ready=null; try{ ready=await (await fetch(API+'/r1r2/readiness')).json(); }catch(e){}
+  const items=(ready&&ready.items)||[];
+  const dir=(ready&&ready.folder)||'D:\\R1_R2_COMPARISON';
+  const missing=items.filter(it=>!it.ok);
+  const checklist = !missing.length
+    ? '<div style="font-size:11.5px;margin:0 0 12px;border:1px dashed rgba(52,211,153,.3);border-radius:10px;padding:10px;color:var(--green)">✓ All 5 files found for today.</div>'
+    : '<div style="font-size:11.5px;color:var(--muted);margin:0 0 14px;border:1px dashed rgba(248,113,113,.4);border-radius:10px;padding:12px"><b style="color:var(--ink)">Missing today</b><div style="margin:2px 0 8px;color:var(--amber)">Upload these, or use 📥 Download / 📥 MCX Deposit above.</div>'
+      + missing.map(it=>'<span style="color:var(--red)">✗</span> <span style="font-family:var(--mono);font-size:10.5px">'+it.example+'</span>').join('<br>') + '</div>';
+  saShowModal('Upload files', `
+<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">Only recognised filenames (CM/FO/CO/NCDEX/MCX/allocation_master.xlsx) are accepted — anything else is rejected. Files are placed straight into the base folder; Live Snapshot picks them up automatically if they're already there.</div>
+${checklist}
+<button class="sa-save" style="width:100%;background:var(--green);color:var(--green-d)" onclick="r1r2PickFiles()">📁 Choose files</button>
+<div style="font-size:10px;color:var(--dim);margin-top:10px;font-family:var(--mono)">${dir}</div>`);
+}
+function r1r2PickFiles(){
+  saCloseModal();
+  const i=document.getElementById('r1r2UploadInput'); if(i) i.click();
+}
+async function r1r2DoUpload(inp){
+  if(!inp.files.length) return;
+  saShowModal('Uploading…', `<div style="color:var(--muted);font-size:13px">Copying ${inp.files.length} file(s) into the base folder…</div>`);
+  const fd=new FormData(); for(const f of inp.files){ fd.append('files', f); }
+  const ctl=new AbortController(); window._saUploadCtl=ctl;
+  const to=setTimeout(()=>ctl.abort(), 180000);
+  try{
+    const r=await fetch(API+'/px/upload?pipe=r1r2&target=main', {method:'POST', body:fd, signal:ctl.signal});
+    clearTimeout(to);
+    if(ctl.signal.aborted) return;
+    if(!r.ok){ let t=''; try{ t=await r.text(); }catch(_){ } throw new Error('Server '+r.status+(t?(' — '+t.slice(0,160)):'')); }
+    const d=await r.json();
+    if(ctl.signal.aborted) return;
+    let html=`<div style="font-size:13px;color:var(--muted);margin-bottom:10px">Folder: <span style="font-family:var(--mono);color:var(--ink)">${d.dest||''}</span></div>`;
+    if(d.dest_is_fallback) html+=`<div style="font-size:11.5px;color:var(--amber);margin:-4px 0 10px;padding:8px 10px;border:1px dashed rgba(251,191,36,.4);border-radius:8px">⚠️ That folder wasn't reachable from this machine — saved to a temp folder instead. Move these files to the real folder before the next run.</div>`;
+    (d.ok||[]).forEach(m=>{ html+=`<div class="sa-ev ok"><span class="ic">✓</span><span>${m}</span><span class="what">uploaded</span></div>`; });
+    (d.skipped||[]).forEach(m=>{ html+=`<div class="sa-ev" style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);color:var(--amber)"><span class="ic" style="background:var(--amber);color:#1a0d00">!</span><span>${m}</span><span class="what">already there</span></div>`; });
+    (d.rejected||[]).forEach(m=>{ html+=`<div class="sa-ev bad"><span class="ic">✕</span><span>${m}</span><span class="what">not recognised</span></div>`; });
+    html+=`<button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal();r1r2LoadReady();r1r2Status()">Done</button>`;
+    saShowModal('Upload result', html);
+  }catch(e){
+    if(ctl.signal.aborted) return;
+    saShowModal('Upload failed', `<div style="color:var(--red);font-size:13px">${(e&&e.message)?e.message:String(e)}</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>`);
+  }finally{ window._saUploadCtl=null; inp.value=''; }
+}
 // _cliLastVariant holds {variant,ok,ts} from the backend — used to show which
 // of OLD/NEW last ran + a green tick, and to dim the one that DIDN'T run.
 var _cliLastVariant={variant:null,ok:null,ts:null};
@@ -5039,7 +5280,7 @@ async function pxStop(pipe){
   // Ownership check happens SERVER-side (api.py's _can_stop()) — ask first and
   // bail out without touching any UI state if denied, so a rejected Stop can
   // never make this browser's screen claim the run stopped when it didn't.
-  var _su=pipe==='ctcl'?'/ctcl/stop':(pipe==='cli'?'/cli/stop':(pipe==='ms15'?'/ms15/stop':'/px/stop'));
+  var _su=pipe==='ctcl'?'/ctcl/stop':(pipe==='cli'?'/cli/stop':(pipe==='ms15'?'/ms15/stop':(pipe==='r1r2'?'/r1r2/stop':'/px/stop')));
   try{
     const r=await fetch(API+_su,{method:'POST'});
     if(r.status===403){ const d=await r.json().catch(()=>({})); alert(d.error||"You didn't start this run, so you can't stop it. Ask the person who started it, or an admin."); return; }
@@ -5065,6 +5306,19 @@ async function pxStop(pipe){
     if(dbtn){ dbtn.disabled=false; dbtn.textContent='📥 Download'; }
     const strip=document.getElementById('cliStrip');
     if(strip){ strip.style.display='block'; strip.innerHTML='<div style="font-weight:700;color:var(--red)">⛔ Stopped by user</div>'; }
+  }
+  // /r1r2/stop kills the tracked subprocess instantly, regardless of which
+  // leg (NMASS/NCDEX login, MCX TCS BANCS login, reconciliation, email) it's
+  // currently in.
+  if(pipe==='r1r2'){
+    _r1r2RunningKind=null;
+    _r1r2ToolbarBusy(false);
+    const db=document.getElementById('r1r2DownloadBtn'); if(db) db.textContent='📥 Download';
+    const mb=document.getElementById('r1r2McxBtn'); if(mb) mb.textContent='📥 MCX Deposit';
+    const strip=document.getElementById('r1r2Strip');
+    if(strip){ strip.style.display='block'; strip.innerHTML='<div style="font-weight:700;color:var(--red)">⛔ Stopped by user</div>'; }
+    captchaStopPoller();
+    r1r2Status(); r1r2LoadReady();
   }
   _pxMarkDone(pipe);
   if(pipe==='ctcl'){
@@ -5969,6 +6223,8 @@ setInterval(()=>{ if(!_pxIsRunning('cli')) pxStatus('cli'); },5000);
 cliLoadReady(); setInterval(()=>{ cliLoadReady(); },30000);
 pxStatus('ms15'); setInterval(()=>{ if(!_pxIsRunning('ms15')) pxStatus('ms15'); },5000);
 ms15LoadReady(); setInterval(()=>{ ms15LoadReady(); },30000);
+r1r2Status(); setInterval(()=>{ if(!_pxIsRunning('r1r2')) r1r2Status(); },5000);
+r1r2LoadReady(); setInterval(()=>{ r1r2LoadReady(); },30000);
 // Restore the generic "View / Explain error" button for any pipe whose last run
 // (from this browser, possibly a previous page load) is still remembered.
 Object.keys(_pxRunLog).forEach(p=>pxInjectViewBtn(p));
@@ -6075,6 +6331,7 @@ function _procDomOrder(){
   found.sort((a,b)=>(a.el.compareDocumentPosition(b.el)&Node.DOCUMENT_POSITION_FOLLOWING)?-1:1);
   return found.map(o=>o.k);
 }
+var _procPendingOrder=null, _procPendingCount=0;
 function reorderProcessSections(){
   try{
     const runningKey=_saRunning?'sa':(_pxRunning?_pxRunningPipe:null);
@@ -6085,7 +6342,21 @@ function reorderProcessSections(){
       if(box&&box.classList.contains('due')) dueKeys.push(s.key); else restKeys.push(s.key);
     });
     const desired=[]; if(runningKey) desired.push(runningKey); desired.push(...dueKeys,...restKeys);
-    if(desired.join(',')===_procDomOrder().join(',')) return;  // already in the right order — don't touch the DOM
+    const desiredStr=desired.join(',');
+    if(desiredStr===_procDomOrder().join(',')){ _procPendingOrder=null; _procPendingCount=0; return; }  // already in the right order — don't touch the DOM
+
+    // Require the SAME desired order on 2 consecutive ticks (~3-6s apart)
+    // before actually touching the DOM. This used to reorder the instant the
+    // desired order changed even once — if the underlying running/due state
+    // flickered between polls for a moment (two boxes briefly trading
+    // "running"), the boxes visibly swapped position just as fast, so a box
+    // you were about to click could jump away right under your cursor. Now a
+    // box only moves once its new position has actually held for a bit.
+    if(desiredStr!==_procPendingOrder){ _procPendingOrder=desiredStr; _procPendingCount=1; return; }
+    _procPendingCount++;
+    if(_procPendingCount<2) return;
+    _procPendingOrder=null; _procPendingCount=0;
+
     const items=desired.map(k=>{
       const spec=_PROC_SPECS.find(s=>s.key===k); const box=document.getElementById(spec.boxId);
       const sec=box?box.previousElementSibling:null;
