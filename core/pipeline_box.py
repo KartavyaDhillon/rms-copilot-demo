@@ -1216,6 +1216,15 @@ _LOG_LABELS = {
         ("UPLOAD",           "📤 Upload"),
         ("RESTORE",          "♻️ Restore"),
     ],
+    "r1r2": [
+        ("r1r2_download",     "📥 Download"),
+        ("r1r2_mcx_download", "📥 MCX Deposit"),
+        ("r1r2_live",         "🔴 Live Snapshot"),
+        ("r1r2_afternoon",    "🌤️ Afternoon"),
+        ("r1r2_evening",      "🌙 Evening"),
+        ("UPLOAD",            "📤 Upload"),
+        ("RESTORE",           "♻️ Restore"),
+    ],
 }
 
 def _log_friendly_label(key, filename):

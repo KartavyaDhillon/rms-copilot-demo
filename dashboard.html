@@ -4837,9 +4837,9 @@ function r1r2RenderTiles(s){
   const done=s.modes_done||[];
   const busy=_r1r2Busy();
   const tiles=[
-    {id:'live',      label:'LIVE',      win:'No daily limit', kind:'live',      fn:'r1r2Live()',      onceADay:false},
-    {id:'afternoon', label:'AFTERNOON', win:'Once per day',   kind:'afternoon', fn:'r1r2Afternoon()', onceADay:true},
-    {id:'evening',   label:'EVENING',   win:'Once per day',   kind:'evening',   fn:'r1r2Evening()',   onceADay:true},
+    {id:'live',      label:'🔴 LIVE',      win:'No daily limit', kind:'live',      fn:'r1r2Live()',      onceADay:false},
+    {id:'afternoon', label:'🌤️ AFTERNOON', win:'Once per day',   kind:'afternoon', fn:'r1r2Afternoon()', onceADay:true},
+    {id:'evening',   label:'🌙 EVENING',   win:'Once per day',   kind:'evening',   fn:'r1r2Evening()',   onceADay:true},
   ];
   let html='';
   tiles.forEach(function(t){
