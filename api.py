@@ -3214,10 +3214,22 @@ _r1r2_last_answered_at: dict = {}
 def r1r2_captcha_pending():
     """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
     for the Segment-wise Collateral Movement Report's Live Snapshot download.
-    Same logic as /ms15/captcha/pending, scoped to R1R2_FOLDER."""
+    Same logic as /ms15/captcha/pending, scoped to R1R2_FOLDER.
+
+    Must resolve the SAME folder core.pipelines.r1_r2_comparison.BASE_FOLDER
+    (and nmass_download.py's _PIPE_FOLDER["r1r2"], which mirrors it) resolves
+    to — that's where NMASS_NCFE_API_MIX.PY actually writes .captcha_state/
+    .captcha_nmass.png. This used to hardcode a bare os.getenv fallback of
+    D:\\R1_R2_COMPARISON, which only matched on a machine that happens to set
+    R1R2_FOLDER to that exact path. On any machine where R1R2_FOLDER isn't
+    set (falls back to <repo>\\data\\r1_r2_comparison instead), this endpoint
+    was checking a folder nothing ever wrote to — so it always reported
+    "pending: false" and the captcha popup never appeared, even while the
+    download was genuinely sitting there waiting for an answer. Importing
+    BASE_FOLDER directly guarantees this can never drift out of sync again."""
     import base64 as _b64, json as _cj, os as _co, time as _ct
+    from core.pipelines.r1_r2_comparison import BASE_FOLDER as _dir
     global _r1r2_last_answered_at
-    _dir = _co.getenv("R1R2_FOLDER", r"D:\R1_R2_COMPARISON")
     _sf  = _co.path.join(_dir, ".captcha_state")
     _img = _co.path.join(_dir, ".captcha_nmass.png")
     try:
@@ -3236,10 +3248,11 @@ def r1r2_captcha_pending():
 
 @app.post("/r1r2/captcha/answer")
 def r1r2_captcha_answer(a: _CTCLCaptchaAnswer):
-    """Submit typed captcha text to the waiting NMASS/NCDEX script (R1/R2 box)."""
+    """Submit typed captcha text to the waiting NMASS/NCDEX script (R1/R2 box).
+    See r1r2_captcha_pending()'s docstring — must resolve the same folder."""
     import os as _co, time as _ct, json as _cj
+    from core.pipelines.r1_r2_comparison import BASE_FOLDER as _dir
     global _r1r2_last_answered_at
-    _dir = _co.getenv("R1R2_FOLDER", r"D:\R1_R2_COMPARISON")
     _sf  = _co.path.join(_dir, ".captcha_state")
     _af  = _co.path.join(_dir, ".captcha_answer")
     try:

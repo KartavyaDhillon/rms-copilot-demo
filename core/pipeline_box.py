@@ -175,7 +175,18 @@ PIPELINES = {
     # entry exists for the shared infra only — Backup Files browser, log
     # viewer, credentials modal. See core/pipelines/r1_r2_comparison.py.
     "r1r2": {"name": "Segment-wise Collateral Movement Report", "logdir": "r1r2", "runs": 1,
-             "state_dir_env": "R1R2_FOLDER", "state_default": r"D:\R1_R2_COMPARISON",
+             # state_default/upload_default MUST match core.pipelines.r1_r2_comparison's
+             # own BASE_FOLDER default (and nmass_download.py's _PIPE_FOLDER["r1r2"],
+             # which mirrors it) — all three resolve R1R2_FOLDER the same way, falling
+             # back to <repo>\data\r1_r2_comparison when it isn't set in .env. This used
+             # to hardcode D:\R1_R2_COMPARISON here, which only matched machines that
+             # happen to set R1R2_FOLDER to exactly that path — on any machine where it's
+             # unset, Upload files/Backup files/px/status all silently pointed at a
+             # folder nothing ever wrote to (same class of bug fixed in the r1r2 captcha
+             # endpoints in api.py — see those docstrings). upload_default also doubles
+             # as the backup-root fallback (pb_backup path: os.getenv(backup_root_env,
+             # upload_default)), so fixing it here covers Backup files too.
+             "state_dir_env": "R1R2_FOLDER", "state_default": os.path.join(REPO, "data", "r1_r2_comparison"),
              "state_file": "run_counter.txt",
              "email_keys": {"Report": ["R1R2_EMAIL_TO", "R1R2_EMAIL_CC"]},
              "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
@@ -191,7 +202,7 @@ PIPELINES = {
                        "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
                        "note": "eclear.mcxccl.com \"Query Detailed Limit\" login (Live Snapshot only) — "
                                "shared with Short Allocation's MCX Deposit / CLI's MCX Web Allocation buttons"}},
-             "upload_dir_env": "R1R2_FOLDER", "upload_default": r"D:\R1_R2_COMPARISON",
+             "upload_dir_env": "R1R2_FOLDER", "upload_default": os.path.join(REPO, "data", "r1_r2_comparison"),
              "backup_root_env": "R1R2_FOLDER", "backup_subdir": "Backup",
              "file_types": [
                  ["CM Client Collaterals", "CM_ClientLevelCollaterals_*.csv,CM_ClientLevelCollaterals_*.txt,CM_ClientLevelCollaterals_*.xlsx", "CM_ClientLevelCollaterals_<date>.csv"],
