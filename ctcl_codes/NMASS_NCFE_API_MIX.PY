@@ -7,6 +7,7 @@ import json
 import uuid
 import threading
 import time
+from datetime import datetime
 
 import tkinter as tk
 from tkinter import simpledialog
@@ -1666,6 +1667,156 @@ def run_ncdex():
 
 
 
+
+
+# =========================================================================
+# ALLOCATION FILE UPLOAD MODE
+# =========================================================================
+# Deliberately lives in THIS script rather than a standalone one: the whole
+# captcha/login/session-restart/423-handling stack above is what makes an
+# authenticated NMASS call possible, and duplicating it in a second file is
+# exactly how the two copies drift apart. Everything above (load_session /
+# login / COMMON_HEADERS / session) already ran by the time we get here, so
+# these two calls are just ordinary authenticated POSTs.
+#
+# Driven by env vars set by the caller (core/pipelines/nmass_alloc_upload.py):
+#   NMASS_RUN_MODE=alloc_upload   → run this instead of the downloads
+#   NMASS_ALLOC_FILE              → full path to the local file to upload
+#   NMASS_ALLOC_REQUEST_TYPE      → "I" = Immediate/Intraday (default),
+#                                   "E" = EOD  (the two buttons on the NMASS
+#                                   Allocation File Upload page)
+
+def list_alloc_batches():
+    """Return the sorted list of batch numbers already present in NMASS's
+    ALLOCATION *upload* folder for today, e.g. [1, 2, ... 21].
+
+    This is the "which batch is currently the last" lookup — the upload folder
+    is the authoritative one (it holds the .T#### files we submit); the
+    download folder holds NSE's matching .S#### return/status files.
+    """
+    payload = {
+        "version": "2.0",
+        "data": {"reqVO": {
+            "fileType": "ALLOCATION",
+            "folderType": "upload",
+            "memberCode": CONSCODE,
+        }},
+    }
+    r = session.post(
+        f"{BASE}/nmass/collateral-management/files-list",
+        headers={**COMMON_HEADERS, "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"files-list failed: HTTP {r.status_code} — {r.text[:300]}")
+
+    body = r.json()
+    if str(body.get("status", "")).upper() != "SUCCESS":
+        raise RuntimeError(f"files-list rejected: {body.get('messages')}")
+
+    today_compact = datetime.now().strftime("%d%m%Y")
+    prefix = f"{CONSCODE}_ALLOC_{today_compact}.T"
+    batches = []
+    for item in (body.get("data") or {}).get("fileList") or []:
+        name = str(item.get("fileName") or "")
+        if name.startswith(prefix):
+            tail = name[len(prefix):]
+            if tail.isdigit():
+                batches.append(int(tail))
+    batches.sort()
+    log_info(f"NMASS upload folder has {len(batches)} allocation file(s) for {today_compact}"
+             + (f" — last batch T{batches[-1]:04d}" if batches else " — none yet"))
+    return batches
+
+
+def next_alloc_batch():
+    """Next free batch number = last existing + 1 (1 if today has none yet)."""
+    batches = list_alloc_batches()
+    return (batches[-1] + 1) if batches else 1
+
+
+def run_alloc_upload():
+    src_path = os.getenv("NMASS_ALLOC_FILE", "").strip()
+    if not src_path:
+        raise RuntimeError("NMASS_ALLOC_FILE is not set — nothing to upload")
+    if not os.path.exists(src_path):
+        raise RuntimeError(f"Allocation file not found: {src_path}")
+
+    request_type = (os.getenv("NMASS_ALLOC_REQUEST_TYPE", "I").strip().upper() or "I")
+
+    log_header("ALLOCATION FILE UPLOAD")
+    log_info(f"Local file : {src_path}")
+
+    # 1. Ask NMASS which batch is currently last, and claim the next one.
+    #    This is the whole reason the batch number can't be hardcoded: other
+    #    people/systems upload allocation files for the same member code all
+    #    day, so the correct number is only knowable at upload time.
+    batch = next_alloc_batch()
+    today_compact = datetime.now().strftime("%d%m%Y")
+    final_name = f"{CONSCODE}_ALLOC_{today_compact}.T{batch:04d}"
+    log_success(f"Uploading as batch T{batch:04d}  →  {final_name}")
+
+    # 2. Read the file EXACTLY as bytes (no text round-trip) so the CRLF line
+    #    endings the file was written with survive into the base64 payload.
+    with open(src_path, "rb") as f:
+        raw = f.read()
+    b64 = base64.b64encode(raw).decode("ascii")
+
+    payload = {
+        "version": "2.0",
+        "data": {"reqVO": {
+            "fileType": "ALLOCATION",
+            "folderType": "upload",
+            "memberCode": CONSCODE,
+            "requestType": request_type,
+            "fileList": [{"fileName": final_name, "base64str": b64}],
+        }},
+    }
+
+    r = session.post(
+        f"{BASE}/nmass/collateral-management/upload-files",
+        headers={**COMMON_HEADERS, "Content-Type": "application/json"},
+        json=payload,
+        timeout=60,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"upload-files failed: HTTP {r.status_code} — {r.text[:300]}")
+
+    body = r.json()
+    msgs = body.get("messages") or {}
+    if str(body.get("status", "")).upper() != "SUCCESS":
+        raise RuntimeError(f"upload-files rejected: {msgs}")
+
+    log_success("NMASS response: " + "; ".join(str(v) for v in msgs.values()))
+
+    # 3. Rename the local copy to the name it was actually accepted under, so
+    #    the file on disk and the file in NMASS can never disagree about which
+    #    batch this was. Best-effort only — the upload already succeeded, and
+    #    a rename failure must not make it look like it didn't.
+    try:
+        dst_path = os.path.join(os.path.dirname(src_path), final_name)
+        if os.path.abspath(dst_path) != os.path.abspath(src_path):
+            if os.path.exists(dst_path):
+                os.remove(dst_path)
+            os.rename(src_path, dst_path)
+            log_info(f"Local file renamed to match: {dst_path}")
+    except Exception as e:
+        log_warning(f"Uploaded fine, but local rename failed: {e}")
+
+    # Machine-readable line for the caller to parse out of the log stream.
+    print(f"[ALLOC_UPLOADED] {final_name}")
+    log_success("ALLOCATION FILE UPLOADED ✅")
+
+
+if os.getenv("NMASS_RUN_MODE", "").strip().lower() == "alloc_upload":
+    try:
+        run_alloc_upload()
+    except Exception as e:
+        log_error(f"Allocation upload failed: {e}")
+        import sys as _alloc_sys
+        _alloc_sys.exit(1)
+    raise SystemExit(0)
 
 
 # ── Single-run mode: run once and exit (used as subprocess by dashboard) ──

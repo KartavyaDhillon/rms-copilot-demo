@@ -1549,6 +1549,98 @@ Master Capital Services Ltd<br>
     run_whatsapp_alerts(final_df, _ms_run_number)  # sending whatsapp alert
 
     # =====================================================
+    # SHORTFALL ALLOCATION FILE — runs every cycle, BEFORE backup/cleanup
+    # moves this run's input/output files out of BASE_DIR (per explicit
+    # instruction: generated once the rest of the run is done, but before
+    # backup). Reuses final_df/fo_df already in memory from this same run
+    # rather than re-reading Shortage_vs_CC_Deposit.xlsx off disk — same
+    # data, no risk of an xlsx round-trip formatting mismatch.
+    #
+    # The batch number in the filename here is only ever a PLACEHOLDER. The
+    # real one cannot be known at generation time — other people and systems
+    # upload allocation files for the same member code all day, so "which
+    # batch is next" is only knowable from NMASS at the moment of upload.
+    # core/pipelines/nmass_alloc_upload.py asks NMASS (files-list,
+    # folderType=upload) for the last existing batch, claims the next number,
+    # uploads under that name, and renames this local file to match. Nothing
+    # is ever sent automatically: uploading is always an explicit operator
+    # action from the dashboard. The placeholder used here is THIS RUN'S
+    # number, so every cycle's file sits alongside the previous ones (a fixed
+    # placeholder would have each 15-min run silently overwrite the last),
+    # while still matching the strict <CODE>_ALLOC_<DDMMYYYY>.T#### shape the
+    # uploader and NMASS both expect.
+    try:
+        _stage("building Shortfall Allocation file…")
+        _alloc_dir = os.path.join(BASE_DIR, "ALLOC_FILES")
+        os.makedirs(_alloc_dir, exist_ok=True)
+
+        _sf = final_df[final_df["REMARKS"] == "SHORTFALL"][["ACCOUNTID", "DIFFERENCE(F-G)"]].copy()
+        if _sf.empty:
+            print("ℹ️ No SHORTFALL accounts this run — skipping Shortfall Allocation file.")
+        else:
+            _sf["ACCOUNTID"] = _sf["ACCOUNTID"].astype(str).str.strip()
+            # SHORTFALL rows are DIFFERENCE(F-G) < 0 by definition (see REMARKS
+            # LOGIC above) — make positive: an allocation amount, not a deficit.
+            _sf["DIFFERENCE(F-G)"] = _num(_sf["DIFFERENCE(F-G)"]).abs()
+
+            # fo_df has one row per FO position, not one per client — group/sum
+            # "Cash allocated (b)" per Client Code first (same reasoning as the
+            # CM_SUM/FO_SUM groupby a few hundred lines up), then left-join onto
+            # the shortfall accounts. fo_df's "Client Code" and final_df's
+            # "ACCOUNTID" are the exact same identifier (final_df was built by
+            # renaming "Client Code" -> "ACCOUNTID" above), so this join is safe.
+            _fo_cash = (
+                fo_df.assign(**{"Cash allocated (b)": _num(fo_df["Cash allocated (b)"])})
+                .groupby("Client Code", as_index=False)["Cash allocated (b)"].sum()
+                .rename(columns={"Client Code": "ACCOUNTID"})
+            )
+            _sf = _sf.merge(_fo_cash, on="ACCOUNTID", how="left")
+            # Accounts with no matching FO row (never traded FO today, etc.) —
+            # 0, not blank, per explicit instruction.
+            _sf["Cash allocated (b)"] = _sf["Cash allocated (b)"].fillna(0.0)
+            _sf["Total"] = (_sf["DIFFERENCE(F-G)"] + _sf["Cash allocated (b)"]).round(2)
+
+            _work_path = os.path.join(_alloc_dir, f"Shortfall_Allocation_Working_run{_ms_run_number:02d}.xlsx")
+            _sf.to_excel(_work_path, index=False)
+            print(f"✅ Shortfall Allocation working file saved: {_work_path}  ({len(_sf)} accounts)")
+
+            _conscode = os.getenv("CTCL_NMASS_CONSCODE", "06436")
+            _batch = max(1, int(_ms_run_number or 1))   # placeholder — see note above
+            _date_ddmmyyyy_dash = datetime.now().strftime("%d-%b-%Y").upper()  # e.g. 04-SEP-2026
+            _date_compact = datetime.now().strftime("%d%m%Y")                  # e.g. 04092026
+            _alloc_filename = f"{_conscode}_ALLOC_{_date_compact}.T{_batch:04d}"
+            _alloc_path = os.path.join(_alloc_dir, _alloc_filename)
+
+            _lines = []
+            for _, _row in _sf.iterrows():
+                # Amounts are NOT zero-padded to 2dp — NMASS's own sample rows
+                # show 941222.07, 1916990.5 and 500 side by side, so round to
+                # 2dp then strip trailing zeros / a bare trailing dot.
+                _amt_str = f"{float(_row['Total']):.2f}".rstrip("0").rstrip(".")
+                if not _amt_str or _amt_str == "-":
+                    _amt_str = "0"
+                # Exact fixed layout (14 commas / 15 fields), only client code
+                # and amount vary — see build spec:
+                #   <DATE>,FO,<CONSCODE>,<CONSCODE>,,<CLIENT>,C,<AMOUNT>,,,,,,,U
+                _lines.append(
+                    f"{_date_ddmmyyyy_dash},FO,{_conscode},{_conscode},,"
+                    f"{_row['ACCOUNTID']},C,{_amt_str},,,,,,,U"
+                )
+            # CRLF line endings + trailing newline — matches the byte-for-byte
+            # payload NMASS itself accepted (base64 of a working upload decoded
+            # to "...,U\r\n").
+            with open(_alloc_path, "w", encoding="utf-8", newline="") as _af:
+                _af.write("\r\n".join(_lines) + "\r\n")
+            print(f"✅ Shortfall Allocation file saved: {_alloc_path}  ({len(_lines)} accounts)")
+            print("   Not uploaded — use 📤 Upload Allocation on the dashboard when you want to send it; "
+                  "the real NMASS batch number is assigned at that point.")
+    except Exception as _alloc_exc:
+        # Never let this new, still-being-refined step take down the rest of
+        # an otherwise-successful 15-min run (emails/WhatsApp already sent).
+        print(f"⚠️ Shortfall Allocation file step failed (rest of the run is unaffected): {_alloc_exc}")
+        traceback.print_exc()
+
+    # =====================================================
     # BACKUP & CLEANUP (UNCHANGED LOGIC, + DB archiving)
     # =====================================================
     def backup_and_cleanup(base_dir):
@@ -1598,6 +1690,47 @@ Master Capital Services Ltd<br>
             _archive_to_db(db_tag, kind, dst)
             os.remove(src)
             print(f"🗂️ Backed up & removed: {f}")
+
+        # ── Allocation files ──────────────────────────────────────────────
+        # The sweep above only looks at files sitting directly in base_dir and
+        # skips directories, so ALLOC_FILES is untouched by it — deliberately,
+        # so an allocation file can't be swept away between being generated and
+        # being uploaded. They still belong in the run's backup though, and the
+        # upload has already had its chance by the time we get here.
+        #
+        # The three kinds together are the full audit trail for one allocation:
+        # the working .xlsx (what was calculated), the .T#### file (what was
+        # submitted) and STATUS\.S#### (what the exchange said back). They're
+        # only useful as a set, so they're kept as a set. _session (captcha
+        # scratch) is skipped — it records nothing.
+        try:
+            _alloc_src = os.path.join(base_dir, "ALLOC_FILES")
+            if os.path.isdir(_alloc_src):
+                _alloc_dst = os.path.join(backup_root, "ALLOC_FILES")
+                _alloc_n = 0
+                for _sub, _dst in ((_alloc_src, _alloc_dst),
+                                   (os.path.join(_alloc_src, "STATUS"),
+                                    os.path.join(_alloc_dst, "STATUS"))):
+                    if not os.path.isdir(_sub):
+                        continue
+                    for _name in os.listdir(_sub):
+                        _s = os.path.join(_sub, _name)
+                        if os.path.isdir(_s):
+                            continue
+                        os.makedirs(_dst, exist_ok=True)
+                        try:
+                            shutil.copy2(_s, os.path.join(_dst, _name))
+                            os.remove(_s)
+                            _alloc_n += 1
+                        except Exception as _e:
+                            print(f"   could not back up {_name}: {_e}")
+                if _alloc_n:
+                    print(f"🗂️ Backed up & removed: {_alloc_n} allocation file(s) "
+                          f"-> {_alloc_dst}")
+        except Exception as _e:
+            # Backing up the allocation files must never break the run's own
+            # backup/counter logic below.
+            print(f"   allocation-file backup skipped: {_e}")
 
         # Write run_counter.txt (date|run_number) — same format core/pipeline_box.py's
         # _read_counter() already reads for CTCL/CLI, purely so the dashboard's run

@@ -663,6 +663,7 @@ body {
             <button class="sa-tool" onclick="pxLogs('ms15')" data-tip="View the full saved output of past runs.">🗂️ Logs</button>
             <button class="sa-tool" id="ms15NmassBtn" onclick="ms15NmassDownload()" data-tip="Downloads CM/FO/CO ClientLevelCollaterals + ClientNetEffectiveDeposits into this box's own folder — separate download from CTCL vs NMASS's copy." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 NMASS/NCDEX</button>
             <button class="sa-tool" id="ms15Mcx90Btn" onclick="ms15Mcx90Download()" data-tip="Logs in to TCS BANCS and downloads the MCX 90% margin file. Automatically skipped if CTCL vs NMASS already shared today's file at a matching run time — see the Architecture doc for the exact 3 paired times." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX 90%</button>
+            <button class="sa-tool" id="ms15AllocBtn" onclick="ms15AllocUpload()" data-tip="Send a Shortfall Allocation file to NMASS. Every 15-min run writes one to disk automatically but nothing is ever sent on its own — you pick which one, and the batch number is taken from NMASS itself (last batch + 1) at the moment of upload." style="border-color:rgba(167,139,250,.5);color:var(--violet)">📤 Upload Allocation</button>
             <button class="sa-tool" id="ms15TestBtn" onclick="ms15TestRun()" data-tip="Runs the FULL pipeline exactly like a real run — file check, calculations, and the main + zone emails (which currently go to your test inbox) — but does NOT send any WhatsApp to clients. Each eligible client is listed as '[TEST] would send' in the log so you can verify everything works safely." style="border-color:rgba(251,191,36,.5);color:var(--amber)">🧪 Test run</button>
           </div>
         </div>
@@ -672,6 +673,7 @@ body {
         <!-- download log strips (shown while downloading) -->
         <div id="ms15NmassStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>
         <div id="ms15Mcx90Strip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>
+        <div id="ms15AllocStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(167,139,250,.25);border-radius:9px;background:rgba(167,139,250,.05);line-height:1.7"></div>
         <div class="sa-runs" id="pxRuns-ms15"></div>
         <div class="sa-status" id="pxStatus-ms15"><div class="sa-status-empty">Run status — email/WhatsApp confirmations — appears here. Full output is saved to Logs.</div></div>
       </div>
@@ -4604,6 +4606,132 @@ function ms15Mcx90Download(){
   };
 }
 
+// ── Margin Shortage (15-min) — Shortfall Allocation file upload ─────────────
+// Every 15-min run writes an allocation file to <MARGIN_SHORTAGE_FOLDER>\
+// ALLOC_FILES and stops there — nothing is ever sent automatically. This is
+// the only path that puts a file into NMASS, and it always goes through an
+// explicit pick + confirm.
+//
+// The batch number in the on-disk filename is a PLACEHOLDER and is ignored:
+// other people upload allocation files for the same member code all day, so
+// the real number is only knowable from NMASS at the moment of upload. The
+// backend asks NMASS for the last existing batch, claims the next one, and
+// renames the local file to match — that's why the confirm step deliberately
+// does not let you type a batch number.
+var _ms15AllocES=null, _ms15AllocPick=null;
+
+async function ms15AllocUpload(){
+  saShowModal('📤 Upload Allocation', '<div style="color:var(--muted);font-size:12px">Looking for allocation files generated today…</div>');
+  let d=null; try{ d=await (await fetch(API+'/ms15/alloc/list')).json(); }catch(e){}
+  if(!d){ saShowModal('📤 Upload Allocation', '<div style="color:var(--red);font-size:13px">⚠ Backend not reachable — start uvicorn.</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>'); return; }
+  const files=d.files||[];
+  const esc=s=>String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  if(!files.length){
+    saShowModal('📤 Upload Allocation', `
+<div style="font-size:12.5px;color:var(--muted);line-height:1.6">No allocation file has been generated today yet.</div>
+<div style="font-size:11.5px;color:var(--dim);margin-top:10px;line-height:1.6">One is written automatically at the end of every 15-min run — but only when that run actually found accounts in shortfall. If today's runs had none, there is nothing to upload.</div>
+<div style="font-size:10px;color:var(--dim);margin-top:12px;font-family:var(--mono)">${esc(d.folder||'')}</div>
+<button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>`);
+    return;
+  }
+  // Newest first, and the newest is pre-selected — that's almost always the
+  // one wanted (the most recent shortfall snapshot).
+  _ms15AllocPick=files[0].name;
+  const rows=files.map((f,i)=>`
+<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid ${i===0?'rgba(167,139,250,.5)':'rgba(255,255,255,.08)'};border-radius:10px;margin-bottom:8px;cursor:pointer;background:${i===0?'rgba(167,139,250,.07)':'transparent'}" onclick="ms15AllocSelect('${esc(f.name)}')">
+  <input type="radio" name="ms15AllocPick" value="${esc(f.name)}" ${i===0?'checked':''} style="margin-top:3px;flex:none;accent-color:var(--violet)">
+  <div style="min-width:0">
+    <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink);word-break:break-all">${esc(f.name)}</div>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:3px">${f.lines} account${f.lines===1?'':'s'} · ${f.size} bytes · generated ${esc(f.modified)}</div>
+  </div>
+</label>`).join('');
+  saShowModal('📤 Upload Allocation', `
+<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">Pick which allocation file to send to NMASS. Each 15-min run writes its own, so the newest one is the most current shortfall picture.</div>
+<div style="max-height:270px;overflow:auto;margin-bottom:4px">${rows}</div>
+<div style="font-size:11px;color:var(--dim);line-height:1.6;margin:10px 0 14px;padding:9px 11px;border:1px dashed rgba(167,139,250,.3);border-radius:9px">
+  The batch number is decided by NMASS, not by the filename above — we ask which batch is currently last and take the next one, then rename the file to match.
+</div>
+<button class="sa-save" style="width:100%;background:var(--violet);color:#12061f" onclick="ms15AllocConfirm()">Review &amp; upload →</button>
+<div style="font-size:10px;color:var(--dim);margin-top:10px;font-family:var(--mono)">${esc(d.folder||'')}</div>`);
+}
+
+function ms15AllocSelect(name){ _ms15AllocPick=name; }
+
+async function ms15AllocConfirm(){
+  const sel=document.querySelector('input[name="ms15AllocPick"]:checked');
+  const name=(sel&&sel.value)||_ms15AllocPick;
+  if(!name) return;
+  _ms15AllocPick=name;
+  const esc=s=>String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  saShowModal('📤 Confirm upload', '<div style="color:var(--muted);font-size:12px">Loading a preview…</div>');
+  let p=null; try{ p=await (await fetch(API+'/ms15/alloc/preview?name='+encodeURIComponent(name))).json(); }catch(e){}
+  const rows=(p&&p.rows)||[];
+  const preview=rows.length
+    ? '<div style="font-family:var(--mono);font-size:10.5px;line-height:1.75;color:var(--muted);max-height:170px;overflow:auto;padding:10px 12px;border:1px solid rgba(255,255,255,.08);border-radius:9px;background:rgba(0,0,0,.18);white-space:pre">'+rows.map(esc).join('\n')+'</div>'
+    : '<div style="font-size:11.5px;color:var(--amber)">Could not read the file to preview it.</div>';
+  saShowModal('📤 Confirm upload', `
+<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:10px">About to send <b style="color:var(--ink);font-family:var(--mono);font-size:11.5px">${esc(name)}</b> to NMASS. This puts real allocation instructions into the exchange — check the rows below first.</div>
+${preview}
+<div style="font-size:11px;color:var(--dim);line-height:1.6;margin:14px 0 14px">Sent as <b style="color:var(--ink)">Immediate / Intraday</b>. A login may be required — if a captcha appears, answer it as usual.</div>
+<div style="display:flex;gap:10px">
+  <button class="sa-save" style="flex:1;background:transparent;border:1px solid rgba(255,255,255,.15);color:var(--muted)" onclick="ms15AllocUpload()">← Back</button>
+  <button class="sa-save" style="flex:2;background:var(--violet);color:#12061f" onclick="ms15AllocGo()">Upload to NMASS</button>
+</div>`);
+}
+
+// Password gate. Uploading is the one action in this box that sends real
+// allocation instructions to the exchange, so it asks for the same console
+// password as Credentials (/sa/auth). The server enforces it too — this modal
+// only obtains the one-time token that /ms15/alloc/upload-stream requires.
+function ms15AllocGo(){
+  const name=_ms15AllocPick; if(!name) return;
+  saShowModal('\uD83D\uDD12 Authorise upload', '<div style="display:flex;align-items:center;gap:14px;margin-bottom:16px"><div style="width:46px;height:46px;border-radius:12px;flex:none;display:grid;place-items:center;font-size:22px;background:conic-gradient(from 210deg,var(--violet),var(--blue),var(--teal),var(--violet));box-shadow:0 0 0 1px rgba(255,255,255,.08)">\uD83D\uDD12</div><div style="font-size:13px;color:var(--muted);line-height:1.5">You are about to send <b style="color:var(--ink)">'+name.replace(/[<>]/g,'')+'</b> to <b style="color:var(--ink)">NMASS</b>.<br>Enter your authorisation password to continue.</div></div><div class="sa-field"><label>Password</label><input type="password" id="ms15AllocPwInput" placeholder="enter password" onkeydown="if(event.keyCode===13)ms15AllocPwVerify()"></div><button class="sa-save" style="width:100%;background:var(--violet);color:#12061f" onclick="ms15AllocPwVerify()">Verify &amp; upload</button><div class="sa-msg" id="ms15AllocPwMsg"></div>');
+  setTimeout(function(){var el=document.getElementById('ms15AllocPwInput'); if(el) el.focus();}, 60);
+}
+async function ms15AllocPwVerify(){
+  const pw=(document.getElementById('ms15AllocPwInput')||{}).value||'';
+  const msg=document.getElementById('ms15AllocPwMsg');
+  if(msg) msg.innerHTML='<span style="color:var(--muted)">Checking\u2026</span>';
+  let auth;
+  try{
+    auth=await (await fetch(API+'/ms15/alloc/authorise',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})})).json();
+  }catch(e){
+    if(msg) msg.innerHTML='<span style="color:var(--red)">\u26a0 Backend not reachable \u2014 start uvicorn.</span>'; return;
+  }
+  if(!auth||!auth.ok||!auth.token){ if(msg) msg.innerHTML='<span style="color:var(--red)">\u2715 Wrong password.</span>'; return; }
+  saCloseModal();
+  _ms15AllocRun(auth.token);
+}
+function _ms15AllocRun(token){
+  const name=_ms15AllocPick; if(!name) return;
+  const btn=document.getElementById('ms15AllocBtn');
+  const strip=document.getElementById('ms15AllocStrip');
+  if(_ms15AllocES){ _ms15AllocES.close(); _ms15AllocES=null; }
+  if(btn){ btn.disabled=true; btn.textContent='⏳ Uploading…'; }
+  if(strip){ strip.style.display='block'; strip.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--violet);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Asking NMASS for the next batch number, then uploading — full output saved to <b style="color:var(--ink)">🗂️ Logs</b>.</span></div>'; }
+  captchaStartPoller();  // the NMASS login behind this can need a captcha
+  const ev=new EventSource(API+'/ms15/alloc/upload-stream?name='+encodeURIComponent(name)+'&token='+encodeURIComponent(token));
+  _ms15AllocES=ev;
+  const _fin=()=>{ captchaStopPoller(); if(btn){ btn.disabled=false; btn.textContent='📤 Upload Allocation'; } };
+  ev.onmessage=m=>{
+    let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
+    if(d.type==='login_failed'){
+      loginFailedPopup(d.server, d.reason);
+      if(strip) strip.innerHTML='<div style="font-weight:700;color:var(--red)">🔒 Login failed for '+(d.server||'a server')+' — see popup</div>';
+    } else if(d.type==='error'){
+      if(strip) strip.innerHTML='<div style="font-weight:700;color:var(--red)">✕ '+((d.msg||'').replace(/[<>]/g,s=>s==='<'?'&lt;':'&gt;'))+'</div>';
+    } else if(d.type==='done'){
+      if(strip) strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+(d.ok?'✓ ':'⚠ ')+((d.msg||'').replace(/[<>]/g,s=>s==='<'?'&lt;':'&gt;'))+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
+    } else if(d.type==='end'){
+      ev.close(); _ms15AllocES=null; _fin();
+    }
+  };
+  ev.onerror=()=>{
+    ev.close(); _ms15AllocES=null; _fin();
+    if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost — check 🗂️ Logs before re-uploading, so the same file isn\'t sent twice.</div>';
+  };
+}
+
 // 🧪 Test run — full pipeline (emails included) but NO WhatsApp to clients.
 // Streams through the generic pipeline runner so Stop/pxStop('ms15') can kill it,
 // and the live "would-send" lines show in the box status strip.
@@ -4810,6 +4938,69 @@ function r1r2Evening(){
   if(_r1r2Busy()) return;
   return _r1r2RunOneStep(API+'/r1r2/evening-stream','evening',null,null,null);
 }
+// ── 15-min Backup mode ──────────────────────────────────────────────────────
+// Unlike the other three tiles this one doesn't run on click — it opens a
+// picker, because WHICH 15-min snapshot to compare against is the operator's
+// decision, not something the clock can infer. Morning baseline is unchanged
+// (CLI's backup, as always); only the second set changes.
+var _r1r2Ms15Pick=null;
+async function r1r2Ms15Pick(){
+  if(_r1r2Busy()) return;
+  const esc=s=>String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  saShowModal('🕒 15-min Backup', '<div style="color:var(--muted);font-size:12px">Looking for today\'s 15-min backup runs…</div>');
+  let d=null; try{ d=await (await fetch(API+'/r1r2/ms15backup/list')).json(); }catch(e){}
+  if(!d){ saShowModal('🕒 15-min Backup', '<div style="color:var(--red);font-size:13px">⚠ Backend not reachable — start uvicorn.</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>'); return; }
+  const runs=(d.runs||[]);
+  const usable=runs.filter(r=>r.usable);
+  if(!runs.length){
+    saShowModal('🕒 15-min Backup', `
+<div style="font-size:12.5px;color:var(--muted);line-height:1.6">No Margin Shortage (15-min) backups found for today yet.</div>
+<div style="font-size:11.5px;color:var(--dim);margin-top:10px;line-height:1.6">The 15-min pipeline writes one backup folder per run. Run it at least once, then come back here.</div>
+<div style="font-size:10px;color:var(--dim);margin-top:12px;font-family:var(--mono)">${esc(d.folder||'')}</div>
+<button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>`);
+    return;
+  }
+  _r1r2Ms15Pick = usable.length ? usable[0].run : null;
+  const rows=runs.map(function(r,i){
+    const first = r.usable && r.run===_r1r2Ms15Pick;
+    if(!r.usable){
+      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid rgba(248,113,113,.25);border-radius:10px;margin-bottom:8px;opacity:.6">
+  <div style="width:14px;flex:none;margin-top:2px;color:var(--red)">✕</div>
+  <div style="min-width:0">
+    <div style="font-size:12px;color:var(--ink)">Run ${String(r.run).padStart(2,'0')}${r.label?(' &middot; '+esc(r.label)):''}</div>
+    <div style="font-size:10.5px;color:var(--red);margin-top:3px">Can't be used — missing ${esc((r.missing||[]).join(', '))}</div>
+  </div>
+</div>`;
+    }
+    const segs=Object.keys(r.segments||{}).map(k=>k+' ✓').join(' &middot; ');
+    return `<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid ${first?'rgba(96,165,250,.5)':'rgba(255,255,255,.08)'};border-radius:10px;margin-bottom:8px;cursor:pointer;background:${first?'rgba(96,165,250,.07)':'transparent'}" onclick="_r1r2Ms15Pick=${r.run}">
+  <input type="radio" name="r1r2Ms15Run" value="${r.run}" ${first?'checked':''} style="margin-top:3px;flex:none;accent-color:var(--blue)">
+  <div style="min-width:0">
+    <div style="font-size:12px;color:var(--ink)">Run ${String(r.run).padStart(2,'0')}${r.label?(' &middot; <b>'+esc(r.label)+'</b>'):''}</div>
+    <div style="font-size:10.5px;color:var(--muted);margin-top:3px">${segs}</div>
+  </div>
+</label>`;
+  }).join('');
+  const runBtn = usable.length
+    ? '<button class="sa-save" style="width:100%;background:var(--blue);color:var(--blue-d)" onclick="r1r2Ms15Go()">&#9654; Run against this backup</button>'
+    : '<div style="font-size:11.5px;color:var(--amber);text-align:center;padding:10px">None of today\'s runs has all four of CM/FO/CO/NCDEX — nothing to run against yet.</div>';
+  saShowModal('🕒 15-min Backup', `
+<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">Pick which 15-min backup run to compare against. The <b style="color:var(--ink)">Morning baseline stays exactly the same</b> (CLI's backup, as always) — only the second set of files changes.</div>
+<div style="max-height:260px;overflow:auto">${rows}</div>
+<div style="font-size:11px;color:var(--dim);line-height:1.6;margin:10px 0 14px;padding:9px 11px;border:1px dashed rgba(96,165,250,.28);border-radius:9px">
+  CM, FO, CO and NCDEX come from the run you tick. The 5th file is the <b style="color:var(--ink)">MCX Deposit</b> file — fetched the same way Live Snapshot fetches it, because the 15-min backup only holds the MCX <i>90%</i> file, which is a different report.
+</div>
+${runBtn}
+<div style="font-size:10px;color:var(--dim);margin-top:10px;font-family:var(--mono)">${esc(d.folder||'')}</div>`);
+}
+function r1r2Ms15Go(){
+  const sel=document.querySelector('input[name="r1r2Ms15Run"]:checked');
+  const run=(sel&&sel.value)||_r1r2Ms15Pick;
+  if(run==null||run==='') return;
+  saCloseModal();
+  if(_r1r2Busy()) return;
+  return _r1r2RunOneStep(API+'/r1r2/ms15backup-stream?run='+encodeURIComponent(run),'ms15backup',null,null,null);
+}
 function r1r2Download(){
   if(_r1r2Busy()) return;
   return _r1r2RunOneStep(API+'/r1r2/download-stream','download','r1r2DownloadBtn','⏳ Downloading…','📥 Download');
@@ -4840,6 +5031,10 @@ function r1r2RenderTiles(s){
     {id:'live',      label:'🔴 LIVE',      win:'No daily limit', kind:'live',      fn:'r1r2Live()',      onceADay:false},
     {id:'afternoon', label:'🌤️ AFTERNOON', win:'Once per day',   kind:'afternoon', fn:'r1r2Afternoon()', onceADay:true},
     {id:'evening',   label:'🌙 EVENING',   win:'Once per day',   kind:'evening',   fn:'r1r2Evening()',   onceADay:true},
+    // 4th mode — unlimited like Live, because each run targets a DIFFERENT
+    // 15-min backup snapshot, so re-running is the normal case. Opens a picker
+    // instead of running straight away.
+    {id:'ms15backup', label:'🕒 15-MIN BACKUP', win:'Pick a run',  kind:'ms15backup', fn:'r1r2Ms15Pick()', onceADay:false},
   ];
   let html='';
   tiles.forEach(function(t){

@@ -146,10 +146,23 @@ def _show_captcha(image_bytes: bytes) -> str:
     state_file = state_dir / ".captcha_state"
     ans_file   = state_dir / ".captcha_answer"
 
+    # Debug convenience only — a copy of the captcha dropped in whatever the
+    # current working directory happens to be, so it can be eyeballed after a
+    # failed run. It used to sit INSIDE the try block below, which meant that
+    # when this relative write failed (Errno 22 on the console machine, where
+    # the server's cwd is not this folder), the exception aborted the whole
+    # dashboard-captcha setup before state_file was written — the dashboard
+    # was never told a captcha was waiting, and the run fell through to a
+    # terminal prompt that has no terminal. A throwaway debug copy must never
+    # be able to break the real mechanism, so it gets its own guard.
+    try:
+        Path("captcha_ncdex.png").write_bytes(image_bytes)
+    except Exception:
+        pass
+
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
         img_file.write_bytes(image_bytes)
-        Path("captcha_ncdex.png").write_bytes(image_bytes)   # local debug copy
         ans_file.write_text("", encoding="utf-8")
         state_file.write_text("PENDING", encoding="utf-8")
 
@@ -178,19 +191,41 @@ def _show_captcha(image_bytes: bytes) -> str:
     except Exception as e:
         print(f"  [CAPTCHA] Web state-file error ({e}) — falling back to terminal input")
 
-    # Terminal fallback
+    # ── Terminal fallback ────────────────────────────────────────────────
+    # Only usable when a person is actually sitting at a terminal. Run from
+    # the console this is a subprocess with no stdin, so input() used to raise
+    # a bare EOFError and kill the whole SA run with a traceback that said
+    # nothing about captchas. Check first and fail with a sentence that
+    # explains what happened instead.
     p = Path("captcha_ncdex.png")
     try:
         Image.open(BytesIO(image_bytes)).save(p)
         print(f"  [CAPTCHA] Saved to: {p.absolute()}")
-        try:
-            if sys.platform == "win32":
-                os.startfile(str(p))
-            else:
-                subprocess.Popen(["open" if sys.platform == "darwin"
-                                  else "xdg-open", str(p)])
-        except Exception:
-            pass
+    except Exception:
+        pass
+
+    _interactive = False
+    try:
+        _interactive = bool(sys.stdin) and sys.stdin.isatty()
+    except Exception:
+        _interactive = False
+
+    if not _interactive:
+        raise RuntimeError(
+            "NCDEX needs a CAPTCHA answered, but there is no way to ask for one. "
+            "The browser dashboard was not reachable (see the reason above) and "
+            "this is running without a terminal, so it cannot be typed either. "
+            f"Check that SA_OUTPUT_DIR ({DEFAULT_DIR}) exists and is writable — "
+            "that folder is how the dashboard is told a CAPTCHA is waiting."
+        )
+
+    # A human is present — open the image for them and ask.
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(p))
+        else:
+            subprocess.Popen(["open" if sys.platform == "darwin"
+                              else "xdg-open", str(p)])
     except Exception:
         pass
     return input("  Enter CAPTCHA text: ").strip()
