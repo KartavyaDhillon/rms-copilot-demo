@@ -298,6 +298,182 @@ def _count_todays_backup_runs(base_dir, today_str):
     return max(disk_max, counter_n) + 1
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SHORTFALL ALLOCATION — UPLOAD PROMPT
+#
+# Uploading sends real allocation instructions to the exchange, so it is never
+# automatic. When the allocation file has been built, the run pauses and asks
+# in the dashboard: the operator sees TOTAL FUNGIBLE and the row count, and has
+# to enter the console password to authorise.
+#
+# The default is always DON'T UPLOAD. No answer, a timeout, a wrong password,
+# a scheduled run with nobody watching, a dashboard nobody has open — every one
+# of those ends the same way: the file stays on disk, backed up and archived,
+# ready to be sent later. The only path that uploads is an explicit,
+# password-verified yes.
+#
+# Mechanism is the same file-based handshake the captcha already uses, because
+# this runs in a subprocess with no direct line to the browser:
+#   this process   writes  .alloc_prompt.json  +  .alloc_prompt_state=PENDING
+#   dashboard      polls   GET  /ms15/alloc/prompt
+#   operator       answers POST /ms15/alloc/prompt/answer  (password checked
+#                          server-side, never here)
+#   api.py         writes  .alloc_prompt_state = UPLOAD | SKIP
+#   this process   reads   it and acts
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _alloc_fmt_inr(value):
+    """10290406.55 -> '1.03 CR'.  550000 -> '5.50 L'.  4200 -> '4,200.00'."""
+    try:
+        v = float(value)
+    except Exception:
+        return str(value)
+    sign = "-" if v < 0 else ""
+    a = abs(v)
+    if a >= 1_00_00_000:
+        return f"{sign}{a / 1_00_00_000:.2f} CR"
+    if a >= 1_00_000:
+        return f"{sign}{a / 1_00_000:.2f} L"
+    return f"{sign}{a:,.2f}"
+
+
+def _alloc_prompt_paths(base_dir=None):
+    # BASE_DIR is local to _run_margin_shortage_15min_impl(), so it is passed in
+    # rather than read as a global. api.py resolves the same folder from
+    # MARGIN_SHORTAGE_FOLDER, which is what makes both ends agree.
+    d = base_dir or os.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    return (os.path.join(d, ".alloc_prompt.json"),
+            os.path.join(d, ".alloc_prompt_state"))
+
+
+def _alloc_clear_prompt(base_dir=None):
+    """Remove any leftover prompt files so a stopped run's unanswered question
+    can never reappear on a later, unrelated run and get answered by accident."""
+    for p in _alloc_prompt_paths(base_dir):
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+
+
+def _ms15_alloc_prompt_and_upload(alloc_files, total_fungible, total_rows, base_dir):
+    """Ask in the dashboard, then upload only if explicitly authorised."""
+    wait_seconds = int(os.getenv("MS15_ALLOC_PROMPT_WAIT", "180"))
+    info_path, state_path = _alloc_prompt_paths(base_dir)
+
+    _alloc_clear_prompt(base_dir)
+    try:
+        with open(info_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "total_fungible": total_fungible,
+                "total_fungible_text": _alloc_fmt_inr(total_fungible),
+                "total_rows": total_rows,
+                "files": [{"name": os.path.basename(p), "rows": n}
+                          for p, n in alloc_files],
+                "asked_at": datetime.now().isoformat(),
+                "wait_seconds": wait_seconds,
+            }, f)
+        with open(state_path, "w", encoding="utf-8") as f:
+            f.write("PENDING")
+    except Exception as e:
+        print(f"⚠️ Could not ask about uploading ({e}) — file NOT uploaded, "
+              f"it is on disk and can be sent later.")
+        _alloc_clear_prompt(base_dir)
+        return
+
+    _stage(f"allocation file ready ({_alloc_fmt_inr(total_fungible)}) — "
+           f"waiting for upload approval…")
+    print(f"⏳ Waiting up to {wait_seconds}s for an upload decision in the dashboard. "
+          f"No answer means the file is NOT uploaded.")
+
+    answer = None
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        time.sleep(1)
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                st = f.read().strip().upper()
+        except Exception:
+            continue
+        if st in ("UPLOAD", "SKIP"):
+            answer = st
+            break
+
+    _alloc_clear_prompt(base_dir)
+
+    if answer != "UPLOAD":
+        if answer == "SKIP":
+            print("↩️  Not uploaded — you chose to skip. The file is on disk and backed up.")
+        else:
+            print(f"↩️  Not uploaded — no decision within {wait_seconds}s. "
+                  f"The file is on disk and backed up; send it from a later run "
+                  f"or by hand if it is still needed.")
+        return
+
+    print("✅ Upload authorised.")
+    _ms15_alloc_do_upload(alloc_files, base_dir)
+
+
+def _ms15_alloc_do_upload(alloc_files, base_dir):
+    """Run NMASS_NCFE_API_MIX.PY in alloc_upload mode, once per file.
+
+    That script owns the NMASS login, captcha, session-restart and 423
+    handling; duplicating any of it here is how two copies drift apart. It
+    claims the next batch number from NMASS itself, uploads, renames the local
+    file to match, then waits for and saves the .S#### status file.
+    """
+    import subprocess
+
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = os.getenv("CTCL_NMASS_SCRIPT",
+                       os.path.join(repo, "ctcl_codes", "NMASS_NCFE_API_MIX.PY"))
+    python = os.getenv("CTCL_PYTHON", os.getenv("SA_PYTHON", "python"))
+    if not os.path.isfile(script):
+        print(f"⚠️ NMASS script not found: {script} — nothing uploaded.")
+        return
+
+    alloc_dir = os.path.dirname(alloc_files[0][0])
+
+    for path, rows in alloc_files:
+        print(f"\n📤 Uploading {os.path.basename(path)} ({rows} rows)…")
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONUNBUFFERED"] = "1"
+        env["NMASS_RUN_MODE"] = "alloc_upload"
+        env["NMASS_ALLOC_FILE"] = path
+        env["NMASS_ALLOC_REQUEST_TYPE"] = "I"   # Immediate/Intraday, always
+        # Keeps the login captcha inside the dashboard instead of throwing a Tk
+        # window onto the server's desktop — captcha_popup() writes its state
+        # into NMASS_SAVE_DIR and /ms15/captcha/pending reads it from here.
+        env["NMASS_SAVE_DIR"] = base_dir
+        # Status file lands inside ALLOC_FILES so the backup sweep below takes
+        # it into the same run folder, and the same Postgres archive, as the
+        # allocation file it belongs to.
+        env["NMASS_ALLOC_STATUS_DIR"] = os.path.join(alloc_dir, "STATUS")
+
+        try:
+            proc = subprocess.Popen(
+                [python, "-u", script],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env)
+            for line in proc.stdout:
+                print(line.rstrip())
+            proc.wait()
+            rc = proc.returncode
+        except Exception as e:
+            print(f"⚠️ Could not start the upload: {e}")
+            return
+
+        if rc != 0:
+            print(f"⚠️ Upload failed (exit code {rc}). Stopping here — any "
+                  f"remaining file was NOT uploaded, so nothing is half-sent "
+                  f"under a wrong batch number.")
+            return
+
+    print("✅ Allocation upload complete.")
+
+
 def _archive_to_db(tag, kind, filepath, max_retries=3, retry_delay=2):
     """Copy a file's bytes into PostgreSQL with retry. Never raises — a DB
     hiccup must not break the run. Identical pattern to ctcl_vs_nmass._archive_to_db."""
@@ -1560,11 +1736,11 @@ Master Capital Services Ltd<br>
     # real one cannot be known at generation time — other people and systems
     # upload allocation files for the same member code all day, so "which
     # batch is next" is only knowable from NMASS at the moment of upload.
-    # core/pipelines/nmass_alloc_upload.py asks NMASS (files-list,
+    # _ms15_alloc_do_upload() (above) asks NMASS (files-list,
     # folderType=upload) for the last existing batch, claims the next number,
     # uploads under that name, and renames this local file to match. Nothing
-    # is ever sent automatically: uploading is always an explicit operator
-    # action from the dashboard. The placeholder used here is THIS RUN'S
+    # is ever sent automatically: the run stops and asks in the dashboard, and
+    # only a password-verified yes uploads. The placeholder used here is THIS RUN'S
     # number, so every cycle's file sits alongside the previous ones (a fixed
     # placeholder would have each 15-min run silently overwrite the last),
     # while still matching the strict <CODE>_ALLOC_<DDMMYYYY>.T#### shape the
@@ -1604,12 +1780,16 @@ Master Capital Services Ltd<br>
             _sf.to_excel(_work_path, index=False)
             print(f"✅ Shortfall Allocation working file saved: {_work_path}  ({len(_sf)} accounts)")
 
+            # Headline figure for the confirm popup — the total shortfall being
+            # covered. A raw 8-digit number is exactly what gets misread when
+            # someone is approving 90+ rows in a hurry, so the dashboard shows
+            # this in crore/lakh form.
+            _total_fungible = float(_sf["DIFFERENCE(F-G)"].sum())
+            print(f"   TOTAL FUNGIBLE: {_alloc_fmt_inr(_total_fungible)}  ({_total_fungible:,.2f})")
+
             _conscode = os.getenv("CTCL_NMASS_CONSCODE", "06436")
-            _batch = max(1, int(_ms_run_number or 1))   # placeholder — see note above
             _date_ddmmyyyy_dash = datetime.now().strftime("%d-%b-%Y").upper()  # e.g. 04-SEP-2026
             _date_compact = datetime.now().strftime("%d%m%Y")                  # e.g. 04092026
-            _alloc_filename = f"{_conscode}_ALLOC_{_date_compact}.T{_batch:04d}"
-            _alloc_path = os.path.join(_alloc_dir, _alloc_filename)
 
             _lines = []
             for _, _row in _sf.iterrows():
@@ -1626,14 +1806,35 @@ Master Capital Services Ltd<br>
                     f"{_date_ddmmyyyy_dash},FO,{_conscode},{_conscode},,"
                     f"{_row['ACCOUNTID']},C,{_amt_str},,,,,,,U"
                 )
-            # CRLF line endings + trailing newline — matches the byte-for-byte
-            # payload NMASS itself accepted (base64 of a working upload decoded
-            # to "...,U\r\n").
-            with open(_alloc_path, "w", encoding="utf-8", newline="") as _af:
-                _af.write("\r\n".join(_lines) + "\r\n")
-            print(f"✅ Shortfall Allocation file saved: {_alloc_path}  ({len(_lines)} accounts)")
-            print("   Not uploaded — use 📤 Upload Allocation on the dashboard when you want to send it; "
-                  "the real NMASS batch number is assigned at that point.")
+
+            # NMASS rejects oversized allocation files, so split at
+            # MS15_ALLOC_MAX_ROWS. Each part gets its own batch number when
+            # uploaded, claimed consecutively from NMASS.
+            _max_rows = int(os.getenv("MS15_ALLOC_MAX_ROWS", "900"))
+            _chunks = [_lines[i:i + _max_rows] for i in range(0, len(_lines), _max_rows)]
+            if len(_chunks) > 1:
+                print(f"   {len(_lines)} rows exceeds {_max_rows} per file — "
+                      f"splitting across {len(_chunks)} files.")
+
+            _alloc_files = []
+            for _ci, _chunk in enumerate(_chunks):
+                _batch = max(1, int(_ms_run_number or 1)) + _ci   # placeholder — see note above
+                _alloc_path = os.path.join(
+                    _alloc_dir, f"{_conscode}_ALLOC_{_date_compact}.T{_batch:04d}")
+                # CRLF line endings + trailing newline — matches the byte-for-byte
+                # payload NMASS itself accepted (base64 of a working upload decoded
+                # to "...,U\r\n").
+                with open(_alloc_path, "w", encoding="utf-8", newline="") as _af:
+                    _af.write("\r\n".join(_chunk) + "\r\n")
+                _alloc_files.append((_alloc_path, len(_chunk)))
+                print(f"✅ Shortfall Allocation file saved: {_alloc_path}  ({len(_chunk)} accounts)")
+
+            # ── Ask the operator, in the dashboard, whether to send it ──────
+            # Nothing is ever uploaded without an explicit, password-verified
+            # answer. No answer, a timeout, a wrong password, or a run nobody
+            # is watching all mean the same thing: the file stays on disk.
+            _ms15_alloc_prompt_and_upload(_alloc_files, _total_fungible,
+                                          len(_lines), BASE_DIR)
     except Exception as _alloc_exc:
         # Never let this new, still-being-refined step take down the rest of
         # an otherwise-successful 15-min run (emails/WhatsApp already sent).
@@ -1719,7 +1920,17 @@ Master Capital Services Ltd<br>
                             continue
                         os.makedirs(_dst, exist_ok=True)
                         try:
-                            shutil.copy2(_s, os.path.join(_dst, _name))
+                            _d = os.path.join(_dst, _name)
+                            shutil.copy2(_s, _d)
+                            # Archive to Postgres too, exactly like the main
+                            # sweep above — the disk copy lives on one machine,
+                            # the DB copy is what survives that machine. An
+                            # allocation actually sent to the exchange is the
+                            # last thing that should exist in only one place.
+                            _kind = ("alloc_status" if _sub.endswith("STATUS")
+                                     else ("alloc_working" if _name.lower().endswith(".xlsx")
+                                           else "alloc_file"))
+                            _archive_to_db(db_tag, _kind, _d)
                             os.remove(_s)
                             _alloc_n += 1
                         except Exception as _e:

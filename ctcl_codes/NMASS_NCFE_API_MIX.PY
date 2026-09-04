@@ -1808,6 +1808,125 @@ def run_alloc_upload():
     print(f"[ALLOC_UPLOADED] {final_name}")
     log_success("ALLOCATION FILE UPLOADED ✅")
 
+    # 4. Collect NMASS's return/status file for this batch.
+    #    Every upload produces one in the DOWNLOAD folder with the same number
+    #    but an S prefix (T0022 -> S0022). It is not written instantly — on the
+    #    website you have to press refresh — so this polls rather than checking
+    #    once and reporting it missing.
+    if os.getenv("NMASS_ALLOC_FETCH_STATUS", "1").strip() != "0":
+        try:
+            fetch_alloc_status_file(batch)
+        except Exception as e:
+            log_warning(f"Could not collect the status file: {e}")
+            log_info("The upload itself succeeded — check the NMASS page directly.")
+
+
+def fetch_alloc_status_file(batch, wait_seconds=None, poll_every=None):
+    """Wait for, download and save the .S#### status file for one batch."""
+    import base64 as _b64
+
+    wait_seconds = int(wait_seconds or os.getenv("NMASS_ALLOC_STATUS_WAIT", "240"))
+    poll_every   = int(poll_every   or os.getenv("NMASS_ALLOC_STATUS_POLL", "15"))
+    save_dir = os.getenv(
+        "NMASS_ALLOC_STATUS_DIR",
+        os.path.join(os.path.dirname(os.getenv("NMASS_ALLOC_FILE", ".")), "STATUS"))
+    os.makedirs(save_dir, exist_ok=True)
+
+    today_compact = datetime.now().strftime("%d%m%Y")
+    wanted = f"{CONSCODE}_ALLOC_{today_compact}.S{batch:04d}"
+
+    log_header("WAITING FOR NMASS RETURN / STATUS FILE")
+    log_info(f"Expecting: {wanted}")
+
+    deadline = time.time() + wait_seconds
+    info = None
+    while time.time() < deadline:
+        try:
+            r = session.post(
+                f"{BASE}/nmass/collateral-management/files-list",
+                headers={**COMMON_HEADERS, "Content-Type": "application/json"},
+                json={"version": "2.0", "data": {"reqVO": {
+                    "fileType": "ALLOCATION",
+                    "folderType": "download",
+                    "memberCode": CONSCODE,
+                }}},
+                timeout=30,
+            )
+            listing = {str(it.get("fileName")): it
+                       for it in ((r.json().get("data") or {}).get("fileList") or [])}
+        except Exception as e:
+            log_warning(f"could not read the download folder: {e}")
+            listing = {}
+
+        if wanted in listing:
+            info = listing[wanted]
+            break
+
+        left = int(deadline - time.time())
+        if left <= 0:
+            break
+        log_info(f"not there yet — checking again in {poll_every}s ({left}s left)")
+        time.sleep(poll_every)
+
+    if info is None:
+        log_warning(f"{wanted} had not appeared within {wait_seconds}s. The upload "
+                    f"itself already succeeded — check the NMASS page in a few minutes.")
+        return None
+
+    log_success(f"{wanted} is ready ({info.get('fileLength', '?')}, "
+                f"{info.get('lastModified', '')})")
+
+    # The folder listing returns base64str as an empty string — it only says
+    # what exists. download-file is what actually returns the bytes.
+    r = session.post(
+        f"{BASE}/nmass/collateral-management/download-file",
+        headers={**COMMON_HEADERS, "Content-Type": "application/json"},
+        json={"version": "2.0", "data": {"reqVO": {
+            "fileType": "ALLOCATION",
+            "folderType": "download",
+            "memberCode": CONSCODE,
+            "downloadFileName": wanted,
+        }}},
+        timeout=90,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"download-file failed: HTTP {r.status_code} — {r.text[:200]}")
+    body = r.json()
+    if str(body.get("status", "")).upper() != "SUCCESS":
+        raise RuntimeError(f"download-file rejected: {body.get('messages')}")
+
+    b64 = (((body.get("data") or {}).get("file") or {}).get("byteArr")) or ""
+    if not b64:
+        raise RuntimeError("download-file returned no content")
+
+    content = _b64.b64decode(b64)
+    path = os.path.join(save_dir, wanted)
+    with open(path, "wb") as f:
+        f.write(content)
+    log_success(f"Status file saved: {path}")
+
+    # NMASS echoes each row back with an extra trailing field — the per-row
+    # status code. A file where every row carries the same code went through
+    # cleanly; a MIX means some rows were treated differently, which is worth
+    # noticing now rather than a week later.
+    codes, rows = {}, 0
+    for line in content.decode("utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rows += 1
+        code = line.split(",")[-1].strip()
+        codes[code] = codes.get(code, 0) + 1
+    log_info(f"{rows} row(s) returned")
+    for code, count in sorted(codes.items(), key=lambda kv: -kv[1]):
+        log_info(f"   status {code or '(blank)'} : {count} row(s)")
+    if len(codes) > 1:
+        log_warning("MIXED status codes — not every row was treated the same. "
+                    "Open the file and check before assuming this went through cleanly.")
+
+    print(f"[ALLOC_STATUS_SAVED] {wanted}")
+    return path
+
 
 if os.getenv("NMASS_RUN_MODE", "").strip().lower() == "alloc_upload":
     try:
