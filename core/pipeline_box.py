@@ -2065,19 +2065,29 @@ def _pb_backup_roots(pipe):
 
 def _pb_parse_date_part(part):
     """Recognize a date encoded in one path segment of a backup folder tree.
-    Two genuinely different conventions are in use: ctcl/ms15/cli/sa all use
-    DD-MM-YYYY (e.g. "21-07-2026"), but probable's own backup steps
-    (probable_reconcile.py/probable_alerts.py) format the date folder as
-    "%d %b %Y" upper-cased (e.g. "21 JUL 2026") — not a bug in probable's own
-    code (that's the reference script's own convention, left untouched per
-    "don't change calculation/threshold logic"), just something this GENERIC
-    lookup needs to also understand, or every Probable backup file silently
-    fell back to file mtime for date-range filtering instead of its real
-    logical folder date."""
+    THREE genuinely different conventions are in use, confirmed against what
+    each pipeline's own backup_and_cleanup() actually writes to disk (not just
+    what a comment here used to claim): ctcl/cli use DD-MM-YYYY (e.g.
+    "21-07-2026"); ms15 (margin_shortage_15min.py) uses YYYY-MM-DD (e.g.
+    "2026-06-01") — this was NOT recognized here before, which is exactly why
+    /px/client-lookup?pipe=ms15 always came back with empty inputs/outputs and
+    zero warnings (every ms15 backup date folder silently failed to parse as a
+    date, so the whole by-directory scan found nothing to iterate); probable's
+    own backup steps (probable_reconcile.py/probable_alerts.py) format the
+    date folder as "%d %b %Y" upper-cased (e.g. "21 JUL 2026") — not a bug in
+    probable's own code (that's the reference script's own convention, left
+    untouched per "don't change calculation/threshold logic"), just something
+    this GENERIC lookup needs to also understand, or every Probable backup
+    file silently fell back to file mtime for date-range filtering instead of
+    its real logical folder date."""
     part = part.strip()
     mm = re.fullmatch(r"(\d{2})-(\d{2})-(\d{4})", part)
     if mm:
         try: return datetime.date(int(mm.group(3)), int(mm.group(2)), int(mm.group(1)))
+        except Exception: return None
+    mm2 = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", part)
+    if mm2:
+        try: return datetime.date(int(mm2.group(1)), int(mm2.group(2)), int(mm2.group(3)))
         except Exception: return None
     if re.fullmatch(r"\d{1,2} [A-Za-z]{3} \d{4}", part):
         try: return datetime.datetime.strptime(part.title(), "%d %b %Y").date()
@@ -2365,7 +2375,11 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                       "full_file_ctcl_vs_nmass", "update limits", "risk_report")
 
     # ── 1. Walk backup folders, group files by (date, run_n) directory ────────
-    # Structure: root/<DD-MM-YYYY>/<NN>/files  where NN = zero-padded run number
+    # Structure: root/<date-folder>/<NN>/files  where NN = zero-padded run
+    # number. The date-folder format is NOT the same for every pipeline (ctcl/
+    # cli use DD-MM-YYYY, ms15 uses YYYY-MM-DD, probable uses "21 JUL 2026") —
+    # _pb_parse_date_part() knows all three; using its own narrower regex here
+    # (DD-MM-YYYY only) used to make every ms15 lookup silently return empty.
     by_dir = {}   # (date_obj, run_n) → list of (fn, fpp)
 
     for root in _pb_backup_roots(pipe):
@@ -2377,12 +2391,10 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
             run_n = None
             found_date_idx = None
             for i, part in enumerate(parts):
-                mm = re.fullmatch(r"(\d{2})-(\d{2})-(\d{4})", part.strip())
-                if mm:
-                    try:
-                        cdate = datetime.date(int(mm.group(3)), int(mm.group(2)), int(mm.group(1)))
-                        found_date_idx = i
-                    except Exception: pass
+                pdate = _pb_parse_date_part(part.strip())
+                if pdate is not None:
+                    cdate = pdate
+                    found_date_idx = i
                 elif found_date_idx is not None and run_n is None:
                     # The segment immediately after the date folder is the run subfolder
                     if re.fullmatch(r"\d{1,2}", part.strip()):
