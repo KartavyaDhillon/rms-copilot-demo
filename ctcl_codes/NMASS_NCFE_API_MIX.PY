@@ -1152,516 +1152,553 @@ def run_ncdex():
 
 
     # =========================
-    # 🌐 SESSION START
+    # 🌐 SESSION START  (rewritten to match the proven-working manual version —
+    # a generic redirect-chain follower + real authentication verification,
+    # instead of guessing which of SecurityQs/Dashboard/frmSession comes next
+    # and treating any 302 as success. Confirmed working against the live
+    # site by the manual copy at D:\15 minutes\codes\API HITTING before being
+    # ported here.)
     # =========================
-    session = requests.Session()
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": "https://ncfe.ncdex.com",
-        "Referer": "https://ncfe.ncdex.com/Login/NCFEMain.aspx",
-        "Connection": "keep-alive"
-    }
-
-    login_url = "https://ncfe.ncdex.com/Login/NCFEMain.aspx"
-
+    import re
 
     session = requests.Session()
     session.cookies.clear()
 
-    # =========================
-    # 🔹 STEP 1: GET LOGIN PAGE
-    # =========================
-    print("\n===== STEP 1: GET LOGIN PAGE =====")
+    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
 
-    resp = session.get(login_url, headers=headers)
-    print("Status Code:", resp.status_code)
+    session.headers.update({
+        "User-Agent": UA,
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "image/avif,image/webp,image/apng,*/*;q=0.8"),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    })
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    viewstate = soup.find(id="__VIEWSTATE")["value"]
-    eventvalidation = soup.find(id="__EVENTVALIDATION")["value"]
-    viewstategenerator = soup.find(id="__VIEWSTATEGENERATOR")["value"]
-
-    token_input = soup.find("input", {"name": "__RequestVerificationToken"})
-    token = token_input["value"] if token_input else ""
-
-    # ✅ GET HDN VALUE (IMPORTANT)
-    hdn_value = soup.find(id="hdn")["value"]
-
-    print("✅ Tokens extracted")
-    print("HDN VALUE:", hdn_value)
-
-    print("\n===== STEP 2: CAPTCHA =====")
-
-    img = soup.find("img", src=lambda x: x and "Captcha.aspx" in x)
-
-    captcha_src = img["src"]
-
-    # 🔴 FIX URL ENCODING
-    captcha_url = "https://ncfe.ncdex.com/Login/" + urllib.parse.quote(captcha_src, safe=":/?=&")
-
-    print("Captcha URL:", captcha_url)
-
-    captcha_headers = {
-        "User-Agent": headers["User-Agent"],
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Referer": login_url,
-        "Connection": "keep-alive"
-    }
-
-    # The NCDEX captcha endpoint sometimes returns a 404/HTML error page instead
-    # of the actual image (site hiccup) — saving that as "captcha.png" and
-    # feeding it to cv2.imread() gets back None, and cv2.cvtColor(None, ...)
-    # then crashes with "!_src.empty()" and kills the whole run instead of just
-    # retrying the download. Now: validate the response actually looks like an
-    # image before accepting it, retrying a few times if not.
-    captcha_resp = None
-    for _cap_attempt in range(1, 6):
-        captcha_resp = session.get(
-            captcha_url,
-            headers=captcha_headers,
-            cookies=session.cookies
-        )
-        print("Captcha Response Status:", captcha_resp.status_code)
-        print("Captcha Content-Type:", captcha_resp.headers.get("Content-Type"))
-        print("Captcha size:", len(captcha_resp.content))
-        # Sniff the body instead of trusting Content-Type — NCDEX doesn't always
-        # send an "image/*" header for a genuine captcha, and requiring it here
-        # rejected good downloads and spun uselessly. Only reject bodies that
-        # actually look like an HTML/XML error page (always starts with '<').
-        _body = captcha_resp.content
-        _looks_like_html = _body.lstrip()[:20].lower().startswith(b"<")
-        if captcha_resp.status_code == 200 and len(_body) > 100 and not _looks_like_html:
-            break
-        print(f"⚠️ Captcha download looked invalid (attempt {_cap_attempt}/5) — "
-              f"site may be having a hiccup, retrying in 2s...")
-        time.sleep(2)
-    else:
-        raise RuntimeError("NCDEX captcha image never downloaded successfully after 5 attempts "
-                            "(kept getting a non-image response — the site was likely down/erroring)")
-
-    captcha_path = os.path.join(TEMP_FOLDER, "captcha.png")
-
-    with open(captcha_path, "wb") as f:
-        f.write(captcha_resp.content)
-    time.sleep(0.5)
-
-    print("🖼️ Captcha saved as captcha.png")
-
-    # 🔴 ADD BACK INPUT
-    captcha_text = captcha_popup(captcha_path)
-
-    print("Final Captcha:", captcha_text)
-
-    hdnCaptchaVal = captcha_src.split("cpt=")[-1]
-    hdnCaptchaVal = urllib.parse.unquote(hdnCaptchaVal)
-
-    # =========================
-    # 🔹 STEP 3: ENCRYPT PASSWORD
-    # =========================
-    print("\n===== STEP 3: ENCRYPT PASSWORD =====")
+    ROOT      = "https://ncfe.ncdex.com"
+    login_url = ROOT + "/Login/NCFEMain.aspx"
+    FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded", "Origin": ROOT}
 
     # Read from .env (Credentials button on the dashboard writes these) — the
-    # literal defaults below only apply if CTCL_NCDEX_* is ever missing from
-    # .env. This was previously hardcoded and ignored .env entirely, which is
-    # why changing the password in Credentials had no effect on this login.
+    # literal defaults below only apply if CTCL_NCDEX_* is ever missing.
     username = os.getenv("CTCL_NCDEX_USER", "F01292")
-    password = os.getenv("CTCL_NCDEX_PASSWORD", "aSKUS%2222")
+    password = os.getenv("CTCL_NCDEX_PASSWORD", "Askus@1292")
 
-    enc_password = encrypt_password(password, hdn_value)
+    MAX_LOGIN_TRIES = 5
 
-    print("Encrypted:", enc_password)
+    # Every response of this run gets dumped here, in order, on disk — this is
+    # what actually found both the missing-antiforgery-token bug and the
+    # frmSession.aspx bug (no amount of guessing from status codes alone did).
+    # Kept ON permanently rather than removed after the fact: if NCFE changes
+    # anything else later, this is the difference between reading the real
+    # response immediately vs. another multi-round guessing cycle. Cleared at
+    # the start of every run so it never grows unbounded.
+    DEBUG_DIR = os.path.join(TEMP_FOLDER, "NCFE_DEBUG")
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    for _old in os.listdir(DEBUG_DIR):
+        try:
+            os.remove(os.path.join(DEBUG_DIR, _old))
+        except Exception:
+            pass
 
-    # =========================
-    # 🔹 STEP 4: LOGIN POST
-    # =========================
-    print("\n===== STEP 4: LOGIN =====")
+    def soup_of(r):
+        return BeautifulSoup(r.text, "html.parser")
 
-    payload = {
-        "__EVENTTARGET": "",
-        "__EVENTARGUMENT": "",
-        "__VIEWSTATE": viewstate,
-        "__VIEWSTATEGENERATOR": viewstategenerator,
-        "__EVENTVALIDATION": eventvalidation,
-        "__RequestVerificationToken": token,
+    def page_title(r):
+        try:
+            t = soup_of(r).find("title")
+            return t.text.strip() if t else ""
+        except Exception:
+            return ""
 
-        "txtUserNm": username,
-        "txtPassword": enc_password,
-        "txtCaptcha": captcha_text,
+    def page_msg(r):
+        try:
+            b = soup_of(r).find(id="lblMsgBox")
+            return b.text.strip() if b else ""
+        except Exception:
+            return ""
 
-        "hdn": "",  # IMPORTANT (must be empty)
-        "hdnCaptchaVal": hdnCaptchaVal,
-        "hdnEnabledCaptcha": "1",
+    _step = [0]
 
-        "hdnUserAgent": "",
-        "hidProId": "",
-        "hidFile": "",
+    def dump(tag, r, body_chars=900, save_body=True):
+        """Print EVERYTHING about a response and save the raw body to DEBUG_DIR."""
+        _step[0] += 1
+        n = _step[0]
+        print("\n" + "-" * 78)
+        print("[NCFE DEBUG %02d] %s" % (n, tag))
+        print("    request          : %s %s" % (r.request.method, r.url))
+        print("    status           : %s" % r.status_code)
+        print("    location         : %s" % r.headers.get("Location"))
+        print("    content-type     : %s" % r.headers.get("Content-Type"))
+        print("    content-disp     : %s" % r.headers.get("Content-Disposition"))
+        print("    bytes            : %s" % len(r.content))
+        try:
+            _t = page_title(r)
+            _m = page_msg(r)
+        except Exception:
+            _t, _m = "", ""
+        if _t:
+            print("    <title>          : %s" % _t)
+        if _m:
+            print("    lblMsgBox        : %s" % _m)
+        if save_body and r.content:
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            ext = "html" if "html" in ctype else ("txt" if "text" in ctype else "bin")
+            safe = re.sub(r"[^A-Za-z0-9]+", "_", tag)[:45]
+            p = os.path.join(DEBUG_DIR, "%02d_%s.%s" % (n, safe, ext))
+            try:
+                with open(p, "wb") as f:
+                    f.write(r.content)
+                print("    body saved       : %s" % p)
+            except Exception as e:
+                print("    body save failed : %s" % e)
+        if body_chars and r.content[:1] in (b"<", b" ", b"\n", b"\r"):
+            print("    ---------------- body (first %d chars) ----------------" % body_chars)
+            print(r.text[:body_chars])
+            print("    ------------------------------------------------------")
+        print("-" * 78)
+        return r
 
-        "imgBtnLogin.x": "18",
-        "imgBtnLogin.y": "1",
-    }
+    def logged_in(r):
+        """True only if the page really is an authenticated NCFE page."""
+        try:
+            s = soup_of(r)
+        except Exception:
+            return False
+        if s.find(id="txtUserNm") or s.find(id="hdnCaptchaVal"):
+            return False                      # this is the login page
+        if s.find(id="ctl00_lblUser"):
+            return True
+        if s.find("input", {"id": "ctl00_imgBtnLogout"}):
+            return True
+        return False
 
+    def collect_fields(resp_or_soup):
+        """Every postable input on the page, in document order, duplicates KEPT
+        (NCFE posts __ANTIFORGERY twice — a plain dict would lose one)."""
+        s = resp_or_soup if isinstance(resp_or_soup, BeautifulSoup) else soup_of(resp_or_soup)
+        out = []
+        for inp in s.find_all("input"):
+            nm = inp.get("name")
+            if not nm:
+                continue
+            t = (inp.get("type") or "text").lower()
+            if t in ("image", "submit", "button", "password", "file"):
+                continue
+            if t in ("checkbox", "radio"):
+                if inp.has_attr("checked"):
+                    out.append((nm, inp.get("value", "on")))
+                continue
+            out.append((nm, inp.get("value", "")))
+        for sel in s.find_all("select"):
+            nm = sel.get("name")
+            if not nm:
+                continue
+            opt = sel.find("option", selected=True) or sel.find("option")
+            out.append((nm, opt.get("value", "") if opt else ""))
+        for ta in s.find_all("textarea"):
+            nm = ta.get("name")
+            if nm:
+                out.append((nm, ta.text or ""))
+        return out
 
+    def get_af_token(s):
+        """NCFE's anti-forgery token — missing this (not the captcha, not the
+        password) is what was bouncing every login to frmSession.aspx
+        ('Session Expired') no matter how fresh the viewstate/captcha were."""
+        el = s.find("input", {"name": "_AntiForgeryToken"})
+        if el and el.get("value"):
+            return el["value"]
+        el2 = s.find("input", {"name": "__ANTIFORGERY"})
+        return el2["value"] if el2 and el2.get("value") else ""
 
-    headers["Referer"] = login_url
-    captcha_headers["Referer"] = login_url
+    # -------------------------------------------------------------------
+    # STEP 1: LOGIN PAGE
+    # -------------------------------------------------------------------
+    print("\n===== STEP 1: GET LOGIN PAGE =====")
+    page = session.get(login_url, headers={"Referer": login_url})
+    dump("GET login page", page, body_chars=0)
 
-    # =========================
-    # 🔹 LOGIN WITH CAPTCHA RETRY
-    # =========================
-    print("\n===== LOGIN WITH CAPTCHA RETRY =====")
-
-    _retry_reason = None   # filled per-branch; passed into captcha_popup on retries
-    while True:
-        login_resp = session.post(
-            login_url,
-            data=payload,
-            headers=headers,
-            allow_redirects=False
-        )
-
-        print("\n===== LOGIN RESPONSE =====")
-        print("Status:", login_resp.status_code)
-        print("Redirect:", login_resp.headers.get("Location"))
-  
-                # 🔥 SMART RESPONSE HANDLING (FIXED)
-
-        from bs4 import BeautifulSoup
-
-        soup = BeautifulSoup(login_resp.text, "html.parser")
-
-        error_box = soup.find(id="lblMsgBox")
-        error_msg = error_box.text.strip().lower() if error_box else ""
-
-        print("🔍 Server message:", error_msg)
-
-        if login_resp.status_code == 302:
-            print("✅ Login success (redirect)")
-            break
-
-        elif "already" in error_msg and "login" in error_msg:
-            print("⚠️ USER ALREADY LOGGED IN — RETRYING SAME SESSION")
-
-            # 🔥 DO NOT RESET SESSION
-
-            # 🔥 RELOAD LOGIN PAGE
-            resp = session.get(login_url, headers=headers)
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            viewstate = soup.find(id="__VIEWSTATE")["value"]
-            eventvalidation = soup.find(id="__EVENTVALIDATION")["value"]
-            viewstategenerator = soup.find(id="__VIEWSTATEGENERATOR")["value"]
-
-            token_input = soup.find("input", {"name": "__RequestVerificationToken"})
-            token = token_input["value"] if token_input else ""
-
-            hdn_value = soup.find(id="hdn")["value"]
-
-            # 🔥 NEW CAPTCHA
-            img = soup.find("img", src=lambda x: x and "Captcha.aspx" in x)
-            captcha_src = img["src"]
-
-            captcha_url = "https://ncfe.ncdex.com/Login/" + urllib.parse.quote(captcha_src, safe=":/?=&")
-
-            captcha_resp = None
-            for _cap_attempt in range(1, 6):
-                captcha_resp = session.get(captcha_url, headers=headers)
-                _body = captcha_resp.content
-                _looks_like_html = _body.lstrip()[:20].lower().startswith(b"<")
-                if captcha_resp.status_code == 200 and len(_body) > 100 and not _looks_like_html:
-                    break
-                print(f"⚠️ Captcha download looked invalid (status {captcha_resp.status_code}, "
-                      f"attempt {_cap_attempt}/5) — retrying in 2s...")
-                time.sleep(2)
-            else:
-                raise RuntimeError("NCDEX captcha image never downloaded successfully after 5 attempts "
-                                    "(kept getting a non-image response — the site was likely down/erroring)")
-
-            captcha_path = os.path.join(TEMP_FOLDER, "captcha.png")
-
-            with open(captcha_path, "wb") as f:
-                f.write(captcha_resp.content)
-
-            print("🔄 New captcha (same session)")
-
-            captcha_text = captcha_popup(captcha_path, reason="⚠️ Already logged in — enter new captcha")
-
-            # 🔥 REBUILD PAYLOAD
-            payload = {
-                "__EVENTTARGET": "",
-                "__EVENTARGUMENT": "",
-                "__VIEWSTATE": viewstate,
-                "__VIEWSTATEGENERATOR": viewstategenerator,
-                "__EVENTVALIDATION": eventvalidation,
-                "__RequestVerificationToken": token,
-
-                "txtUserNm": username,
-                "txtPassword": encrypt_password(password, hdn_value),
-                "txtCaptcha": captcha_text,
-
-                "hdn": "",
-                "hdnCaptchaVal": urllib.parse.unquote(captcha_src.split("cpt=")[-1]),
-                "hdnEnabledCaptcha": "1",
-
-                "hdnUserAgent": "",
-                "hidProId": "",
-                "hidFile": "",
-
-                "imgBtnLogin.x": "18",
-                "imgBtnLogin.y": "1",
-            }
-
-            continue
-
-        elif "locked" in error_msg:
-            # Account is already locked out — retrying with a new captcha
-            # would just be another wrong-password attempt against a locked
-            # account. Stop immediately instead of silently returning (a bare
-            # `return` here used to make run_ncdex() look like it finished
-            # normally, hiding the failure).
-            print("🔴 USER LOCKED — STOPPING BOT")
-            print(f"[NCFE_LOCKED] {error_msg}")
-            raise RuntimeError(f"NCDEX (NCFE) account locked: {error_msg}")
-
-        elif "invalid" in error_msg and ("username" in error_msg or "password" in error_msg):
-            # Wrong password. This used to fall into the generic "retry with
-            # a new captcha" branch below, which is exactly what burned
-            # through the exchange's login-attempt limit and got the account
-            # locked — a new captcha does nothing to fix a wrong password.
-            print("🔴 WRONG PASSWORD — STOPPING BOT (not retrying)")
-            print(f"[NCFE_AUTH_FAIL] {error_msg}")
-            raise RuntimeError(f"NCDEX (NCFE) login failed — wrong password: {error_msg}")
-
-        elif "captcha" in error_msg:
-            print("❌ Captcha incorrect — retrying...")
-            _retry_reason = "❌ Captcha incorrect — try again"
-
-        elif error_msg:
-            print(f"⚠️ Server error: {error_msg}")
-            _retry_reason = f"⚠️ Server error: {error_msg}"
-
-        else:
-            print("⚠️ Unknown response — retrying...")
-            _retry_reason = "⚠️ Unknown response — try again"
-
-        # 🔍 DEBUG SERVER MESSAGE
-        soup_msg = BeautifulSoup(login_resp.text, "html.parser")
-
-
-        # 🔥 Reload login page
-        resp = session.get(login_url, headers=headers)
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        viewstate = soup.find(id="__VIEWSTATE")["value"]
-        eventvalidation = soup.find(id="__EVENTVALIDATION")["value"]
-        viewstategenerator = soup.find(id="__VIEWSTATEGENERATOR")["value"]
-
-        token_input = soup.find("input", {"name": "__RequestVerificationToken"})
-        token = token_input["value"] if token_input else ""
-
-        hdn_value = soup.find(id="hdn")["value"]
-
-        # 🔥 Get new captcha
-        img = soup.find("img", src=lambda x: x and "Captcha.aspx" in x)
-        captcha_src = img["src"]
-
-        captcha_url = "https://ncfe.ncdex.com/Login/" + urllib.parse.quote(captcha_src, safe=":/?=&")
-
-        captcha_resp = None
+    def fetch_captcha(page_resp, reason=None):
+        """Download the captcha image off `page_resp`, validating it actually
+        looks like an image first (NCDEX occasionally serves an HTML error
+        page here instead — feeding THAT straight to cv2 used to crash the
+        whole run instead of just retrying), then route it through the
+        dashboard's own captcha popup (state-file handshake, not a local Tk
+        window — this runs headless on the console machine)."""
+        s = soup_of(page_resp)
+        img = s.find("img", src=lambda x: x and "Captcha.aspx" in x)
+        if not img:
+            raise RuntimeError("Captcha <img> not on page — see " + DEBUG_DIR)
+        cap_url = ROOT + "/Login/" + urllib.parse.quote(img["src"], safe=":/?=&")
+        cap_resp = None
         for _cap_attempt in range(1, 6):
-            captcha_resp = session.get(captcha_url, headers=headers)
-            _body = captcha_resp.content
+            cap_resp = session.get(cap_url, headers={
+                "Referer": login_url,
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            })
+            _body = cap_resp.content
             _looks_like_html = _body.lstrip()[:20].lower().startswith(b"<")
-            if captcha_resp.status_code == 200 and len(_body) > 100 and not _looks_like_html:
+            if cap_resp.status_code == 200 and len(_body) > 100 and not _looks_like_html:
                 break
-            print(f"⚠️ Captcha download looked invalid (status {captcha_resp.status_code}, "
+            print(f"⚠️ Captcha download looked invalid (status {cap_resp.status_code}, "
                   f"attempt {_cap_attempt}/5) — retrying in 2s...")
             time.sleep(2)
         else:
-            raise RuntimeError("NCDEX captcha image never downloaded successfully after 5 attempts "
-                                "(kept getting a non-image response — the site was likely down/erroring)")
+            raise RuntimeError("NCDEX captcha image never downloaded successfully after 5 "
+                                "attempts (kept getting a non-image response — the site was "
+                                "likely down/erroring).")
+        dump("GET captcha image", cap_resp, body_chars=0)
+        p = os.path.join(TEMP_FOLDER, "captcha.png")
+        with open(p, "wb") as f:
+            f.write(cap_resp.content)
+        time.sleep(0.3)
+        return captcha_popup(p, reason=reason)
 
-        captcha_path = os.path.join(TEMP_FOLDER, "captcha.png")
+    def build_login_payload(page_resp, captcha_text):
+        """Replicates the browser POST field-for-field, including the
+        _AntiForgeryToken / __ANTIFORGERY trio the old code never sent."""
+        s = soup_of(page_resp)
 
-        with open(captcha_path, "wb") as f:
-            f.write(captcha_resp.content)
+        def v(name):
+            el = s.find("input", {"name": name})
+            return el.get("value", "") if el else ""
 
-        print("🔄 New captcha loaded")
+        af  = get_af_token(s)
+        vs  = v("__VIEWSTATE")
+        vsg = v("__VIEWSTATEGENERATOR")
+        ev  = v("__EVENTVALIDATION")
+        rvt = v("__RequestVerificationToken")
 
-        captcha_text = captcha_popup(captcha_path, reason=_retry_reason)
+        hdn_el = s.find(id="hdn")
+        if hdn_el is None:
+            raise RuntimeError("hdn (AES key:iv) missing — page is not the login form")
+        hdn_value = hdn_el.get("value", "")
+        cap_val_el = s.find(id="hdnCaptchaVal")
+        cap_val = cap_val_el.get("value", "") if cap_val_el else ""
+        cap_enabled_el = s.find(id="hdnEnabledCaptcha")
+        cap_enabled = cap_enabled_el.get("value", "1") if cap_enabled_el else "1"
 
-        print("New Captcha:", captcha_text)
+        print("    _AntiForgeryToken: %s" % (af or "(MISSING)"))
+        print("    hdn (AES key:iv) : %s" % hdn_value)
+        print("    hdnCaptchaVal    : %s" % cap_val)
+        print("    captcha typed    : %s" % captcha_text)
 
-        # 🔥 REBUILD PAYLOAD
-        payload = {
-            "__EVENTTARGET": "",
-            "__EVENTARGUMENT": "",
-            "__VIEWSTATE": viewstate,
-            "__VIEWSTATEGENERATOR": viewstategenerator,
-            "__EVENTVALIDATION": eventvalidation,
-            "__RequestVerificationToken": token,
+        enc = encrypt_password(password, hdn_value)
 
-            "txtUserNm": username,
-            "txtPassword": encrypt_password(password, hdn_value),
-            "txtCaptcha": captcha_text,
+        return [
+            ("_AntiForgeryToken", af),
+            ("__ANTIFORGERY", af),
+            ("__ANTIFORGERY", af),
+            ("__VIEWSTATE", vs),
+            ("__VIEWSTATEGENERATOR", vsg),
+            ("__EVENTVALIDATION", ev),
+            ("__RequestVerificationToken", rvt),
+            ("hdn", ""),                      # browser blanks it before posting
+            ("hdnCaptchaVal", cap_val),
+            ("hdnEnabledCaptcha", cap_enabled),
+            ("txtUserNm", username),
+            ("txtPassword", enc),
+            ("txtCaptcha", captcha_text),
+            ("imgBtnLogin.x", "46"),
+            ("imgBtnLogin.y", "13"),
+            ("hdnUserAgent", UA),             # must equal our UA header
+            ("hidProId", ""),
+            ("hidFile", ""),
+        ]
 
-            "hdn": "",
-            "hdnCaptchaVal": urllib.parse.unquote(captcha_src.split("cpt=")[-1]),
-            "hdnEnabledCaptcha": "1",
+    # -------------------------------------------------------------------
+    # STEP 2-4: CAPTCHA + LOGIN (retry loop, bounded) — same locked /
+    # wrong-password immediate-stop behaviour as before: a new captcha never
+    # fixes either of those, and retrying anyway is what burns through
+    # NCDEX's login-attempt limit and gets the account locked for real.
+    # -------------------------------------------------------------------
+    login_resp = None
+    _retry_reason = None
+    for attempt in range(1, MAX_LOGIN_TRIES + 1):
+        print("\n===== LOGIN ATTEMPT %d/%d =====" % (attempt, MAX_LOGIN_TRIES))
+        captcha_text = fetch_captcha(page, reason=_retry_reason)
+        data = build_login_payload(page, captcha_text)
 
-            "hdnUserAgent": "",
-            "hidProId": "",
-            "hidFile": "",
+        login_resp = session.post(
+            login_url, data=data,
+            headers={**FORM_HEADERS, "Referer": login_url},
+            allow_redirects=False,
+        )
+        dump("POST login (attempt %d)" % attempt, login_resp, body_chars=0)
 
-            "imgBtnLogin.x": "18",
-            "imgBtnLogin.y": "1",
-        }
+        if login_resp.status_code in (301, 302):
+            print("✅ login POST accepted → %s" % login_resp.headers.get("Location"))
+            break
 
+        msg = page_msg(login_resp).lower()
 
-    # =========================
-    # 🔹 STEP 5: SECURITY QUESTION
-    # =========================
-    if login_resp.status_code == 302 and "SecurityQs" in str(login_resp.headers.get("Location")):
-        print("\n===== STEP 5: SECURITY QUESTION =====")
+        if "locked" in msg:
+            # Account is already locked out — retrying with a new captcha
+            # would just be another wrong-password attempt against a locked
+            # account. Stop immediately rather than retrying.
+            print("🔴 USER LOCKED — STOPPING BOT")
+            print(f"[NCFE_LOCKED] {msg}")
+            raise RuntimeError(f"NCDEX (NCFE) account locked: {msg}")
 
-        sec_url = "https://ncfe.ncdex.com" + login_resp.headers["Location"]
+        if "invalid" in msg and ("username" in msg or "password" in msg):
+            # Wrong password. Retrying with a new captcha does nothing to fix
+            # this and is exactly what burns through the exchange's
+            # login-attempt limit and gets the account locked for real.
+            print("🔴 WRONG PASSWORD — STOPPING BOT (not retrying)")
+            print(f"[NCFE_AUTH_FAIL] {msg}")
+            raise RuntimeError(f"NCDEX (NCFE) login failed — wrong password: {msg}")
 
-        sec_page = session.get(sec_url, headers=headers)
-        soup = BeautifulSoup(sec_page.text, "html.parser")
-
-        viewstate = soup.find(id="__VIEWSTATE")["value"]
-        eventvalidation = soup.find(id="__EVENTVALIDATION")["value"]
-        viewstategenerator = soup.find(id="__VIEWSTATEGENERATOR")["value"]
-
-        answer = "a"
-
-        sec_payload = {
-            "__VIEWSTATE": viewstate,
-            "__VIEWSTATEGENERATOR": viewstategenerator,
-            "__EVENTVALIDATION": eventvalidation,
-
-            "ctl00$ContentPlaceHolderCentre$txtanswers0": answer,
-            "ctl00$ContentPlaceHolderCentre$imgBtnSubmit.x": "9",
-            "ctl00$ContentPlaceHolderCentre$imgBtnSubmit.y": "14",
-            "ctl00$ContentPlaceHolderCentre$hdnType": "ACTIVE",
-            "ctl00$ContentPlaceHolderCentre$hidDate": "",
-            "ctl00$ContentPlaceHolderCentre$hdnCounter": "",
-            "ctl00$ContentPlaceHolderCentre$Hidden1": ""
-        }
-
-        sec_resp = session.post(sec_url, data=sec_payload, headers=headers, allow_redirects=False)
-
-        print("Security Status:", sec_resp.status_code)
-        print("Redirect:", sec_resp.headers.get("Location"))
-
-        if sec_resp.status_code == 302:
-            print("\n✅ FULL LOGIN SUCCESS 🎉")
+        if "already" in msg and "login" in msg:
+            print("⚠️  '%s'" % msg)
+            print("    → NCFE needs a SECOND login to kill the old session. Retrying.")
+            _retry_reason = "⚠️ Already logged in — enter new captcha"
+        elif "captcha" in msg:
+            print("❌ captcha rejected by server — retrying with a new one")
+            _retry_reason = "❌ Captcha incorrect — try again"
+        elif msg:
+            print("⚠️  server message: %s" % msg)
+            _retry_reason = f"⚠️ Server error: {msg}"
         else:
-            print("\n❌ Security step failed")
-            print(sec_resp.text[:1000])
+            print("⚠️  HTTP 200 with no lblMsgBox — body saved in %s" % DEBUG_DIR)
+            _retry_reason = "⚠️ Unknown response — try again"
 
+        # the 200 body IS a fresh login page (new VIEWSTATE + new captcha) — reuse it
+        page = login_resp
     else:
-        print("\n❌ Login did not reach security step")
+        log_error("NCFE login failed after %d attempts — see %s" % (MAX_LOGIN_TRIES, DEBUG_DIR))
+        raise RuntimeError(f"NCDEX (NCFE) login failed after {MAX_LOGIN_TRIES} attempts — "
+                            f"see {DEBUG_DIR}")
 
-    # =========================
-    # 🔹 STEP 6: DASHBOARD
-    # =========================
-    dashboard_url = "https://ncfe.ncdex.com/Common/Dashboard.aspx"
-    dash_resp = session.get(dashboard_url, headers=headers)
+    # -------------------------------------------------------------------
+    # STEP 5: FOLLOW THE POST-LOGIN REDIRECT CHAIN
+    #         (old code only ever handled /SecurityQs/ and otherwise treated
+    #          ANY 302 — including one to /Common/frmSession.aspx — as
+    #          success. That silently unauthenticated session is exactly how
+    #          a 0KB ClientNetEffectiveDeposits.csv got saved and reported as
+    #          downloaded fine.)
+    # -------------------------------------------------------------------
+    def auto_submit_form(url, resp, label):
+        """Submit whatever single form the page carries (used for
+        frmSession.aspx — a stale-login-page-session 'Session Expired, click
+        OK to go to Login Page' screen, not a concurrent-session conflict).
+        Generic on purpose: guessing a specific field/button name here is how
+        this exact bug got reintroduced once already."""
+        s = soup_of(resp)
+        form = s.find("form")
+        if not form:
+            return None
+        action = urllib.parse.urljoin(url, form.get("action") or url)
+        data = collect_fields(BeautifulSoup(str(form), "html.parser"))
+        for inp in form.find_all("input"):
+            nm = inp.get("name")
+            if not nm:
+                continue
+            t = (inp.get("type") or "text").lower()
+            if t == "image":
+                data.append((nm + ".x", "10"))
+                data.append((nm + ".y", "10"))
+            elif t in ("submit", "button"):
+                data.append((nm, inp.get("value", "")))
+        print("    form action      : %s" % action)
+        print("    fields posted    : %s" % [k for k, _ in data])
+        r = session.post(action, data=data,
+                         headers={**FORM_HEADERS, "Referer": url},
+                         allow_redirects=False)
+        dump("POST %s" % label, r, body_chars=600)
+        return r
 
-    print("\nDashboard status:", dash_resp.status_code)
+    def do_security_questions(url, resp):
+        print("\n===== STEP 5: SECURITY QUESTION =====")
+        s = soup_of(resp)
+        af = get_af_token(s)
 
-    # =========================
-    # 🔹 STEP 7: API
-    # =========================
-    print("\n===== STEP 7: API =====")
+        def v(name):
+            el = s.find("input", {"name": name})
+            return el.get("value", "") if el else ""
 
-    api_url = "https://ncfe.ncdex.com/Common/MemberContact.ashx"
+        data = [
+            ("_AntiForgeryToken", af),
+            ("__ANTIFORGERY", af),
+            ("__ANTIFORGERY", af),
+            ("__VIEWSTATE", v("__VIEWSTATE")),
+            ("__VIEWSTATEGENERATOR", v("__VIEWSTATEGENERATOR")),
+            ("__EVENTVALIDATION", v("__EVENTVALIDATION")),
+        ]
 
-    api_resp = session.post(api_url, data={"MethodName": "GetData"}, headers=headers)
+        answered = 0
+        for inp in s.find_all("input"):
+            nm = inp.get("name") or ""
+            if "txtanswers" not in nm:
+                continue
+            idx = nm.rsplit("txtanswers", 1)[-1]
+            lbl = s.find(id="ctl00_ContentPlaceHolderCentre_lblQuestion%s" % idx)
+            q = lbl.text.strip() if lbl else "(question text not found)"
+            ans = "a"   # the site's own security answer — confirmed correct/
+                        # accepted against the real site via a manual browser capture
+            print("    Q[%s] : %s" % (idx, q))
+            print("    A[%s] : %s" % (idx, ans))
+            data.append((nm, ans))
+            answered += 1
 
-    print("API Status:", api_resp.status_code)
-    print("Response:", api_resp.text[:500])
+        if answered == 0:
+            log_error("No security-answer boxes found — HTML saved in %s" % DEBUG_DIR)
+            return None
 
+        btn = s.find("input", {"type": "image", "id": re.compile("imgBtnSubmit")})
+        btn_name = btn.get("name") if btn else "ctl00$ContentPlaceHolderCentre$imgBtnSubmit"
+        print("    submit button    : %s" % btn_name)
+        data.append((btn_name + ".x", "19"))
+        data.append((btn_name + ".y", "19"))
 
-    import requests
-    from bs4 import BeautifulSoup
+        r = session.post(url, data=data,
+                         headers={**FORM_HEADERS, "Referer": url},
+                         allow_redirects=False)
+        dump("POST security answers", r, body_chars=600)
+        if r.status_code not in (301, 302):
+            log_error("Security step did NOT redirect — answer probably wrong. See %s" % DEBUG_DIR)
+        return r
 
-    print("\n===== STEP 8: OPEN DEPOSIT PAGE =====")
+    print("\n===== POST-LOGIN REDIRECT CHAIN =====")
+    loc     = login_resp.headers.get("Location")
+    referer = login_url
+    hops    = 0
 
-    page_url = "https://ncfe.ncdex.com/CMS/ClientNetEffectiveDeposits.aspx"
+    while loc and hops < 8:
+        hops += 1
+        url = loc if loc.lower().startswith("http") else ROOT + loc
+        r = session.get(url, headers={"Referer": referer}, allow_redirects=False)
+        dump("HOP %d GET %s" % (hops, url), r, body_chars=0)
+        referer = url
+        low = url.lower()
 
-    page_resp = session.get(page_url, headers=headers)
-    print("Page Status:", page_resp.status_code)
+        if r.status_code in (301, 302):
+            loc = r.headers.get("Location")
+            continue
 
-    soup = BeautifulSoup(page_resp.text, "html.parser")
+        if "authenticateqs" in low:
+            r2 = do_security_questions(url, r)
+            if r2 is None:
+                raise RuntimeError("NCDEX security question step failed — see " + DEBUG_DIR)
+            loc = r2.headers.get("Location") if r2.status_code in (301, 302) else None
+            continue
 
-    viewstate = soup.find(id="__VIEWSTATE")["value"]
-    eventvalidation = soup.find(id="__EVENTVALIDATION")["value"]
-    viewstategenerator = soup.find(id="__VIEWSTATEGENERATOR")["value"]
+        if "frmsession" in low:
+            print("\n⚠️  Server sent /Common/frmSession.aspx (stale login-page session — "
+                  "'Session Expired, click OK to go to Login Page'). Auto-submitting its "
+                  "own form (whatever fields it actually has) rather than guessing:")
+            r2 = auto_submit_form(url, r, "frmSession.aspx")
+            if r2 is None:
+                log_error("frmSession.aspx has no form — full HTML saved in %s" % DEBUG_DIR)
+                raise RuntimeError("NCDEX frmSession.aspx had no form to submit — see " + DEBUG_DIR)
+            loc = r2.headers.get("Location") if r2.status_code in (301, 302) else None
+            continue
 
-    # 🔥 SAFE TOKEN HANDLING
-    token_input = soup.find("input", {"name": "__RequestVerificationToken"})
-    token = token_input["value"] if token_input else ""
+        if "dashboard" in low:
+            loc = None
+            continue
 
-    print("Token present:", bool(token))
-    print("✅ Page tokens extracted")
+        print("    ℹ️  landed on an unhandled page: %s" % url)
+        loc = None
 
-    import re
+    # -------------------------------------------------------------------
+    # STEP 6: VERIFY WE ARE ACTUALLY LOGGED IN  (old code never checked —
+    # ANY 302 anywhere was treated as "FULL LOGIN SUCCESS")
+    # -------------------------------------------------------------------
+    print("\n===== STEP 6: VERIFY SESSION =====")
+    dash = session.get(ROOT + "/Common/Dashboard.aspx", headers={"Referer": referer})
+    dump("GET Dashboard", dash, body_chars=0)
 
-    print("\n===== STEP 9: DOWNLOAD FILE =====")
+    if not logged_in(dash):
+        log_error("NOT AUTHENTICATED — every download from here would be an HTML page.")
+        log_error("Every response of this run is saved, in order, in: %s" % DEBUG_DIR)
+        raise RuntimeError("NCDEX (NCFE) session did not authenticate — see " + DEBUG_DIR)
 
-    download_headers = headers.copy()
-    download_headers["Content-Type"] = "application/x-www-form-urlencoded"
-    download_headers["Referer"] = page_url
-    download_headers["Origin"] = "https://ncfe.ncdex.com"
+    log_success("NCFE session authenticated ✅ (RSID=%s)" % session.cookies.get("RSID"))
 
-    payload = {
-        "__EVENTTARGET": "",
-        "__EVENTARGUMENT": "",
-        "__VIEWSTATE": viewstate,
-        "__VIEWSTATEGENERATOR": viewstategenerator,
-        "__EVENTVALIDATION": eventvalidation,
+    # -------------------------------------------------------------------
+    # STEP 7: OPEN DEPOSIT PAGE
+    # -------------------------------------------------------------------
+    print("\n===== STEP 7: OPEN DEPOSIT PAGE =====")
+    page_url  = ROOT + "/CMS/ClientNetEffectiveDeposits.aspx"
+    page_resp = session.get(page_url, headers={"Referer": ROOT + "/Common/Dashboard.aspx"})
+    dump("GET deposit page", page_resp, body_chars=0)
 
-        **({"__RequestVerificationToken": token} if token else {}),
+    if not logged_in(page_resp):
+        log_error("Deposit page bounced back to login — session died. See %s" % DEBUG_DIR)
+        raise RuntimeError("NCDEX (NCFE) deposit page bounced to login — see " + DEBUG_DIR)
 
-        "ctl00$ContentFooter$lstUCC": "",
-        "ctl00$txtSubject": "Problem in: Client Net Effective Deposits",
-        "ctl00$txtProbDesc": "",
+    s = soup_of(page_resp)
+    export_btn = None
+    for inp in s.find_all("input"):
+        nm = inp.get("name") or ""
+        if "export" in nm.lower():
+            export_btn = nm
+            break
+    print("    export button    : %s" % export_btn)
+    if not export_btn:
+        log_error("No export control on the page — HTML saved in %s" % DEBUG_DIR)
+        raise RuntimeError("NCDEX deposit page has no export control — see " + DEBUG_DIR)
 
-        "ctl00$ContentFooter$imgBtnExport.x": "8",
-        "ctl00$ContentFooter$imgBtnExport.y": "11",
-    }
+    # -------------------------------------------------------------------
+    # STEP 8: EXPORT
+    # -------------------------------------------------------------------
+    print("\n===== STEP 8: DOWNLOAD FILE =====")
+    data = collect_fields(page_resp)
+    data.append((export_btn + ".x", "8"))
+    data.append((export_btn + ".y", "11"))
+    print("    fields posted    : %s" % [k for k, _ in data])
 
-    download_resp = session.post(page_url, data=payload, headers=download_headers)
+    dl = session.post(page_url, data=data,
+                      headers={**FORM_HEADERS, "Referer": page_url},
+                      allow_redirects=True)
+    dump("POST export", dl, body_chars=400)
 
-    print("Download Status:", download_resp.status_code)
-    print("Content-Type:", download_resp.headers.get("Content-Type"))
-    print("Content-Disposition:", download_resp.headers.get("Content-Disposition"))
+    ct   = (dl.headers.get("Content-Type") or "").lower()
+    cd   = dl.headers.get("Content-Disposition") or ""
+    body = dl.content
 
-    # =========================
-    # 🔥 CORRECT FILE NAME FROM SERVER
-    # =========================
-    content_disp = download_resp.headers.get("Content-Disposition", "")
+    # NCFE sends  Content-Type: application/Excel
+    #             Content-Disposition: inline;filename=...csv
+    # "inline" is NOT a failure — only an empty body or an HTML page is.
+    is_empty = len(body.strip()) == 0
+    is_html  = ("html" in ct) or body.lstrip()[:1] == b"<"
 
-    file_name = "ClientNetEffectiveDeposits.csv"  # fallback
+    print("    verdict          : empty=%s  html=%s  disposition=%s"
+          % (is_empty, is_html, cd.split(";")[0] or "(none)"))
 
-    if "filename=" in content_disp:
-        file_name = re.findall(r'filename="?(.+?)"?$', content_disp)[0]
+    if is_empty or is_html:
+        ext_bad = "html" if is_html else "bin"
+        bad = os.path.join(DEBUG_DIR, "EXPORT_FAILED.%s" % ext_bad)
+        with open(bad, "wb") as f:
+            f.write(body)
+        log_error("EXPORT DID NOT RETURN A FILE — refusing to write a 0 KB fake CSV.")
+        print("    content-type     : %s" % (ct or "(none)"))
+        print("    content-disp     : %s" % (cd or "(none)"))
+        print("    bytes            : %s" % len(body))
+        m = page_msg(dl)
+        if m:
+            print("    page message     : %s" % m)
+        print("    saved response   : %s" % bad)
+        raise RuntimeError("NCDEX export returned no file — see " + bad)
 
-    print("Server File Name:", file_name)
+    # ---- server-supplied filename (works for inline; and attachment;) ----
+    file_name = "ClientNetEffectiveDeposits.csv"
+    m = re.search(r"filename\*?\s*=\s*(?:UTF-8'')?\"?([^\";\r\n]+)\"?", cd, re.I)
+    if m:
+        file_name = m.group(1).strip()
+    print("    server filename  : %s" % file_name)
 
-    # =========================
-    # 🔥 SAVE FILE CORRECTLY
-    # =========================
-    with open(os.path.join(DOWNLOAD_FOLDER, file_name), "wb") as f:
-        f.write(download_resp.content)
+    out_path = os.path.join(DOWNLOAD_FOLDER, file_name)
+    with open(out_path, "wb") as f:
+        f.write(body)
 
-    print(f"✅ File downloaded exactly like browser: {file_name}")
+    log_success("Saved: %s  (%d bytes, %d lines)"
+                % (out_path, len(body), body.count(b"\n") + 1))
+    print("    preview:")
+    for line in dl.text.splitlines()[:3]:
+        print("      " + line[:160])
 
 
 
