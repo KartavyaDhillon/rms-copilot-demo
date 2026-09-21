@@ -540,7 +540,7 @@ def download_both(output_dir, force=False):
 
         trigger_383 = _dt.datetime.now()
         export383 = {**search383,
-                     "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "50",
+                     "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "100",
                      "dateStamp": trigger_383.strftime("%Y%m%d"),
                      "timeStamp": trigger_383.strftime("%H:%M:%S"),
                      "PageNum": "1", "undefined": "",
@@ -593,7 +593,7 @@ def download_both(output_dir, force=False):
 
         trigger_335 = _dt.datetime.now()
         export335 = {**search335,
-                     "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "50",
+                     "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "100",
                      "PageNum": "1", "undefined": "",
                      "MCBrowserEventInformation":
                          "sourceElementName~|~undefined#*#eventType~|~callListExport#*#butId~|~null",

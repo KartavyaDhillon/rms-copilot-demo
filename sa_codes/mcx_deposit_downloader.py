@@ -640,7 +640,7 @@ def download_mcx_deposit(output_dir=None):
         export_trigger_time = datetime.now()
         export_payload = {**search_base}
         export_payload.update({
-            "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "50",
+            "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "100",
             "dateStamp": export_trigger_time.strftime("%Y%m%d"),
             "timeStamp": export_trigger_time.strftime("%H:%M:%S"),
             "PageNum": "1", "undefined": "",

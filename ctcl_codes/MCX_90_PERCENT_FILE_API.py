@@ -650,7 +650,7 @@ export_payload_335 = search_payload_335.copy()
 export_payload_335.update({
     "Export": "Excel",
     "enableBatchForExport": "yes",
-    "noPgsToExport": "50",
+    "noPgsToExport": "100",
     "PageNum": "1",
     "undefined": "",
     "MCBrowserEventInformation": "sourceElementName~|~undefined#*#eventType~|~callListExport#*#butId~|~null",
