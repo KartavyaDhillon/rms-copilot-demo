@@ -3383,6 +3383,33 @@ def ms15_shortage_wa_config_set(to: str = "", password: str = ""):
     return {"ok": True}
 
 
+@app.get("/ctcl/wa-config")
+def ctcl_wa_config_get():
+    """Read the recipient list for the Run 1 Margin Shortfall Dashboard images
+    (core/pipelines/margin_shortfall_dashboard.py) — same pattern as MS15's own
+    /ms15/shortage-wa-config. No password needed to READ (matches every other
+    /px/config-style GET), only to save."""
+    import os as _cwc
+    return {"to": _cwc.getenv("CTCL_SHORTFALL_WA_TO", "")}
+
+
+@app.post("/ctcl/wa-config")
+def ctcl_wa_config_set(to: str = "", password: str = ""):
+    """Save the Margin Shortfall Dashboard's recipient list — the button
+    injected by process-probable-box.js on the CTCL vs NMASS box, mirroring
+    MS15's. Same console password as every other 🔑 Credentials save."""
+    from core.short_allocation import check_password as _cwc_pw
+    if not _cwc_pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    numbers = [_ms15_normalize_wa_number(n) for n in to.split(",")]
+    numbers = [n for n in numbers if n]
+    if len(numbers) > 10:
+        return {"ok": False, "error": "Maximum 10 numbers allowed"}
+    from core.pipeline_box import _write_env as _cwc_write
+    _cwc_write({"CTCL_SHORTFALL_WA_TO": ",".join(numbers)})
+    return {"ok": True}
+
+
 def _ms15_wa_rows(date: str, runs: str):
     run_list = [int(r) for r in runs.split(",") if r.strip().isdigit()]
     use_pg = os.getenv("USE_POSTGRES", "false").strip().lower() == "true"

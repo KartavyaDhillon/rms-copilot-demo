@@ -79,7 +79,8 @@ PIPELINES = {
                             "Top20 CDR+MT": ["CTCL_TOP20_CDRMT_TO", "CTCL_TOP20_CC"],
                             "Top20 V2": ["CTCL_TOP20_V2_TO", "CTCL_TOP20_CC"],
                             "Top20 V1": ["CTCL_TOP20_V1_TO", "CTCL_TOP20_CC"],
-                            "Payout Check": ["PAYOUT_CHECK_TO", "PAYOUT_CHECK_CC"]},
+                            "Payout Check": ["PAYOUT_CHECK_TO", "PAYOUT_CHECK_CC"],
+                            "Cash Risk Codes": ["CTCL_SHORTFALL_EMAIL_TO", "CTCL_SHORTFALL_EMAIL_CC"]},
              "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
                        "pass_key": "SENDER_PASSWORD",
                        "note": "the email account CTCL sends reports from"},
@@ -93,7 +94,11 @@ PIPELINES = {
                        "note": "NCDEX portal login used for the CTCL NCDEX download"},
                       "MCX 90% login": {"user_key": "CTCL_MCX90_USER",
                        "pass_key": "CTCL_MCX90_PASSWORD",
-                       "note": "eclear.mcxccl.com login used by MCX_90_PERCENT_FILE_API.py"}},
+                       "note": "eclear.mcxccl.com login used by MCX_90_PERCENT_FILE_API.py"},
+                      "WhatsApp (Tata) bearer token — CASH RISK CODES": {"single_key": "WA_AUTH_TOKEN",
+                       "note": "sends the Run 1 CASH RISK CODES dashboard images (core/pipelines/margin_shortfall_dashboard.py) — "
+                               "same Tata account MS15's shortage image alert uses. Rotate here once ready; "
+                               "the value pasted into this integration earlier must be treated as compromised."}},
              "upload_dir_env": "CTCL_NMASS_FOLDER", "upload_default": r"D:\CTCL VS NMASS",
              # secondary upload target — files the pipeline reads from C:\COMMON FILES
              "common_dir_env": "SA_COMMON_DIR", "common_default": r"C:\COMMON FILES",

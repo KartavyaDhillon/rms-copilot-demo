@@ -96,6 +96,7 @@
     patchGlobals();
     injectAdvanceRunButtons();
     injectMs15WaButton();
+    injectCtclWaButton();
     removeMs15TestButton();
     purgeStaleMs15TestLog();
     injectMs15SafeTestButton();
@@ -335,6 +336,24 @@
     // "📱 WhatsApp numbers" button is the first one, per explicit request that
     // every box's layout match) — not appended at the end like the other
     // injected buttons.
+    tools.insertBefore(btn, tools.firstChild);
+  }
+
+  // ── CTCL vs NMASS: "📱 WhatsApp numbers" for the Run 1 CASH RISK CODES
+  // dashboard (core/pipelines/margin_shortfall_dashboard.py) — same button,
+  // same password-protected +/- list editor, same backing shape as MS15's
+  // above, just its own env var (CTCL_SHORTFALL_WA_TO) and endpoint
+  // (/ctcl/wa-config) so the two lists stay independent. ───────────────────
+  function injectCtclWaButton() {
+    var tools = document.querySelector('#pxBox-ctcl .sa-tools');
+    if (!tools || tools.querySelector('.ctcl-wa-btn')) return;
+    var btn = document.createElement('button');
+    btn.className = 'sa-tool ctcl-wa-btn';
+    btn.textContent = '📱 WhatsApp numbers';
+    btn.title = 'Change who receives the Run 1 CASH RISK CODES images.';
+    btn.onclick = function () {
+      window.saAskPassword('WhatsApp numbers', function (pw) { ctclWaConfigPrompt(pw); });
+    };
     tools.insertBefore(btn, tools.firstChild);
   }
 
@@ -1233,6 +1252,8 @@
 
   var MS15_WA_KEY = 'MS15_SHORTAGE_WA_TO';
   var MS15_WA_MAX = 10;
+  var CTCL_WA_KEY = 'CTCL_SHORTFALL_WA_TO';
+  var CTCL_WA_MAX = 10;
 
   // Same collapsed named-field list editor Short Allocation's own "WhatsApp
   // numbers" / "Email recipients" modals use (saListFieldCollapsed /
@@ -1263,6 +1284,45 @@
         var to = raw.map(_ms15NormalizePhone).filter(function (v) { return v; }).join(',');
         if (msg) msg.innerHTML = '<span style="color:var(--muted)">Saving…</span>';
         fetch(API + '/ms15/shortage-wa-config?to=' + encodeURIComponent(to) +
+              '&password=' + encodeURIComponent(pw || ''), { method: 'POST' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d && d.ok === false) { if (msg) msg.innerHTML = '<span style="color:var(--red)">✕ ' + (d.error || 'Failed') + '</span>'; return; }
+            if (typeof window.saCloseModal === 'function') window.saCloseModal();
+          }).catch(function () {
+            if (msg) msg.innerHTML = '<span style="color:var(--red)">✕ Could not reach backend.</span>';
+          });
+      };
+    }).catch(function () { alert('Could not load current config'); });
+  }
+
+  // Same modal/list editor as ms15WaConfigPrompt above, wired to CTCL's own
+  // env var + endpoint. See injectCtclWaButton() for why this is separate
+  // rather than reusing MS15's list.
+  function ctclWaConfigPrompt(pw) {
+    fetch(API + '/ctcl/wa-config').then(function (r) { return r.json(); }).then(function (cfg) {
+      if (typeof window.saShowModal !== 'function' || typeof window.saListFieldCollapsed !== 'function') { return; }
+      window._saListState = window._saListState || {};
+      window._saListState[CTCL_WA_KEY] = (cfg.to || '').split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+
+      var rows = window.saListFieldCollapsed(CTCL_WA_KEY, 'CASH RISK CODES RECIPIENTS', '9811122233 (10-digit number)', 'phone');
+      rows += '<div style="font-size:11px;color:var(--dim);margin:-6px 0 16px">Up to ' + CTCL_WA_MAX + ' numbers. Type just the 10-digit number — +91 is added automatically. ' +
+              'Receives the Run 1 CASH RISK CODES zone images.</div>';
+      rows += '<button class="sa-save" style="width:100%" onclick="_ctclSaveWaNumbers()">Save changes</button><div class="sa-msg" id="ctclWaMsg"></div>';
+
+      window.saShowModal('📱 WhatsApp numbers — CASH RISK CODES', rows);
+      window.saListUpdateSummary(CTCL_WA_KEY);
+
+      window._ctclSaveWaNumbers = function () {
+        var msg = document.getElementById('ctclWaMsg');
+        var raw = (window._saListState[CTCL_WA_KEY] || []).map(function (v) { return (v || '').trim(); }).filter(function (v) { return v !== ''; });
+        if (raw.length > CTCL_WA_MAX) {
+          if (msg) msg.innerHTML = '<span style="color:var(--red)">✕ Maximum ' + CTCL_WA_MAX + ' numbers allowed — remove ' + (raw.length - CTCL_WA_MAX) + ' before saving.</span>';
+          return;
+        }
+        var to = raw.map(_ms15NormalizePhone).filter(function (v) { return v; }).join(',');
+        if (msg) msg.innerHTML = '<span style="color:var(--muted)">Saving…</span>';
+        fetch(API + '/ctcl/wa-config?to=' + encodeURIComponent(to) +
               '&password=' + encodeURIComponent(pw || ''), { method: 'POST' })
           .then(function (r) { return r.json(); })
           .then(function (d) {
@@ -2247,13 +2307,15 @@
     if (typeof window.saListToggleAdd === 'function' && !window.saListToggleAdd.__ms15CapPatched) {
       var origToggleAdd = window.saListToggleAdd;
       var wrappedToggleAdd = function (key, placeholder) {
-        if (key === MS15_WA_KEY) {
+        if (key === MS15_WA_KEY || key === CTCL_WA_KEY) {
+          var cap = (key === MS15_WA_KEY) ? MS15_WA_MAX : CTCL_WA_MAX;
+          var label = (key === MS15_WA_KEY) ? 'Margin Shortage image' : 'CASH RISK CODES';
           var cur = (window._saListState && window._saListState[key]) || [];
           var alreadyOpen = typeof window.saListIsOpen === 'function' ? window.saListIsOpen(key) : true;
           // First click just reveals the list — never block that. Only a
           // second+ click (which appends a new blank row) is capped.
-          if (alreadyOpen && cur.length >= MS15_WA_MAX) {
-            alert('Maximum ' + MS15_WA_MAX + ' numbers allowed for the Margin Shortage image list.');
+          if (alreadyOpen && cur.length >= cap) {
+            alert('Maximum ' + cap + ' numbers allowed for the ' + label + ' list.');
             return;
           }
         }
