@@ -1027,6 +1027,29 @@ Master Capital Services Ltd<br>
         from core.pipelines.margin_top20 import run_margin_top20
         run_margin_top20()
         print("\n🎯 TOP20 PROCESS COMPLETED\n")
+
+        # CASH RISK CODES (run 1 only) — reuses the SAME update_limits_file /
+        # risk_file this run already resolved above (still present on disk —
+        # TOP20 only COPIED them into MARGIN_TOP10_FOLDER, backup/cleanup for
+        # THIS run's own files hasn't happened yet), so no second multi-minute
+        # read of a 100MB+ Update Limits file. Wrapped in try/except — a
+        # WhatsApp/email hiccup here must never fail the whole CTCL vs NMASS run.
+        print("\n🚀 RUN 1 DETECTED → STARTING CASH RISK CODES...\n")
+        try:
+            from core.pipelines.margin_shortfall_dashboard import run_margin_shortfall_dashboard
+            _crc_result = run_margin_shortfall_dashboard(
+                base_dir=BASE_DIR,
+                common_dir=COMMON_DIR,
+                update_limits_file=update_limits_file,
+                risk_file=risk_file,
+            )
+            if _crc_result.get("ok"):
+                print(f"✅ CASH RISK CODES completed — {_crc_result.get('flagged', 0)} client(s) flagged")
+            else:
+                print(f"❌ CASH RISK CODES reported an error: {_crc_result.get('error')}")
+        except Exception as e:
+            print(f"❌ CASH RISK CODES failed: {e}")
+        print("\n🎯 CASH RISK CODES PROCESS COMPLETED\n")
     else:
         print(f"\n⏭ Skipping TOP20 process (Run = {run_number})\n")
 

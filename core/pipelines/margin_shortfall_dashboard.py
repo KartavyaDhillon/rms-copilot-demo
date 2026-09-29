@@ -216,6 +216,28 @@ def load_zone_map(risk_report_path):
     return dict(zip(risk["ACCOUNTID"], risk["Zone"]))
 
 
+def load_status_map(risk_report_path):
+    """ACCOUNTID -> ClientStatus, from the risk report file. Returns None if the
+    ClientStatus column isn't present (e.g. an older RISK_REPORT export) instead
+    of failing the whole run - the Active-status filter is then simply skipped,
+    with a clear message printed so that's never silent."""
+    try:
+        if _HAS_POLARS:
+            try:
+                pl_df = pl.read_csv(risk_report_path, columns=["ACCOUNTID", "ClientStatus"])
+                risk = pd.DataFrame(pl_df.to_dict(as_series=False))
+                risk = risk.drop_duplicates(subset="ACCOUNTID", keep="first")
+                return dict(zip(risk["ACCOUNTID"], risk["ClientStatus"]))
+            except Exception as e:
+                print(f"polars fast-read failed for ClientStatus ({e}); falling back to pandas...")
+        risk = pd.read_csv(risk_report_path, usecols=["ACCOUNTID", "ClientStatus"], dtype=str)
+        risk = risk.drop_duplicates(subset="ACCOUNTID", keep="first")
+        return dict(zip(risk["ACCOUNTID"], risk["ClientStatus"]))
+    except Exception as e:
+        print(f"ClientStatus column not found in RISK_REPORT ({e}) - skipping the Active-status filter.")
+        return None
+
+
 # ============================================================
 # 2. READ THE UPDATE LIMITS FILE (polars fast path + fallback)
 # ============================================================
@@ -319,7 +341,11 @@ def read_ledger_data(path):
 # ============================================================
 # 3. COMPUTE NET LEDGER / PERCENTAGE AND FILTER
 # ============================================================
-def build_shortfall_table(df, zone_map=None):
+def build_shortfall_table(df, zone_map=None, status_map=None):
+    """Returns (table, dropped_inactive_count). dropped_inactive_count is how
+    many otherwise-flagged accounts were removed because their RISK_REPORT
+    ClientStatus wasn't "Active" (0 if status_map is None, i.e. the column
+    wasn't found)."""
     for col in ["Cash", "Payin", "GrossCollateral", "Span", "Exposure"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
@@ -334,14 +360,35 @@ def build_shortfall_table(df, zone_map=None):
     df = df[df["Percentage"] <= PERCENT_MAX].copy()
     df = df.sort_values("Percentage")                    # worst first
 
+    # Active-status filter — applied to whatever has survived every threshold
+    # filter above. An account not found in the ClientStatus map (unmapped
+    # ACCOUNTID) is treated as not-Active and dropped too, same as an explicit
+    # non-Active value. Not shown in the dashboard images — only mentioned (as
+    # plain English + this count) in the email body.
+    dropped_inactive = 0
+    if status_map is not None:
+        status_series = df["Entity"].map(status_map)
+        is_active = status_series.astype(str).str.strip().str.lower().eq("active")
+        dropped_inactive = int((~is_active).sum())
+        df = df[is_active].copy()
+
     if zone_map is not None:
         df["Zone"] = df["Entity"].map(zone_map)
 
+    # Whole numbers only in the email/WhatsApp output — round AFTER filtering
+    # (filters above compare against NET_LEDGER_MAX/PERCENT_MAX on the exact
+    # values, so rounding first could flip a borderline row in or out).
+    # Cast to int (not just .round(0)) so the CSV shows "1234", not "1234.0".
+    df["NET LEDGER"] = df["NET LEDGER"].round(0).astype("int64")
+    df["GrossCollateral"] = df["GrossCollateral"].round(0).astype("int64")
+    df["Percentage"] = df["Percentage"].round(0).astype("int64")
+
     cols = ["Entity", "Zone", "NET LEDGER", "GrossCollateral", "Percentage"] if zone_map is not None \
         else ["Entity", "NET LEDGER", "GrossCollateral", "Percentage"]
-    return df[cols].rename(
+    table = df[cols].rename(
         columns={"Entity": "CLIENT CODE", "Zone": "ZONE", "GrossCollateral": "GROSS COLLATERAL", "Percentage": "%"}
     )
+    return table, dropped_inactive
 
 
 # ============================================================
@@ -464,7 +511,7 @@ def render_dashboard(table, source_file, out_path, zone_label=None):
             cards = [
                 ("CLIENTS FLAGGED", f"{n_total:,}", TEAL),
                 ("TOTAL NET LEDGER SHORTFALL", "\u20b9 " + format_indian(total_net_ledger), (196, 30, 40)),
-                ("AVERAGE SHORTFALL %", f"{avg_pct:,.2f}%", (230, 85, 40)),
+                ("AVERAGE SHORTFALL %", f"{avg_pct:,.0f}%", (230, 85, 40)),
                 ("WORST CASE", f"{worst['CLIENT CODE']}  ({worst['%']:,.0f}%)" if worst is not None else "-", (120, 15, 25)),
             ]
             card_gap = 20
@@ -516,7 +563,7 @@ def render_dashboard(table, source_file, out_path, zone_label=None):
                 draw.text((col_x["ZONE"], y + ROW_H / 2), str(r["ZONE"]) if pd.notna(r["ZONE"]) else "-", fill=TEXT_DARK, font=font_row, anchor="lm")
             draw.text((col_x["NET LEDGER"], y + ROW_H / 2), format_indian(r["NET LEDGER"]), fill=(196, 30, 40), font=font_row, anchor="lm")
             draw.text((col_x["GROSS COLLATERAL"], y + ROW_H / 2), format_indian(r["GROSS COLLATERAL"]), fill=TEXT_DARK, font=font_row, anchor="lm")
-            pct_text = f"{r['%']:,.2f}%"
+            pct_text = f"{r['%']:,.0f}%"
             pw = text_w(pct_text, font_row_b) + 24
             px1 = WIDTH - MARGIN - 40
             px0 = px1 - pw
@@ -608,7 +655,7 @@ def send_whatsapp_dashboard(image_paths, numbers, wa_auth_token, label=""):
 # ============================================================
 # 6. EMAIL (SMTP)
 # ============================================================
-def send_email_report(attachments, zone_summary_lines, sender_email, sender_password):
+def send_email_report(attachments, zone_summary_lines, sender_email, sender_password, dropped_inactive=0):
     email_to = _email_to()
     email_cc = _email_cc()
     if not sender_password:
@@ -648,7 +695,9 @@ def send_email_report(attachments, zone_summary_lines, sender_email, sender_pass
         "",
         "6. Each flagged account's Zone is looked up from the Risk Report file, matched on its Account ID.",
         "",
-        "7. The flagged accounts are then split by zone. Accounts in any zone not listed below are not counted in a zone group, but are still included in the attached CSV.",
+        f"7. Each flagged account's ClientStatus is also checked in the Risk Report file - only accounts marked \"Active\" are kept; the rest are removed from this list entirely. {dropped_inactive} account(s) were removed this run because of that check.",
+        "",
+        "8. The flagged accounts are then split by zone. Accounts in any zone not listed below are not counted in a zone group, but are still included in the attached CSV.",
         "",
         "Zone-wise breakdown for this run:",
     ] + zone_summary_lines + [
@@ -714,10 +763,16 @@ def run_margin_shortfall_dashboard(base_dir, common_dir=None, update_limits_file
     print("Reading:", risk_report_file)
     zone_map = load_zone_map(risk_report_file)
     print("Zone lookups loaded:", len(zone_map))
+    status_map = load_status_map(risk_report_file)
+    if status_map is not None:
+        print("ClientStatus lookups loaded:", len(status_map))
 
-    shortfall_table = build_shortfall_table(raw_df, zone_map=zone_map)
-    shortfall_table = shortfall_table.round({"%": 2})
+    shortfall_table, dropped_inactive = build_shortfall_table(raw_df, zone_map=zone_map, status_map=status_map)
+    # NET LEDGER / GROSS COLLATERAL / % are already rounded to whole numbers
+    # inside build_shortfall_table() — nothing further to round here.
     print("Rows breaching threshold (all zones):", len(shortfall_table))
+    if status_map is not None:
+        print("Rows dropped for not being ClientStatus=Active:", dropped_inactive)
 
     shortfall_table.to_csv(dashboard_csv, index=False)
     print("CSV written:", dashboard_csv)
@@ -753,7 +808,8 @@ def run_margin_shortfall_dashboard(base_dir, common_dir=None, update_limits_file
             send_whatsapp_dashboard(pages, numbers, wa_auth_token, label=zone_label)
 
     if SEND_EMAIL:
-        send_email_report([dashboard_csv], zone_summary_lines, sender_email, sender_password)
+        send_email_report([dashboard_csv], zone_summary_lines, sender_email, sender_password,
+                          dropped_inactive=dropped_inactive)
 
     return {"ok": True, "flagged": len(shortfall_table), "csv": dashboard_csv, "error": None}
 

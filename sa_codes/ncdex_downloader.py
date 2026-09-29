@@ -254,7 +254,8 @@ def download_ncdex(output_dir: str = None, run_suffix: str = "01") -> str:
 
     # Member code: "F01292" → "01292"
     member_code = re.sub(r"^[Ff]", "", NCDEX_USER)
-    target_name = f"NCCL_MARGIN_REP_{member_code}_{today_ymd}_{run_suffix}.csv"
+    report_prefix = "NCCL_MARGIN_REP_"   # the ONLY report type this function may ever pick
+    target_name = f"{report_prefix}{member_code}_{today_ymd}_{run_suffix}.csv"
     local_path  = save_dir / target_name
 
     # ── Hard skip ──────────────────────────────────────────────────────────
@@ -457,29 +458,43 @@ def download_ncdex(output_dir: str = None, run_suffix: str = "01") -> str:
     print(f"[9] Looking for {target_name} …")
     all_links = _all_file_links(dsup)
 
+    # Every fallback below MUST also match the report prefix (NCCL_MARGIN_REP_) —
+    # otherwise a same-day, same-member-code file for a DIFFERENT report (e.g.
+    # NCDEX_CLIOI_01292_<date>_00.csv — Client-level Open Interest, not the
+    # margin report) gets picked by mistake and silently reported as success.
+    # That happened for real on 2026-09-29: the margin report wasn't published
+    # yet, but the old "today's date anywhere in filename" fallback grabbed
+    # NCDEX_CLIOI_01292_20260929_00.csv instead because it also contains
+    # today's date and the member code. Requiring the prefix means an
+    # unpublished margin report now correctly returns None (see below) instead
+    # of ever substituting a different file.
+    def _is_margin_report(t):
+        return t.upper().startswith(report_prefix.upper())
+
     # Exact match first (case-insensitive)
     chosen = next(
         ((t, f) for t, f in all_links if t.lower() == target_name.lower()),
         None,
     )
-    # Today-date match YYYYMMDD (any suffix)
+    # Today-date match YYYYMMDD (any suffix) — same report type only
     if not chosen:
         chosen = next(
-            ((t, f) for t, f in all_links if today_ymd in t),
+            ((t, f) for t, f in all_links if _is_margin_report(t) and today_ymd in t),
             None,
         )
-    # Fallback: today date in DDMMYYYY format (some NCDEX portals use this)
+    # Fallback: today date in DDMMYYYY format (some NCDEX portals use this) — same report type only
     if not chosen:
         today_dmy8 = datetime.now().strftime("%d%m%Y")
         chosen = next(
-            ((t, f) for t, f in all_links if today_dmy8 in t),
+            ((t, f) for t, f in all_links if _is_margin_report(t) and today_dmy8 in t),
             None,
         )
-    # Fallback: member_code in filename (picks first CSV with our member code)
+    # Fallback: member_code in filename — same report type only (was matching
+    # ANY .csv with our member code, e.g. CLIOI, which is the exact bug above)
     if not chosen:
         chosen = next(
             ((t, f) for t, f in all_links
-             if member_code in t and t.lower().endswith(".csv")),
+             if _is_margin_report(t) and member_code in t and t.lower().endswith(".csv")),
             None,
         )
     # File not found — log what IS on the page to help diagnose

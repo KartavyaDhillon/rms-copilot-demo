@@ -118,6 +118,7 @@ PIPELINES = {
              "phase_patterns": [
                  (r"CTCL EMAILS COMPLETED",            {"type": "phase", "name": "ctcl_emails_done"}),
                  (r"RUN 1 DETECTED.*STARTING TOP20",   {"type": "phase", "name": "top20"}),
+                 (r"RUN 1 DETECTED.*STARTING CASH RISK CODES", {"type": "phase", "name": "cash_risk_codes"}),
                  (r"STARTING PAYOUT DOWNLOAD",          {"type": "phase", "name": "payout"}),
                  (r"PAYOUT CHECKING COMPLETED",         {"type": "phase", "name": "payout_done"}),
              ]},
