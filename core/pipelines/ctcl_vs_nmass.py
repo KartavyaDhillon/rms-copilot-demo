@@ -436,11 +436,13 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
             "MCX_RANDOM_NAME_FILE": {"patterns": ["*.xlsx"], "date_format": "YYYYMMDD",
                                      "exclude_contains": ["Update Limits", "KAMBALA",
                                                           "FULL_FILE_CTCL_VS_NMASS"]},
-            # Compulsory for Run 1's CASH RISK CODES step — uploaded via the
-            # dashboard's own "📤 Upload files" button straight into BASE_DIR,
-            # same as Update Limits/RISK_REPORT, so no separate folder needed.
-            "T5_DEBIT_REPORT": {"patterns": ["T5DEBIT_*.csv"], "date_format": "DDMMYYYY"},
         }
+        # T5 DEBIT report is only compulsory on Run 1 (that's the only run that
+        # triggers CASH RISK CODES). By Run 2+ it's already been swept into
+        # BACKUPFILES AUTOMATED by the previous run's backup_and_cleanup(), so
+        # requiring it on every run would fail pre-run checks for no reason.
+        if run_number == 1:
+            required_files["T5_DEBIT_REPORT"] = {"patterns": ["T5DEBIT_*.csv"], "date_format": "DDMMYYYY"}
         missing = []; wrong_date = []; found = {}
         for name, cfg in required_files.items():
             files = []
