@@ -238,6 +238,63 @@ def load_status_map(risk_report_path):
         return None
 
 
+def load_branch_region_map(risk_report_path):
+    """(ACCOUNTID -> Branch, ACCOUNTID -> Region) — two dicts from one read of the
+    risk report file. Returns (None, None) if either column isn't present (e.g. an
+    older RISK_REPORT export) instead of failing the whole run - the BRANCH/REGION
+    output columns are then simply left out, with a clear message printed."""
+    try:
+        if _HAS_POLARS:
+            try:
+                pl_df = pl.read_csv(risk_report_path, columns=["ACCOUNTID", "Branch", "Region"])
+                risk = pd.DataFrame(pl_df.to_dict(as_series=False))
+                risk = risk.drop_duplicates(subset="ACCOUNTID", keep="first")
+                return (dict(zip(risk["ACCOUNTID"], risk["Branch"])),
+                        dict(zip(risk["ACCOUNTID"], risk["Region"])))
+            except Exception as e:
+                print(f"polars fast-read failed for Branch/Region ({e}); falling back to pandas...")
+        risk = pd.read_csv(risk_report_path, usecols=["ACCOUNTID", "Branch", "Region"], dtype=str)
+        risk = risk.drop_duplicates(subset="ACCOUNTID", keep="first")
+        return (dict(zip(risk["ACCOUNTID"], risk["Branch"])),
+                dict(zip(risk["ACCOUNTID"], risk["Region"])))
+    except Exception as e:
+        print(f"Branch/Region columns not found in RISK_REPORT ({e}) - skipping those output columns.")
+        return None, None
+
+
+def resolve_t5debit_file(t5debit_folder):
+    """T5 DEBIT report is a separate, compulsory daily file - e.g.
+    D:\\CLAUDE\\T5DEBIT_30092026.csv. Only used when the caller doesn't already
+    have the exact path (ctcl_vs_nmass.py's own pre-run file check resolves and
+    validates this before the run even starts, and passes the path straight in)."""
+    candidates = glob.glob(os.path.join(t5debit_folder, "T5DEBIT_*.csv"))
+    candidates = [c for c in candidates if not os.path.basename(c).startswith("~$")]
+    if not candidates:
+        raise FileNotFoundError(f"No 'T5DEBIT_*.csv' file found in {t5debit_folder}")
+    candidates.sort(key=os.path.getmtime, reverse=True)
+    return candidates[0]
+
+
+def load_t5debit_set(t5debit_path):
+    """Set of normalized AccountID values (stripped, upper-cased) present in the
+    T5 DEBIT report. Returns None if the file can't be read or lacks an AccountID
+    column - the "Code in T5 DEBIT REPORT" output column is then simply left out
+    rather than the whole run failing."""
+    try:
+        if _HAS_POLARS:
+            try:
+                pl_df = pl.read_csv(t5debit_path, columns=["AccountID"])
+                ids = pl_df["AccountID"].to_list()
+                return {str(v).strip().upper() for v in ids if v is not None}
+            except Exception as e:
+                print(f"polars fast-read failed for T5 DEBIT report ({e}); falling back to pandas...")
+        df = pd.read_csv(t5debit_path, usecols=["AccountID"], dtype=str)
+        return {str(v).strip().upper() for v in df["AccountID"].dropna()}
+    except Exception as e:
+        print(f"AccountID column not found in T5 DEBIT report ({e}) - skipping the T5 DEBIT match column.")
+        return None
+
+
 # ============================================================
 # 2. READ THE UPDATE LIMITS FILE (polars fast path + fallback)
 # ============================================================
@@ -341,11 +398,18 @@ def read_ledger_data(path):
 # ============================================================
 # 3. COMPUTE NET LEDGER / PERCENTAGE AND FILTER
 # ============================================================
-def build_shortfall_table(df, zone_map=None, status_map=None):
+def build_shortfall_table(df, zone_map=None, status_map=None, branch_map=None,
+                           region_map=None, t5debit_set=None):
     """Returns (table, dropped_inactive_count). dropped_inactive_count is how
     many otherwise-flagged accounts were removed because their RISK_REPORT
     ClientStatus wasn't "Active" (0 if status_map is None, i.e. the column
-    wasn't found)."""
+    wasn't found).
+
+    branch_map/region_map (ACCOUNTID -> value, from RISK_REPORT) add BRANCH/
+    REGION reference columns — informational only, never filtered on.
+    t5debit_set (normalized AccountID values from today's T5 DEBIT report)
+    adds "Code in T5 DEBIT REPORT" = YES/NO — also informational, never
+    filtered on. Any of these being None just omits that output column."""
     for col in ["Cash", "Payin", "GrossCollateral", "Span", "Exposure"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
@@ -372,8 +436,16 @@ def build_shortfall_table(df, zone_map=None, status_map=None):
         dropped_inactive = int((~is_active).sum())
         df = df[is_active].copy()
 
+    cols = ["Entity"]
     if zone_map is not None:
         df["Zone"] = df["Entity"].map(zone_map)
+        cols.append("Zone")
+    if branch_map is not None:
+        df["Branch"] = df["Entity"].map(branch_map)
+        cols.append("Branch")
+    if region_map is not None:
+        df["Region"] = df["Entity"].map(region_map)
+        cols.append("Region")
 
     # Whole numbers only in the email/WhatsApp output — round AFTER filtering
     # (filters above compare against NET_LEDGER_MAX/PERCENT_MAX on the exact
@@ -382,12 +454,18 @@ def build_shortfall_table(df, zone_map=None, status_map=None):
     df["NET LEDGER"] = df["NET LEDGER"].round(0).astype("int64")
     df["GrossCollateral"] = df["GrossCollateral"].round(0).astype("int64")
     df["Percentage"] = df["Percentage"].round(0).astype("int64")
+    cols += ["NET LEDGER", "GrossCollateral", "Percentage"]
 
-    cols = ["Entity", "Zone", "NET LEDGER", "GrossCollateral", "Percentage"] if zone_map is not None \
-        else ["Entity", "NET LEDGER", "GrossCollateral", "Percentage"]
-    table = df[cols].rename(
-        columns={"Entity": "CLIENT CODE", "Zone": "ZONE", "GrossCollateral": "GROSS COLLATERAL", "Percentage": "%"}
-    )
+    if t5debit_set is not None:
+        in_t5 = df["Entity"].astype(str).str.strip().str.upper().isin(t5debit_set)
+        df["T5DEBIT"] = in_t5.map({True: "YES", False: "NO"})
+        cols.append("T5DEBIT")
+
+    table = df[cols].rename(columns={
+        "Entity": "CLIENT CODE", "Zone": "ZONE", "Branch": "BRANCH", "Region": "REGION",
+        "GrossCollateral": "GROSS COLLATERAL", "Percentage": "%",
+        "T5DEBIT": "Code in T5 DEBIT REPORT",
+    })
     return table, dropped_inactive
 
 
@@ -459,7 +537,7 @@ def render_dashboard(table, source_file, out_path, zone_label=None):
     BG, ROW_WHITE, ROW_ALT, BORDER = (244, 246, 250), (255, 255, 255), (238, 242, 248), (222, 227, 234)
     TEXT_DARK, TEXT_MUTE, WHITE = (28, 34, 46), (110, 120, 135), (255, 255, 255)
 
-    WIDTH, MARGIN, ROW_H = 1360, 40, 46
+    WIDTH, MARGIN, ROW_H = 1700, 40, 46
     HEADER_H, KPI_H, TABLE_HEAD_H, FOOTER_H, TOP_PAD = 150, 130, 54, 60, 24
 
     n_total = len(table)
@@ -527,28 +605,40 @@ def render_dashboard(table, source_file, out_path, zone_label=None):
                 draw.text((cx + 24, y + 58), value, fill=TEXT_DARK, font=f)
             y += KPI_H + 30
 
+        # Column layout is built dynamically left-to-right from whichever
+        # optional columns are actually present in `table` \u2014 ZONE/BRANCH/
+        # REGION/T5 DEBIT each come from their own lookup map, and a run with
+        # an older RISK_REPORT or no T5 DEBIT match still renders correctly
+        # with just the columns it has. "%" is always last, right-aligned.
         has_zone = "ZONE" in table.columns
-        if has_zone:
-            col_x = {
-                "CLIENT CODE": MARGIN + 20,
-                "ZONE": MARGIN + 300,
-                "NET LEDGER": MARGIN + 460,
-                "GROSS COLLATERAL": MARGIN + 780,
-                "%": WIDTH - MARGIN - 40,
-            }
-        else:
-            col_x = {
-                "CLIENT CODE": MARGIN + 20,
-                "NET LEDGER": MARGIN + 420,
-                "GROSS COLLATERAL": MARGIN + 720,
-                "%": WIDTH - MARGIN - 40,
-            }
+        has_branch = "BRANCH" in table.columns
+        has_region = "REGION" in table.columns
+        has_t5 = "Code in T5 DEBIT REPORT" in table.columns
+
+        col_order = ["CLIENT CODE"]
+        if has_zone: col_order.append("ZONE")
+        if has_branch: col_order.append("BRANCH")
+        if has_region: col_order.append("REGION")
+        if has_t5: col_order.append("T5 DEBIT")
+        col_order += ["NET LEDGER", "GROSS COLLATERAL"]
+
+        col_widths = {
+            "CLIENT CODE": 200, "ZONE": 130, "BRANCH": 130, "REGION": 130,
+            "T5 DEBIT": 130, "NET LEDGER": 320, "GROSS COLLATERAL": 320,
+        }
+        col_x, _cx = {}, MARGIN + 20
+        for c in col_order:
+            col_x[c] = _cx
+            _cx += col_widths[c]
+        col_x["%"] = WIDTH - MARGIN - 40
+
+        col_headers = {
+            "CLIENT CODE": "CLIENT CODE", "ZONE": "ZONE", "BRANCH": "BRANCH", "REGION": "REGION",
+            "T5 DEBIT": "T5 DEBIT", "NET LEDGER": "NET LEDGER (\u20b9)", "GROSS COLLATERAL": "GROSS COLLATERAL (\u20b9)",
+        }
         draw.rectangle([MARGIN, y, WIDTH - MARGIN, y + TABLE_HEAD_H], fill=NAVY_2)
-        draw.text((col_x["CLIENT CODE"], y + TABLE_HEAD_H / 2), "CLIENT CODE", fill=WHITE, font=font_head, anchor="lm")
-        if has_zone:
-            draw.text((col_x["ZONE"], y + TABLE_HEAD_H / 2), "ZONE", fill=WHITE, font=font_head, anchor="lm")
-        draw.text((col_x["NET LEDGER"], y + TABLE_HEAD_H / 2), "NET LEDGER (\u20b9)", fill=WHITE, font=font_head, anchor="lm")
-        draw.text((col_x["GROSS COLLATERAL"], y + TABLE_HEAD_H / 2), "GROSS COLLATERAL (\u20b9)", fill=WHITE, font=font_head, anchor="lm")
+        for c in col_order:
+            draw.text((col_x[c], y + TABLE_HEAD_H / 2), col_headers[c], fill=WHITE, font=font_head, anchor="lm")
         draw.text((col_x["%"], y + TABLE_HEAD_H / 2), "%", fill=WHITE, font=font_head, anchor="rm")
         y += TABLE_HEAD_H
 
@@ -561,6 +651,13 @@ def render_dashboard(table, source_file, out_path, zone_label=None):
             draw.text((col_x["CLIENT CODE"] + 24, y + ROW_H / 2), str(r["CLIENT CODE"]), fill=TEXT_DARK, font=font_row_b, anchor="lm")
             if has_zone:
                 draw.text((col_x["ZONE"], y + ROW_H / 2), str(r["ZONE"]) if pd.notna(r["ZONE"]) else "-", fill=TEXT_DARK, font=font_row, anchor="lm")
+            if has_branch:
+                draw.text((col_x["BRANCH"], y + ROW_H / 2), str(r["BRANCH"]) if pd.notna(r["BRANCH"]) else "-", fill=TEXT_DARK, font=font_row, anchor="lm")
+            if has_region:
+                draw.text((col_x["REGION"], y + ROW_H / 2), str(r["REGION"]) if pd.notna(r["REGION"]) else "-", fill=TEXT_DARK, font=font_row, anchor="lm")
+            if has_t5:
+                _t5v = r["Code in T5 DEBIT REPORT"]
+                draw.text((col_x["T5 DEBIT"], y + ROW_H / 2), str(_t5v) if pd.notna(_t5v) else "-", fill=TEXT_DARK, font=font_row, anchor="lm")
             draw.text((col_x["NET LEDGER"], y + ROW_H / 2), format_indian(r["NET LEDGER"]), fill=(196, 30, 40), font=font_row, anchor="lm")
             draw.text((col_x["GROSS COLLATERAL"], y + ROW_H / 2), format_indian(r["GROSS COLLATERAL"]), fill=TEXT_DARK, font=font_row, anchor="lm")
             pct_text = f"{r['%']:,.0f}%"
@@ -697,7 +794,9 @@ def send_email_report(attachments, zone_summary_lines, sender_email, sender_pass
         "",
         f"7. Each flagged account's ClientStatus is also checked in the Risk Report file - only accounts marked \"Active\" are kept; the rest are removed from this list entirely. {dropped_inactive} account(s) were removed this run because of that check.",
         "",
-        "8. The flagged accounts are then split by zone. Accounts in any zone not listed below are not counted in a zone group, but are still included in the attached CSV.",
+        "8. Two reference columns are also added to the attached CSV: Branch and Region, both looked up from the Risk Report file. A third column, \"Code in T5 DEBIT REPORT\", shows YES or NO depending on whether that account's code appears in today's T5 DEBIT report (matched on Account ID) - none of these three affect which accounts are flagged, they are shown for reference only.",
+        "",
+        "9. The flagged accounts are then split by zone. Accounts in any zone not listed below are not counted in a zone group, but are still included in the attached CSV.",
         "",
         "Zone-wise breakdown for this run:",
     ] + zone_summary_lines + [
@@ -734,7 +833,8 @@ def send_email_report(attachments, zone_summary_lines, sender_email, sender_pass
 # MAIN — callable entry point (was `if __name__ == "__main__":`)
 # ============================================================
 def run_margin_shortfall_dashboard(base_dir, common_dir=None, update_limits_file=None,
-                                    risk_file=None, output_dir=None):
+                                    risk_file=None, output_dir=None, t5debit_file=None,
+                                    t5debit_folder=None):
     """Callable version of the original standalone script's main block.
 
     base_dir            — CTCL vs NMASS's BASE_DIR (where Update Limits normally is)
@@ -742,6 +842,13 @@ def run_margin_shortfall_dashboard(base_dir, common_dir=None, update_limits_file
     update_limits_file   — exact path already resolved by the caller, skips re-glob
     risk_file             — exact path already resolved by the caller, skips re-glob
     output_dir           — where the CSV/PNGs get written; defaults to base_dir
+    t5debit_file          — exact T5 DEBIT report path already resolved by the caller
+                            (ctcl_vs_nmass.py's pre-run file check already validated
+                            this file exists for today before the run even starts, so
+                            this is normally always given on a real run)
+    t5debit_folder        — only used to resolve t5debit_file when not given directly
+                            (e.g. standalone testing); defaults to T5_DEBIT_FOLDER env
+                            var, else D:\\CLAUDE
 
     Returns a dict summary: {"ok": bool, "flagged": int, "csv": path, "error": str|None}
     """
@@ -766,8 +873,20 @@ def run_margin_shortfall_dashboard(base_dir, common_dir=None, update_limits_file
     status_map = load_status_map(risk_report_file)
     if status_map is not None:
         print("ClientStatus lookups loaded:", len(status_map))
+    branch_map, region_map = load_branch_region_map(risk_report_file)
+    if branch_map is not None:
+        print("Branch/Region lookups loaded:", len(branch_map))
 
-    shortfall_table, dropped_inactive = build_shortfall_table(raw_df, zone_map=zone_map, status_map=status_map)
+    t5debit_path = t5debit_file or resolve_t5debit_file(
+        t5debit_folder or os.getenv("T5_DEBIT_FOLDER", r"D:\CLAUDE"))
+    print("Reading:", t5debit_path)
+    t5debit_set = load_t5debit_set(t5debit_path)
+    if t5debit_set is not None:
+        print("T5 DEBIT AccountIDs loaded:", len(t5debit_set))
+
+    shortfall_table, dropped_inactive = build_shortfall_table(
+        raw_df, zone_map=zone_map, status_map=status_map,
+        branch_map=branch_map, region_map=region_map, t5debit_set=t5debit_set)
     # NET LEDGER / GROSS COLLATERAL / % are already rounded to whole numbers
     # inside build_shortfall_table() — nothing further to round here.
     print("Rows breaching threshold (all zones):", len(shortfall_table))

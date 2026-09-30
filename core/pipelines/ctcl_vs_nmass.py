@@ -52,7 +52,7 @@ def _emails(key):
 
 # Same classification rule backup_and_cleanup() uses below — pulled to module
 # level so backfill_run_to_db() can reuse it without duplicating the list.
-INPUT_PREFIXES = ("CM_Client", "FO_Client", "CO_Client", "ClientNet", "Update Limits", "RISK_REPORT")
+INPUT_PREFIXES = ("CM_Client", "FO_Client", "CO_Client", "ClientNet", "Update Limits", "RISK_REPORT", "T5DEBIT")
 
 
 # ── KAMBALA reference file ───────────────────────────────────────────────────
@@ -436,12 +436,18 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
             "MCX_RANDOM_NAME_FILE": {"patterns": ["*.xlsx"], "date_format": "YYYYMMDD",
                                      "exclude_contains": ["Update Limits", "KAMBALA",
                                                           "FULL_FILE_CTCL_VS_NMASS"]},
+            # Compulsory for Run 1's CASH RISK CODES step — uploaded via the
+            # dashboard's own "📤 Upload files" button straight into BASE_DIR,
+            # same as Update Limits/RISK_REPORT, so no separate folder needed.
+            "T5_DEBIT_REPORT": {"patterns": ["T5DEBIT_*.csv"], "date_format": "DDMMYYYY"},
         }
         missing = []; wrong_date = []; found = {}
         for name, cfg in required_files.items():
             files = []
+            search_dirs = cfg.get("search_dirs", [base_dir])
             for pattern in cfg["patterns"]:
-                files.extend(glob.glob(os.path.join(base_dir, pattern)))
+                for sd in search_dirs:
+                    files.extend(glob.glob(os.path.join(sd, pattern)))
                 # RISK_REPORT is shared — also search SA_COMMON_DIR
                 if name == "RISK_REPORT" and os.path.isdir(COMMON_DIR):
                     files.extend(glob.glob(os.path.join(COMMON_DIR, pattern)))
@@ -1037,11 +1043,17 @@ Master Capital Services Ltd<br>
         print("\n🚀 RUN 1 DETECTED → STARTING CASH RISK CODES...\n")
         try:
             from core.pipelines.margin_shortfall_dashboard import run_margin_shortfall_dashboard
+            # T5 DEBIT report — uploaded straight into BASE_DIR (same as Update
+            # Limits/RISK_REPORT), already validated present-and-current-date
+            # by pre_run_file_check() above (T5_DEBIT_REPORT), so find_file()
+            # will always find it on a real run.
+            t5debit_file = find_file(starts_with="T5DEBIT", contains=today_ddmmyyyy)
             _crc_result = run_margin_shortfall_dashboard(
                 base_dir=BASE_DIR,
                 common_dir=COMMON_DIR,
                 update_limits_file=update_limits_file,
                 risk_file=risk_file,
+                t5debit_file=t5debit_file,
             )
             if _crc_result.get("ok"):
                 print(f"✅ CASH RISK CODES completed — {_crc_result.get('flagged', 0)} client(s) flagged")
@@ -1131,6 +1143,12 @@ Master Capital Services Ltd<br>
                 except Exception: pass
             except Exception as e:
                 errors.append(f"{fname}: {e}")
+
+        # T5 DEBIT report now lives directly in base_dir (uploaded via the
+        # console's "📤 Upload files" button, same as Update Limits/RISK_REPORT),
+        # so it's already swept by the os.listdir(base_dir) loop above — no
+        # separate extra_files handling needed.
+
         if moved:
             print(f"📦 Backup: {len(moved)} files → {run_folder}")
         for err in errors:

@@ -111,6 +111,7 @@ PIPELINES = {
                  ["Client Net Effective Deposits", "ClientNetEffectiveDeposits_*.csv,ClientNetEffectiveDeposits_*.xlsx", "ClientNetEffectiveDeposits_<date>.csv"],
                  ["Update Limits", "Update Limits*.xlsx", "Update Limits <date>.xlsx"],
                  ["RISK_REPORT", "RISK_REPORT_*.csv", "RISK_REPORT_<date>.csv"],
+                 ["T5 DEBIT report", "T5DEBIT_*.csv", "T5DEBIT_<date>.csv"],
                  ["MCX 90% file (xlsx)", "*.xlsx", "<random>-<YYYYMMDDHHMMSS>.xlsx"],
                  ["CTCL output file", "FULL_FILE_CTCL_VS_NMASS_*.xlsx", "FULL_FILE_CTCL_VS_NMASS_<NN>.xlsx"],
              ],
