@@ -170,45 +170,295 @@ def clean_to_int(series):
 
 # ════════════════════════════════════════════════════════════════════
 # TENTATIVE OBLIGATION SUMMARY EMAIL — resume point.
-# Now built & sent by NARRATION.py (D:\CLAUDE\NARRATION.py), loaded as a
-# module and called directly — same change as LAS4.py's copy of this step,
-# see the comment there for the full reasoning. Re-reads BASE_FOLDER's own
-# main.csv directly (this is a standalone resume script, so df_main_raw from
-# LAS4.py's run isn't available here) rather than depending on main_filtered
-# or the old Tentative Obligation File existing on disk.
+# NARRATION.py-style dashboard email, fully self-contained (NOT loaded from
+# an external D:\CLAUDE\NARRATION.py path — that broke the very first run on
+# a machine where that file doesn't exist; see LAS4.py's copy of this
+# function for the full reasoning). Re-reads BASE_FOLDER's own main.csv
+# directly (this is a standalone resume script, so df_main_raw from LAS4.py's
+# run isn't available here) rather than depending on main_filtered or the
+# old Tentative Obligation File existing on disk.
 # ════════════════════════════════════════════════════════════════════
-print("\n📊 Preparing Tentative Obligation Summary (via NARRATION.py, resume point)")
+print("\n📊 Preparing Tentative Obligation Summary (NARRATION-style, self-contained, resume point)")
 
-def _las_load_narration_module():
-    import importlib.util
-    _path = _SAENV("SA_NARRATION_SCRIPT", r"D:\CLAUDE\NARRATION.py")
-    _spec = importlib.util.spec_from_file_location("sa_narration_module", _path)
-    _mod = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_mod)
-    return _mod
+def _las_narration_tentative_email(df_main_raw):
+    """Builds + sends the NARRATION.py-style Pay-In/Pay-Out dashboard email
+    for the Tentative Obligation step — no external file dependency, no
+    import of any other script. Password-protects the xlsx attachment with
+    the same Scenario@<DDMMYYYY> scheme every other LAS4 file uses, and
+    retries sending forever on SMTP failure, same as send_email_infinite_retry
+    elsewhere in this file."""
+    import time as _nt_time
+    import smtplib as _nt_smtplib
+    from email.mime.multipart import MIMEMultipart as _NtMulti
+    from email.mime.text import MIMEText as _NtText
+    from email.mime.image import MIMEImage as _NtImage
+    from email.mime.base import MIMEBase as _NtBase
+    from email import encoders as _nt_encoders
+    import win32com.client as _nt_win32
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as _nt_plt
+    from matplotlib.patches import FancyBboxPatch as _NtBox
+    from openpyxl import Workbook as _NtWorkbook
+    from openpyxl.styles import Font as _NtFont, PatternFill as _NtFill, Alignment as _NtAlign, Border as _NtBorder, Side as _NtSide
+    from openpyxl.utils import get_column_letter as _nt_col_letter
+
+    _TITLE = "Pay-In / Pay-Out Summary"
+    _SUBTITLE = "Cash  |  Futures  |  MCX"
+    _SUBJECT_PREFIX = "Tentative Obligation File"
+    _FILE_PREFIX = "PayIn_PayOut_Summary"
+    _DATA_SHEETS = [
+        ("FuturesMTM", "FuturesMTM"),
+        ("MCXFuturesMTM", "MCXFuturesMTM"),
+        ("DayNetPremium", "DayNetPremium"),
+        ("MCXDayNetPremium", "MCXDayNetPremium"),
+        ("EquityAmount", "EquityAmount"),
+    ]
+
+    def _nt_indian(n):
+        n = int(round(n))
+        sign_ = "-" if n < 0 else ""
+        s = str(abs(n))
+        if len(s) > 3:
+            head, tail = s[:-3], s[-3:]
+            parts = []
+            while len(head) > 2:
+                parts.insert(0, head[-2:]); head = head[:-2]
+            if head: parts.insert(0, head)
+            s = ",".join(parts) + "," + tail
+        return sign_ + s
+
+    def _nt_sign(x):
+        x = float(x)
+        return 1 if x > 0 else (-1 if x < 0 else 0)
+
+    def _nt_build_sheet_df(df, col):
+        d = df[["ClientID", "Product", col]].copy()
+        d["Product"] = d["Product"].astype(str).str.strip()
+        d[col] = pd.to_numeric(d[col].astype(str).str.replace(",", "").str.strip(), errors="coerce").fillna(0)
+        d = d[(d["Product"] == "-") & (d[col] != 0)]
+        d = d[["ClientID", col]].rename(columns={"ClientID": "CLIENT CODE"})
+        return d.reset_index(drop=True)
+
+    def _nt_compute_narration(sheets):
+        fut = sheets["FuturesMTM"]["FuturesMTM"].sum()
+        mcx = sheets["MCXFuturesMTM"]["MCXFuturesMTM"].sum()
+        dnp = sheets["DayNetPremium"]["DayNetPremium"].sum()
+        mdnp = sheets["MCXDayNetPremium"]["MCXDayNetPremium"].sum()
+        eq = sheets["EquityAmount"]["EquityAmount"]
+        buying = eq[eq > 0].sum()
+        selling = eq[eq < 0].sum()
+        fo_premium = -_nt_sign(dnp) * (abs(dnp) - abs(mdnp))
+        m_sc = -mdnp
+        def _lbl(base, total, positive_is_in):
+            if abs(total) < 0.005: return f"{base} PAYIN PAYOUT"
+            is_in = (total > 0) == positive_is_in
+            return f"{base} {'PAYIN' if is_in else 'PAYOUT'}"
+        rows = [
+            ["CASH", buying, selling, 0.0, 0.0, True],
+            ["FUTURE", 0.0, 0.0, fut, fo_premium, False],
+            ["MCX", 0.0, 0.0, mcx, m_sc, False],
+        ]
+        out = []
+        for base, b, s_, f, p, pos_in in rows:
+            total = b + s_ + f + p
+            out.append([_lbl(base, total, pos_in), total, b, s_, f, p])
+        return out
+
+    def _nt_write_excel(path, narr_rows, sheets):
+        wb = _NtWorkbook()
+        hdr_fill = _NtFill("solid", fgColor="1F3864")
+        hdr_font = _NtFont(bold=True, color="FFFFFF")
+        tot_fill = _NtFill("solid", fgColor="D9E1F2")
+        thin = _NtSide(style="thin", color="999999")
+        border = _NtBorder(left=thin, right=thin, top=thin, bottom=thin)
+        num_fmt = '#,##0.00;[Red]-#,##0.00'
+        ws = wb.active
+        ws.title = "NARRATION"
+        heads = ["Narration", "Total", "Buying", "Selling", "Future/MCX MTM", "Premium"]
+        ws.append(heads)
+        for r in narr_rows: ws.append(r)
+        for c in ws[1]:
+            c.fill, c.font, c.border = hdr_fill, hdr_font, border
+            c.alignment = _NtAlign(horizontal="center")
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            for i, c in enumerate(row):
+                c.border = border
+                if i: c.number_format = num_fmt
+        for i, w in enumerate([26, 20, 20, 20, 20, 20], 1):
+            ws.column_dimensions[_nt_col_letter(i)].width = w
+        for name, col in _DATA_SHEETS:
+            d = sheets[name]
+            w = wb.create_sheet(name)
+            w.append(["CLIENT CODE", col])
+            for rec in d.itertuples(index=False): w.append(list(rec))
+            last = w.max_row
+            w.append(["TOTAL", f"=SUM(B2:B{last})" if last >= 2 else 0])
+            for c in w[1]:
+                c.fill, c.font, c.border = hdr_fill, hdr_font, border
+                c.alignment = _NtAlign(horizontal="center")
+            for row in w.iter_rows(min_row=2, max_row=w.max_row):
+                row[0].border = row[1].border = border
+                row[1].number_format = num_fmt
+            for c in w[w.max_row]:
+                c.font, c.fill = _NtFont(bold=True), tot_fill
+            w.column_dimensions["A"].width = 18
+            w.column_dimensions["B"].width = 24
+            w.freeze_panes = "A2"
+        wb.save(path)
+
+    def _nt_write_dashboard(path, narr_rows, stamp):
+        heads = ["Narration", "Total", "Buying", "Selling", "Future/MCX MTM", "Premium"]
+        col_w = [3.3, 2.3, 1.9, 1.9, 2.1, 2.2]
+        W, H = 11.5, 6.3
+        fig = _nt_plt.figure(figsize=(W, H), dpi=150)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_xlim(0, W); ax.set_ylim(0, H); ax.axis("off")
+        fig.patch.set_facecolor("#F4F6FA")
+        NAVY, LINE, INK, MUTE = "#14284B", "#E3E8F0", "#1B2230", "#8A94A6"
+        RED, GREEN = "#C62828", "#1B7F3B"
+        ACCENT = ["#3B6FD4", "#1C9C8C", "#E09A1A"]
+        ax.add_patch(_nt_plt.Rectangle((0, H - 1.3), W, 1.3, fc=NAVY, ec="none"))
+        ax.text(0.5, H - 0.55, _TITLE, fontsize=25, fontweight="bold", color="white", va="center")
+        ax.text(0.5, H - 0.98, _SUBTITLE, fontsize=13, color="#AFC0E0", va="center")
+        ax.text(W - 0.5, H - 0.55, stamp, fontsize=13, color="white", va="center", ha="right")
+        ax.text(W - 0.5, H - 0.98, "All figures in \u20b9", fontsize=13, color="#AFC0E0", va="center", ha="right")
+        x0, x1 = 0.4, W - 0.4
+        scale = (x1 - x0) / sum(col_w)
+        xs = [x0]
+        for w in col_w: xs.append(xs[-1] + w * scale)
+        top = H - 1.3 - 0.4
+        hh, rh = 0.65, 0.95
+        card_h = hh + rh * len(narr_rows)
+        ax.add_patch(_NtBox((x0, top - card_h), x1 - x0, card_h, boxstyle="round,pad=0,rounding_size=0.12", fc="white", ec=LINE, lw=1.2))
+        ax.add_patch(_nt_plt.Rectangle((x0 + 0.01, top - hh), x1 - x0 - 0.02, hh - 0.01, fc="#EAEFF8", ec="none"))
+        for i, h in enumerate(heads):
+            if i == 0:
+                ax.text(xs[0] + 0.4, top - hh / 2, h.upper(), color=NAVY, fontsize=12, fontweight="bold", va="center", ha="left")
+            else:
+                ax.text((xs[i] + xs[i + 1]) / 2, top - hh / 2, h.upper(), color=NAVY, fontsize=12, fontweight="bold", va="center", ha="center")
+        for r, row in enumerate(narr_rows):
+            y1 = top - hh - r * rh
+            y0 = y1 - rh
+            yc = (y0 + y1) / 2
+            if r < len(narr_rows) - 1:
+                ax.plot([x0 + 0.3, x1 - 0.3], [y0, y0], color=LINE, lw=1)
+            ax.add_patch(_nt_plt.Rectangle((x0 + 0.01, y0 + 0.2), 0.09, rh - 0.4, fc=ACCENT[r % 3], ec="none"))
+            ax.add_patch(_nt_plt.Rectangle((xs[1] + 0.1, y0 + 0.12), xs[2] - xs[1] - 0.2, rh - 0.24, fc="#F5F7FB", ec="none"))
+            ax.text(xs[0] + 0.4, yc, row[0], fontsize=14.5, fontweight="bold", color=INK, va="center", ha="left")
+            for i in range(1, 6):
+                v = row[i]
+                colr = RED if v < -0.5 else (GREEN if v > 0.5 else MUTE)
+                ax.text((xs[i] + xs[i + 1]) / 2, yc, _nt_indian(v), fontsize=14.5 if i == 1 else 14, fontweight="bold" if i == 1 else "normal", color=colr, va="center", ha="center")
+        ax.add_patch(_nt_plt.Rectangle((0, 0), W, 0.65, fc="#E9EDF4", ec="none"))
+        ax.text(0.5, 0.325, "Cash  |  Futures  |  MCX  |  Daily Pay-In / Pay-Out", fontsize=12, color="#5B6577", va="center")
+        ax.text(W - 0.5, 0.325, "Master Capital Services Ltd", fontsize=12, color="#5B6577", va="center", ha="right", fontweight="bold")
+        fig.savefig(path, dpi=150, facecolor=fig.get_facecolor())
+        _nt_plt.close(fig)
+
+    def _nt_password_protect(input_file):
+        _today = datetime.now().strftime("%d%m%Y")
+        password = f"Scenario@{_today}"
+        input_file = os.path.abspath(input_file)
+        base, ext = os.path.splitext(input_file)
+        dated_file = f"{base}_{_today}{ext}"
+        excel = _nt_win32.DispatchEx("Excel.Application")
+        excel.DisplayAlerts = False
+        excel.Visible = False
+        wb = excel.Workbooks.Open(input_file, False, False)
+        wb.SaveAs(dated_file, FileFormat=51, Password=password)
+        wb.Close(False)
+        excel.Quit()
+        print(f"🔐 PASSWORD APPLIED → {os.path.basename(dated_file)}")
+        print(f"🔑 Password: {password}")
+        return dated_file
+
+    def _nt_build_email_html(stamp):
+        return f"""\
+<html><body style="margin:0;padding:0;background:#EEF1F6;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#EEF1F6;padding:24px 0;">
+<tr><td align="center">
+  <table role="presentation" width="920" cellpadding="0" cellspacing="0"
+         style="max-width:920px;width:100%;background:#FFFFFF;border-radius:10px;overflow:hidden;
+                font-family:'Segoe UI',Calibri,Arial,sans-serif;color:#1B2230;">
+    <tr><td style="padding:26px 28px 6px 28px;font-size:15px;line-height:1.6;">
+        Dear Sir,<br>
+        Please find the Tentative Obligation File Summary below:-
+    </td></tr>
+    <tr><td style="padding:14px 28px 6px 28px;">
+        <img src="cid:dashboard" alt="{_TITLE}" width="860"
+             style="display:block;width:860px;max-width:100%;height:auto;border:1px solid #E3E8F0;border-radius:6px;">
+    </td></tr>
+    <tr><td style="padding:0 28px 14px 28px;font-size:0;line-height:0;">&nbsp;</td></tr>
+    <tr><td style="padding:0 28px 16px 28px;font-size:13px;line-height:1.5;color:#3B4A63;">
+        <b>NOTE:</b> Custodian Accounts have been removed from this report.<br>
+        The Day Net Premium includes FO Day Net Premium and MCX Day Net Premium.
+    </td></tr>
+    <tr><td style="padding:0 28px;"><div style="border-top:1px solid #E3E8F0;"></div></td></tr>
+    <tr><td style="padding:18px 28px 26px 28px;font-size:14px;line-height:1.65;">
+        Best regards,<br>
+        Sandeep Kumar<br>
+        011-42111079
+    </td></tr>
+  </table>
+</td></tr></table>
+</body></html>"""
+
+    sheets = {name: _nt_build_sheet_df(df_main_raw, col) for name, col in _DATA_SHEETS}
+    narr_rows = _nt_compute_narration(sheets)
+    stamp = datetime.now().strftime("%d-%b-%Y %H:%M")
+    xlsx_path = os.path.join(BASE_FOLDER, f"{_FILE_PREFIX}_{EMAIL_DATE}.xlsx")
+    png_path = os.path.join(BASE_FOLDER, f"{_FILE_PREFIX}_{EMAIL_DATE}.png")
+    _nt_write_excel(xlsx_path, narr_rows, sheets)
+    _nt_write_dashboard(png_path, narr_rows, stamp)
+    protected_xlsx = _nt_password_protect(xlsx_path)
+
+    to_list = _SALIST("SA_MAIL_TENTATIVE_TO", ["kartavya.dhillon@mastertrust.co.in"])
+    cc_list = _SALIST("SA_MAIL_TENTATIVE_CC", ["kartavya.dhillon@mastertrust.co.in"])
+
+    while True:
+        try:
+            msg = _NtMulti("mixed")
+            msg["From"] = EMAIL_ADDRESS
+            msg["To"] = ", ".join(to_list)
+            if cc_list: msg["Cc"] = ", ".join(cc_list)
+            msg["Subject"] = f"{_SUBJECT_PREFIX}-{EMAIL_DATE}"
+            alt = _NtMulti("alternative")
+            msg.attach(alt)
+            alt.attach(_NtText("Dear Sir,\nPlease find the Tentative Obligation File Summary below:-\n\n"
+                                "(View this email in HTML to see the summary.)\n\nBest regards,\nSandeep Kumar\n011-42111079", "plain", "utf-8"))
+            related = _NtMulti("related")
+            alt.attach(related)
+            related.attach(_NtText(_nt_build_email_html(stamp), "html", "utf-8"))
+            with open(png_path, "rb") as f:
+                img = _NtImage(f.read(), _subtype="png")
+            img.add_header("Content-ID", "<dashboard>")
+            img.add_header("Content-Disposition", "inline", filename=os.path.basename(png_path))
+            related.attach(img)
+            with open(protected_xlsx, "rb") as f:
+                part = _NtBase("application", "vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                part.set_payload(f.read())
+            _nt_encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=os.path.basename(protected_xlsx))
+            msg.attach(part)
+            with _nt_smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+                server.sendmail(EMAIL_ADDRESS, to_list + cc_list, msg.as_string())
+            print(f"✅ Email sent successfully: {_SUBJECT_PREFIX}-{EMAIL_DATE}")
+            break
+        except Exception as e:
+            print(f"❌ Email error ({_SUBJECT_PREFIX}-{EMAIL_DATE}): {e}")
+            print("🔁 Retrying in 3 seconds...")
+            _nt_time.sleep(3)
 
 _main_csv_path = os.path.join(BASE_FOLDER, "main.csv")
 if not os.path.exists(_main_csv_path):
     raise FileNotFoundError(f"❌ main.csv not found: {_main_csv_path}")
 df_main_raw = pd.read_csv(_main_csv_path, dtype=str)
 
-try:
-    _narr = _las_load_narration_module()
-    _narr_sheets = {name: _narr.build_sheet_df(df_main_raw, col) for name, col in _narr.DATA_SHEETS}
-    _narr_rows = _narr.compute_narration(_narr_sheets)
-    _narr_stamp = datetime.now().strftime("%d-%b-%Y %H:%M")
-    _narr_xlsx = os.path.join(BASE_FOLDER, f"PayIn_PayOut_Summary_{EMAIL_DATE}.xlsx")
-    _narr_png = os.path.join(BASE_FOLDER, f"PayIn_PayOut_Summary_{EMAIL_DATE}.png")
-    _narr.write_excel(_narr_xlsx, _narr_rows, _narr_sheets)
-    _narr.write_dashboard(_narr_png, _narr_rows, _narr_stamp)
-
-    _narr.TO_EMAILS = _SALIST("SA_MAIL_TENTATIVE_TO", ["kartavya.dhillon@mastertrust.co.in"])
-    _narr.CC_EMAILS = _SALIST("SA_MAIL_TENTATIVE_CC", ["kartavya.dhillon@mastertrust.co.in"])
-    _narr.send_email(_narr_png, _narr_xlsx, _narr_stamp)
-    print("✅ NARRATION-style Tentative Obligation email sent (password-protected attachment)")
-except Exception as _e:
-    print(f"❌ NARRATION.py-based Tentative Obligation email FAILED: {_e}")
-    raise
+_las_narration_tentative_email(df_main_raw)
+print("✅ NARRATION-style Tentative Obligation email sent (password-protected attachment)")
 
 # ════════════════════════════════════════════════════════════════════
 print("\n📊 Starting POST-EMAIL Scenario & LAS reference steps")
