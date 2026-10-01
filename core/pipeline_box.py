@@ -1701,6 +1701,89 @@ def _pb_cleanup_allocation_ftp_folder(keep_filename, _p):
         _p(f"⚠️ FTP cleanup failed (non-fatal): {_ce}")
 
 
+def _pb_cleanup_ftp_folder_keep_prefixes(remote_folder, keep_prefixes, _p):
+    """Delete every file in `remote_folder` except those whose name starts with
+    one of `keep_prefixes` (case-insensitive). Used by Client Prudential
+    Limit's afternoon Run NEW upload step to prune the morning's ALLOCATION
+    folder down to just Allocation_Detail_<date>.csv + CLI_PRUDENTIAL_LIMIT.txt
+    once afternoon's own files have gone into ALLOCATION(AFTERNOON) — those
+    two are the only things anything downstream still reads out of the plain
+    ALLOCATION folder; everything else there is stale collateral/MCX data from
+    the morning run. Non-fatal — failures here don't affect whether the
+    afternoon/evening upload itself succeeded."""
+    from ftplib import FTP
+    ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
+    ftp_user = os.getenv("FTP_USER", "TRADING")
+    ftp_pass = os.getenv("FTP_PASS", "")
+    try:
+        ftp = FTP(ftp_host)
+        ftp.login(ftp_user, ftp_pass)
+        try:
+            ftp.cwd(remote_folder)
+        except Exception:
+            _p(f"ℹ️ {remote_folder} doesn't exist yet — nothing to clean.")
+            ftp.quit()
+            return
+        files = ftp.nlst()
+        kept, deleted = [], []
+        for file in files:
+            if any(file.lower().startswith(p.lower()) for p in keep_prefixes):
+                kept.append(file)
+                continue
+            try:
+                ftp.delete(file)
+                deleted.append(file)
+                _p(f"🗑 Deleted from {remote_folder}: {file}")
+            except Exception as _de:
+                _p(f"⚠️ Could not delete {file} from {remote_folder}: {_de}")
+        ftp.quit()
+        _p(f"✅ {remote_folder} cleaned — kept {len(kept)} file(s) "
+           f"({', '.join(kept) or 'none'}), deleted {len(deleted)}")
+    except Exception as _ce:
+        _p(f"⚠️ Could not clean {remote_folder} (non-fatal): {_ce}")
+
+
+def _pb_delete_ftp_folder(remote_folder, _p):
+    """Delete every file inside `remote_folder`, then remove the folder itself
+    (RMD). Used by Client Prudential Limit's evening Run NEW upload step to
+    wipe out ALLOCATION(AFTERNOON) entirely once the evening folder has its
+    own fresh files uploaded — that folder never holds Allocation_Detail or
+    CLI_PRUDENTIAL_LIMIT.txt (both are morning-only, uploaded only to the
+    plain ALLOCATION folder), so by evening there is nothing in it worth
+    keeping. Non-fatal — failures here don't affect whether the evening
+    upload itself succeeded."""
+    from ftplib import FTP
+    ftp_host = os.getenv("FTP_HOST", "202.58.232.124")
+    ftp_user = os.getenv("FTP_USER", "TRADING")
+    ftp_pass = os.getenv("FTP_PASS", "")
+    try:
+        ftp = FTP(ftp_host)
+        ftp.login(ftp_user, ftp_pass)
+        try:
+            ftp.cwd(remote_folder)
+        except Exception:
+            _p(f"ℹ️ {remote_folder} doesn't exist — nothing to delete.")
+            ftp.quit()
+            return
+        files = ftp.nlst()
+        for file in files:
+            try:
+                ftp.delete(file)
+                _p(f"🗑 Deleted: {remote_folder}/{file}")
+            except Exception as _de:
+                _p(f"⚠️ Could not delete {file}: {_de}")
+        ftp.cwd("/")
+        try:
+            ftp.rmd(remote_folder)
+            _p(f"✅ Deleted folder: {remote_folder}")
+        except Exception as _re:
+            _p(f"⚠️ Could not remove folder {remote_folder} (non-fatal — its files were "
+               f"still deleted above; safe to remove the empty folder by hand): {_re}")
+        ftp.quit()
+    except Exception as _ce:
+        _p(f"⚠️ Could not delete {remote_folder} (non-fatal): {_ce}")
+
+
 def _pb_fetch_allocation_detail(base_folder, today_str, _p):
     """Shared Allocation_Detail fetch (local-first, FTP fallback, auto-create+push
     FTP folder if needed, then clean the FTP folder down to just today's file —
@@ -2247,6 +2330,105 @@ def pb_backup_db_file(path):
     return _pb_db_get_file(file_id)
 
 
+# Candidate account/client-code column names, tried in order, across every
+# file type the backup browser's "Get files" tab can filter — CSV/XLSX
+# collateral files use "Client Code" (or "Client/CP Code" for the NCDEX-style
+# file); RISK_REPORT/Allocation Detail/Intermediate use "ACCOUNTID"/"AccountID".
+_PB_ACCOUNT_COL_CANDIDATES = (
+    "AccountID", "ACCOUNTID", "Account ID", "Client Code",
+    "Client/CP Code", "UCC Code", "CLIENT CODE",
+)
+
+
+def pb_backup_file_filtered(pipe, path, client_codes):
+    """Like pb_backup_file, but returns only the rows belonging to
+    `client_codes` (case-insensitive), in the file's ORIGINAL column layout —
+    same columns, same order, just fewer rows. Used by the "Get files" tab's
+    optional Client/Account Code filter: fill in a code and every file you'd
+    otherwise download in full comes back pre-filtered to just that account.
+
+    Handles the two plain-text formats specially (CLI_PRUDENTIAL_LIMIT.txt:
+    "ClientPrudentialLimit" header then "AccountID,Sum" lines; Kambala's
+    '|'-delimited export with AccountID in column 0) since neither is a
+    normal table. Every CSV/XLSX file is handled generically by trying each
+    name in _PB_ACCOUNT_COL_CANDIDATES.
+
+    Returns (filename, content_bytes, media_type) on success, or None if the
+    file has no recognizable account column (or isn't one of the two special
+    text formats) — caller falls back to serving the original, unfiltered
+    file rather than failing outright."""
+    import pandas as pd
+    ap = pb_backup_file(pipe, path)
+    if not ap:
+        return None
+    codes = {c.strip().upper() for c in (client_codes or []) if c and c.strip()}
+    if not codes:
+        return None
+    fname = os.path.basename(ap)
+    low = fname.lower()
+
+    # ── CLI_PRUDENTIAL_LIMIT.txt — "ClientPrudentialLimit" header, then
+    # "AccountID,Sum" lines (see core/pipelines/cli_allocation_new.py /
+    # ALLOCATION_CLI_NMASS_NCDEX.py's run_processing()). ──────────────────────
+    if low == "cli_prudential_limit.txt":
+        try:
+            lines = open(ap, encoding="utf-8").read().splitlines()
+        except Exception:
+            return None
+        if not lines:
+            return None
+        header, rows = lines[0], lines[1:]
+        kept = [ln for ln in rows if ln.split(",", 1)[0].strip().upper() in codes]
+        out = "\n".join([header] + kept) + "\n"
+        return (fname, out.encode("utf-8"), "text/plain")
+
+    # ── Kambala_Omny_Depo_Adhoc_All_level.txt_<date>.txt — '|'-delimited,
+    # row 0 is a header (kept as-is), column 0 is AccountID. ──────────────────
+    if low.startswith("kambala_omny_depo_adhoc_all_level.txt_"):
+        try:
+            lines = open(ap, encoding="utf-8", errors="ignore").read().splitlines()
+        except Exception:
+            return None
+        if not lines:
+            return None
+        header, rows = lines[0], lines[1:]
+        kept = [ln for ln in rows if ln.split("|", 1)[0].strip().upper() in codes]
+        out = "\n".join([header] + kept) + "\n"
+        return (fname, out.encode("utf-8"), "text/plain")
+
+    # ── Everything else: CSV or XLSX with a real header row and SOME
+    # account-ish column — try each known name in turn. ───────────────────────
+    is_csv = low.endswith(".csv")
+    is_xlsx = low.endswith(".xlsx")
+    if not (is_csv or is_xlsx):
+        return None
+    try:
+        if is_csv:
+            try:
+                df = pd.read_csv(ap, dtype=str)
+            except Exception:
+                df = pd.read_csv(ap, dtype=str, encoding="latin-1")
+        else:
+            df, err = _pb_read_xlsx_pandas(ap)
+            if err or df is None:
+                return None
+    except Exception:
+        return None
+    col = _pb_col(df, *_PB_ACCOUNT_COL_CANDIDATES)
+    if not col:
+        return None
+    mask = df[col].astype(str).str.strip().str.upper().isin(codes)
+    filtered = df[mask]
+    if is_csv:
+        buf_s = filtered.to_csv(index=False)
+        return (fname, buf_s.encode("utf-8"), "text/csv")
+    import io
+    bio = io.BytesIO()
+    filtered.to_excel(bio, index=False)
+    return (fname, bio.getvalue(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 # ── client data lookup across backup runs (Polars-powered) ───────────────────
 
 def _pb_col(df, *names):
@@ -2654,6 +2836,202 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
     inputs.sort(key=_sort_key)
     outputs.sort(key=_sort_key)
     return {"ok": True, "codes": codes, "inputs": inputs, "outputs": outputs, "warnings": warnings[:20]}
+
+
+def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
+    """CLI Prudential Limit's own "Client data" lookup — separate from
+    pb_client_lookup() on purpose: that function's run-subfolder detection
+    only recognizes a bare 1-2 digit folder name ("01","02",...), and CLI's
+    backup tree uses the word-named Morning/Afternoon/Evening slot folders
+    instead (see _cli_time_slot() in core/pipelines/cli_upload.py) — extending
+    the shared regex risked quietly changing what counts as a "run" for the
+    already-relied-upon CTCL/MS15 lookup, so this is its own standalone walk.
+
+    Backup structure: <backup_root>/<DD-MM-YYYY>/<Morning|Afternoon|Evening>/files...
+
+    Unlike pb_client_lookup, this ALSO reports the raw per-component columns
+    that were summed into each of CM/FO/CO (Cash allocated (b), Cash-Others
+    (c), Non-cash Securities (d)) individually, per the user's request to see
+    "which columns were used to calculate all these singly" — not just the
+    pre-summed bucket total.
+
+    Returns:
+      inputs  → one row per (date, slot, client_code): CM/FO/CO/MCX/NCDEX/TOTAL
+                plus CM_B/CM_C/CM_D, FO_B/FO_C/FO_D, CO_B/CO_C/CO_D raw components
+      outputs → always [] — CLI has no comparable "deposit vs uploaded" output
+                file the way CTCL vs NMASS / Margin Shortage do, so there is
+                nothing to put in a second table.
+    """
+    import pandas as pd
+    codes = [c.strip().upper() for c in (client_codes or []) if c and c.strip()]
+    if not codes:
+        return {"ok": False, "error": "Enter at least one client code."}
+
+    def pdte(s):
+        try: return datetime.datetime.strptime(s, "%Y-%m-%d").date()
+        except Exception: return None
+    d_from, d_to = pdte(from_date), pdte(to_date)
+
+    slot_filter = {s for s in (slots or []) if s in ("Morning", "Afternoon", "Evening")}
+
+    KNOWN_PREFIXES = ("cm_clientlevelcollaterals", "fo_clientlevelcollaterals",
+                      "co_clientlevelcollaterals", "clientneteffectivedeposits",
+                      "allocation_detail", "cli_prudential_limit")
+
+    # ── 1. Walk CLI's backup folders, group files by (date, slot) directory ──
+    by_dir = {}   # (date_obj, slot_str) → list of (fn, fpp)
+    for root in _pb_backup_roots("cli"):
+        if not os.path.isdir(root): continue
+        for dp, _dirs, files in os.walk(root):
+            if not files: continue
+            parts = dp.replace("\\", "/").split("/")
+            cdate = None
+            slot = None
+            found_date_idx = None
+            for i, part in enumerate(parts):
+                pdate = _pb_parse_date_part(part.strip())
+                if pdate is not None:
+                    cdate = pdate
+                    found_date_idx = i
+                elif found_date_idx is not None and slot is None and part.strip() in ("Morning", "Afternoon", "Evening"):
+                    slot = part.strip()
+            if cdate is None: continue
+            if d_from and cdate < d_from: continue
+            if d_to   and cdate > d_to:   continue
+            key = (cdate, slot)   # slot may be None for old flat structure
+            by_dir.setdefault(key, []).extend((fn, os.path.join(dp, fn)) for fn in files)
+
+    inputs, warnings = [], []
+    sorted_keys = sorted(by_dir.keys(), key=lambda k: (k[0], k[1] or ""), reverse=False)
+    sorted_keys.sort(key=lambda k: k[0], reverse=True)
+    sorted_keys = sorted_keys[:200]
+
+    for (cdate, slot) in sorted_keys:
+        if slot_filter and slot is not None and slot not in slot_filter: continue
+        dl = cdate.strftime("%d-%m-%Y")
+        group = by_dir[(cdate, slot)]
+
+        def _scan_collateral_detail(pref):
+            """Returns {code: {"B":val,"C":val,"D":val}} — the three raw
+            component columns individually, not just their sum, per client."""
+            cand = [(fn, fpp) for fn, fpp in group
+                    if fn.lower().startswith(pref) and fn.lower().endswith((".csv", ".xlsx"))]
+            if not cand: return {}
+            fn, fpp = cand[0]
+            try:
+                if fpp.lower().endswith(".csv"):
+                    try:
+                        tdf = pd.read_csv(fpp, dtype=str)
+                    except Exception:
+                        tdf = pd.read_csv(fpp, dtype=str, encoding="latin-1")
+                else:
+                    tdf, err = _pb_read_xlsx_pandas(fpp)
+                    if err or tdf is None: return {}
+                cc = _pb_col(tdf, "Client Code")
+                b_col = _pb_col(tdf, "Cash allocated (b)")
+                c_col = _pb_col(tdf, "Cash-Others (c)", "Cash-others (c)")
+                d_col = _pb_col(tdf, "Non-cash Securities (d)")
+                if not cc: warnings.append(f"{dl} {slot or ''} {fn}: cols missing"); return {}
+                cs = tdf[cc].astype(str).str.strip().str.upper()
+                res = {}
+                for code in codes:
+                    sub = tdf[cs == code]
+                    if sub.empty: continue
+                    def _s(col):
+                        if not col: return 0.0
+                        return round(float(pd.to_numeric(
+                            sub[col].astype(str).str.replace(",", "", regex=False),
+                            errors="coerce").fillna(0).sum()), 2)
+                    res[code] = {"B": _s(b_col), "C": _s(c_col), "D": _s(d_col)}
+                return res
+            except Exception as e:
+                warnings.append(f"{dl} {slot or ''} {fn}: {e}"); return {}
+
+        detail = {c: {} for c in codes}
+        for tag, pref in [("CM", "cm_clientlevelcollaterals"),
+                           ("FO", "fo_clientlevelcollaterals"),
+                           ("CO", "co_clientlevelcollaterals")]:
+            for code, bcd in _scan_collateral_detail(pref).items():
+                detail[code][tag] = bcd
+
+        vals = {c: {} for c in codes}
+
+        # ── NCDEX ─────────────────────────────────────────────────────────────
+        ncdex_cand = [(fn, fpp) for fn, fpp in group
+                      if fn.lower().startswith("clientneteffectivedeposits")
+                      and fn.lower().endswith((".csv", ".xlsx"))]
+        if ncdex_cand:
+            fn, fpp = ncdex_cand[0]
+            try:
+                if fpp.lower().endswith(".csv"):
+                    try:
+                        tdf = pd.read_csv(fpp, dtype=str)
+                    except Exception:
+                        tdf = pd.read_csv(fpp, dtype=str, encoding="latin-1")
+                else:
+                    tdf, err = _pb_read_xlsx_pandas(fpp)
+                    if err: tdf = None
+                if tdf is not None:
+                    cc = _pb_col(tdf, "Client/CP Code", "Client Code")
+                    vc = _pb_col(tdf, "Total Collateral (Cash and Non Cash)")
+                    if cc and vc:
+                        cs = tdf[cc].astype(str).str.strip().str.upper()
+                        for code in codes:
+                            sub = tdf[cs == code]
+                            if not sub.empty:
+                                vc_clean = sub[vc].astype(str).str.replace(",", "", regex=False)
+                                vals[code]["NCDEX"] = round(float(pd.to_numeric(vc_clean, errors="coerce").fillna(0).sum()), 2)
+            except Exception as e:
+                warnings.append(f"{dl} {slot or ''} NCDEX: {e}")
+
+        # ── MCX: any xlsx with a "Client Margin Limit" column ─────────────────
+        mcx_cand = [(fn, fpp) for fn, fpp in group
+                    if fn.lower().endswith(".xlsx")
+                    and not any(fn.lower().startswith(p) for p in KNOWN_PREFIXES)]
+        for fn, fpp in mcx_cand:
+            try:
+                tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Client Margin Limit"])
+                if err or tdf is None: continue
+                cc = _pb_col(tdf, "Client Code"); ml = _pb_col(tdf, "Client Margin Limit")
+                if not cc or not ml: continue
+                cs = tdf[cc].astype(str).str.strip().str.upper()
+                for code in codes:
+                    sub = tdf[cs == code]
+                    if not sub.empty:
+                        ml_clean = sub[ml].astype(str).str.replace(",", "", regex=False)
+                        vals[code]["MCX"] = round(float(pd.to_numeric(ml_clean, errors="coerce").fillna(0).sum()), 2)
+                break
+            except Exception: continue
+
+        # ── Append one input row per (date, slot, client_code) ────────────────
+        for code in codes:
+            d = detail.get(code, {})
+            v = vals.get(code, {})
+            cm_b, cm_c, cm_d = d.get("CM", {}).get("B", 0), d.get("CM", {}).get("C", 0), d.get("CM", {}).get("D", 0)
+            fo_b, fo_c, fo_d = d.get("FO", {}).get("B", 0), d.get("FO", {}).get("C", 0), d.get("FO", {}).get("D", 0)
+            co_b, co_c, co_d = d.get("CO", {}).get("B", 0), d.get("CO", {}).get("C", 0), d.get("CO", {}).get("D", 0)
+            cm = round(cm_b + cm_c + cm_d, 2)
+            fo = round(fo_b + fo_c + fo_d, 2)
+            co = round(co_b + co_c + co_d, 2)
+            ncdex = v.get("NCDEX", 0)
+            mcx = v.get("MCX", 0)
+            if not d and not v: continue   # nothing found for this code in this slot at all
+            inputs.append({
+                "date": dl, "slot": slot, "client_code": code,
+                "CM": cm, "CM_B": cm_b, "CM_C": cm_c, "CM_D": cm_d,
+                "FO": fo, "FO_B": fo_b, "FO_C": fo_c, "FO_D": fo_d,
+                "CO": co, "CO_B": co_b, "CO_C": co_c, "CO_D": co_d,
+                "NCDEX": ncdex, "MCX": mcx,
+                "TOTAL": round(cm + fo + co + ncdex + mcx, 2),
+            })
+
+    _SLOT_ORDER = {"Morning": 0, "Afternoon": 1, "Evening": 2}
+    def _sort_key(x):
+        try: dd = datetime.datetime.strptime(x["date"], "%d-%m-%Y")
+        except Exception: dd = datetime.datetime.min
+        return (-dd.toordinal(), _SLOT_ORDER.get(x.get("slot"), 9))
+    inputs.sort(key=_sort_key)
+    return {"ok": True, "codes": codes, "inputs": inputs, "outputs": [], "warnings": warnings[:20]}
 
 
 def pb_copy_backups(pipe, paths, dest):

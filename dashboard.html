@@ -5575,6 +5575,13 @@ function pxRenderRuns(pipe,s){
   let html='', due=null;
   for(let i=1;i<=runs;i++){
     const id=pipe.toUpperCase()+'-0'+i, w=wins[i]||wins[String(i)]||'', pw=pxParseWin(w);
+    // CLI's three daily runs are fixed slots (morning/afternoon/evening), not
+    // an open-ended numbered sequence like CTCL/MS15 — shown with the same
+    // emoji-labeled-tile style as the Segment-wise Collateral Movement
+    // Report (r1r2) box's Live/Afternoon/Evening tiles, instead of the
+    // generic CLI-01/02/03 numbering.
+    const _cliSlotLabels={1:'🌅 CLI MORNING',2:'🌤️ CLI AFTERNOON',3:'🌙 CLI EVENING'};
+    const displayId=(pipe==='cli'&&_cliSlotLabels[i])?_cliSlotLabels[i]:id;
     const done=i<=completed, isNext=(i===completed+1), afterStart=(!pw||now>=pw.s), enabled=isNext&&!done&&afterStart&&!_thisPipeRunning;
     // CTCL: active retry — show "Running" on the EXACT run being retried (even if backend says done)
     if(pipe==='ctcl' && _thisPipeRunning && i===_ctclRunCurrent){
@@ -5631,7 +5638,7 @@ function pxRenderRuns(pipe,s){
         ? `<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button>`
         : `<button class="sa-run-btn" ${enabled?'':'disabled'} onclick="pxRun('${pipe}')" data-tip="${pxRunTip(pipe)}">${done?'&#10003; Done':'Run'}</button>`;
     }
-    html+=`<div class="${cls}"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">${state}</div>${_btn}</div>`;
+    html+=`<div class="${cls}"><div class="sa-run-id">${displayId}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">${state}</div>${_btn}</div>`;
   }
   wrap.innerHTML=html;
   // ms15 has 9 runs/day — fix at exactly 5 columns so the grid always wraps as
@@ -5773,6 +5780,7 @@ const _PX_BK_META={
   'FO Client Collaterals':         {icon:'F', col:'#60a5fa', sec:'Exchange Inputs'},
   'CO Client Collaterals':         {icon:'O', col:'#60a5fa', sec:'Exchange Inputs'},
   'Client Net Effective Deposits': {icon:'N', col:'#60a5fa', sec:'Exchange Inputs'},
+  'MCX Web Allocation/Deallocation': {icon:'💵', col:'#60a5fa', sec:'Exchange Inputs'},
   'Update Limits':                 {icon:'📋', col:'#a78bfa', sec:'Daily Reports'},
   'RISK_REPORT':                   {icon:'⚠', col:'#a78bfa', sec:'Daily Reports'},
   'MCX 90% file (xlsx)':           {icon:'💵', col:'#a78bfa', sec:'Daily Reports'},
@@ -5800,10 +5808,6 @@ function _pxBkClearAll(){ window._pxBkSel=new Set(); pxBackup(window._pxBkPipe,'
 async function pxBackup(pipe, tab){
   window._pxBkPipe=pipe;
   tab=tab||'files';
-  // Client Prudential Limit doesn't have the per-run CM/FO/CO/MCX/NCDEX Update Limits
-  // structure the "Client data" lookup was built around (that's CTCL vs NMASS specific) —
-  // per request, don't show that tab here at all, just the plain file archive.
-  if(pipe==='cli' && tab==='client') tab='files';
   // Margin Shortage (ms15) reuses the same "Client data" lookup as CTCL vs
   // NMASS (own input files + own Shortage_vs_CC_Deposit output, 9 runs/day
   // instead of 5), plus its own extra "WhatsApp check" tab.
@@ -5813,7 +5817,7 @@ async function pxBackup(pipe, tab){
   const _tBtn=(id,lbl,on)=>`<button onclick="pxBackup('${pipe}','${id}')" style="padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid ${on?'var(--teal)':'var(--line)'};background:${on?'rgba(52,211,153,.12)':'transparent'};color:${on?'var(--teal)':'var(--dim)'}">${lbl}</button>`;
   const _extraTabs = pipe==='ms15'
     ? _tBtn('client','🔍 Client data',tab==='client')+_tBtn('wacheck','📱 WhatsApp check',tab==='wacheck')
-    : (pipe==='cli' ? '' : _tBtn('client','🔍 Client data',tab==='client'));
+    : _tBtn('client','🔍 Client data',tab==='client');
   const _tabs=`<div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:12px">${_tBtn('files','📦 Get files',tab==='files')}${_extraTabs}</div>`;
   // ── WhatsApp check (ms15) — who actually received a WhatsApp, per date + run(s) ──
   if(tab==='wacheck'){
@@ -5829,6 +5833,26 @@ async function pxBackup(pipe, tab){
   }
   // ── Client data tab — look up a client across all backup runs ─────────────
   if(tab==='client'){
+    // CLI Prudential Limit runs in named Morning/Afternoon/Evening slots, not
+    // numbered runs — its own chip row + lookup function + consolidated-table
+    // renderer (pxCliSlotFind/pxShowCliLookupPopup below) instead of the
+    // numeric Run-N machinery CTCL/MS15 use.
+    if(pipe==='cli'){
+      if(!window._pxCliSlotSel) window._pxCliSlotSel=new Set(['Morning','Afternoon','Evening']);
+      const _slotChips=()=>{
+        const sel=window._pxCliSlotSel;
+        const _lbl={Morning:'🌅 Morning',Afternoon:'🌤️ Afternoon',Evening:'🌙 Evening'};
+        let chips='';
+        ['Morning','Afternoon','Evening'].forEach(s=>{
+          const on=sel.has(s);
+          chips+=`<button id="pxCliSlotChip_${s}" onclick="pxToggleCliSlot('${s}')" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">${_lbl[s]}</button>`;
+        });
+        return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button onclick="pxCliSlotSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">All</button><button onclick="pxCliSlotClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
+      };
+      saShowModal('🔍 Client data lookup',_tabs+`<div style="font-size:12px;color:var(--muted);margin-bottom:14px">One consolidated row per date &amp; slot: CM / FO / CO / MCX / NCDEX Deposit + Total NMASS — plus the raw Cash allocated (b) / Cash-Others (c) / Non-cash Securities (d) columns that were summed into each of CM/FO/CO, individually.</div><div class="sa-field" style="margin-bottom:12px"><label>Client / Account Code(s) <span style="font-weight:400;color:var(--dim)">— comma-separate for multiple</span></label><input id="pxCliClient" placeholder="e.g. SN120 or SN120, AB1234" style="text-transform:uppercase"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px"><div class="sa-field"><label>From (DD/MM/YYYY)</label><input type="text" id="pxCliFrom" value="${dmy(mAgo)}" placeholder="DD/MM/YYYY"></div><div class="sa-field"><label>To (DD/MM/YYYY)</label><input type="text" id="pxCliTo" value="${dmy(t)}" placeholder="DD/MM/YYYY"></div></div><div id="pxRunChipsWrap">${_slotChips()}</div><button class="sa-save" style="width:100%;background:var(--blue);color:var(--blue-d)" onclick="pxCliSlotFind()">🔍 Look up client data</button><div id="pxCliResult" style="margin-top:12px"></div>`);
+      setTimeout(()=>{const el=document.getElementById('pxCliClient');if(el){el.focus();el.addEventListener('input',e=>{e.target.value=e.target.value.toUpperCase();});}},100);
+      return;
+    }
     const p=_pxRunCount(pipe); // CTCL vs NMASS = 5 runs/day, Margin Shortage (ms15) = 9 runs/day
     if(window._pxRunSelPipe!==pipe){
       // Switching pipe (e.g. ctcl ↔ ms15) — reset the run-filter selection to
@@ -5895,6 +5919,11 @@ async function pxBackup(pipe, tab){
 </div>
 <div style="padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);margin-bottom:12px">
 ${sectionHtml}
+<div class="sa-field" style="margin-top:10px;margin-bottom:0">
+  <label>Client / Account Code <span style="font-weight:400;color:var(--dim)">— optional, comma-separate for multiple</span></label>
+  <input id="pxBkClient" placeholder="e.g. SN120 — leave blank for full files" style="text-transform:uppercase">
+  <div style="font-size:10.5px;color:var(--dim);margin-top:4px">Filled in: every matching file comes back filtered to just that account's row(s), same columns as the original. Left blank: full files, as usual.</div>
+</div>
 <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px;display:flex;justify-content:flex-end">
   <button onclick="_pxBkClearAll()" style="font-size:11px;font-weight:600;padding:4px 14px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer" onmouseenter="this.style.color='var(--red)';this.style.borderColor='var(--red)'" onmouseleave="this.style.color='var(--muted)';this.style.borderColor='var(--line)'">✕ Clear all filters</button>
 </div>
@@ -5905,6 +5934,12 @@ ${sectionHtml}
 </div>
 <button class="sa-save" style="width:100%;background:var(--blue);color:var(--blue-d)" onclick="pxBackupFind()">🔍 Search backups</button>
 <div id="pxBkResult" style="margin-top:12px"></div>`);
+  setTimeout(()=>{const el=document.getElementById('pxBkClient');if(el){el.value=window._pxBkClientCode||'';el.addEventListener('input',e=>{e.target.value=e.target.value.toUpperCase();});}},80);
+}
+function _pxBkDlUrl(pipe,path,clientCode){
+  const cc=(clientCode!==undefined?clientCode:(window._pxBkClientCode||'')).trim();
+  if(cc) return API+'/px/backup/download-filtered?pipe='+pipe+'&path='+encodeURIComponent(path)+'&client_code='+encodeURIComponent(cc);
+  return API+'/px/backup/download?pipe='+pipe+'&path='+encodeURIComponent(path);
 }
 async function pxBackupFind(){
   const pipe=window._pxBkPipe||'';
@@ -5912,6 +5947,12 @@ async function pxBackupFind(){
   const from=saDmy2iso(_rf); const to=saDmy2iso(_rt);
   const box=document.getElementById('pxBkResult');
   if((_rf&&!from)||(_rt&&!to)){ box.innerHTML='<div style="color:var(--amber);font-size:12.5px">Enter dates as DD/MM/YYYY.</div>'; return; }
+  // Client/Account code filter — blank means "full files, as before". When
+  // set, every row's download link below points at /px/backup/download-filtered
+  // instead of the plain /px/backup/download, so what you get back is the
+  // same file's original columns with only that account's row(s).
+  window._pxBkClientCode=((document.getElementById('pxBkClient')||{}).value||'').trim().toUpperCase();
+  const clientCode=window._pxBkClientCode;
   const globs=[...(window._pxBkSel||new Set())].join(',');
   box.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;padding:12px 0"><div style="width:16px;height:16px;border-radius:50%;border:2px solid var(--teal);border-top-color:transparent;animation:spin .7s linear infinite"></div>Scanning backup folders…</div>';
   let d; try{ d=await (await fetch(API+`/px/backup/list?pipe=${pipe}&from_date=${from}&to_date=${to}&types=${encodeURIComponent(globs)}`)).json(); }catch(e){ box.innerHTML=`<div style="color:var(--red);font-size:12.5px">Connection error: ${e}</div>`; return; }
@@ -5942,14 +5983,14 @@ async function pxBackupFind(){
     <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${f.name||''}">${f.name||'—'}</div>
     <div style="font-size:10px;color:var(--muted);margin-top:2px">${f.run?`<span style="color:var(--teal);font-weight:600">Run ${f.run}</span> · `:''}${f.time?`<span style="font-weight:600">${f.time}</span> · `:''}${f.date} · ${(f.size/1024).toFixed(1)} KB</div>
   </div>
-  <a href="${API}/px/backup/download?pipe=${pipe}&path=${encodeURIComponent(f.path||'')}" download="${(f.name||'file').replace(/"/g,'')}" title="Download this file" style="flex-shrink:0;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.25);text-decoration:none;font-size:14px;transition:background .15s" onmouseenter="this.style.background='rgba(52,211,153,.22)'" onmouseleave="this.style.background='rgba(52,211,153,.1)'">⬇</a>
+  <a href="${_pxBkDlUrl(pipe,f.path||'',clientCode)}" download="${(f.name||'file').replace(/"/g,'')}" title="Download this file${clientCode?' (filtered to '+clientCode+')':''}" style="flex-shrink:0;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.25);text-decoration:none;font-size:14px;transition:background .15s" onmouseenter="this.style.background='rgba(52,211,153,.22)'" onmouseleave="this.style.background='rgba(52,211,153,.1)'">⬇</a>
 </div>`;
     });
   });
   const resHtml=`
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
   <button onclick="pxBackup('${pipe}','files')" style="font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer" onmouseenter="this.style.color='var(--ink)'" onmouseleave="this.style.color='var(--muted)'">← Back</button>
-  <span style="font-size:11px;color:var(--muted);flex:1">${files.length} file(s) · <label style="cursor:pointer"><input type="checkbox" onchange="document.querySelectorAll('.pxBkChk').forEach(c=>c.checked=this.checked)"> select all</label></span>
+  <span style="font-size:11px;color:var(--muted);flex:1">${files.length} file(s)${clientCode?` · filtered to <b style="color:var(--teal)">${clientCode}</b>`:''} · <label style="cursor:pointer"><input type="checkbox" onchange="document.querySelectorAll('.pxBkChk').forEach(c=>c.checked=this.checked)"> select all</label></span>
   <button onclick="pxBkDownloadSelected()" style="font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px;background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.3);cursor:pointer">⬇ Download to my PC</button>
 </div>
 <div style="max-height:45vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;overflow-x:hidden">${rows}</div>
@@ -5974,7 +6015,7 @@ async function pxBkDownloadSelected(){
       let ok=0, fail=0;
       for(const {path,fn} of items){
         try{
-          const r=await fetch(API+'/px/backup/download?pipe='+pipe+'&path='+encodeURIComponent(path));
+          const r=await fetch(_pxBkDlUrl(pipe,path));
           if(!r.ok){ fail++; continue; }
           const blob=await r.blob();
           const fh=await dirHandle.getFileHandle(fn,{create:true});
@@ -5990,7 +6031,7 @@ async function pxBkDownloadSelected(){
   if(msg) msg.innerHTML=`<span style="color:var(--muted)">Downloading ${items.length} file(s) to your Downloads folder…</span>`;
   for(const {path,fn} of items){
     const a=document.createElement('a');
-    a.href=API+'/px/backup/download?pipe='+pipe+'&path='+encodeURIComponent(path);
+    a.href=_pxBkDlUrl(pipe,path);
     a.download=fn;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     await new Promise(r=>setTimeout(r,350));
@@ -6026,6 +6067,25 @@ function pxRunClearAll(){
     const b=document.getElementById('pxRunChip'+i);
     if(b){b.style.borderColor='var(--line)';b.style.background='transparent';b.style.color='var(--dim)';}
   }
+}
+// ── CLI's own Morning/Afternoon/Evening slot-filter chip helpers ───────────
+function _pxCliSlotPaint(s){
+  const on=(window._pxCliSlotSel||new Set()).has(s);
+  const b=document.getElementById('pxCliSlotChip_'+s);
+  if(b){ b.style.borderColor=on?'rgba(59,130,246,.6)':'var(--line)'; b.style.background=on?'rgba(59,130,246,.14)':'transparent'; b.style.color=on?'var(--blue)':'var(--dim)'; }
+}
+function pxToggleCliSlot(s){
+  const sel=window._pxCliSlotSel||(window._pxCliSlotSel=new Set(['Morning','Afternoon','Evening']));
+  if(sel.has(s)) sel.delete(s); else sel.add(s);
+  _pxCliSlotPaint(s);
+}
+function pxCliSlotSelAll(){
+  window._pxCliSlotSel=new Set(['Morning','Afternoon','Evening']);
+  ['Morning','Afternoon','Evening'].forEach(_pxCliSlotPaint);
+}
+function pxCliSlotClearAll(){
+  window._pxCliSlotSel=new Set();
+  ['Morning','Afternoon','Evening'].forEach(_pxCliSlotPaint);
 }
 
 // ── Margin Shortage (ms15) backup-panel helpers ─────────────────────────────
@@ -6299,6 +6359,139 @@ async function pxClientFind(){
   if(!d.ok){box.innerHTML=`<div style="color:var(--red);font-size:12px">${d.error||'Lookup failed'}</div>`;return;}
   box.innerHTML='';
   pxShowLookupPopup(d, codes, sel);
+}
+
+// ── CLI's own client-data lookup — Morning/Afternoon/Evening slots ─────────
+async function pxCliSlotFind(){
+  const cc=(document.getElementById('pxCliClient')||{}).value||'';
+  const rf=(document.getElementById('pxCliFrom')||{}).value||'';
+  const rt=(document.getElementById('pxCliTo')||{}).value||'';
+  const from=saDmy2iso(rf),to=saDmy2iso(rt);
+  const box=document.getElementById('pxCliResult');
+  if(!cc.trim()){box.innerHTML='<div style="color:var(--amber);font-size:12.5px">Enter at least one client / account code.</div>';return;}
+  if((rf&&!from)||(rt&&!to)){box.innerHTML='<div style="color:var(--amber);font-size:12.5px">Enter dates as DD/MM/YYYY.</div>';return;}
+  const codes=cc.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean);
+  const sel=window._pxCliSlotSel||(window._pxCliSlotSel=new Set(['Morning','Afternoon','Evening']));
+  const slotsParam=[...sel].join(',');
+
+  const btn=document.querySelector('[onclick="pxCliSlotFind()"]');
+  if(btn){ btn.disabled=true; btn.textContent='⏳ Scanning…'; }
+  box.innerHTML=`<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;padding:6px 0"><div style="width:13px;height:13px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div>Scanning backup folders for <b style="color:var(--ink)">${codes.join(', ')}</b>…</div>`;
+  let d;
+  try{d=await(await fetch(API+`/px/cli-client-lookup?client_codes=${encodeURIComponent(codes.join(','))}&from_date=${from}&to_date=${to}&slots=${encodeURIComponent(slotsParam)}`)).json();}
+  catch(e){ if(btn){btn.disabled=false;btn.textContent='🔍 Look up client data';} box.innerHTML=`<div style="color:var(--red);font-size:12px">Network error: ${e}</div>`;return;}
+  if(btn){ btn.disabled=false; btn.textContent='🔍 Look up client data'; }
+  if(!d.ok){box.innerHTML=`<div style="color:var(--red);font-size:12px">${d.error||'Lookup failed'}</div>`;return;}
+  box.innerHTML='';
+  pxShowCliLookupPopup(d, codes, sel);
+}
+
+// ── CLI results popup — one consolidated row per date/slot, + raw b/c/d ────
+function pxShowCliLookupPopup(d, codes, selectedSlots){
+  const old=document.getElementById('pxLookupPopup');
+  if(old) old.remove();
+
+  const ins=d.inputs||[];
+  const multi=codes.length>1;
+  const fmt=v=>v==null?'<span style="color:var(--dim)">—</span>':`<span>${(+v).toLocaleString('en-IN',{maximumFractionDigits:0})}</span>`;
+  const fmtBold=v=>v==null?'<span style="color:var(--dim)">—</span>':`<b style="color:var(--ink)">${(+v).toLocaleString('en-IN',{maximumFractionDigits:0})}</b>`;
+  const fmtSm=v=>v==null?'<span style="color:var(--dim)">—</span>':`<span style="color:var(--dim)">${(+v).toLocaleString('en-IN',{maximumFractionDigits:0})}</span>`;
+  const fmtRaw=v=>v==null?'':(+v).toFixed(2);
+  const _slotBadge=s=>{
+    const _lbl={Morning:'🌅 Morning',Afternoon:'🌤️ Afternoon',Evening:'🌙 Evening'};
+    return s?`<span style="display:inline-block;padding:1px 8px;border-radius:8px;background:rgba(59,130,246,.13);border:1px solid rgba(59,130,246,.3);color:var(--blue);font-size:10px;font-weight:700;white-space:nowrap">${_lbl[s]||s}</span>`:'<span style="color:var(--dim)">—</span>';
+  };
+
+  const slots_label=selectedSlots.size===3?'All slots':[...selectedSlots].join(', ');
+
+  const badge=`<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:12px;font-size:11px;color:var(--muted)">
+    ${codes.map(c=>`<span style="background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.3);border-radius:12px;padding:2px 10px;font-family:var(--mono);color:var(--violet);font-weight:600">${c}</span>`).join('')}
+    <span style="color:var(--line)">·</span><span>${ins.length} row(s)</span>
+    <span style="color:var(--line)">·</span><span style="color:var(--blue)">${slots_label}</span>
+  </div>`;
+
+  const legend=`<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:var(--dim);margin-bottom:14px;padding:6px 10px;background:rgba(255,255,255,.02);border-radius:8px;border:1px solid var(--line)">
+    <span>CM / FO / CO = NSE collaterals (b = Cash allocated, c = Cash-Others, d = Non-cash Securities) &nbsp;·&nbsp; MCX = Client Margin Limit &nbsp;·&nbsp; NCDEX = Total Collateral (Cash+Non Cash)</span>
+  </div>`;
+
+  let html=badge+legend;
+
+  if(!ins.length){
+    html+=`<div style="text-align:center;padding:40px 20px;color:var(--dim);font-size:13px">No data found for <b style="color:var(--ink)">${codes.join(', ')}</b>.<br>Check codes or widen the date range.</div>`;
+  } else {
+    const subTh=(lbl,sub,col,extra)=>`<th style="padding:8px 9px;text-align:right;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${col};border-bottom:2px solid var(--line);white-space:nowrap;${extra||''}">${lbl}<span style="display:block;font-size:7.5px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--dim);margin-top:2px;white-space:normal">(${sub})</span></th>`;
+    const bcdTh=(col)=>`<th style="padding:6px 7px;text-align:right;font-size:8px;font-weight:600;color:${col};border-bottom:2px solid var(--line);white-space:nowrap">b</th><th style="padding:6px 7px;text-align:right;font-size:8px;font-weight:600;color:${col};border-bottom:2px solid var(--line);white-space:nowrap">c</th><th style="padding:6px 7px;text-align:right;font-size:8px;font-weight:600;color:${col};border-bottom:2px solid var(--line);white-space:nowrap">d</th>`;
+
+    const csvH=[...(multi?['Client']:[]),'Date','Run',
+      'CM Deposit','CM (b)','CM (c)','CM (d)',
+      'FO Deposit','FO (b)','FO (c)','FO (d)',
+      'CO Deposit','CO (b)','CO (c)','CO (d)',
+      'MCX Deposit','NCDEX Deposit','Total NMASS'];
+    const csvR=ins.map(r=>[...(multi?[r.client_code||'']:[]),r.date,r.slot||'',
+      fmtRaw(r.CM),fmtRaw(r.CM_B),fmtRaw(r.CM_C),fmtRaw(r.CM_D),
+      fmtRaw(r.FO),fmtRaw(r.FO_B),fmtRaw(r.FO_C),fmtRaw(r.FO_D),
+      fmtRaw(r.CO),fmtRaw(r.CO_B),fmtRaw(r.CO_C),fmtRaw(r.CO_D),
+      fmtRaw(r.MCX),fmtRaw(r.NCDEX),fmtRaw(r.TOTAL)].join(','));
+    const csvU='data:text/csv;charset=utf-8,'+encodeURIComponent([csvH.join(','),...csvR].join('\n'));
+
+    let tbl=`<table style="width:100%;border-collapse:collapse;font-size:11px;min-width:1280px"><thead><tr>
+      ${multi?`<th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line)">Client</th>`:''}
+      <th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--line)">Date</th>
+      <th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--line)">Run</th>
+      ${subTh('CM Deposit','sum of b+c+d','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}${bcdTh('var(--blue)')}
+      ${subTh('FO Deposit','sum of b+c+d','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}${bcdTh('var(--blue)')}
+      ${subTh('CO Deposit','sum of b+c+d','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}${bcdTh('var(--blue)')}
+      ${subTh('MCX Deposit','Client Margin Limit','#f59e0b','border-left:1px solid rgba(245,158,11,.2)')}
+      ${subTh('NCDEX Deposit','Total Collateral (Cash+Non Cash)','#a78bfa','border-right:1px solid rgba(167,139,250,.2)')}
+      <th style="padding:8px 9px;text-align:right;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--teal);border-bottom:2px solid var(--line);border-left:1px solid rgba(52,211,153,.2)">Total NMASS</th>
+    </tr></thead><tbody>`;
+    let lastDate='';
+    ins.forEach((r,i)=>{
+      const nd=r.date!==lastDate; lastDate=r.date;
+      tbl+=`<tr style="font-size:11px;${i%2?'background:rgba(255,255,255,.018)':''}${nd&&i>0?';border-top:1px solid rgba(255,255,255,.07)':''}">
+        ${multi?`<td style="padding:5px 9px;font-family:var(--mono);font-size:10px;color:var(--violet);white-space:nowrap">${r.client_code||''}</td>`:''}
+        <td style="padding:5px 9px;font-family:var(--mono);font-size:10.5px;color:var(--teal);white-space:nowrap">${nd?r.date:'<span style="color:var(--dim);font-size:10px">↳</span>'}</td>
+        <td style="padding:5px 9px;white-space:nowrap">${_slotBadge(r.slot)}</td>
+        <td style="padding:5px 9px;text-align:right;color:var(--blue);border-left:1px solid rgba(59,130,246,.1)">${fmtBold(r.CM)}</td>
+        <td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_D)}</td>
+        <td style="padding:5px 9px;text-align:right;color:var(--blue);border-left:1px solid rgba(59,130,246,.1)">${fmtBold(r.FO)}</td>
+        <td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_D)}</td>
+        <td style="padding:5px 9px;text-align:right;color:var(--blue);border-left:1px solid rgba(59,130,246,.1)">${fmtBold(r.CO)}</td>
+        <td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_D)}</td>
+        <td style="padding:5px 9px;text-align:right;color:#f59e0b;border-left:1px solid rgba(245,158,11,.1)">${fmt(r.MCX)}</td>
+        <td style="padding:5px 9px;text-align:right;color:#a78bfa;border-right:1px solid rgba(167,139,250,.1)">${fmt(r.NCDEX)}</td>
+        <td style="padding:5px 9px;text-align:right;border-left:1px solid rgba(52,211,153,.1)">${fmtBold(r.TOTAL)}</td>
+      </tr>`;
+    });
+    tbl+='</tbody></table>';
+
+    html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
+      <b style="font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">📥 Consolidated Deposits — per date &amp; slot</b>
+      <a href="${csvU}" download="cli_client_data_${codes.join('_')}.csv" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:8px;border:1px solid rgba(52,211,153,.4);color:var(--teal);font-size:10px;font-weight:600;text-decoration:none">⬇ CSV</a>
+    </div>
+    <div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px">${tbl}</div>`;
+  }
+
+  if((d.warnings||[]).length){
+    html+=`<div style="font-size:10px;color:var(--dim);padding:6px 10px;border:1px solid var(--line);border-radius:8px;margin-top:10px">⚠ ${d.warnings.length} file(s) skipped: ${d.warnings.slice(0,3).join(' · ')}</div>`;
+  }
+
+  const overlay=document.createElement('div');
+  overlay.id='pxLookupPopup';
+  overlay.style.cssText='position:fixed;inset:0;z-index:9100;display:flex;align-items:flex-start;justify-content:center;padding:20px;background:rgba(0,0,0,.65);backdrop-filter:blur(4px);overflow-y:auto';
+  overlay.innerHTML=`
+    <div style="width:100%;max-width:1480px;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 24px 80px rgba(0,0,0,.5);overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--panel-3)">
+        <div>
+          <div style="font-family:var(--display);font-size:16px;font-weight:750;color:var(--ink)">🔍 Client Data — CLI Prudential Limit</div>
+          <div style="font-size:10.5px;color:var(--dim);margin-top:2px">${codes.join(', ')} &nbsp;·&nbsp; ${(document.getElementById('pxCliFrom')||{}).value||''} → ${(document.getElementById('pxCliTo')||{}).value||''}</div>
+        </div>
+        <button onclick="document.getElementById('pxLookupPopup').remove()" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--dim);font-size:18px;cursor:pointer;display:grid;place-items:center">×</button>
+      </div>
+      <div style="padding:18px 20px;overflow-y:auto;max-height:calc(100vh - 100px)">${html}</div>
+    </div>`;
+  overlay.addEventListener('click',e=>{ if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 async function pxBrowseDest(){ const inp=document.getElementById('pxBkDest'); const old=inp?inp.placeholder:''; if(inp) inp.placeholder='Opening folder picker…'; try{ const d=await (await fetch(API+'/sa/browse-folder')).json(); if(d&&d.ok&&d.path&&inp) inp.value=d.path; }catch(e){} if(inp) inp.placeholder=old; }
 async function pxBackupCopy(){

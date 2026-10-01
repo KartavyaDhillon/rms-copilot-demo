@@ -114,21 +114,40 @@ WHATSAPP_NUMBERS = [
     "+917889026088",
     # "+91XXXXXXXXXX",
 ]
-WHATSAPP_ZONE_NUMBERS = {
-    # "Delhi Zone": ["+91XXXXXXXXXX"],
-    # "Mumbai Zone": ["+91XXXXXXXXXX"],
-    # "Ludhiana Zone": ["+91XXXXXXXXXX"],
+
+# Per-zone recipient lists — each zone's image goes ONLY to its own number(s)
+# when that zone's list has been set from the dashboard's "📱 WhatsApp
+# numbers" button; a zone with no numbers of its own falls back to the
+# default/all-zones list (_whatsapp_numbers() below) instead of being skipped.
+ZONE_WA_ENV_KEYS = {
+    "Delhi Zone": "CTCL_SHORTFALL_WA_TO_DELHI",
+    "Mumbai Zone": "CTCL_SHORTFALL_WA_TO_MUMBAI",
+    "Ludhiana Zone": "CTCL_SHORTFALL_WA_TO_LUDHIANA",
 }
 
 
 def _whatsapp_numbers():
-    """Recipient list for the dashboard sends — CTCL_SHORTFALL_WA_TO (set via the
-    dashboard's password-protected "📱 WhatsApp numbers" button, same pattern as
-    MS15's own shortage-image recipient list) if set, else WHATSAPP_NUMBERS above."""
+    """Default/fallback recipient list for the dashboard sends — CTCL_SHORTFALL_WA_TO
+    (set via the dashboard's password-protected "📱 WhatsApp numbers" button, same
+    pattern as MS15's own shortage-image recipient list) if set, else WHATSAPP_NUMBERS
+    above. Used for any zone that doesn't have its own list configured (see
+    _whatsapp_zone_numbers below)."""
     raw = os.getenv("CTCL_SHORTFALL_WA_TO", "").strip()
     if raw:
         return [n.strip() for n in raw.split(",") if n.strip()]
     return WHATSAPP_NUMBERS
+
+
+def _whatsapp_zone_numbers(zone_label):
+    """Recipient list for one specific zone's image — that zone's own env var
+    (ZONE_WA_ENV_KEYS) if it has been set from the dashboard, else the default/
+    all-zones list from _whatsapp_numbers()."""
+    env_key = ZONE_WA_ENV_KEYS.get(zone_label)
+    if env_key:
+        raw = os.getenv(env_key, "").strip()
+        if raw:
+            return [n.strip() for n in raw.split(",") if n.strip()]
+    return _whatsapp_numbers()
 
 # ---- Email (SMTP) ----
 SEND_EMAIL = True
@@ -921,9 +940,8 @@ def run_margin_shortfall_dashboard(base_dir, common_dir=None, update_limits_file
         zone_summary_lines.append(f"- Other zones (CSV only, not shown as a separate dashboard): {other_count} account(s)")
 
     if SEND_WHATSAPP:
-        default_numbers = _whatsapp_numbers()
         for zone_label, pages in all_dashboard_pages:
-            numbers = WHATSAPP_ZONE_NUMBERS.get(zone_label) or default_numbers
+            numbers = _whatsapp_zone_numbers(zone_label)
             send_whatsapp_dashboard(pages, numbers, wa_auth_token, label=zone_label)
 
     if SEND_EMAIL:

@@ -173,6 +173,7 @@ def run_cli_upload():
             os.remove(_marker_path)
         except OSError:
             pass
+    _slot_name = None
     if _slot_target:
         _slot_name = ("afternoon" if "AFTERNOON" in _slot_target.upper()
                       else "evening" if "EVENING" in _slot_target.upper() else "non-morning")
@@ -249,6 +250,32 @@ def run_cli_upload():
         except Exception as e:
             hard_error = f"FTP upload failed: {e}"
             _p(f"❌ {hard_error}")
+
+    # ── STEP 1.5: prune the OLDER slot folder(s) on the FTP ──────────────────
+    # Per explicit instruction: the three ALLOCATION / ALLOCATION(AFTERNOON) /
+    # ALLOCATION(EVENING) folders and what gets uploaded into each stay exactly
+    # as they are — this only adds a deletion step alongside that unchanged
+    # upload behaviour.
+    #   Afternoon upload: the morning's plain ALLOCATION folder still has all of
+    #   this morning's files sitting in it. Prune it down to just
+    #   Allocation_Detail_<date>.csv + CLI_PRUDENTIAL_LIMIT.txt — the only two
+    #   anything downstream still needs out of it.
+    #   Evening upload: ALLOCATION(AFTERNOON) never holds either of those two
+    #   files (both are morning-only), so once evening's own folder has its
+    #   files there is nothing left in ALLOCATION(AFTERNOON) worth keeping —
+    #   delete it outright, folder and all.
+    if _slot_name == "afternoon":
+        _p("🧹 STEP 1.5: Cleaning morning's ALLOCATION folder — keeping only "
+           "Allocation Detail + CLI Prudential Limit")
+        from core.pipeline_box import _pb_cleanup_ftp_folder_keep_prefixes
+        _pb_cleanup_ftp_folder_keep_prefixes(
+            "/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION",
+            ["Allocation_Detail", "CLI_PRUDENTIAL_LIMIT"], _p)
+    elif _slot_name == "evening":
+        _p("🧹 STEP 1.5: Deleting the afternoon's ALLOCATION(AFTERNOON) folder — "
+           "no longer needed")
+        from core.pipeline_box import _pb_delete_ftp_folder
+        _pb_delete_ftp_folder("/TRADING/CTCL_FILES/KORP_LIVE/ALLOCATION(AFTERNOON)", _p)
 
     # ── STEP 2: backup + cleanup (still runs even if upload had trouble) ─────
     _p("🚀 STEP 2: Backup + cleanup")

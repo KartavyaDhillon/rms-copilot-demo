@@ -1250,10 +1250,48 @@
     return digits ? '+91' + digits : '';
   }
 
+  // CASH RISK CODES WhatsApp numbers support an optional "#Name" comment per
+  // entry ("9811122233#Kartavya") so it's clear whose number was added — the
+  // "#Name" part never reaches the actual WhatsApp send; the backend
+  // (/ctcl/wa-config) splits it into its own *_LABELS env var and only ever
+  // sends the clean number. This normalizes just the number half client-side
+  // while leaving the "#Name" half untouched.
+  function _ctclNormalizeEntry(v) {
+    v = (v || '').trim();
+    if (!v) return '';
+    var hashIdx = v.indexOf('#');
+    var numPart = hashIdx === -1 ? v : v.slice(0, hashIdx);
+    var label = hashIdx === -1 ? '' : v.slice(hashIdx + 1).trim();
+    var num = _ms15NormalizePhone(numPart);
+    if (!num) return '';
+    return label ? (num + '#' + label) : num;
+  }
+
+  // Zips a clean numbers CSV with a "num:label,num:label" labels CSV (as
+  // returned by /ctcl/wa-config) back into "num#label" display/edit strings.
+  function _ctclBuildDisplayList(numbersCsv, labelsCsv) {
+    var labelMap = {};
+    (labelsCsv || '').split(',').forEach(function (pair) {
+      var i = pair.indexOf(':');
+      if (i === -1) return;
+      var num = pair.slice(0, i).trim(), label = pair.slice(i + 1).trim();
+      if (num && label) labelMap[num] = label;
+    });
+    return (numbersCsv || '').split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s; })
+      .map(function (num) { return labelMap[num] ? (num + '#' + labelMap[num]) : num; });
+  }
+
   var MS15_WA_KEY = 'MS15_SHORTAGE_WA_TO';
   var MS15_WA_MAX = 10;
   var CTCL_WA_KEY = 'CTCL_SHORTFALL_WA_TO';
   var CTCL_WA_MAX = 10;
+  // Per-zone recipient lists — each saved independently; a zone left empty
+  // falls back to CTCL_WA_KEY's default/all-zones list (handled server-side).
+  var CTCL_WA_ZONE_KEYS = [
+    { key: 'CTCL_SHORTFALL_WA_TO_DELHI',    field: 'to_delhi',    label: 'DELHI ZONE RECIPIENTS' },
+    { key: 'CTCL_SHORTFALL_WA_TO_MUMBAI',   field: 'to_mumbai',   label: 'MUMBAI ZONE RECIPIENTS' },
+    { key: 'CTCL_SHORTFALL_WA_TO_LUDHIANA', field: 'to_ludhiana', label: 'LUDHIANA ZONE RECIPIENTS' },
+  ];
 
   // Same collapsed named-field list editor Short Allocation's own "WhatsApp
   // numbers" / "Email recipients" modals use (saListFieldCollapsed /
@@ -1303,26 +1341,46 @@
     fetch(API + '/ctcl/wa-config').then(function (r) { return r.json(); }).then(function (cfg) {
       if (typeof window.saShowModal !== 'function' || typeof window.saListFieldCollapsed !== 'function') { return; }
       window._saListState = window._saListState || {};
-      window._saListState[CTCL_WA_KEY] = (cfg.to || '').split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s; });
+      window._saListState[CTCL_WA_KEY] = _ctclBuildDisplayList(cfg.to, cfg.to_labels);
 
-      var rows = window.saListFieldCollapsed(CTCL_WA_KEY, 'CASH RISK CODES RECIPIENTS', '9811122233 (10-digit number)', 'phone');
+      var waPlaceholder = '9811122233 or 9811122233#Kartavya';
+      var rows = window.saListFieldCollapsed(CTCL_WA_KEY, 'DEFAULT / ALL ZONES RECIPIENTS', waPlaceholder, 'phone');
       rows += '<div style="font-size:11px;color:var(--dim);margin:-6px 0 16px">Up to ' + CTCL_WA_MAX + ' numbers. Type just the 10-digit number — +91 is added automatically. ' +
-              'Receives the Run 1 CASH RISK CODES zone images.</div>';
+              'Add #Name after a number (e.g. 9811122233#Kartavya) to remember whose it is — optional. ' +
+              'Used for any zone below that has no numbers of its own.</div>';
+
+      CTCL_WA_ZONE_KEYS.forEach(function (z) {
+        window._saListState[z.key] = _ctclBuildDisplayList(cfg[z.field], cfg[z.field + '_labels']);
+        rows += window.saListFieldCollapsed(z.key, z.label, waPlaceholder, 'phone');
+      });
+      rows += '<div style="font-size:11px;color:var(--dim);margin:-6px 0 16px">Up to ' + CTCL_WA_MAX + ' numbers each. A zone with numbers here gets ONLY its own image — ' +
+              'leave a zone empty to send it to the default list above instead.</div>';
+
       rows += '<button class="sa-save" style="width:100%" onclick="_ctclSaveWaNumbers()">Save changes</button><div class="sa-msg" id="ctclWaMsg"></div>';
 
       window.saShowModal('📱 WhatsApp numbers — CASH RISK CODES', rows);
       window.saListUpdateSummary(CTCL_WA_KEY);
+      CTCL_WA_ZONE_KEYS.forEach(function (z) { window.saListUpdateSummary(z.key); });
 
       window._ctclSaveWaNumbers = function () {
         var msg = document.getElementById('ctclWaMsg');
-        var raw = (window._saListState[CTCL_WA_KEY] || []).map(function (v) { return (v || '').trim(); }).filter(function (v) { return v !== ''; });
-        if (raw.length > CTCL_WA_MAX) {
-          if (msg) msg.innerHTML = '<span style="color:var(--red)">✕ Maximum ' + CTCL_WA_MAX + ' numbers allowed — remove ' + (raw.length - CTCL_WA_MAX) + ' before saving.</span>';
+        var allKeys = [CTCL_WA_KEY].concat(CTCL_WA_ZONE_KEYS.map(function (z) { return z.key; }));
+        var tooMany = allKeys.filter(function (k) {
+          return ((window._saListState[k] || []).filter(function (v) { return (v || '').trim() !== ''; })).length > CTCL_WA_MAX;
+        });
+        if (tooMany.length) {
+          if (msg) msg.innerHTML = '<span style="color:var(--red)">✕ Maximum ' + CTCL_WA_MAX + ' numbers allowed per list — one or more lists is over the limit.</span>';
           return;
         }
-        var to = raw.map(_ms15NormalizePhone).filter(function (v) { return v; }).join(',');
+        function listFor(k) {
+          return (window._saListState[k] || []).map(function (v) { return (v || '').trim(); }).filter(function (v) { return v !== ''; })
+            .map(_ctclNormalizeEntry).filter(function (v) { return v; }).join(',');
+        }
+        var to = listFor(CTCL_WA_KEY);
+        var qs = 'to=' + encodeURIComponent(to);
+        CTCL_WA_ZONE_KEYS.forEach(function (z) { qs += '&' + z.field + '=' + encodeURIComponent(listFor(z.key)); });
         if (msg) msg.innerHTML = '<span style="color:var(--muted)">Saving…</span>';
-        fetch(API + '/ctcl/wa-config?to=' + encodeURIComponent(to) +
+        fetch(API + '/ctcl/wa-config?' + qs +
               '&password=' + encodeURIComponent(pw || ''), { method: 'POST' })
           .then(function (r) { return r.json(); })
           .then(function (d) {
@@ -2306,8 +2364,9 @@
     // MS15_SHORTAGE_WA_TO specifically — every other field's "+" is untouched.
     if (typeof window.saListToggleAdd === 'function' && !window.saListToggleAdd.__ms15CapPatched) {
       var origToggleAdd = window.saListToggleAdd;
+      var ctclZoneKeySet = CTCL_WA_ZONE_KEYS.map(function (z) { return z.key; });
       var wrappedToggleAdd = function (key, placeholder) {
-        if (key === MS15_WA_KEY || key === CTCL_WA_KEY) {
+        if (key === MS15_WA_KEY || key === CTCL_WA_KEY || ctclZoneKeySet.indexOf(key) !== -1) {
           var cap = (key === MS15_WA_KEY) ? MS15_WA_MAX : CTCL_WA_MAX;
           var label = (key === MS15_WA_KEY) ? 'Margin Shortage image' : 'CASH RISK CODES';
           var cur = (window._saListState && window._saListState[key]) || [];
@@ -2323,6 +2382,31 @@
       };
       wrappedToggleAdd.__ms15CapPatched = true;
       window.saListToggleAdd = wrappedToggleAdd;
+    }
+
+    // ── Collapsed-summary masking for CASH RISK CODES numbers: the native
+    // saMaskValue() just masks the raw string's last 4 characters, which for
+    // a "+917889026088#Kartavya" entry would mask the NAME ("•••tava")
+    // instead of the phone number. This wraps it so, for CTCL's WA keys only,
+    // the "#Name" half is split off first, the number half is masked the
+    // normal way, and the name is reappended for readability.
+    if (typeof window.saMaskValue === 'function' && !window.saMaskValue.__ctclLabelPatched) {
+      var origMaskValue = window.saMaskValue;
+      var ctclZoneKeySet2 = CTCL_WA_ZONE_KEYS.map(function (z) { return z.key; });
+      var wrappedMaskValue = function (key, v) {
+        if (key === CTCL_WA_KEY || ctclZoneKeySet2.indexOf(key) !== -1) {
+          v = (v || '').trim();
+          if (!v) return '';
+          var hashIdx = v.indexOf('#');
+          var numPart = hashIdx === -1 ? v : v.slice(0, hashIdx);
+          var label = hashIdx === -1 ? '' : v.slice(hashIdx + 1).trim();
+          var masked = origMaskValue(key, numPart);
+          return label ? (masked + ' (' + label + ')') : masked;
+        }
+        return origMaskValue(key, v);
+      };
+      wrappedMaskValue.__ctclLabelPatched = true;
+      window.saMaskValue = wrappedMaskValue;
     }
   }
 

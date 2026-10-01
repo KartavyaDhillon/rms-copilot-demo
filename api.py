@@ -2232,6 +2232,29 @@ def px_backup_download(pipe: str = "", path: str = ""):
     return _PX_FileResp(ap, filename=_sa_os.path.basename(ap),
                         media_type="application/octet-stream")
 
+@app.get("/px/backup/download-filtered")
+def px_backup_download_filtered(pipe: str = "", path: str = "", client_code: str = ""):
+    """Same file as /px/backup/download, but with only the row(s) belonging to
+    `client_code` (comma-separate for multiple) — same columns/format as the
+    original, just filtered. Falls back to the plain, unfiltered download if
+    the file has no recognizable account column (e.g. an .xlsx that isn't a
+    normal collateral export) rather than erroring out."""
+    from core.pipeline_box import pb_backup_file_filtered as _pbbff, pb_backup_file as _pbbf
+    from fastapi.responses import FileResponse as _PX_FileResp2, Response as _PX_Resp2
+    codes = [c.strip() for c in client_code.replace(";", ",").split(",") if c.strip()]
+    if codes:
+        got = _pbbff(pipe, path, codes)
+        if got:
+            fname, content, media_type = got
+            return _PX_Resp2(content=content, media_type=media_type,
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    # No codes given, or the file couldn't be filtered — serve the original.
+    ap = _pbbf(pipe, path)
+    if not ap:
+        return {"error": "file not found or outside backup folder"}
+    return _PX_FileResp2(ap, filename=_sa_os.path.basename(ap),
+                         media_type="application/octet-stream")
+
 @app.get("/px/client-lookup")
 def px_client_lookup(pipe: str = "", client_codes: str = "",
                      from_date: str = "", to_date: str = "",
@@ -2251,6 +2274,24 @@ def px_client_lookup(pipe: str = "", client_codes: str = "",
             pass
     try:
         return _pbcl(pipe, codes, from_date, to_date, run_filter)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/px/cli-client-lookup")
+def px_cli_client_lookup(client_codes: str = "", from_date: str = "", to_date: str = "",
+                          slots: str = ""):
+    """CLI Prudential Limit's own client-data lookup — Morning/Afternoon/Evening
+    slot folders instead of numbered runs, plus the raw CM/FO/CO component
+    columns (Cash allocated (b) / Cash-Others (c) / Non-cash Securities (d))
+    individually, not just their summed bucket value. See pb_cli_client_lookup
+    for why this isn't just pb_client_lookup with an extra pipe branch.
+    slots: optional comma-separated "Morning,Afternoon,Evening" — empty = all."""
+    from core.pipeline_box import pb_cli_client_lookup as _pbccl
+    codes = [c.strip() for c in client_codes.replace(";", ",").split(",") if c.strip()]
+    slot_filter = [s.strip() for s in slots.split(",") if s.strip()]
+    try:
+        return _pbccl(codes, from_date, to_date, slot_filter)
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -3383,30 +3424,87 @@ def ms15_shortage_wa_config_set(to: str = "", password: str = ""):
     return {"ok": True}
 
 
+def _ctcl_parse_wa_entries(raw: str):
+    """Parses a comma-separated list where each entry is either a bare number
+    ("9811122233") or a number with a "#Name" comment ("9811122233#Kartavya"),
+    so whoever added a number can tell whose it is later. Returns
+    (clean_numbers: list[str], labels_csv: str) — labels_csv is "num:label,..."
+    for entries that had a name, ready to store in its own env var. The
+    number-only env var (CTCL_SHORTFALL_WA_TO etc.) NEVER carries the "#Name"
+    part, so nothing downstream that sends the actual WhatsApp message needs
+    to know this convention exists."""
+    numbers, labels = [], []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "#" in entry:
+            num_part, label_part = entry.split("#", 1)
+        else:
+            num_part, label_part = entry, ""
+        num = _ms15_normalize_wa_number(num_part)
+        label = label_part.strip()
+        if not num:
+            continue
+        numbers.append(num)
+        if label:
+            labels.append(f"{num}:{label}")
+    return numbers, ",".join(labels)
+
+
 @app.get("/ctcl/wa-config")
 def ctcl_wa_config_get():
-    """Read the recipient list for the Run 1 Margin Shortfall Dashboard images
+    """Read the recipient lists for the Run 1 CASH RISK CODES dashboard images
     (core/pipelines/margin_shortfall_dashboard.py) — same pattern as MS15's own
     /ms15/shortage-wa-config. No password needed to READ (matches every other
-    /px/config-style GET), only to save."""
+    /px/config-style GET), only to save. "to" is the default/all-zones
+    fallback list; to_delhi/to_mumbai/to_ludhiana are per-zone lists that,
+    when set, receive ONLY that zone's image instead of the default list.
+    The *_labels fields are "num:name,num:name" strings the console UI uses to
+    redisplay each number's "#Name" comment — they're display-only, never
+    used when actually sending."""
     import os as _cwc
-    return {"to": _cwc.getenv("CTCL_SHORTFALL_WA_TO", "")}
+    return {
+        "to": _cwc.getenv("CTCL_SHORTFALL_WA_TO", ""),
+        "to_labels": _cwc.getenv("CTCL_SHORTFALL_WA_TO_LABELS", ""),
+        "to_delhi": _cwc.getenv("CTCL_SHORTFALL_WA_TO_DELHI", ""),
+        "to_delhi_labels": _cwc.getenv("CTCL_SHORTFALL_WA_TO_DELHI_LABELS", ""),
+        "to_mumbai": _cwc.getenv("CTCL_SHORTFALL_WA_TO_MUMBAI", ""),
+        "to_mumbai_labels": _cwc.getenv("CTCL_SHORTFALL_WA_TO_MUMBAI_LABELS", ""),
+        "to_ludhiana": _cwc.getenv("CTCL_SHORTFALL_WA_TO_LUDHIANA", ""),
+        "to_ludhiana_labels": _cwc.getenv("CTCL_SHORTFALL_WA_TO_LUDHIANA_LABELS", ""),
+    }
 
 
 @app.post("/ctcl/wa-config")
-def ctcl_wa_config_set(to: str = "", password: str = ""):
-    """Save the Margin Shortfall Dashboard's recipient list — the button
+def ctcl_wa_config_set(to: str = "", to_delhi: str = "", to_mumbai: str = "", to_ludhiana: str = "", password: str = ""):
+    """Save the CASH RISK CODES dashboard's recipient lists — the button
     injected by process-probable-box.js on the CTCL vs NMASS box, mirroring
-    MS15's. Same console password as every other 🔑 Credentials save."""
+    MS15's. Same console password as every other 🔑 Credentials save.
+    "to" is the default/all-zones fallback; the three to_* fields are
+    per-zone overrides (each capped at 10 numbers, like "to"). Each entry may
+    carry an optional "#Name" comment (see _ctcl_parse_wa_entries) which is
+    split out into its own *_LABELS env var and never stored mixed in with
+    the actual phone numbers."""
     from core.short_allocation import check_password as _cwc_pw
     if not _cwc_pw(password):
         return {"ok": False, "error": "Wrong password"}
-    numbers = [_ms15_normalize_wa_number(n) for n in to.split(",")]
-    numbers = [n for n in numbers if n]
-    if len(numbers) > 10:
-        return {"ok": False, "error": "Maximum 10 numbers allowed"}
+
+    parsed = {
+        "CTCL_SHORTFALL_WA_TO": _ctcl_parse_wa_entries(to),
+        "CTCL_SHORTFALL_WA_TO_DELHI": _ctcl_parse_wa_entries(to_delhi),
+        "CTCL_SHORTFALL_WA_TO_MUMBAI": _ctcl_parse_wa_entries(to_mumbai),
+        "CTCL_SHORTFALL_WA_TO_LUDHIANA": _ctcl_parse_wa_entries(to_ludhiana),
+    }
+    for _k, (_nums, _labels) in parsed.items():
+        if len(_nums) > 10:
+            return {"ok": False, "error": "Maximum 10 numbers allowed"}
     from core.pipeline_box import _write_env as _cwc_write
-    _cwc_write({"CTCL_SHORTFALL_WA_TO": ",".join(numbers)})
+    env_update = {}
+    for key, (nums, labels) in parsed.items():
+        env_update[key] = ",".join(nums)
+        env_update[f"{key}_LABELS"] = labels
+    _cwc_write(env_update)
     return {"ok": True}
 
 

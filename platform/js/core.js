@@ -238,18 +238,18 @@
       seen[k] = e.status;
       if (isNew && Object.keys(seen).length < 12 && !RMS._notifWarm) return; // first boot: don't replay history
       if (e.status === "failed") {
-        // Bell history always records the failure regardless of this
-        // preference — only the intrusive sticky TOAST is gated. Was
-        // previously hardcoded "always on" with no way to turn it off; a
-        // busy day of retries/waits (each one a legitimate, expected
-        // "failed" status until the file arrives — see margin_shortage_15min
-        // and short-allocation's own wait/retry flows) could stack up
-        // several of these un-dismissing toasts at once.
+        // Run status (ok/failed/stopped) ONLY goes to the bell now — no
+        // on-screen toast. These fire from background polling, not a direct
+        // user action, and a busy day of retries/waits (each one a
+        // legitimate, expected "failed" status until the file arrives — see
+        // margin_shortage_15min and short-allocation's own wait/retry flows)
+        // used to stack up several un-dismissing sticky toasts at once,
+        // piling up over the page. Open the bell (top right) to see these —
+        // click one there to jump straight to its log, same as the toast
+        // used to.
         RMS.pushNotif("err", e.label + " failed", e.pipe_name, e);
-        if (RMS.prefs.notifyFailure !== false) RMS.toast("err", e.label + " failed", e.pipe_name + " — click to view log", { sticky: true, onClick: () => RMS.openLogViewer(e) });
       } else if (e.status === "ok" && RMS._notifWarm) {
         RMS.pushNotif("ok", e.label + " completed", e.pipe_name, e);
-        if (RMS.prefs.notifySuccess !== false) RMS.toast("ok", e.label + " completed", e.pipe_name);
       }
     });
     RMS._notifWarm = true;

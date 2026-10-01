@@ -2326,107 +2326,60 @@ Sandeep Kumar
 
 
 # ==================================================
-# EMAIL 3: TENTATIVE OBLIGATION SUMMARY
+# EMAIL 3: TENTATIVE OBLIGATION SUMMARY — now built & sent by NARRATION.py
 # ==================================================
+# Per explicit request: forget the old Product=='-' TOTAL-row summary-table
+# email entirely and send the SAME dashboard-style email NARRATION.py (D:\
+# CLAUDE\NARRATION.py) already sends elsewhere — CASH / FUTURE / MCX PAYIN-
+# PAYOUT narration table rendered as an inline PNG dashboard + a formatted
+# .xlsx attachment. NARRATION.py is loaded as a module (not re-implemented
+# here) so this really is "the same email", not a lookalike -- its own
+# build_sheet_df/compute_narration/write_excel/write_dashboard/send_email
+# are called directly, fed with LAS4's own already-loaded main.csv
+# (df_main_raw, read at STEP 5.2 above) instead of NARRATION.py's own
+# BASE_DIR file-discovery. Subject/body/layout are untouched — only WHO it's
+# sent to is overridden, to LAS4's existing Tentative Obligation recipients
+# (SA_MAIL_TENTATIVE_TO/CC), same as the email it replaces.
 
-print("📊 Preparing Tentative Obligation Summary")
+print("📊 Preparing Tentative Obligation Summary (via NARRATION.py)")
 
-tentative_file = os.path.join(
-    BASE_FOLDER,
-    f"Tentative Obligation File_{EMAIL_DATE}.xlsx"
-)
+def _las_load_narration_module():
+    import importlib.util
+    _path = _SAENV("SA_NARRATION_SCRIPT", r"D:\CLAUDE\NARRATION.py")
+    _spec = importlib.util.spec_from_file_location("sa_narration_module", _path)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    return _mod
 
-pretty_names = {
-    "DayNetPremium": "Day Net Premium",
-    "EquityAmount": "Equity Amount",
-    "FuturesMTM": "Future MTM",
-}
+try:
+    _narr = _las_load_narration_module()
 
-reverse_sign_sheets = {"DayNetPremium", "EquityAmount"}
+    # Same Product=='-' / non-zero filter NARRATION.py's own build_sheet_df
+    # applies — df_main_raw already has ClientID/Product/FuturesMTM/
+    # MCXFuturesMTM/DayNetPremium/MCXDayNetPremium/EquityAmount (confirmed
+    # against a real main.csv header from this folder).
+    _narr_sheets = {name: _narr.build_sheet_df(df_main_raw, col) for name, col in _narr.DATA_SHEETS}
+    _narr_rows = _narr.compute_narration(_narr_sheets)
+    _narr_stamp = datetime.now().strftime("%d-%b-%Y %H:%M")
+    _narr_xlsx = os.path.join(BASE_FOLDER, f"PayIn_PayOut_Summary_{EMAIL_DATE}.xlsx")
+    _narr_png = os.path.join(BASE_FOLDER, f"PayIn_PayOut_Summary_{EMAIL_DATE}.png")
+    _narr.write_excel(_narr_xlsx, _narr_rows, _narr_sheets)
+    _narr.write_dashboard(_narr_png, _narr_rows, _narr_stamp)
 
-def format_indian(n: int) -> str:
-    s = str(int(round(abs(n))))
-    if len(s) <= 3:
-        out = s
-    else:
-        last3 = s[-3:]
-        rest = s[:-3]
-        parts = []
-        while rest:
-            parts.insert(0, rest[-2:])
-            rest = rest[:-2]
-        out = ",".join(parts + [last3])
-    return f"{'-' if n < 0 else ''}{out}/-"
-
-summary_rows = []
-
-if os.path.exists(tentative_file):
-    xls = pd.ExcelFile(tentative_file)
-    for sheet in xls.sheet_names:
-        df = xls.parse(sheet, dtype=str)
-        df.columns = df.columns.str.strip()
-
-        if "ClientID" not in df.columns:
-            continue
-
-        value_col = [c for c in df.columns if c != "ClientID"]
-        if not value_col:
-            continue
-
-        total_row = df[
-            df["ClientID"].astype(str).str.upper() == "TOTAL"
-        ]
-
-        if total_row.empty:
-            continue
-
-        val = pd.to_numeric(
-            total_row.iloc[-1][value_col[0]], errors="coerce"
-        )
-        val = 0 if pd.isna(val) else val
-
-        if sheet in reverse_sign_sheets:
-            val = -val
-
-        summary_rows.append(
-            (pretty_names.get(sheet, sheet), format_indian(int(val)))
-        )
-    xls.close()  # release the OS file handle immediately (Windows keeps files
-                 # locked until closed, which was causing "file locked" cleanup
-                 # failures later in the run for files opened this way)
-
-summary_html = """
-<table border="1" cellspacing="0" cellpadding="5"
-style="border-collapse:collapse; text-align:center;
-font-family:Arial; font-size:12px;">
-<tr style="background-color:#ADD8E6; font-weight:bold;">
-<th>Narration</th><th>Net Amount</th>
-</tr>
-"""
-for n, v in summary_rows:
-    summary_html += f"<tr><td>{n}</td><td>{v}</td></tr>"
-summary_html += "</table>"
-
-# Tentative Obligation File email — the email itself still goes out (CEO
-# flagged that recipients need this), but the attachment is removed: it was
-# going out unpassworded with every client's data, which is the actual
-# problem. tentative_file is still built above and left on disk, just not
-# attached to this email anymore.
-send_email_infinite_retry(
-    subject=f"Tentative Obligation File-{EMAIL_DATE}",
-    body=f"""
-<p>Dear Sir,</p>
-<p>Please find the Tentative Obligation File Summary below:-</p>
-{summary_html}
-<p>Best regards,<br>
-Sandeep Kumar<br>
-011-42111079</p>
-""",
-    to_recipients=_SALIST("SA_MAIL_TENTATIVE_TO", ["kartavya.dhillon@mastertrust.co.in"]),
-    cc_recipients=_SALIST("SA_MAIL_TENTATIVE_CC", ["kartavya.dhillon@mastertrust.co.in"]),
-    attachments=[],
-    is_html=True
-)
+    # Recipients stay LAS4's own (not NARRATION.py's hardcoded director list) —
+    # override its module-level TO/CC before calling its own send_email(),
+    # so subject/HTML layout/retry logic are still 100% NARRATION.py's code.
+    # NARRATION.py's send_email() now ALSO password-protects the xlsx before
+    # attaching (same "Scenario@<DDMMYYYY>" scheme every other LAS4 file
+    # uses) and retries forever on SMTP failure instead of giving up — both
+    # inherited here for free since this calls straight into that function.
+    _narr.TO_EMAILS = _SALIST("SA_MAIL_TENTATIVE_TO", ["kartavya.dhillon@mastertrust.co.in"])
+    _narr.CC_EMAILS = _SALIST("SA_MAIL_TENTATIVE_CC", ["kartavya.dhillon@mastertrust.co.in"])
+    _narr.send_email(_narr_png, _narr_xlsx, _narr_stamp)
+    print("✅ NARRATION-style Tentative Obligation email sent (password-protected attachment)")
+except Exception as _e:
+    print(f"❌ NARRATION.py-based Tentative Obligation email FAILED: {_e}")
+    raise
 
 print("🎉 ALL EMAILS SENT SUCCESSFULLY")
 
