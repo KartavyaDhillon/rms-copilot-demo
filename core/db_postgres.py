@@ -411,6 +411,53 @@ def save_run_file(pipeline: str, kind: str, filename: str, content: bytes,
         conn.close()
 
 
+def fix_cli_run_dates() -> dict:
+    """One-off repair: every CLI row archived via backfill_date_to_db() /
+    the live backup step's own save_run_file() call BEFORE run_date was
+    passed explicitly got stamped with date.today() (save_run_file()'s
+    default) regardless of which date the file actually belonged to — the
+    real date only ever lived in `tag` ("DD-MM-YYYY" or "DD-MM-YYYY/Slot").
+    This is why backfilled historical files were showing up as "today" in
+    the Client Data lookup, Get Files' date range, and the merged-download
+    Date column.
+
+    Fixes it IN PLACE (UPDATE, not a new row — unlike re-running the
+    backfill, which would just add duplicate correctly-dated rows on top of
+    the stale ones) by re-deriving run_date from each row's own tag and
+    correcting any mismatch. Safe to run more than once — a row whose
+    run_date already matches its tag is left untouched."""
+    import re as _re
+    conn = _conn()
+    checked = fixed = skipped_unparseable = 0
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, tag, run_date FROM run_files WHERE pipeline = %s", ("cli",))
+            rows = cur.fetchall()
+            for file_id, tag, run_date_val in rows:
+                checked += 1
+                m = _re.match(r"^(\d{2})-(\d{2})-(\d{4})", tag or "")
+                if not m:
+                    skipped_unparseable += 1
+                    continue
+                dd, mm, yyyy = m.groups()
+                try:
+                    correct = date(int(yyyy), int(mm), int(dd))
+                except Exception:
+                    skipped_unparseable += 1
+                    continue
+                if run_date_val != correct:
+                    cur.execute("UPDATE run_files SET run_date = %s WHERE id = %s", (correct, file_id))
+                    fixed += 1
+        conn.commit()
+        return {"ok": True, "checked": checked, "fixed": fixed,
+                "skipped_unparseable": skipped_unparseable}
+    except Exception as e:
+        conn.rollback()
+        return {"ok": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
 def list_run_files(pipeline: str = None, tag: str = None, run_date: str = None,
                    kind: str = None, days: int = 30,
                    from_date: str = None, to_date: str = None) -> list:

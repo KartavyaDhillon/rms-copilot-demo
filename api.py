@@ -2162,6 +2162,21 @@ def px_backfill_db(pipe: str = "", date: str = "", run: int = 0, subfolder: str 
         return {"ok": False, "error": str(e)}
 
 
+@app.post("/px/backfill-fix-cli-dates")
+def px_backfill_fix_cli_dates():
+    """One-off repair for CLI backfilled rows that got stamped with
+    date.today() in Postgres's run_date column instead of their real date
+    (see core.db_postgres.fix_cli_run_dates() for the full story — this is
+    why backfilled history was showing up as "today" in the Client Data
+    lookup, Get Files, and the merged-download Date column). Re-derives the
+    correct date from each row's own `tag` and fixes it in place. Safe to
+    call more than once."""
+    if os.getenv("USE_POSTGRES", "false").strip().lower() != "true":
+        return {"ok": False, "error": "USE_POSTGRES is not enabled on this machine"}
+    from core.db_postgres import fix_cli_run_dates
+    return fix_cli_run_dates()
+
+
 @app.post("/sa/backfill-db")
 def sa_backfill_db(date: str = "", run: int = 0, password: str = ""):
     """Push an ALREADY-on-disk Short Allocation run folder into PostgreSQL —

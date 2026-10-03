@@ -2624,7 +2624,17 @@ def pb_backup_download_merged(pipe, items, client_codes):
         # its own (some exports carry their own date/timestamp column) —
         # don't stack a second one on top.
         if not _pb_col(df, "Date"):
-            df.insert(0, "Date", date)
+            # Written as ="DD-MM-YYYY" (an Excel formula producing literal
+            # text) rather than the bare string — a plain "03-10-2026" gets
+            # silently auto-converted by Excel into a real date value AND
+            # reformatted per the user's locale, but ONLY on rows where the
+            # day number is <=12 (so it could plausibly be misread as a
+            # month, e.g. "03" in "03-10-2026"); a row like "15-09-2026"
+            # can't be misread that way and is left as plain text — hence
+            # the same column showing two different formats depending on
+            # the date. Wrapping in ="..." forces every row to render
+            # identically, always as the original DD-MM-YYYY text.
+            df.insert(0, "Date", f'="{date}"' if date else date)
         frames.append(df)
     if not any_recognized:
         return None   # not a filterable file type at all — caller falls back

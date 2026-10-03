@@ -78,11 +78,22 @@ def _cli_time_slot(dt=None):
     return "Evening"
 
 
-def _archive_to_db(tag, kind, filepath, max_retries=3, retry_delay=2):
+def _archive_to_db(tag, kind, filepath, max_retries=3, retry_delay=2, run_date=None):
     """Copy a file's bytes into PostgreSQL (or SQLite fallback) with retry.
     Never raises. Same dual-path pattern already used inline further down in
     this file's normal backup step — pulled out so backfill_date_to_db() can
-    reuse it without duplicating the USE_POSTGRES/save_run_file dance."""
+    reuse it without duplicating the USE_POSTGRES/save_run_file dance.
+
+    `run_date` — ISO 'YYYY-MM-DD' string for the Postgres run_files.run_date
+    column. IMPORTANT: db_postgres.save_run_file() defaults this to
+    date.today() when not given — fine for a live same-day archive (the
+    caller further down this file relies on exactly that default), but a
+    backfilled HISTORICAL file must pass its real date explicitly, or every
+    backfilled file silently gets today's date in run_date (the actual date
+    only lives in `tag`) — which is exactly what used to make backfilled
+    data show up as "today" everywhere that filters/displays by run_date
+    (Client Data lookup, Get Files' date range, the merged-download Date
+    column). backfill_date_to_db() below always passes this now."""
     if not filepath or not os.path.exists(filepath):
         return False
     fname = os.path.basename(filepath)
@@ -97,8 +108,8 @@ def _archive_to_db(tag, kind, filepath, max_retries=3, retry_delay=2):
         return False
     for attempt in range(1, max_retries + 1):
         try:
-            _sf("cli", kind, fname, content, tag=tag)
-            print(f"[cli_upload] archived {fname} ({len(content):,} bytes) -> DB")
+            _sf("cli", kind, fname, content, tag=tag, run_date=run_date)
+            print(f"[cli_upload] archived {fname} ({len(content):,} bytes) -> DB (run_date={run_date})")
             return True
         except Exception as e:
             if attempt < max_retries:
@@ -127,6 +138,14 @@ def backfill_date_to_db(date_str):
     if not os.path.isdir(date_folder):
         return {"ok": False, "error": f"Folder not found: {date_folder}"}
     archived, skipped, tags = [], [], []
+    # The ACTUAL date these files belong to, as ISO — see _archive_to_db's
+    # docstring for why this must be passed explicitly rather than left to
+    # default to today.
+    try:
+        _dd, _mm, _yyyy = date_str.split("-")
+        iso_date = f"{_yyyy}-{_mm}-{_dd}"
+    except Exception:
+        iso_date = None
 
     def _slot_for_subdir(name):
         """Maps a subfolder name to Morning/Afternoon/Evening for the tag —
@@ -182,7 +201,7 @@ def backfill_date_to_db(date_str):
                 fpath = os.path.join(slot_path, fname)
                 if not os.path.isfile(fpath):
                     continue
-                if _archive_to_db(tag, "backup", fpath):
+                if _archive_to_db(tag, "backup", fpath, run_date=iso_date):
                     archived.append(f"{dirname}/{fname}")
                 else:
                     skipped.append(f"{dirname}/{fname}")
@@ -192,7 +211,7 @@ def backfill_date_to_db(date_str):
             fpath = os.path.join(date_folder, fname)
             if not os.path.isfile(fpath):
                 continue
-            if _archive_to_db(date_str, "backup", fpath):
+            if _archive_to_db(date_str, "backup", fpath, run_date=iso_date):
                 archived.append(fname)
             else:
                 skipped.append(fname)
