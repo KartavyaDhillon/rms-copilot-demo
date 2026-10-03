@@ -169,6 +169,7 @@ PIPELINES = {
                 ["CO Client Collaterals", "CO_ClientLevelCollaterals_*.csv,CO_ClientLevelCollaterals_*.txt", "CO_ClientLevelCollaterals_<date>.csv"],
                 ["Client Net Effective Deposits", "ClientNetEffectiveDeposits_*.csv", "ClientNetEffectiveDeposits_<date>.csv"],
                 ["MCX Web Allocation/Deallocation", "MCX_WebAllocationDeallocation.csv", "MCX_WebAllocationDeallocation.csv"],
+                ["MCX Deposit (RSK383 export, xlsx)", "*.xlsx", "<random>-<YYYYMMDDHHMMSS>.xlsx"],
                 ["RISK_REPORT", "RISK_REPORT_*.csv", "RISK_REPORT_<date>.csv"],
                 ["Kambala", "Kambala_Omny_Depo_Adhoc_All_level.txt_*.txt", "Kambala_Omny_Depo_Adhoc_All_level.txt_<DDMMYYYY>.txt"],
             ]},
