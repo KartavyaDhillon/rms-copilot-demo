@@ -6007,7 +6007,7 @@ async function pxBackupFind(){
       const border=fi<dFiles.length-1?'border-bottom:1px solid rgba(34,41,50,.4)':'';
       const pEsc=(f.path||'').replace(/"/g,'&quot;');
       rows+=`<div class="pxBkRow" style="display:flex;align-items:center;gap:10px;padding:9px 12px;${border};transition:background .1s" onmouseenter="this.style.background='rgba(255,255,255,.03)'" onmouseleave="this.style.background=''">
-  <input type="checkbox" class="pxBkChk" data-path="${pEsc}" data-fn="${(f.name||'file').replace(/"/g,'&quot;')}" style="flex-shrink:0;accent-color:var(--teal)">
+  <input type="checkbox" class="pxBkChk" data-path="${pEsc}" data-fn="${(f.name||'file').replace(/"/g,'&quot;')}" data-date="${f.date||''}" style="flex-shrink:0;accent-color:var(--teal)">
   <span style="display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;background:color-mix(in srgb,${m.col} 12%,transparent);color:${m.col};border:1px solid color-mix(in srgb,${m.col} 30%,transparent)">${m.icon} ${m.label}</span>
   <div style="flex:1;min-width:0">
     <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${f.name||''}">${f.name||'—'}</div>
@@ -6034,6 +6034,14 @@ async function pxBkDownloadSelected(){
   const chks=[...document.querySelectorAll('.pxBkChk:checked')];
   const msg=document.getElementById('pxBkDlMsg');
   if(!chks.length){ if(msg) msg.innerHTML='<span style="color:var(--amber)">Tick at least one file first.</span>'; return; }
+  const clientCode=(window._pxBkClientCode||'').trim();
+  // A client-code filter is set — don't hand back one file per date per
+  // type (5 types × a 30-day range used to mean up to 150 downloads).
+  // Group the checked files by TYPE (same label used for the colored chip
+  // next to each row) and merge each group's matching rows into ONE file
+  // per type, with a Date column so you can still tell which date each row
+  // came from — see /px/backup/download-merged.
+  if(clientCode){ return pxBkDownloadMerged(pipe, chks, clientCode, msg); }
   const items=chks.map(c=>({path:c.dataset.path, fn:c.dataset.fn||'file'}));
   if(msg) msg.innerHTML='<span style="color:var(--muted)">Starting download…</span>';
   // File System Access API (Chrome/Edge) — save into a chosen LOCAL folder
@@ -6092,6 +6100,54 @@ async function pxBkDownloadSelected(){
     await new Promise(r=>setTimeout(r,350));
   }
   _bkDownloadResultModal(ok2, fail2, 'Check your browser\'s Downloads folder.', skipped2);
+}
+async function pxBkDownloadMerged(pipe, chks, clientCode, msg){
+  // Group the checked checkboxes by file TYPE (same label as the colored
+  // chip shown next to each row) — one POST to /px/backup/download-merged
+  // per group, one saved file per group, regardless of how many dates are
+  // in that group.
+  const groups={};
+  chks.forEach(c=>{
+    const label=_pxBkRowMeta(c.dataset.fn||'').label;
+    (groups[label]=groups[label]||[]).push({path:c.dataset.path, date:c.dataset.date||'', name:c.dataset.fn||'file'});
+  });
+  const labels=Object.keys(groups);
+  if(msg) msg.innerHTML=`<span style="color:var(--muted)">Merging ${labels.length} file type(s) across the selected dates…</span>`;
+  const dirHandle = ('showDirectoryPicker' in window) ? await (async()=>{
+    try{ return await window.showDirectoryPicker({mode:'readwrite'}); }
+    catch(e){ return null; }
+  })() : null;
+  let ok=0, fail=0, skipped=0;
+  for(const label of labels){
+    try{
+      const r=await fetch(API+'/px/backup/download-merged',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({pipe, client_code:clientCode, items:groups[label]})});
+      const ct=r.headers.get('content-type')||'';
+      if(!r.ok || ct.includes('application/json')){
+        const j=await r.json().catch(()=>null);
+        if(j && j.error==='no_data'){ skipped++; continue; }
+        fail++; continue;
+      }
+      const blob=await r.blob();
+      let fn='merged.csv';
+      const cd=r.headers.get('content-disposition')||'';
+      const m=cd.match(/filename="?([^"]+)"?/);
+      if(m) fn=m[1];
+      if(dirHandle){
+        const fh=await dirHandle.getFileHandle(fn,{create:true});
+        const w=await fh.createWritable(); await w.write(blob); await w.close();
+      } else {
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement('a');
+        a.href=url; a.download=fn;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        await new Promise(res=>setTimeout(res,300));
+      }
+      ok++;
+    }catch(e){ fail++; }
+  }
+  _bkDownloadResultModal(ok, fail, dirHandle?'Saved to the folder you chose — one file per type, all matching dates merged in with a Date column.':'Check your browser\'s Downloads folder — one file per type, all matching dates merged in with a Date column.', skipped);
 }
 // ── Run-filter chip helpers ─────────────────────────────────────────────────
 function _pxRunCount(pipe){ return pipe==='ms15'?9:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=9 runs/day

@@ -2282,6 +2282,39 @@ def px_backup_download_filtered(pipe: str = "", path: str = "", client_code: str
     return _PX_FileResp2(ap, filename=_sa_os.path.basename(ap),
                          media_type="application/octet-stream")
 
+@app.post("/px/backup/download-merged")
+async def px_backup_download_merged(request: Request):
+    """Same filtering as /px/backup/download-filtered, but across many files
+    at once (typically one file TYPE's files across a whole date range),
+    stacked into ONE output with a 'Date' column inserted — so filtering 5
+    exchange file types across a 30-day range returns 5 files (one per
+    type), not up to 150 (one per type per date).
+
+    Body: {"pipe": "cli", "client_code": "SN120",
+           "items": [{"path": "...", "date": "03-09-2026", "name": "..."}, ...]}
+    `items` should all be the SAME file type — the "Get files" tab groups by
+    type client-side (it already computes the type label for display) and
+    calls this once per group."""
+    from core.pipeline_box import pb_backup_download_merged as _pbbdm
+    from fastapi.responses import Response as _PX_Resp3
+    body = await request.json()
+    pipe = (body.get("pipe") or "").strip()
+    items = body.get("items") or []
+    client_code = (body.get("client_code") or "").strip()
+    codes = [c.strip() for c in client_code.replace(";", ",").split(",") if c.strip()]
+    if not codes:
+        return {"error": "client_code required"}
+    if not items:
+        return {"error": "items required"}
+    got = _pbbdm(pipe, items, codes)
+    if not got:
+        return {"error": "no_filterable_column", "message": "This file type has no recognizable account column."}
+    fname, content, media_type = got
+    if content is None:
+        return {"error": "no_data", "message": f"No rows for {client_code} across any of these files"}
+    return _PX_Resp3(content=content, media_type=media_type,
+                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
 @app.get("/px/client-lookup")
 def px_client_lookup(pipe: str = "", client_codes: str = "",
                      from_date: str = "", to_date: str = "",

@@ -2484,12 +2484,14 @@ def pb_backup_file_filtered(pipe, path, client_codes):
     if not (is_csv or is_xlsx):
         return None
     import io
+    col = None
     try:
         if is_csv:
             try:
                 df = pd.read_csv(io.BytesIO(content), dtype=str)
             except Exception:
                 df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="latin-1")
+            col = _pb_col(df, *_PB_ACCOUNT_COL_CANDIDATES)
         else:
             tmp_path = None
             try:
@@ -2498,7 +2500,23 @@ def pb_backup_file_filtered(pipe, path, client_codes):
                     tf.write(content)
                     tmp_path = tf.name
                 df, err = _pb_read_xlsx_pandas(tmp_path)
-                if err or df is None:
+                col = _pb_col(df, *_PB_ACCOUNT_COL_CANDIDATES) if (not err and df is not None) else None
+                if not col:
+                    # Row-0 read either failed or had no recognizable account
+                    # column — the real header may not be row 0 at all (e.g.
+                    # the MCX RSK383 export, "Client Code" buried a few rows
+                    # down — same issue _pb_read_xlsx_header_scan already
+                    # works around for the Client Data lookup, just never
+                    # applied here). Scan the first several rows for one
+                    # that contains a recognizable account column.
+                    for cand in _PB_ACCOUNT_COL_CANDIDATES:
+                        hdf, herr = _pb_read_xlsx_header_scan(tmp_path, [cand])
+                        if not herr and hdf is not None:
+                            hcol = _pb_col(hdf, *_PB_ACCOUNT_COL_CANDIDATES)
+                            if hcol:
+                                df, col = hdf, hcol
+                                break
+                if not col or df is None:
                     return None
             finally:
                 if tmp_path:
@@ -2506,7 +2524,6 @@ def pb_backup_file_filtered(pipe, path, client_codes):
                     except Exception: pass
     except Exception:
         return None
-    col = _pb_col(df, *_PB_ACCOUNT_COL_CANDIDATES)
     if not col:
         return None
     mask = df[col].astype(str).str.strip().str.upper().isin(codes)
@@ -2521,6 +2538,98 @@ def pb_backup_file_filtered(pipe, path, client_codes):
     filtered.to_excel(bio, index=False)
     return (fname, bio.getvalue(),
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+def _pb_filtered_bytes_to_df(fname, content, media_type):
+    """Turn whatever pb_backup_file_filtered() handed back (csv bytes, xlsx
+    bytes, or the text/plain CLI_PRUDENTIAL_LIMIT.txt/Kambala special
+    formats) into a plain DataFrame of strings, so rows from many different
+    dates' files can be concatenated — used by pb_backup_download_merged()
+    only. Returns None on anything unparseable rather than raising."""
+    import pandas as pd, io
+    try:
+        if media_type == "text/csv":
+            try:
+                return pd.read_csv(io.BytesIO(content), dtype=str)
+            except Exception:
+                return pd.read_csv(io.BytesIO(content), dtype=str, encoding="latin-1")
+        if media_type and media_type.startswith("application/vnd.openxmlformats"):
+            return pd.read_excel(io.BytesIO(content), dtype=str)
+        # text/plain — one of pb_backup_file_filtered()'s two special formats:
+        # CLI_PRUDENTIAL_LIMIT.txt is comma-delimited ("AccountID,Sum" rows
+        # under a single header line), Kambala's export is '|'-delimited.
+        text = content.decode("utf-8", errors="replace")
+        lines = [ln for ln in text.splitlines() if ln != ""]
+        if not lines:
+            return None
+        delim = "|" if (fname or "").lower().startswith("kambala") else ","
+        header = lines[0].split(delim)
+        rows = []
+        for ln in lines[1:]:
+            parts = ln.split(delim)
+            if len(parts) < len(header):
+                parts = parts + [""] * (len(header) - len(parts))
+            elif len(parts) > len(header):
+                parts = parts[:len(header)]
+            rows.append(parts)
+        return pd.DataFrame(rows, columns=header)
+    except Exception:
+        return None
+
+
+def pb_backup_download_merged(pipe, items, client_codes):
+    """Like pb_backup_file_filtered(), but across MANY files (typically the
+    same file TYPE across a whole date range) stacked into ONE output, with
+    a 'Date' column inserted as the first column so you can still tell which
+    date each row came from — built for the "Get files" tab's client-code
+    filter: filtering 5 exchange file types across a 30-day range used to
+    hand back up to 5×30 separate per-date files; this hands back 5, one per
+    type, each with every matching date's rows stacked together.
+
+    `items` — list of {"path": ..., "date": "DD-MM-YYYY", "name": ...} (as
+    returned by pb_list_backups / /px/backup/list) — all assumed to be the
+    SAME file type; the caller (frontend) does the grouping by type since it
+    already computes the type label for display.
+
+    Returns (filename, content_bytes, media_type) — content_bytes is None if
+    every item in the group had zero matching rows for the given code(s)
+    (nothing to merge), same "no_data" convention as pb_backup_file_filtered.
+    Returns None if `items` is empty or no item could be parsed at all."""
+    import pandas as pd
+    import re as _re
+    codes = [c.strip() for c in (client_codes or []) if c and c.strip()]
+    if not codes or not items:
+        return None
+    frames = []
+    out_name = None
+    any_recognized = False
+    for it in items:
+        path = it.get("path", "")
+        date = it.get("date", "")
+        if not path:
+            continue
+        got = pb_backup_file_filtered(pipe, path, codes)
+        if not got:
+            continue
+        fname, content, media_type = got
+        any_recognized = True
+        if out_name is None:
+            out_name = fname
+        if content is None:
+            continue   # this date's file had no rows for the code(s) — skip
+        df = _pb_filtered_bytes_to_df(fname, content, media_type)
+        if df is None or df.empty:
+            continue
+        df.insert(0, "Date", date)
+        frames.append(df)
+    if not any_recognized:
+        return None   # not a filterable file type at all — caller falls back
+    if not frames:
+        return (out_name or "merged.csv", None, "text/csv")
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+    base = _re.sub(r"\.(csv|txt|xlsx)$", "", out_name or "merged", flags=_re.I)
+    out_bytes = merged.to_csv(index=False).encode("utf-8")
+    return (f"{base}_MERGED.csv", out_bytes, "text/csv")
 
 
 # ── client data lookup across backup runs (Polars-powered) ───────────────────
@@ -2791,9 +2900,15 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                     and not any(fn.lower().startswith(p) for p in KNOWN_PREFIXES)]
         for fn, fpp in mcx_cand:
             try:
+                # Real header is just "Margin Limit" in some exports, not
+                # "Client Margin Limit" — try both (see pb_cli_client_lookup's
+                # same fix, confirmed against the actual file).
                 tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Client Margin Limit"])
+                if err or tdf is None:
+                    tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Margin Limit"])
                 if err or tdf is None: continue
-                cc = _pb_col(tdf, "Client Code"); ml = _pb_col(tdf, "Client Margin Limit")
+                cc = _pb_col(tdf, "Client Code")
+                ml = _pb_col(tdf, "Client Margin Limit", "Margin Limit")
                 if not cc or not ml: continue
                 cs = tdf[cc].astype(str).str.strip().str.upper()
                 for code in codes:
@@ -3148,9 +3263,17 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
                     and not any(fn.lower().startswith(p) for p in KNOWN_PREFIXES)]
         for fn, fpp in mcx_cand:
             try:
+                # The real export's margin-limit header is just "Margin
+                # Limit" (confirmed from the actual file), not "Client
+                # Margin Limit" as some other pipelines' copy of this file
+                # has it — try both, "Client Margin Limit" first since
+                # that's what margin_shortage_15min.py's own reader expects.
                 tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Client Margin Limit"])
+                if err or tdf is None:
+                    tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Margin Limit"])
                 if err or tdf is None: continue
-                cc = _pb_col(tdf, "Client Code"); ml = _pb_col(tdf, "Client Margin Limit")
+                cc = _pb_col(tdf, "Client Code")
+                ml = _pb_col(tdf, "Client Margin Limit", "Margin Limit")
                 # Bifurcation: the same RSK383 export also carries "Margin
                 # Utilization" alongside "Client Margin Limit" (see
                 # margin_shortage_15min.py's find_mcx_file()) — included when
