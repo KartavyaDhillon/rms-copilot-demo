@@ -2153,6 +2153,30 @@ def _pb_backup_roots(pipe):
     base = os.getenv(p.get("backup_root_env", ""), p.get("upload_default", ""))
     return [os.path.join(base, p.get("backup_subdir", "BACKUPFILES AUTOMATED"))]
 
+def _pb_cli_slot_from_dirname(name):
+    """CLI-only: classify an HH-MM-SS exact-run-time folder name (e.g.
+    "08-36-11", "15-55-53", "20-23-14" — some machines back up by timestamp
+    instead of a Morning/Afternoon/Evening word) into the real CLI run
+    window it actually falls in — Morning 07:00-10:00, Afternoon
+    15:30-18:00, Evening 19:00-22:00, 24-hour clock — falling back to a
+    broad <12/<18/else half-of-day bucket for a stray time outside all
+    three (one-off manual run). Returns None if name isn't HH-MM-SS at all.
+    Mirrors cli_upload.py's backfill_date_to_db()._slot_for_subdir() — kept
+    in sync by hand since one lives in core/pipelines (backfill path) and
+    this one lives in core/pipeline_box.py (disk-scan/list path)."""
+    m = re.fullmatch(r"(\d{2})-(\d{2})-\d{2}", name)
+    if not m:
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2))
+    mins = hour * 60 + minute
+    if 7 * 60 <= mins <= 10 * 60: return "Morning"
+    if 15 * 60 + 30 <= mins <= 18 * 60: return "Afternoon"
+    if 19 * 60 <= mins <= 22 * 60: return "Evening"
+    if hour < 12: return "Morning"
+    if hour < 18: return "Afternoon"
+    return "Evening"
+
+
 def _pb_parse_date_part(part):
     """Recognize a date encoded in one path segment of a backup folder tree.
     THREE genuinely different conventions are in use, confirmed against what
@@ -2204,8 +2228,9 @@ def _pb_db_pipeline_names(pipe):
             seen.add(n); out.append(n)
     return out
 
-def pb_list_backups(pipe, from_date="", to_date="", types=None):
+def pb_list_backups(pipe, from_date="", to_date="", types=None, slots=None):
     globs = [g.strip().lower() for g in (types or []) if g and g.strip()]
+    slot_filter = {s for s in (slots or []) if s in ("Morning", "Afternoon", "Evening")}
     def pd(s):
         try: return datetime.datetime.strptime(s, "%Y-%m-%d").date()
         except Exception: return None
@@ -2238,6 +2263,8 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None):
                     crun = p
                 elif p in ("Morning", "Afternoon", "Evening"):
                     crun = p
+                elif pipe == "cli":
+                    crun = _pb_cli_slot_from_dirname(p) or crun
             for fn in files:
                 if globs and not any(_pb_fn.fnmatch(fn.lower(), g) for g in globs): continue
                 fpp = os.path.join(dp, fn)
@@ -2296,6 +2323,8 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None):
     except Exception as e:
         print(f"[pb_list_backups] Postgres lookup skipped (non-fatal): {e}")
 
+    if slot_filter:
+        res = [r for r in res if r.get("run") in slot_filter]
     res.sort(key=lambda x: (x["date"], x["name"]))
     return res[:3000]
 
@@ -2356,15 +2385,32 @@ def pb_backup_file_filtered(pipe, path, client_codes):
     Returns (filename, content_bytes, media_type) on success, or None if the
     file has no recognizable account column (or isn't one of the two special
     text formats) — caller falls back to serving the original, unfiltered
-    file rather than failing outright."""
+    file rather than failing outright.
+
+    Handles BOTH a real on-disk path AND a 'db:<pipeline>:<id>' Postgres
+    reference (same convention as pb_backup_file/pb_backup_db_file) — a file
+    backfilled from another machine may have no local disk copy at all, so
+    filtering has to work from the stored bytes too, not just from disk."""
     import pandas as pd
-    ap = pb_backup_file(pipe, path)
-    if not ap:
-        return None
+    content = None
+    if str(path or "").startswith("db:"):
+        got = pb_backup_db_file(path)
+        if not got:
+            return None
+        fname, content = got
+    else:
+        ap = pb_backup_file(pipe, path)
+        if not ap:
+            return None
+        fname = os.path.basename(ap)
+        try:
+            with open(ap, "rb") as f:
+                content = f.read()
+        except Exception:
+            return None
     codes = {c.strip().upper() for c in (client_codes or []) if c and c.strip()}
     if not codes:
         return None
-    fname = os.path.basename(ap)
     low = fname.lower()
 
     # ── CLI_PRUDENTIAL_LIMIT.txt — "ClientPrudentialLimit" header, then
@@ -2372,7 +2418,7 @@ def pb_backup_file_filtered(pipe, path, client_codes):
     # ALLOCATION_CLI_NMASS_NCDEX.py's run_processing()). ──────────────────────
     if low == "cli_prudential_limit.txt":
         try:
-            lines = open(ap, encoding="utf-8").read().splitlines()
+            lines = content.decode("utf-8", errors="replace").splitlines()
         except Exception:
             return None
         if not lines:
@@ -2386,7 +2432,7 @@ def pb_backup_file_filtered(pipe, path, client_codes):
     # row 0 is a header (kept as-is), column 0 is AccountID. ──────────────────
     if low.startswith("kambala_omny_depo_adhoc_all_level.txt_"):
         try:
-            lines = open(ap, encoding="utf-8", errors="ignore").read().splitlines()
+            lines = content.decode("utf-8", errors="ignore").splitlines()
         except Exception:
             return None
         if not lines:
@@ -2396,22 +2442,36 @@ def pb_backup_file_filtered(pipe, path, client_codes):
         out = "\n".join([header] + kept) + "\n"
         return (fname, out.encode("utf-8"), "text/plain")
 
-    # ── Everything else: CSV or XLSX with a real header row and SOME
-    # account-ish column — try each known name in turn. ───────────────────────
-    is_csv = low.endswith(".csv")
+    # ── Everything else: CSV / plain-text-with-a-header (CM/FO/CO
+    # *ClientLevelCollaterals*.txt are comma-delimited exports with a real
+    # header row — same shape as .csv, just a .txt extension — so .txt is
+    # treated the same as .csv here) or XLSX, with SOME account-ish column —
+    # try each known name in turn. ─────────────────────────────────────────
+    is_csv = low.endswith(".csv") or low.endswith(".txt")
     is_xlsx = low.endswith(".xlsx")
     if not (is_csv or is_xlsx):
         return None
+    import io
     try:
         if is_csv:
             try:
-                df = pd.read_csv(ap, dtype=str)
+                df = pd.read_csv(io.BytesIO(content), dtype=str)
             except Exception:
-                df = pd.read_csv(ap, dtype=str, encoding="latin-1")
+                df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="latin-1")
         else:
-            df, err = _pb_read_xlsx_pandas(ap)
-            if err or df is None:
-                return None
+            tmp_path = None
+            try:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tf:
+                    tf.write(content)
+                    tmp_path = tf.name
+                df, err = _pb_read_xlsx_pandas(tmp_path)
+                if err or df is None:
+                    return None
+            finally:
+                if tmp_path:
+                    try: os.remove(tmp_path)
+                    except Exception: pass
     except Exception:
         return None
     col = _pb_col(df, *_PB_ACCOUNT_COL_CANDIDATES)
@@ -2422,7 +2482,6 @@ def pb_backup_file_filtered(pipe, path, client_codes):
     if is_csv:
         buf_s = filtered.to_csv(index=False)
         return (fname, buf_s.encode("utf-8"), "text/csv")
-    import io
     bio = io.BytesIO()
     filtered.to_excel(bio, index=False)
     return (fname, bio.getvalue(),

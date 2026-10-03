@@ -5939,6 +5939,17 @@ ${sectionHtml}
   <button onclick="_pxBkClearAll()" style="font-size:11px;font-weight:600;padding:4px 14px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer" onmouseenter="this.style.color='var(--red)';this.style.borderColor='var(--red)'" onmouseleave="this.style.color='var(--muted)';this.style.borderColor='var(--line)'">✕ Clear all filters</button>
 </div>
 </div>
+${pipe==='cli'?(()=>{
+  if(!window._pxCliSlotSel) window._pxCliSlotSel=new Set(['Morning','Afternoon','Evening']);
+  const sel=window._pxCliSlotSel;
+  const _lbl={Morning:'🌅 Morning (07:00-10:00)',Afternoon:'🌤️ Afternoon (15:30-18:00)',Evening:'🌙 Evening (19:00-22:00)'};
+  let chips='';
+  ['Morning','Afternoon','Evening'].forEach(s=>{
+    const on=sel.has(s);
+    chips+=`<button id="pxCliSlotChip_${s}" onclick="pxToggleCliSlot('${s}')" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">${_lbl[s]}</button>`;
+  });
+  return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button onclick="pxCliSlotSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">All</button><button onclick="pxCliSlotClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
+})():''}
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
   <div class="sa-field"><label>From (DD/MM/YYYY)</label><input type="text" id="pxBkFrom" value="${dmy(mAgo)}" placeholder="DD/MM/YYYY"></div>
   <div class="sa-field"><label>To (DD/MM/YYYY)</label><input type="text" id="pxBkTo" value="${dmy(t)}" placeholder="DD/MM/YYYY"></div>
@@ -5965,8 +5976,14 @@ async function pxBackupFind(){
   window._pxBkClientCode=((document.getElementById('pxBkClient')||{}).value||'').trim().toUpperCase();
   const clientCode=window._pxBkClientCode;
   const globs=[...(window._pxBkSel||new Set())].join(',');
+  // CLI-only: Morning/Afternoon/Evening run filter (see the slot-chip row above,
+  // shared state with the Client data tab's own chips) — empty selection means
+  // "nothing selected", not "all", so send it explicitly rather than treating it
+  // the same as "no filter" the way the type chips' empty-selection-means-all works.
+  const slots=(pipe==='cli')?[...(window._pxCliSlotSel||new Set(['Morning','Afternoon','Evening']))].join(','):'';
+  if(pipe==='cli' && slots===''){ box.innerHTML='<div style="color:var(--amber);font-size:12.5px">Select at least one run (Morning/Afternoon/Evening), or click "All".</div>'; return; }
   box.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;padding:12px 0"><div style="width:16px;height:16px;border-radius:50%;border:2px solid var(--teal);border-top-color:transparent;animation:spin .7s linear infinite"></div>Scanning backup folders…</div>';
-  let d; try{ d=await (await fetch(API+`/px/backup/list?pipe=${pipe}&from_date=${from}&to_date=${to}&types=${encodeURIComponent(globs)}`)).json(); }catch(e){ box.innerHTML=`<div style="color:var(--red);font-size:12.5px">Connection error: ${e}</div>`; return; }
+  let d; try{ d=await (await fetch(API+`/px/backup/list?pipe=${pipe}&from_date=${from}&to_date=${to}&types=${encodeURIComponent(globs)}&slots=${encodeURIComponent(slots)}`)).json(); }catch(e){ box.innerHTML=`<div style="color:var(--red);font-size:12.5px">Connection error: ${e}</div>`; return; }
   const files=d.files||[];
   if(!files.length){
     box.innerHTML=`<div style="text-align:center;padding:24px 0;color:var(--dim)"><div style="font-size:28px;margin-bottom:8px">📭</div><div style="font-size:13px">No matching backup files in this range.</div><div style="font-size:11px;color:var(--muted);margin-top:4px">Try widening the date range or selecting different types.</div></div>`;

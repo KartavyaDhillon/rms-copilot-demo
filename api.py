@@ -2207,9 +2207,10 @@ def px_backup_types(pipe: str = ""):
     return {"types": _pbbt(pipe)}
 
 @app.get("/px/backup/list")
-def px_backup_list(pipe: str = "", from_date: str = "", to_date: str = "", types: str = ""):
+def px_backup_list(pipe: str = "", from_date: str = "", to_date: str = "", types: str = "", slots: str = ""):
     tl = [t for t in types.split(",") if t.strip()] if types else None
-    return {"files": _pblb(pipe, from_date, to_date, tl)}
+    sl = [s for s in slots.split(",") if s.strip()] if slots else None
+    return {"files": _pblb(pipe, from_date, to_date, tl, sl)}
 
 class _PXRestore(_SA_BaseModel):
     pipe: str
@@ -2248,7 +2249,7 @@ def px_backup_download_filtered(pipe: str = "", path: str = "", client_code: str
     original, just filtered. Falls back to the plain, unfiltered download if
     the file has no recognizable account column (e.g. an .xlsx that isn't a
     normal collateral export) rather than erroring out."""
-    from core.pipeline_box import pb_backup_file_filtered as _pbbff, pb_backup_file as _pbbf
+    from core.pipeline_box import pb_backup_file_filtered as _pbbff, pb_backup_file as _pbbf, pb_backup_db_file as _pbbdf2
     from fastapi.responses import FileResponse as _PX_FileResp2, Response as _PX_Resp2
     codes = [c.strip() for c in client_code.replace(";", ",").split(",") if c.strip()]
     if codes:
@@ -2258,6 +2259,16 @@ def px_backup_download_filtered(pipe: str = "", path: str = "", client_code: str
             return _PX_Resp2(content=content, media_type=media_type,
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
     # No codes given, or the file couldn't be filtered — serve the original.
+    # path may be a real on-disk path OR a 'db:<pipeline>:<id>' Postgres
+    # reference (a file backfilled from another machine, no local disk copy
+    # on this one) — handle both, same as /px/backup/download.
+    if str(path or "").startswith("db:"):
+        got2 = _pbbdf2(path)
+        if not got2:
+            return {"error": "file not found in Postgres"}
+        fname2, content2 = got2
+        return _PX_Resp2(content=content2, media_type="application/octet-stream",
+                         headers={"Content-Disposition": f'attachment; filename="{fname2}"'})
     ap = _pbbf(pipe, path)
     if not ap:
         return {"error": "file not found or outside backup folder"}

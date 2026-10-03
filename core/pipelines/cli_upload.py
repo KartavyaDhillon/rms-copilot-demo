@@ -110,12 +110,29 @@ def backfill_date_to_db(date_str):
         on disk (e.g. "08-36-11", "15-55-53", "20-23-14" — same idea as
         _cli_time_slot() but classifying from the folder name instead of
         the current clock). Returns None for anything else (e.g. a loose
-        file sitting directly in the date folder isn't a slot dir)."""
+        file sitting directly in the date folder isn't a slot dir).
+
+        For an HH-MM-SS folder, checks the actual CLI run windows first —
+        Morning 07:00-10:00, Afternoon 15:30-18:00, Evening 19:00-22:00
+        (24-hour clock) — and only falls back to the broad <12/<18/else
+        cutoff for a stray time outside all three (e.g. a one-off manual
+        run), so the bucket a file lands in matches when it was ACTUALLY
+        run, not just a rough half-of-day guess."""
         if name in ("Morning", "Afternoon", "Evening"):
             return name
-        m = re.fullmatch(r"(\d{2})-\d{2}-\d{2}", name)
+        m = re.fullmatch(r"(\d{2})-(\d{2})-\d{2}", name)
         if m:
-            hour = int(m.group(1))
+            hour, minute = int(m.group(1)), int(m.group(2))
+            mins = hour * 60 + minute
+            if 7 * 60 <= mins <= 10 * 60:
+                return "Morning"
+            if 15 * 60 + 30 <= mins <= 18 * 60:
+                return "Afternoon"
+            if 19 * 60 <= mins <= 22 * 60:
+                return "Evening"
+            # Outside all three real run windows (one-off manual run) —
+            # fall back to a sane half-of-day bucket rather than leaving it
+            # unclassified.
             if hour < 12: return "Morning"
             if hour < 18: return "Afternoon"
             return "Evening"
