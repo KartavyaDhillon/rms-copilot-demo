@@ -3037,18 +3037,18 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
             """Returns {code: {"B":val,"C":val,"D":val}} — the three raw
             component columns individually, not just their sum, per client."""
             cand = [(fn, fpp) for fn, fpp in group
-                    if fn.lower().startswith(pref) and fn.lower().endswith((".csv", ".xlsx"))]
+                    if fn.lower().startswith(pref) and fn.lower().endswith((".csv", ".txt", ".xlsx"))]
             if not cand: return {}
             fn, fpp = cand[0]
             try:
-                if fpp.lower().endswith(".csv"):
+                if fpp.lower().endswith(".xlsx"):
+                    tdf, err = _pb_read_xlsx_pandas(fpp)
+                    if err or tdf is None: return {}
+                else:
                     try:
                         tdf = pd.read_csv(fpp, dtype=str)
                     except Exception:
                         tdf = pd.read_csv(fpp, dtype=str, encoding="latin-1")
-                else:
-                    tdf, err = _pb_read_xlsx_pandas(fpp)
-                    if err or tdf is None: return {}
                 cc = _pb_col(tdf, "Client Code")
                 b_col = _pb_col(tdf, "Cash allocated (b)")
                 c_col = _pb_col(tdf, "Cash-Others (c)", "Cash-others (c)")
@@ -3081,18 +3081,18 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
         # ── NCDEX ─────────────────────────────────────────────────────────────
         ncdex_cand = [(fn, fpp) for fn, fpp in group
                       if fn.lower().startswith("clientneteffectivedeposits")
-                      and fn.lower().endswith((".csv", ".xlsx"))]
+                      and fn.lower().endswith((".csv", ".txt", ".xlsx"))]
         if ncdex_cand:
             fn, fpp = ncdex_cand[0]
             try:
-                if fpp.lower().endswith(".csv"):
+                if fpp.lower().endswith(".xlsx"):
+                    tdf, err = _pb_read_xlsx_pandas(fpp)
+                    if err: tdf = None
+                else:
                     try:
                         tdf = pd.read_csv(fpp, dtype=str)
                     except Exception:
                         tdf = pd.read_csv(fpp, dtype=str, encoding="latin-1")
-                else:
-                    tdf, err = _pb_read_xlsx_pandas(fpp)
-                    if err: tdf = None
                 if tdf is not None:
                     cc = _pb_col(tdf, "Client/CP Code", "Client Code")
                     vc = _pb_col(tdf, "Total Collateral (Cash and Non Cash)")
