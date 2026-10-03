@@ -1,5 +1,5 @@
 """
-core/pipelines/r1_r2_comparison.py — Segment-wise Collateral Movement Report
+core/pipelines/r1_r2_comparison.py — R1-R2 Comparison Report
 ==============================================================================
 Console-native port of the standalone reconciliation_snapshot_v2.py. Tracks
 per-client collateral allocation across 5 exchange segments (CM, FO, CO,
@@ -44,7 +44,11 @@ SECOND SET OF 5 FILES:
     folder afterward, so R1R2_FOLDER ends up clean - a same-day rerun always
     re-downloads fresh rather than reusing leftovers.
 
-OUTPUT: allocation_master.xlsx in R1R2_FOLDER - never accumulates every run
+FORMATTING: ditto match to the standalone reconciliation_snapshot_v2.py —
+whole numbers (no decimals), no green/red diff fill. Values are rounded to
+the nearest whole number when written, not just displayed that way.
+
+OUTPUT: R1-R2_COMPARISON_REPORT.xlsx in R1R2_FOLDER - never accumulates every run
 of the day; each Afternoon/Evening/Live run REPLACES the previous run's
 non-Morning columns, so the master always holds exactly 10 data columns
 (5 Morning + 5 latest run) plus that run's diff columns. Resets automatically
@@ -79,21 +83,13 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 
 CLI_FOLDER = os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT")
 
-# Margin Shortage (15-min) — source for the "15-min Backup" mode's second set.
-# NOTE its backup layout is a THIRD convention, different from CLI's and this
-# module's own: <MS15_FOLDER>\BACKUPFILES AUTOMATED\<YYYY-MM-DD>\<NN>\
-# (zero-padded RUN NUMBER, not a HH-MM-SS time). See backup_and_cleanup() in
-# core/pipelines/margin_shortage_15min.py.
-MS15_FOLDER = os.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
-MS15_BACKUP_ROOT = "BACKUPFILES AUTOMATED"
-
 # On a fresh machine (nobody's set R1R2_FOLDER in .env yet) this lives inside
 # the console's own data folder; override in .env (e.g. R1R2_FOLDER=D:\R1_R2_COMPARISON)
 # for a machine that already has a folder in use.
 BASE_FOLDER = os.getenv("R1R2_FOLDER", os.path.join(_REPO, "data", "r1_r2_comparison"))
 
 SEGMENT_ORDER = ["CM", "FO", "CO", "NCDEX", "MCX"]
-MASTER_FILENAME = "allocation_master.xlsx"
+MASTER_FILENAME = "R1-R2_COMPARISON_REPORT.xlsx"
 META_FILENAME = ".reconciliation_meta.json"
 BACKUP_FOLDER_NAME = "Backup"
 SOURCE_EXTENSIONS = (".csv", ".txt", ".xlsx", ".xlsm", ".xls")
@@ -645,156 +641,6 @@ def download_mcx_only():
 
 
 # ---------------------------------------------------------------------------
-# "15-min Backup" mode - second set comes from ONE chosen Margin Shortage
-# (15-min) backup run instead of a CLI slot or a live download.
-#
-# Two things make this mode different from the other three:
-#   1. Which backup run to use is chosen BY THE OPERATOR at click time (the
-#      dashboard shows a tickbox list of today's runs), not derived from the
-#      clock - so the same day can be re-run against several different 15-min
-#      snapshots. That's also why it has no once-per-day limit.
-#   2. Only CM/FO/CO/NCDEX come from that backup. MS15's own MCX file is the
-#      MCX **90%** file, which is a different report from the MCX **Deposit**
-#      file this reconciliation needs - using it would silently compare the
-#      wrong numbers. So the 5th file is fetched exactly the way Live Snapshot
-#      fetches it (mcx_deposit_downloader.download_mcx_deposit), reusing
-#      today's copy in BASE_FOLDER if one is already there.
-# ---------------------------------------------------------------------------
-
-MS15_BACKUP_SEGMENTS = ["CM", "FO", "CO", "NCDEX"]
-
-
-def _ms15_backup_date_dir(date_str):
-    """date_str is DD-MM-YYYY (this module's convention); MS15 names its backup
-    folders YYYY-MM-DD, so translate."""
-    dd, mm, yyyy = date_str.split("-")
-    return os.path.join(MS15_FOLDER, MS15_BACKUP_ROOT, f"{yyyy}-{mm}-{dd}")
-
-
-def list_ms15_backup_runs(date_str=None, verbose=False):
-    """Today's Margin Shortage backup runs, newest first - feeds the picker.
-
-    Each entry: {run, folder, label, segments, missing, usable}.
-    `label` is the run's own file timestamp ("11.45"), so the operator picks by
-    the time they actually care about rather than by run number alone.
-    Never raises - an unreadable/absent folder just yields an empty list.
-    """
-    date_str = date_str or datetime.datetime.now().strftime("%d-%m-%Y")
-    date_dir = _ms15_backup_date_dir(date_str)
-    out = []
-    if not os.path.isdir(date_dir):
-        return out
-
-    for name in sorted(os.listdir(date_dir)):
-        full = os.path.join(date_dir, name)
-        if not os.path.isdir(full) or not name.isdigit():
-            continue
-        try:
-            chosen, chosen_paths, _ = _scan_and_choose(full, verbose=verbose)
-        except Exception:
-            continue
-        missing = [s for s in MS15_BACKUP_SEGMENTS if s not in chosen_paths]
-        label = ""
-        if "CM" in chosen_paths:
-            try:
-                _, label, _ = parse_file_stamp(chosen_paths["CM"])
-            except Exception:
-                label = ""
-        out.append({
-            "run": int(name),
-            "folder": full,
-            "label": label,
-            "segments": {s: os.path.basename(chosen_paths[s])
-                         for s in MS15_BACKUP_SEGMENTS if s in chosen_paths},
-            "clients": {s: len(chosen[s]) for s in MS15_BACKUP_SEGMENTS if s in chosen},
-            "missing": missing,
-            "usable": not missing,
-        })
-
-    out.sort(key=lambda r: r["run"], reverse=True)
-    return out
-
-
-def collect_ms15_backup_second_set(run_no, date_str):
-    """Second set for run_mode == 'ms15backup'.
-
-    CM/FO/CO/NCDEX are COPIED out of the chosen MS15 backup run into a private
-    holding folder under BASE_FOLDER before anything else touches them - MS15's
-    backups are that pipeline's own audit trail and must never be moved,
-    renamed or consumed by this one. MCX Deposit is fetched separately.
-    """
-    date_dir = _ms15_backup_date_dir(date_str)
-    if not os.path.isdir(date_dir):
-        raise AbortRun(
-            f"No Margin Shortage (15-min) backups found for {date_str}.\n"
-            f"  Looked under:\n    {date_dir}\n"
-            f"  The 15-min pipeline creates one folder per run there; run it first."
-        )
-
-    run_dir = os.path.join(date_dir, f"{int(run_no):02d}")
-    if not os.path.isdir(run_dir):
-        available = sorted(n for n in os.listdir(date_dir)
-                           if n.isdigit() and os.path.isdir(os.path.join(date_dir, n)))
-        raise AbortRun(
-            f"Margin Shortage run {int(run_no):02d} has no backup folder for {date_str}.\n"
-            f"  Looked for:\n    {run_dir}\n"
-            f"  Runs available that day: {', '.join(available) or '(none)'}"
-        )
-
-    print(f"Margin Shortage backup run {int(run_no):02d} ({date_str}): scanning {run_dir}\n")
-    chosen, chosen_paths, _ = _scan_and_choose(run_dir)
-    print()
-
-    missing = [s for s in MS15_BACKUP_SEGMENTS if s not in chosen_paths]
-    if missing:
-        raise AbortRun(
-            f"Margin Shortage run {int(run_no):02d} backup is missing file(s) for: "
-            + ", ".join(missing) + "\n"
-            f"  Folder checked:\n    {run_dir}\n"
-            "  CM, FO, CO and NCDEX must all be present in that backup run."
-        )
-
-    # Copy (never move) the 4 files into this run's own holding folder.
-    hold_dir = os.path.join(BASE_FOLDER, ".ms15pick",
-                            f"{date_str}_run{int(run_no):02d}_"
-                            + datetime.datetime.now().strftime("%H%M%S"))
-    os.makedirs(hold_dir, exist_ok=True)
-    seg_totals, seg_paths = {}, {}
-    for seg in MS15_BACKUP_SEGMENTS:
-        src = chosen_paths[seg]
-        dest = os.path.join(hold_dir, os.path.basename(src))
-        try:
-            shutil.copy2(src, dest)
-        except Exception as e:
-            raise AbortRun(f"Could not copy {seg} out of the Margin Shortage backup: {e}")
-        seg_totals[seg] = chosen[seg]
-        seg_paths[seg] = dest
-    print(f"Copied 4 file(s) out of the 15-min backup into:\n  {hold_dir}\n"
-          f"  (the 15-min backup itself is left untouched)\n")
-
-    # ── MCX Deposit — deliberately NOT from the MS15 backup ────────────────
-    print("MCX: the 15-min backup holds the MCX 90% file, which is a different "
-          "report from the MCX Deposit file this reconciliation needs — "
-          "fetching the Deposit file instead.\n")
-    mcx_chosen, mcx_paths, mcx_missing = _scan_and_choose(BASE_FOLDER, today_only=True)
-    if "MCX" in mcx_missing:
-        print("No MCX Deposit file for today in the base folder — downloading it.\n")
-        _run_mcx_tcs_bancs_download()
-        mcx_chosen, mcx_paths, mcx_missing = _scan_and_choose(BASE_FOLDER, today_only=True)
-        if "MCX" in mcx_missing:
-            raise AbortRun(
-                "MCX Deposit file still missing after the download step.\n"
-                f"  Check {BASE_FOLDER} by hand — the download above may have partially failed."
-            )
-    else:
-        print("MCX Deposit file for today already present — skipping the TCS BANCS login.\n")
-
-    seg_totals["MCX"] = mcx_chosen["MCX"]
-    seg_paths["MCX"] = mcx_paths["MCX"]
-    return seg_totals, seg_paths
-
-
-# ---------------------------------------------------------------------------
 # meta - tracks which date the current master belongs to, which modes have
 # already run today, and today's morning column labels (the fixed baseline)
 # ---------------------------------------------------------------------------
@@ -830,7 +676,7 @@ def rotate_if_new_day(folder, today_str):
         dest = os.path.join(dest_dir, MASTER_FILENAME)
         n = 2
         while os.path.exists(dest):
-            dest = os.path.join(dest_dir, f"allocation_master__{n}.xlsx")
+            dest = os.path.join(dest_dir, f"R1-R2_COMPARISON_REPORT__{n}.xlsx")
             n += 1
         shutil.move(master_path, dest)
         print(f"New day detected ({old_date} -> {today_str}). "
@@ -877,8 +723,6 @@ def write_master_xlsx(path, ordered_cols, rows_by_client, diff_cols):
 
     HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
     HEADER_FONT = Font(color="FFFFFF", bold=True)
-    POS_FILL = PatternFill("solid", fgColor="C6EFCE")
-    NEG_FILL = PatternFill("solid", fgColor="FFC7CE")
     NET_FONT = Font(bold=True)
 
     ws.append(ordered_cols)
@@ -891,23 +735,17 @@ def write_master_xlsx(path, ordered_cols, rows_by_client, diff_cols):
         row = rows_by_client[client]
         ws.append([row.get(c, 0) for c in ordered_cols])
 
+    # whole-number formatting + Net_Diff bolding (no decimals, no red/green fill)
     amount_cols = [c for c in ordered_cols if c != "Client Code"]
     col_idx = {c: i + 1 for i, c in enumerate(ordered_cols)}
     for c in amount_cols:
         ci = col_idx[c]
-        is_diff = c in diff_cols
         is_net = c.startswith("Net_Diff")
         for r in range(2, ws.max_row + 1):
             cell = ws.cell(row=r, column=ci)
-            cell.number_format = "#,##0.00"
+            cell.number_format = "#,##0"
             if is_net:
                 cell.font = NET_FONT
-            if is_diff:
-                val = cell.value or 0
-                if val > 0:
-                    cell.fill = POS_FILL
-                elif val < 0:
-                    cell.fill = NEG_FILL
 
     for i, c in enumerate(ordered_cols, start=1):
         maxlen = len(str(c))
@@ -961,16 +799,16 @@ def update_master(folder, meta, seg_totals, seg_label, is_morning):
         row = master_rows.setdefault(client, {"Client Code": client})
         net_diff = 0.0
         for seg in SEGMENT_ORDER:
-            new_val = round(seg_totals.get(seg, {}).get(client, 0.0), 2)
+            new_val = round(seg_totals.get(seg, {}).get(client, 0.0))
             row[f"{seg}_{seg_label}"] = new_val
             if not is_morning:
                 morning_col = f"{seg}_{meta['morning_labels'][seg]}"
                 prev_val = to_float(row.get(morning_col, 0))
-                seg_diff = round(new_val - prev_val, 2)
+                seg_diff = round(new_val - prev_val)
                 row[f"{seg}_Diff_{meta['morning_labels'][seg]}_to_{seg_label}"] = seg_diff
                 net_diff += seg_diff
         if not is_morning:
-            row[f"Net_Diff_Morning_to_{seg_label}"] = round(net_diff, 2)
+            row[f"Net_Diff_Morning_to_{seg_label}"] = round(net_diff)
 
     ordered = ["Client Code"]
     for c in fieldnames + new_cols + diff_cols:
@@ -1060,17 +898,16 @@ _EMAIL_MODE_LABEL = {
     "live": "Live",
     "afternoon": "Afternoon",
     "evening": "Evening",
-    "ms15backup": "15-min Backup",
 }
 
 
 def build_email(mode, date_str, seg_label, morning_label, master_path):
     mode = _EMAIL_MODE_LABEL.get(mode, mode.capitalize())
-    subject = "Segment-Wise Collateral Movement Report"
+    subject = "R1-R2 COMPARISON REPORT"
     body = f"""
 Dear Team,<br><br>
 
-Please find attached the <b>Segment-wise Collateral Movement Report</b> for {date_str}.<br><br>
+Please find attached the <b>R1-R2 COMPARISON REPORT</b> for {date_str}.<br><br>
 
 <b>Note:</b><br>
 This run compares this <b>{mode} ({seg_label})</b> snapshot against
@@ -1084,8 +921,7 @@ this morning's fixed baseline ({morning_label}), across all five segments -
         diffs - the client's total net movement since this morning.</li>
 </ul>
 
-Diff cells are shaded green for net allocation and red for net deallocation,
-so movement is visible at a glance.<br><br>
+All amounts are shown as whole numbers for quick reading.<br><br>
 
 Best Regards,<br>
 <b>Kartavya Dhillon</b><br>
@@ -1097,19 +933,15 @@ Master Capital Services Ltd<br>
 
 # ---------------------------------------------------------------------------
 
-def main(run_mode, ms15_run=None):
+def main(run_mode):
     run_mode = run_mode.lower().strip()
-    if run_mode not in ("afternoon", "evening", "live", "ms15backup"):
-        raise AbortRun(f"run_mode must be 'afternoon', 'evening', 'live' or "
-                       f"'ms15backup', got: {run_mode!r}")
-    if run_mode == "ms15backup" and not ms15_run:
-        raise AbortRun("15-min Backup mode needs a run number — pick one from the list.")
+    if run_mode not in ("afternoon", "evening", "live"):
+        raise AbortRun(f"run_mode must be 'afternoon', 'evening' or 'live', got: {run_mode!r}")
 
-    slot_name = {"live": "Live", "ms15backup": f"15-min Backup (run {int(ms15_run):02d})"}.get(
-        run_mode, run_mode.capitalize())
+    slot_name = "Live" if run_mode == "live" else run_mode.capitalize()
 
     print("=" * 70)
-    print("Segment-wise Collateral Movement Report")
+    print("R1-R2 Comparison Report")
     print("=" * 70)
     print(f"CLI folder : {CLI_FOLDER}")
     print(f"Base folder: {BASE_FOLDER}")
@@ -1120,11 +952,8 @@ def main(run_mode, ms15_run=None):
     today_str = datetime.datetime.now().strftime("%d-%m-%Y")
     meta = rotate_if_new_day(BASE_FOLDER, today_str)
 
-    # Live Snapshot and 15-min Backup have no once-per-day limit - only
-    # Afternoon/Evening do. 15-min Backup is deliberately unlimited because
-    # each run targets a DIFFERENT 15-min snapshot, so re-running it is the
-    # normal case, not a mistake.
-    if run_mode not in ("live", "ms15backup") and run_mode in meta.get("modes_done", []):
+    # Live Snapshot has no once-per-day limit - only Afternoon/Evening do.
+    if run_mode != "live" and run_mode in meta.get("modes_done", []):
         raise AbortRun(
             f"{slot_name} has already been run today ({today_str}).\n"
             f"  Each of Afternoon/Evening can only run once per day.\n"
@@ -1161,8 +990,6 @@ def main(run_mode, ms15_run=None):
     print(f"Fetching {slot_name} snapshot...\n")
     if run_mode == "live":
         seg_totals, seg_paths = collect_live_second_set()
-    elif run_mode == "ms15backup":
-        seg_totals, seg_paths = collect_ms15_backup_second_set(ms15_run, today_str)
     else:
         seg_totals, seg_paths = collect_cli_slot_or_base_folder(slot_name, today_str)
     _, seg_label, note = parse_file_stamp(seg_paths["CM"])
@@ -1170,7 +997,7 @@ def main(run_mode, ms15_run=None):
           + ("" if note == "filename" else f"  (time taken from {note})") + "\n")
 
     master_path = update_master(BASE_FOLDER, meta, seg_totals, seg_label, is_morning=False)
-    if run_mode not in ("live", "ms15backup"):
+    if run_mode != "live":
         meta["modes_done"].append(run_mode)
     save_meta(BASE_FOLDER, meta)
 
@@ -1193,9 +1020,9 @@ def main(run_mode, ms15_run=None):
     print("=" * 70)
 
 
-def _run(mode, ms15_run=None):
+def _run(mode):
     try:
-        main(mode, ms15_run=ms15_run)
+        main(mode)
     except AbortRun as e:
         print("\n" + "!" * 70)
         print("RUN STOPPED - nothing was changed")
@@ -1216,14 +1043,6 @@ def run_r1r2_evening():
     _run("evening")
 
 
-def run_r1r2_ms15_backup(run_no):
-    """4th mode: Morning baseline exactly as always (CLI's backup), second set
-    from the Margin Shortage (15-min) backup run the operator ticked. No
-    once-per-day limit."""
-    _run("ms15backup", ms15_run=int(run_no))
-
-
 if __name__ == "__main__":
     mode = sys.argv[1].strip() if len(sys.argv) > 1 and sys.argv[1].strip() else "live"
-    _ms15_run = sys.argv[2].strip() if len(sys.argv) > 2 and sys.argv[2].strip() else None
-    _run(mode, ms15_run=int(_ms15_run) if _ms15_run else None)
+    _run(mode)

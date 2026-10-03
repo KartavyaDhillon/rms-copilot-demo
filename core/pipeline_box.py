@@ -172,7 +172,7 @@ PIPELINES = {
                 ["RISK_REPORT", "RISK_REPORT_*.csv", "RISK_REPORT_<date>.csv"],
                 ["Kambala", "Kambala_Omny_Depo_Adhoc_All_level.txt_*.txt", "Kambala_Omny_Depo_Adhoc_All_level.txt_<DDMMYYYY>.txt"],
             ]},
-    # Segment-wise Collateral Movement Report — Live Snapshot / Afternoon /
+    # R1-R2 Comparison Report — Live Snapshot / Afternoon /
     # Evening. Same "not the generic numbered px runner" shape as CLI: Live
     # Snapshot repeats any number of times with no fixed order relative to
     # Afternoon/Evening, so the 3 buttons hit their own bespoke SSE endpoints
@@ -180,7 +180,7 @@ PIPELINES = {
     # api.py) instead of /px/run-stream?pipe=r1r2&run_no=N. This registry
     # entry exists for the shared infra only — Backup Files browser, log
     # viewer, credentials modal. See core/pipelines/r1_r2_comparison.py.
-    "r1r2": {"name": "Segment-wise Collateral Movement Report", "logdir": "r1r2", "runs": 1,
+    "r1r2": {"name": "R1-R2 Comparison Report", "logdir": "r1r2", "runs": 1,
              # state_default/upload_default MUST match core.pipelines.r1_r2_comparison's
              # own BASE_FOLDER default (and nmass_download.py's _PIPE_FOLDER["r1r2"],
              # which mirrors it) — all three resolve R1R2_FOLDER the same way, falling
@@ -216,7 +216,7 @@ PIPELINES = {
                  ["CO Client Collaterals", "CO_ClientLevelCollaterals_*.csv,CO_ClientLevelCollaterals_*.txt,CO_ClientLevelCollaterals_*.xlsx", "CO_ClientLevelCollaterals_<date>.csv"],
                  ["Client Net Effective Deposits", "ClientNetEffectiveDeposits_*.csv,ClientNetEffectiveDeposits_*.xlsx", "ClientNetEffectiveDeposits_<date>.csv"],
                  ["MCX (RSK383 export / Web Allocation)", "*.xlsx,MCX_WebAllocationDeallocation.csv", "<random>-<YYYYMMDDHHMMSS>.xlsx"],
-                 ["Allocation Master (output)", "allocation_master.xlsx", "allocation_master.xlsx"],
+                 ["R1-R2 Comparison Report (output)", "R1-R2_COMPARISON_REPORT.xlsx", "R1-R2_COMPARISON_REPORT.xlsx"],
              ]},
     # Margin Shortage (15-min) — runs 11x/day, ported from 15minutesfinal_whatsapp.PY.
     # (Was 9; 16:30 and 16:50 added when the desk's shift extended. The night

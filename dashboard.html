@@ -700,24 +700,24 @@ body {
         <div class="sa-status" id="pxStatus-cli"><div class="sa-status-empty">Run status appears here. Full output is saved to Logs.</div></div>
       </div>
 
-      <!-- ===== Segment-wise Collateral Movement Report (Live Snapshot / Afternoon / Evening) ===== -->
-      <div class="sec">Segment-wise Collateral Movement Report</div>
+      <!-- ===== R1-R2 Comparison Report (Live Snapshot / Afternoon / Evening) ===== -->
+      <div class="sec">R1-R2 Comparison Report</div>
       <div class="sa-box" id="pxBox-r1r2">
         <div class="sa-head" style="flex-direction:column;gap:10px">
-          <div class="sa-title-wrap"><div class="sa-logo">R2</div><div><div class="sa-title">Segment-wise Collateral Movement Report</div><div class="sa-sub">First 5 files are always today's CLI Morning backup (fixed baseline). Live Snapshot downloads/reuses the second 5 itself and can be run any number of times; Afternoon/Evening each pull from CLI's own backup for that slot and can only run once per day. Every run's diff is always vs this morning, never vs whatever ran last.</div></div></div>
+          <div class="sa-title-wrap"><div class="sa-logo">R2</div><div><div class="sa-title">R1-R2 Comparison Report</div><div class="sa-sub">First 5 files are always today's CLI Morning backup (fixed baseline). Live Snapshot downloads/reuses the second 5 itself and can be run any number of times; Afternoon/Evening each pull from CLI's own backup for that slot and can only run once per day. Every run's diff is always vs this morning, never vs whatever ran last.</div></div></div>
           <div class="sa-tools">
             <button class="sa-tool" onclick="pxCredentials('r1r2')" data-tip="Change logins/passwords for NSCCL, NCDEX and MCX RSK383 — shared with CTCL vs NMASS / Short Allocation / CLI where the same accounts are used. Only needed for Live Snapshot's downloads.">🔑 Credentials</button>
             <button class="sa-tool" id="r1r2DownloadBtn" onclick="r1r2Download()" data-tip="Downloads CM/FO/CO/ClientNetEffectiveDeposits only (shared NMASS/NCDEX login, same as CTCL/MS15/PROBABLE — never collides with them) — skips it if today's 4 files are already here. Same step Live Snapshot does automatically; this is for retrying it on its own." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download</button>
             <button class="sa-tool" id="r1r2McxBtn" onclick="r1r2McxDownload()" data-tip="Logs in to TCS BANCS (RSK383) and downloads the MCX file — skips the login entirely if today's MCX file is already here. Same TCS BANCS session SA's MCX Deposit / CLI's MCX Web Allocation buttons use." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX Deposit</button>
             <button class="sa-tool" onclick="r1r2UploadFiles()" data-tip="Manually add a file yourself into the base folder if the automatic download couldn't get it — only recognised filenames are accepted. If this machine can't reach the base folder, files go to a temp folder instead." style="border-color:rgba(52,211,153,.45);color:var(--green)">⬆️ Upload files</button>
-            <button class="sa-tool" onclick="pxBackup('r1r2')" data-tip="Browse/restore past runs' Morning + Live/Afternoon/Evening files and the allocation_master.xlsx snapshot, from Backup\\<date>\\<time>\\.">📦 Backup files</button>
+            <button class="sa-tool" onclick="pxBackup('r1r2')" data-tip="Browse/restore past runs' Morning + Live/Afternoon/Evening files and the R1-R2_COMPARISON_REPORT.xlsx snapshot, from Backup\\<date>\\<time>\\.">📦 Backup files</button>
             <button class="sa-tool" onclick="pxStop('r1r2')" data-tip="Kills whatever is currently running for this box, immediately — no matter which step it's in." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="pxLogs('r1r2')" data-tip="View the full saved output of past Download/MCX/Live Snapshot/Afternoon/Evening attempts.">🗂️ Logs</button>
           </div>
         </div>
         <div class="sa-banner" id="pxBanner-r1r2"><span class="dot"></span><span class="t"></span></div>
         <!-- missing-file warning (hidden when all files present) -->
-        <div class="sa-ready" id="r1r2Ready" style="display:none"></div>
+        <div class="sa-ready" id="r1r2Ready" style="display:block"><span style="color:var(--dim)">Checking today's files…</span></div>
         <div id="r1r2Strip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>
         <div class="sa-runs" id="pxRuns-r1r2"></div>
         <div class="sa-status" id="pxStatus-r1r2"><div class="sa-status-empty">Run status appears here. Full output is saved to Logs.</div></div>
@@ -2300,7 +2300,7 @@ let _tokenCaller='sa';
 // the modal so it's never ambiguous WHICH box/screen a pending captcha or RSA
 // token belongs to when several pipes/people are active at once.
 function _pipeBoxLabel(src){
-  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit', r1r2:'Segment-wise Collateral Movement Report'}[src] || src;
+  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit', r1r2:'R1-R2 Comparison Report'}[src] || src;
 }
 function captchaStartPoller(){
   if(_captchaPoller) return;
@@ -4905,69 +4905,6 @@ function r1r2Evening(){
   if(_r1r2Busy()) return;
   return _r1r2RunOneStep(API+'/r1r2/evening-stream','evening',null,null,null);
 }
-// ── 15-min Backup mode ──────────────────────────────────────────────────────
-// Unlike the other three tiles this one doesn't run on click — it opens a
-// picker, because WHICH 15-min snapshot to compare against is the operator's
-// decision, not something the clock can infer. Morning baseline is unchanged
-// (CLI's backup, as always); only the second set changes.
-var _r1r2Ms15Pick=null;
-async function r1r2Ms15Pick(){
-  if(_r1r2Busy()) return;
-  const esc=s=>String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
-  saShowModal('🕒 15-min Backup', '<div style="color:var(--muted);font-size:12px">Looking for today\'s 15-min backup runs…</div>');
-  let d=null; try{ d=await (await fetch(API+'/r1r2/ms15backup/list')).json(); }catch(e){}
-  if(!d){ saShowModal('🕒 15-min Backup', '<div style="color:var(--red);font-size:13px">⚠ Backend not reachable — start uvicorn.</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>'); return; }
-  const runs=(d.runs||[]);
-  const usable=runs.filter(r=>r.usable);
-  if(!runs.length){
-    saShowModal('🕒 15-min Backup', `
-<div style="font-size:12.5px;color:var(--muted);line-height:1.6">No Margin Shortage (15-min) backups found for today yet.</div>
-<div style="font-size:11.5px;color:var(--dim);margin-top:10px;line-height:1.6">The 15-min pipeline writes one backup folder per run. Run it at least once, then come back here.</div>
-<div style="font-size:10px;color:var(--dim);margin-top:12px;font-family:var(--mono)">${esc(d.folder||'')}</div>
-<button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>`);
-    return;
-  }
-  _r1r2Ms15Pick = usable.length ? usable[0].run : null;
-  const rows=runs.map(function(r,i){
-    const first = r.usable && r.run===_r1r2Ms15Pick;
-    if(!r.usable){
-      return `<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid rgba(248,113,113,.25);border-radius:10px;margin-bottom:8px;opacity:.6">
-  <div style="width:14px;flex:none;margin-top:2px;color:var(--red)">✕</div>
-  <div style="min-width:0">
-    <div style="font-size:12px;color:var(--ink)">Run ${String(r.run).padStart(2,'0')}${r.label?(' &middot; '+esc(r.label)):''}</div>
-    <div style="font-size:10.5px;color:var(--red);margin-top:3px">Can't be used — missing ${esc((r.missing||[]).join(', '))}</div>
-  </div>
-</div>`;
-    }
-    const segs=Object.keys(r.segments||{}).map(k=>k+' ✓').join(' &middot; ');
-    return `<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid ${first?'rgba(96,165,250,.5)':'rgba(255,255,255,.08)'};border-radius:10px;margin-bottom:8px;cursor:pointer;background:${first?'rgba(96,165,250,.07)':'transparent'}" onclick="_r1r2Ms15Pick=${r.run}">
-  <input type="radio" name="r1r2Ms15Run" value="${r.run}" ${first?'checked':''} style="margin-top:3px;flex:none;accent-color:var(--blue)">
-  <div style="min-width:0">
-    <div style="font-size:12px;color:var(--ink)">Run ${String(r.run).padStart(2,'0')}${r.label?(' &middot; <b>'+esc(r.label)+'</b>'):''}</div>
-    <div style="font-size:10.5px;color:var(--muted);margin-top:3px">${segs}</div>
-  </div>
-</label>`;
-  }).join('');
-  const runBtn = usable.length
-    ? '<button class="sa-save" style="width:100%;background:var(--blue);color:var(--blue-d)" onclick="r1r2Ms15Go()">&#9654; Run against this backup</button>'
-    : '<div style="font-size:11.5px;color:var(--amber);text-align:center;padding:10px">None of today\'s runs has all four of CM/FO/CO/NCDEX — nothing to run against yet.</div>';
-  saShowModal('🕒 15-min Backup', `
-<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">Pick which 15-min backup run to compare against. The <b style="color:var(--ink)">Morning baseline stays exactly the same</b> (CLI's backup, as always) — only the second set of files changes.</div>
-<div style="max-height:260px;overflow:auto">${rows}</div>
-<div style="font-size:11px;color:var(--dim);line-height:1.6;margin:10px 0 14px;padding:9px 11px;border:1px dashed rgba(96,165,250,.28);border-radius:9px">
-  CM, FO, CO and NCDEX come from the run you tick. The 5th file is the <b style="color:var(--ink)">MCX Deposit</b> file — fetched the same way Live Snapshot fetches it, because the 15-min backup only holds the MCX <i>90%</i> file, which is a different report.
-</div>
-${runBtn}
-<div style="font-size:10px;color:var(--dim);margin-top:10px;font-family:var(--mono)">${esc(d.folder||'')}</div>`);
-}
-function r1r2Ms15Go(){
-  const sel=document.querySelector('input[name="r1r2Ms15Run"]:checked');
-  const run=(sel&&sel.value)||_r1r2Ms15Pick;
-  if(run==null||run==='') return;
-  saCloseModal();
-  if(_r1r2Busy()) return;
-  return _r1r2RunOneStep(API+'/r1r2/ms15backup-stream?run='+encodeURIComponent(run),'ms15backup',null,null,null);
-}
 function r1r2Download(){
   if(_r1r2Busy()) return;
   return _r1r2RunOneStep(API+'/r1r2/download-stream','download','r1r2DownloadBtn','⏳ Downloading…','📥 Download');
@@ -4986,9 +4923,17 @@ var _r1r2LastStatus=null;
 async function r1r2Status(){
   let s=null;
   try{ const r=await fetch(API+'/r1r2/today-status'); if(r.ok) s=await r.json(); }catch(e){}
+  // Skip the re-render entirely when nothing actually changed since the last
+  // poll — rebuilding the tile grid's innerHTML every 5s even when the data
+  // is identical was causing a visible flicker/jump each time. Comparing the
+  // raw JSON is cheap and catches every real state change (modes_done, etc.).
+  const sig=JSON.stringify(s)+'|'+_r1r2Busy();
+  if(sig===_r1r2LastStatusSig) return;
+  _r1r2LastStatusSig=sig;
   _r1r2LastStatus=s;
   r1r2RenderTiles(s);
 }
+var _r1r2LastStatusSig=null;
 function r1r2RenderTiles(s){
   const wrap=document.getElementById('pxRuns-r1r2'); if(!wrap) return;
   if(!s){ wrap.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--amber);font-size:12.5px;padding:14px;border:1px dashed rgba(251,191,36,.4);border-radius:10px;background:rgba(251,191,36,.06)">&#9888; Backend not reachable — start uvicorn.</div>'; return; }
@@ -4998,10 +4943,6 @@ function r1r2RenderTiles(s){
     {id:'live',      label:'🔴 LIVE',      win:'No daily limit', kind:'live',      fn:'r1r2Live()',      onceADay:false},
     {id:'afternoon', label:'🌤️ AFTERNOON', win:'Once per day',   kind:'afternoon', fn:'r1r2Afternoon()', onceADay:true},
     {id:'evening',   label:'🌙 EVENING',   win:'Once per day',   kind:'evening',   fn:'r1r2Evening()',   onceADay:true},
-    // 4th mode — unlimited like Live, because each run targets a DIFFERENT
-    // 15-min backup snapshot, so re-running is the normal case. Opens a picker
-    // instead of running straight away.
-    {id:'ms15backup', label:'🕒 15-MIN BACKUP', win:'Pick a run',  kind:'ms15backup', fn:'r1r2Ms15Pick()', onceADay:false},
   ];
   let html='';
   tiles.forEach(function(t){
@@ -5031,15 +4972,27 @@ function r1r2RenderTiles(s){
 // Live has no fixed window, so a missing file is worth flagging any time
 // nothing in this box is currently running.
 async function r1r2LoadReady(){
+  // Deliberately NEVER toggles display:none/block — this box sits directly
+  // above the run tiles in normal page flow, so hiding/showing it on every
+  // 30s poll (or every time _r1r2Busy() flips) made the whole box's content
+  // visibly jump up and down. It now always stays in the layout at a
+  // consistent one-line height; only the text/color inside it changes.
   const box=document.getElementById('r1r2Ready'); if(!box) return;
-  if(_r1r2Busy()){ box.style.display='none'; return; }
-  let d; try{ d=await (await fetch(API+'/r1r2/readiness')).json(); }catch(e){ box.style.display='none'; return; }
+  box.style.display='block';
+  if(_r1r2Busy()){
+    box.innerHTML='<span style="color:var(--dim)">Run in progress…</span>';
+    return;
+  }
+  let d; try{ d=await (await fetch(API+'/r1r2/readiness')).json(); }
+  catch(e){ box.innerHTML='<span style="color:var(--dim)">—</span>'; return; }
   const items=(d&&d.items)||[];
   const missing=items.filter(it=>!it.ok);
-  if(!missing.length){ box.style.display='none'; return; }
+  if(!missing.length){
+    box.innerHTML='<span style="color:var(--green)">&#10003; All 5 files present for today.</span>';
+    return;
+  }
   const chips=missing.map(it=>'<span class="missing">'+it.key+'</span>').join('');
   box.innerHTML='<b>&#9888; Not downloaded yet today</b><div class="sr-row"><span class="sr-label">R1/R2</span>'+chips+'</div>';
-  box.style.display='block';
 }
 // ── R1/R2 Upload files — single folder, no COMMON FILES split (unlike CLI/
 // CTCL/MS15, which also handle RISK_REPORT in a separate common folder).
@@ -5058,7 +5011,7 @@ async function r1r2UploadFiles(){
     : '<div style="font-size:11.5px;color:var(--muted);margin:0 0 14px;border:1px dashed rgba(248,113,113,.4);border-radius:10px;padding:12px"><b style="color:var(--ink)">Missing today</b><div style="margin:2px 0 8px;color:var(--amber)">Upload these, or use 📥 Download / 📥 MCX Deposit above.</div>'
       + missing.map(it=>'<span style="color:var(--red)">✗</span> <span style="font-family:var(--mono);font-size:10.5px">'+it.example+'</span>').join('<br>') + '</div>';
   saShowModal('Upload files', `
-<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">Only recognised filenames (CM/FO/CO/NCDEX/MCX/allocation_master.xlsx) are accepted — anything else is rejected. Files are placed straight into the base folder; Live Snapshot picks them up automatically if they're already there.</div>
+<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">Only recognised filenames (CM/FO/CO/NCDEX/MCX/R1-R2_COMPARISON_REPORT.xlsx) are accepted — anything else is rejected. Files are placed straight into the base folder; Live Snapshot picks them up automatically if they're already there.</div>
 ${checklist}
 <button class="sa-save" style="width:100%;background:var(--green);color:var(--green-d)" onclick="r1r2PickFiles()">📁 Choose files</button>
 <div style="font-size:10px;color:var(--dim);margin-top:10px;font-family:var(--mono)">${dir}</div>`);

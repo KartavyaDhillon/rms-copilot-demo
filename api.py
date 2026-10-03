@@ -3329,7 +3329,7 @@ _r1r2_last_answered_at: dict = {}
 @app.get("/r1r2/captcha/pending")
 def r1r2_captcha_pending():
     """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
-    for the Segment-wise Collateral Movement Report's Live Snapshot download.
+    for the R1-R2 Comparison Report's Live Snapshot download.
     Same logic as /ms15/captcha/pending, scoped to R1R2_FOLDER.
 
     Must resolve the SAME folder core.pipelines.r1_r2_comparison.BASE_FOLDER
@@ -4110,37 +4110,6 @@ def r1r2_mcx_download_stream():
     return _r1r2_stream_endpoint(
         "from core.pipelines.r1_r2_comparison import download_mcx_only as _f; _f()",
         "r1r2_mcx_download")
-
-
-@app.get("/r1r2/ms15backup/list")
-def r1r2_ms15backup_list():
-    """Today's Margin Shortage (15-min) backup runs — feeds the tickbox popup
-    behind the "15-min Backup" tile. Each entry says which run number it is,
-    what time its files are stamped, and whether all 4 of CM/FO/CO/NCDEX are
-    actually in that backup (a run missing one can't be used).
-
-    Passive poll from the modal only — verbose scanning is off so it never
-    spams the server console."""
-    from core.pipelines.r1_r2_comparison import list_ms15_backup_runs, _ms15_backup_date_dir
-    import datetime as _mb_dt
-    today = _mb_dt.datetime.now().strftime("%d-%m-%Y")
-    runs = list_ms15_backup_runs(today, verbose=False)
-    return {"date": today, "folder": _ms15_backup_date_dir(today), "runs": runs}
-
-
-@app.get("/r1r2/ms15backup-stream")
-def r1r2_ms15backup_stream(run: int):
-    """SSE: 15-min Backup mode. Morning baseline is CLI's backup exactly as
-    always; the second set's CM/FO/CO/NCDEX come from the chosen Margin
-    Shortage backup run, and the 5th file is the MCX **Deposit** file fetched
-    the same way Live Snapshot fetches it (MS15's own MCX file is the 90%
-    report — a different thing entirely). No once-per-day limit: each run
-    targets a different 15-min snapshot."""
-    _run_no = int(run)
-    return _r1r2_stream_endpoint(
-        "from core.pipelines.r1_r2_comparison import run_r1r2_ms15_backup as _f; "
-        f"_f({_run_no})",
-        "r1r2_ms15backup")
 
 
 @app.get("/r1r2/readiness")
