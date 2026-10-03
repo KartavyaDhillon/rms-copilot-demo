@@ -3965,17 +3965,19 @@ async function saBkDelete(id, btn){
 // already used for Credentials/Email — closing the file browser and putting
 // one unambiguous OK button in front of you, same convention throughout this
 // dashboard rather than a one-off style just for backups.
-function _bkDownloadResultModal(ok, fail, folderNote){
-  const allOk=fail===0 && ok>0, allFail=ok===0 && fail>0;
+function _bkDownloadResultModal(ok, fail, folderNote, skipped){
+  skipped=skipped||0;
+  const allOk=fail===0 && ok>0, allFail=ok===0 && fail>0 && skipped===0;
   const icon=allOk?'✓':(allFail?'✕':'⚠');
   const accent=allOk?'var(--green)':(allFail?'var(--red)':'var(--amber)');
   const accentBg=allOk?'rgba(52,211,153,.12)':(allFail?'rgba(248,113,113,.12)':'rgba(251,191,36,.12)');
   const accentBorder=allOk?'rgba(52,211,153,.45)':(allFail?'rgba(248,113,113,.45)':'rgba(251,191,36,.45)');
-  const title=allOk?'✓ Downloaded':(allFail?'✕ Download failed':'⚠ Partly downloaded');
-  const headline=allOk?`${ok} file${ok===1?'':'s'} saved`:(allFail?`All ${fail} file${fail===1?'':'s'} failed`:`${ok} saved, ${fail} failed`);
+  const title=allOk?'✓ Downloaded':(allFail?'✕ Download failed':'⚠ Done, with notes');
+  let headline=allOk?`${ok} file${ok===1?'':'s'} saved`:(allFail?`All ${fail} file${fail===1?'':'s'} failed`:`${ok} saved${fail?`, ${fail} failed`:''}`);
+  const skipNote=skipped>0?`<div style="font-size:12px;color:var(--muted);margin-top:4px">${skipped} file${skipped===1?'':'s'} skipped — no data for this code in ${skipped===1?'that file':'those files'} (e.g. not traded on that exchange).</div>`:'';
   const btnBg=allOk?'var(--green)':(allFail?'var(--red)':'var(--amber)');
   const btnFg=allOk?'var(--green-d)':(allFail?'#2b0a0a':'var(--amber-d)');
-  saShowModal(title, `<div style="text-align:center;padding:14px 0 4px"><div style="width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:grid;place-items:center;font-size:28px;background:${accentBg};border:1px solid ${accentBorder};color:${accent}">${icon}</div><div style="font-size:15px;color:var(--ink);font-weight:650;margin-bottom:6px">${headline}</div><div style="font-size:13px;color:var(--muted)">${folderNote}</div></div><button class="sa-save" style="width:100%;margin-top:18px;background:${btnBg};color:${btnFg}" onclick="saCloseModal()">OK</button>`);
+  saShowModal(title, `<div style="text-align:center;padding:14px 0 4px"><div style="width:56px;height:56px;border-radius:50%;margin:0 auto 16px;display:grid;place-items:center;font-size:28px;background:${accentBg};border:1px solid ${accentBorder};color:${accent}">${icon}</div><div style="font-size:15px;color:var(--ink);font-weight:650;margin-bottom:6px">${headline}</div><div style="font-size:13px;color:var(--muted)">${folderNote}</div>${skipNote}</div><button class="sa-save" style="width:100%;margin-top:18px;background:${btnBg};color:${btnFg}" onclick="saCloseModal()">OK</button>`);
 }
 
 async function saBkDownloadSelected(){
@@ -6040,31 +6042,56 @@ async function pxBkDownloadSelected(){
     try{ dirHandle=await window.showDirectoryPicker({mode:'readwrite'}); }
     catch(e){ if(e.name==='AbortError'){ if(msg) msg.innerHTML=''; return; } }
     if(dirHandle){
-      let ok=0, fail=0;
+      let ok=0, fail=0, skipped=0;
       for(const {path,fn} of items){
         try{
           const r=await fetch(_pxBkDlUrl(pipe,path));
           if(!r.ok){ fail++; continue; }
+          const ct=r.headers.get('content-type')||'';
+          if(ct.includes('application/json')){
+            // Backend's way of saying "this file had nothing for the code(s)
+            // you filtered to" — e.g. account doesn't trade this exchange at
+            // all — skip it instead of saving a useless empty file.
+            const j=await r.json().catch(()=>null);
+            if(j && j.error==='no_data'){ skipped++; continue; }
+            fail++; continue;
+          }
           const blob=await r.blob();
           const fh=await dirHandle.getFileHandle(fn,{create:true});
           const w=await fh.createWritable(); await w.write(blob); await w.close();
           ok++;
         }catch(e2){ fail++; }
       }
-      _bkDownloadResultModal(ok, fail, 'Saved to the folder you chose.');
+      _bkDownloadResultModal(ok, fail, 'Saved to the folder you chose.', skipped);
       return;
     }
   }
-  // Fallback: individual browser downloads
+  // Fallback: fetch + blob (not a plain <a download> click) so a "no_data"
+  // JSON response can be detected and skipped the same way as above, instead
+  // of the browser just saving a tiny JSON file named like a real export.
   if(msg) msg.innerHTML=`<span style="color:var(--muted)">Downloading ${items.length} file(s) to your Downloads folder…</span>`;
+  let ok2=0, fail2=0, skipped2=0;
   for(const {path,fn} of items){
-    const a=document.createElement('a');
-    a.href=_pxBkDlUrl(pipe,path);
-    a.download=fn;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    try{
+      const r=await fetch(_pxBkDlUrl(pipe,path));
+      if(!r.ok){ fail2++; continue; }
+      const ct=r.headers.get('content-type')||'';
+      if(ct.includes('application/json')){
+        const j=await r.json().catch(()=>null);
+        if(j && j.error==='no_data'){ skipped2++; continue; }
+        fail2++; continue;
+      }
+      const blob=await r.blob();
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url; a.download=fn;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      ok2++;
+    }catch(e2){ fail2++; }
     await new Promise(r=>setTimeout(r,350));
   }
-  _bkDownloadResultModal(items.length, 0, 'Check your browser\'s Downloads folder.');
+  _bkDownloadResultModal(ok2, fail2, 'Check your browser\'s Downloads folder.', skipped2);
 }
 // ── Run-filter chip helpers ─────────────────────────────────────────────────
 function _pxRunCount(pipe){ return pipe==='ms15'?9:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=9 runs/day

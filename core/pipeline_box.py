@@ -163,7 +163,6 @@ PIPELINES = {
             "backup_root_env": "CLI_FOLDER", "backup_subdir": "BACKUPFILES AUTOMATED",
             "file_types": [
                 ["Allocation Detail", "Allocation_Detail_*.csv", "Allocation_Detail_<DDMMYYYY>.csv"],
-                ["Intermediate", "Intermediate.csv", "Intermediate.csv"],
                 ["CLI Prudential Limit", "CLI_PRUDENTIAL_LIMIT.txt", "CLI_PRUDENTIAL_LIMIT.txt"],
                 ["CM Client Collaterals", "CM_ClientLevelCollaterals_*.csv,CM_ClientLevelCollaterals_*.txt", "CM_ClientLevelCollaterals_<date>.csv"],
                 ["FO Client Collaterals", "FO_ClientLevelCollaterals_*.csv,FO_ClientLevelCollaterals_*.txt", "FO_ClientLevelCollaterals_<date>.csv"],
@@ -2382,10 +2381,15 @@ def pb_backup_file_filtered(pipe, path, client_codes):
     normal table. Every CSV/XLSX file is handled generically by trying each
     name in _PB_ACCOUNT_COL_CANDIDATES.
 
-    Returns (filename, content_bytes, media_type) on success, or None if the
-    file has no recognizable account column (or isn't one of the two special
-    text formats) — caller falls back to serving the original, unfiltered
-    file rather than failing outright.
+    Returns (filename, content_bytes, media_type) on success — content_bytes
+    is None instead of b"" when the file WAS recognized/parsed but zero rows
+    matched the given code(s) (e.g. that account doesn't trade this exchange
+    at all), so the caller can tell "nothing to download here" apart from
+    "here's a valid, genuinely empty file" and skip it instead of handing
+    back a useless blank file. Returns None (not a tuple) if the file has no
+    recognizable account column at all (or isn't one of the two special text
+    formats) — caller falls back to serving the original, unfiltered file
+    rather than failing outright.
 
     Handles BOTH a real on-disk path AND a 'db:<pipeline>:<id>' Postgres
     reference (same convention as pb_backup_file/pb_backup_db_file) — a file
@@ -2425,6 +2429,8 @@ def pb_backup_file_filtered(pipe, path, client_codes):
             return None
         header, rows = lines[0], lines[1:]
         kept = [ln for ln in rows if ln.split(",", 1)[0].strip().upper() in codes]
+        if not kept:
+            return (fname, None, "text/plain")
         out = "\n".join([header] + kept) + "\n"
         return (fname, out.encode("utf-8"), "text/plain")
 
@@ -2439,6 +2445,8 @@ def pb_backup_file_filtered(pipe, path, client_codes):
             return None
         header, rows = lines[0], lines[1:]
         kept = [ln for ln in rows if ln.split("|", 1)[0].strip().upper() in codes]
+        if not kept:
+            return (fname, None, "text/plain")
         out = "\n".join([header] + kept) + "\n"
         return (fname, out.encode("utf-8"), "text/plain")
 
@@ -2479,6 +2487,9 @@ def pb_backup_file_filtered(pipe, path, client_codes):
         return None
     mask = df[col].astype(str).str.strip().str.upper().isin(codes)
     filtered = df[mask]
+    if filtered.empty:
+        return (fname, None, "text/csv" if is_csv else
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     if is_csv:
         buf_s = filtered.to_csv(index=False)
         return (fname, buf_s.encode("utf-8"), "text/csv")
@@ -2938,6 +2949,7 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
                       "allocation_detail", "cli_prudential_limit")
 
     # ── 1. Walk CLI's backup folders, group files by (date, slot) directory ──
+    inputs, warnings = [], []
     by_dir = {}   # (date_obj, slot_str) → list of (fn, fpp)
     for root in _pb_backup_roots("cli"):
         if not os.path.isdir(root): continue
@@ -2952,15 +2964,66 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
                 if pdate is not None:
                     cdate = pdate
                     found_date_idx = i
-                elif found_date_idx is not None and slot is None and part.strip() in ("Morning", "Afternoon", "Evening"):
-                    slot = part.strip()
+                elif found_date_idx is not None and slot is None:
+                    p = part.strip()
+                    if p in ("Morning", "Afternoon", "Evening"):
+                        slot = p
+                    else:
+                        slot = _pb_cli_slot_from_dirname(p) or slot
             if cdate is None: continue
             if d_from and cdate < d_from: continue
             if d_to   and cdate > d_to:   continue
             key = (cdate, slot)   # slot may be None for old flat structure
             by_dir.setdefault(key, []).extend((fn, os.path.join(dp, fn)) for fn in files)
 
-    inputs, warnings = [], []
+    # ── 1b. Postgres supplement — a file archived to Postgres (a live run on
+    # ANY machine, or a Backfill-to-DB) but with no local disk copy on THIS
+    # machine must still be found, otherwise a fresh/secondary machine's
+    # lookup always comes back empty even though the data genuinely exists
+    # (same reasoning as pb_list_backups's own Postgres supplement a bit
+    # further up this file). Downloads just the files this lookup actually
+    # cares about (KNOWN_PREFIXES) into a throwaway temp folder so the
+    # existing disk-based scanning code below can read them exactly like a
+    # normal file, rather than duplicating the CSV/txt parsing per-source.
+    _tmp_dir = None
+    try:
+        if os.getenv("USE_POSTGRES", "false").strip().lower() == "true":
+            from core.db_postgres import list_run_files as _cli_db_list, get_run_file as _cli_db_get
+            seen = {(cdate, slot, fn.lower())
+                    for (cdate, slot), items in by_dir.items() for fn, _fpp in items}
+            db_rows = _cli_db_list(pipeline="cli", from_date=(from_date or None),
+                                    to_date=(to_date or None), days=36500)
+            wanted = [r for r in db_rows if any(
+                (r.get("filename") or "").lower().startswith(p) for p in KNOWN_PREFIXES)]
+            if wanted:
+                import tempfile
+                _tmp_dir = tempfile.mkdtemp(prefix="cli_lookup_")
+                for r in wanted:
+                    fn = r.get("filename") or ""
+                    fdate = r.get("run_date")
+                    if not fn or not fdate: continue
+                    if d_from and fdate < d_from: continue
+                    if d_to   and fdate > d_to:   continue
+                    tag = str(r.get("tag") or "")
+                    m = re.search(r"/(Morning|Afternoon|Evening)$", tag)
+                    rslot = m.group(1) if m else None
+                    dedupe_key = (fdate, rslot, fn.lower())
+                    if dedupe_key in seen: continue   # already have this file on disk
+                    got = _cli_db_get(r["id"])
+                    if not got: continue
+                    _, content = got
+                    dest_dir = os.path.join(_tmp_dir, fdate.isoformat(), rslot or "_")
+                    os.makedirs(dest_dir, exist_ok=True)
+                    fpp = os.path.join(dest_dir, fn)
+                    try:
+                        with open(fpp, "wb") as f: f.write(content)
+                    except Exception:
+                        continue
+                    by_dir.setdefault((fdate, rslot), []).append((fn, fpp))
+                    seen.add(dedupe_key)
+    except Exception as e:
+        warnings.append(f"Postgres lookup skipped (non-fatal): {e}")
+
     sorted_keys = sorted(by_dir.keys(), key=lambda k: (k[0], k[1] or ""), reverse=False)
     sorted_keys.sort(key=lambda k: k[0], reverse=True)
     sorted_keys = sorted_keys[:200]
@@ -3090,6 +3153,8 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
         except Exception: dd = datetime.datetime.min
         return (-dd.toordinal(), _SLOT_ORDER.get(x.get("slot"), 9))
     inputs.sort(key=_sort_key)
+    if _tmp_dir:
+        shutil.rmtree(_tmp_dir, ignore_errors=True)
     return {"ok": True, "codes": codes, "inputs": inputs, "outputs": [], "warnings": warnings[:20]}
 
 

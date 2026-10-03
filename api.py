@@ -2256,6 +2256,13 @@ def px_backup_download_filtered(pipe: str = "", path: str = "", client_code: str
         got = _pbbff(pipe, path, codes)
         if got:
             fname, content, media_type = got
+            if content is None:
+                # Recognized/parsed fine, but none of the given code(s) appear in
+                # this particular file (e.g. the account doesn't trade this
+                # exchange at all) — a distinguishable JSON body instead of a
+                # blob, so the caller can skip it rather than save a useless
+                # empty file.
+                return {"error": "no_data", "message": f"No rows for {client_code} in {fname}"}
             return _PX_Resp2(content=content, media_type=media_type,
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
     # No codes given, or the file couldn't be filtered — serve the original.
