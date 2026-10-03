@@ -3772,12 +3772,19 @@ function saBackup(tab){
     {kind:'input_exception',   icon:'🚫',label:'Exception',        col:'#a78bfa', sec:'Daily Reports'},
   ];
 
-  // Known LAS output filenames for sub-filter chips (multi-select)
+  // Known LAS output filenames for sub-filter chips (multi-select).
+  // Most entries are STATIC names (no date in the filename). PayIn_PayOut_Summary
+  // is the exception — its on-disk name always carries today's date (e.g.
+  // "PayIn_PayOut_Summary.xlsx" unprotected, "PayIn_PayOut_Summary_01102026.xlsx"
+  // password-protected, "PayIn_PayOut_Summary_01102026.png" dashboard image) — so
+  // its chip value is the bare PREFIX (no extension) and the match below is a
+  // startsWith, not an exact match, so it still matches whatever today's date is.
   const LAS_FILES=[
     {val:'vertical_1.xlsx',                  lbl:'vertical_1'},
     {val:'VERTICAL_2.xlsx',                  lbl:'VERTICAL_2'},
     {val:'LAS_FUNDING_OUTPUT.xlsx',          lbl:'FUNDING_OUTPUT'},
     {val:'LAS_FUNDING_OUTPUT_FILTERED.xlsx', lbl:'FUNDING_FILTERED'},
+    {val:'PayIn_PayOut_Summary',             lbl:'PayIn/PayOut Summary'},
     {val:'VERTICAL_1_SS.JPG',                lbl:'V1 Screenshot'},
     {val:'VERTICAL_2_SS.JPG',                lbl:'V2 Screenshot'},
     {val:'FUNDING_SS.JPG',                   lbl:'Funding SS'},
@@ -3886,10 +3893,14 @@ async function saBackupFind(){
   if(window._saBkKinds&&window._saBkKinds.size>0){
     files=files.filter(f=>window._saBkKinds.has(f.kind));
   }
-  // LAS sub-filter — if specific filenames are picked, only show those (case-insensitive)
+  // LAS sub-filter — if specific filenames are picked, only show those
+  // (case-insensitive PREFIX match, not exact — PayIn_PayOut_Summary's chip
+  // value is a bare prefix since that file's real name always carries
+  // today's date; every other entry's value already equals its full static
+  // filename, so startsWith still behaves like an exact match for those).
   if(window._saBkLasFiles&&window._saBkLasFiles.size>0){
-    const lasSet=new Set([...window._saBkLasFiles].map(s=>s.toLowerCase()));
-    files=files.filter(f=>f.kind!=='las_output'||lasSet.has((f.filename||'').toLowerCase()));
+    const lasVals=[...window._saBkLasFiles].map(s=>s.toLowerCase());
+    files=files.filter(f=>f.kind!=='las_output'||lasVals.some(v=>(f.filename||'').toLowerCase().startsWith(v)));
   }
   if(!files.length){
     const selLabel=(window._saBkKinds&&window._saBkKinds.size>0)?[...window._saBkKinds].join(', '):'';

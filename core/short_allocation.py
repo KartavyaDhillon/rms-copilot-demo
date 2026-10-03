@@ -1243,10 +1243,21 @@ def housekeep_common_files():
     return moved
 
 
+# "LAS Debit Balances-*.xlsx" below is a loose fnmatch glob — its `*` matches
+# ANY characters, including a stray extra dot, so a near-miss name like
+# "LAS Debit Balances-01-10-2026..xlsx" (double dot before the extension)
+# used to upload "successfully" even though LAS4.py's own exact-filename
+# lookup (f"LAS Debit Balances-{today_dd_mm_yyyy}.xlsx") would never find it —
+# the file sat in the folder all day, silently unused, with no error anywhere.
+# This regex enforces the ONLY filename LAS4.py will ever actually look for.
+_LAS_DEBIT_EXACT_RE = re.compile(r"^las debit balances-\d{2}-\d{2}-\d{4}\.xlsx$")
+
 def _name_ok(name, target):
     import fnmatch
     spec = SA_VALID.get(target, SA_VALID["short_allocation"])
     n = name.lower()
+    if target == "las_funding" and n.startswith("las debit balances-"):
+        return bool(_LAS_DEBIT_EXACT_RE.match(n))
     return any(fnmatch.fnmatch(n, g.lower()) for g in spec["globs"])
 
 

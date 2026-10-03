@@ -2513,10 +2513,26 @@ def _las_narration_tentative_email(df_main_raw):
             ax.add_patch(_nt_plt.Rectangle((x0 + 0.01, y0 + 0.2), 0.09, rh - 0.4, fc=ACCENT[r % 3], ec="none"))
             ax.add_patch(_nt_plt.Rectangle((xs[1] + 0.1, y0 + 0.12), xs[2] - xs[1] - 0.2, rh - 0.24, fc="#F5F7FB", ec="none"))
             ax.text(xs[0] + 0.4, yc, row[0], fontsize=14.5, fontweight="bold", color=INK, va="center", ha="left")
+            is_cash_row = str(row[0]).strip().upper().startswith("CASH")
             for i in range(1, 6):
                 v = row[i]
-                colr = RED if v < -0.5 else (GREEN if v > 0.5 else MUTE)
-                ax.text((xs[i] + xs[i + 1]) / 2, yc, _nt_indian(v), fontsize=14.5 if i == 1 else 14, fontweight="bold" if i == 1 else "normal", color=colr, va="center", ha="center")
+                if is_cash_row and i == 2:            # Buying -> always RED, sign dropped
+                    disp, colr = _nt_indian(abs(v)), RED
+                elif is_cash_row and i == 3:          # Selling -> always GREEN, sign dropped
+                    disp, colr = _nt_indian(abs(v)), GREEN
+                elif is_cash_row and i == 1:          # Total -> magnitude only, inverted color rule
+                    buying, selling = row[2], row[3]  #   selling > buying (signed total -ve) -> GREEN
+                    if abs(selling) > abs(buying):    #   buying > selling (signed total +ve) -> RED
+                        colr = GREEN
+                    elif abs(buying) > abs(selling):
+                        colr = RED
+                    else:
+                        colr = MUTE
+                    disp = _nt_indian(abs(v))
+                else:
+                    colr = RED if v < -0.5 else (GREEN if v > 0.5 else MUTE)
+                    disp = _nt_indian(v)
+                ax.text((xs[i] + xs[i + 1]) / 2, yc, disp, fontsize=14.5 if i == 1 else 14, fontweight="bold" if i == 1 else "normal", color=colr, va="center", ha="center")
         ax.add_patch(_nt_plt.Rectangle((0, 0), W, 0.65, fc="#E9EDF4", ec="none"))
         ax.text(0.5, 0.325, "Cash  |  Futures  |  MCX  |  Daily Pay-In / Pay-Out", fontsize=12, color="#5B6577", va="center")
         ax.text(W - 0.5, 0.325, "Master Capital Services Ltd", fontsize=12, color="#5B6577", va="center", ha="right", fontweight="bold")
@@ -2574,7 +2590,11 @@ def _las_narration_tentative_email(df_main_raw):
     sheets = {name: _nt_build_sheet_df(df_main_raw, col) for name, col in _DATA_SHEETS}
     narr_rows = _nt_compute_narration(sheets)
     stamp = datetime.now().strftime("%d-%b-%Y %H:%M")
-    xlsx_path = os.path.join(BASE_FOLDER, f"{_FILE_PREFIX}_{EMAIL_DATE}.xlsx")
+    # NOTE: xlsx_path deliberately has NO date suffix here — _nt_password_protect()
+    # below adds its own "_<DDMMYYYY>" suffix when it saves the protected copy.
+    # Adding EMAIL_DATE here too used to produce a double-dated filename like
+    # "PayIn_PayOut_Summary_01102026_01102026.xlsx" — fixed, single date now.
+    xlsx_path = os.path.join(BASE_FOLDER, f"{_FILE_PREFIX}.xlsx")
     png_path = os.path.join(BASE_FOLDER, f"{_FILE_PREFIX}_{EMAIL_DATE}.png")
     _nt_write_excel(xlsx_path, narr_rows, sheets)
     _nt_write_dashboard(png_path, narr_rows, stamp)
