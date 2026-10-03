@@ -5991,57 +5991,106 @@ async function pxBackupFind(){
     box.innerHTML=`<div style="text-align:center;padding:24px 0;color:var(--dim)"><div style="font-size:28px;margin-bottom:8px">📭</div><div style="font-size:13px">No matching backup files in this range.</div><div style="font-size:11px;color:var(--muted);margin-top:4px">Try widening the date range or selecting different types.</div></div>`;
     return;
   }
-  // Group by date descending (date format DD-MM-YYYY)
   const iso=s=>{const m=(s||'').match(/(\d{2})-(\d{2})-(\d{4})/);return m?`${m[3]}-${m[2]}-${m[1]}`:'0000';};
-  const byDate={};
-  files.forEach(f=>{(byDate[f.date]=byDate[f.date]||[]).push(f);});
-  const dates=Object.keys(byDate).sort((a,b)=>iso(b).localeCompare(iso(a)));
   const MON=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let rows='';
-  dates.forEach((date,di)=>{
-    const dFiles=byDate[date];
-    const p=date.split('-'); const dLabel=p.length===3?`${p[0]} ${MON[parseInt(p[1],10)]||p[1]} ${p[2]}`:date;
-    rows+=`<div style="padding:6px 12px 4px;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);background:var(--panel-2);border-bottom:1px solid var(--line)${di>0?';border-top:1px solid var(--line)':''}">${dLabel} · ${dFiles.length} file(s)</div>`;
-    dFiles.forEach((f,fi)=>{
-      const m=_pxBkRowMeta(f.name);
-      const border=fi<dFiles.length-1?'border-bottom:1px solid rgba(34,41,50,.4)':'';
-      const pEsc=(f.path||'').replace(/"/g,'&quot;');
-      rows+=`<div class="pxBkRow" style="display:flex;align-items:center;gap:10px;padding:9px 12px;${border};transition:background .1s" onmouseenter="this.style.background='rgba(255,255,255,.03)'" onmouseleave="this.style.background=''">
+  let rows='', footer, countLbl;
+
+  if(clientCode){
+    // A client code is filled in — don't list all 210 individual per-date
+    // files, group them by TYPE (5-ish groups) since that's what you'll
+    // actually get back when you download (merged, one file per type, Date
+    // column inserted). window._pxBkGroups is read by pxBkDownloadSelected /
+    // pxBkDownloadOneGroup below.
+    const groups={};
+    files.forEach(f=>{
+      const label=_pxBkRowMeta(f.name).label;
+      (groups[label]=groups[label]||[]).push(f);
+    });
+    window._pxBkGroups=groups;
+    const labels=Object.keys(groups).sort();
+    labels.forEach((label,gi)=>{
+      const g=groups[label];
+      const m=_pxBkRowMeta(g[0].name);
+      const dates=[...new Set(g.map(f=>f.date))].sort((a,b)=>iso(a).localeCompare(iso(b)));
+      const totalKB=(g.reduce((s,f)=>s+(f.size||0),0)/1024).toFixed(1);
+      const labelEsc=label.replace(/"/g,'&quot;');
+      const border=gi<labels.length-1?'border-bottom:1px solid rgba(34,41,50,.4)':'';
+      rows+=`<div class="pxBkGroupRow" style="display:flex;align-items:center;gap:10px;padding:11px 12px;${border}">
+  <input type="checkbox" class="pxBkGroupChk" data-label="${labelEsc}" checked style="flex-shrink:0;accent-color:var(--teal)">
+  <span style="display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;background:color-mix(in srgb,${m.col} 12%,transparent);color:${m.col};border:1px solid color-mix(in srgb,${m.col} 30%,transparent)">${m.icon} ${m.label}</span>
+  <div style="flex:1;min-width:0">
+    <div style="font-family:var(--mono);font-size:12px;color:var(--ink)">${g.length} file(s) across ${dates.length} date(s) — merged into 1</div>
+    <div style="font-size:10px;color:var(--muted);margin-top:2px">${dates[0]} → ${dates[dates.length-1]} · ${totalKB} KB total (before filtering)</div>
+  </div>
+  <button onclick="pxBkDownloadOneGroup('${labelEsc}')" title="Download merged — all dates, Date column inserted, filtered to ${clientCode}" style="flex-shrink:0;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.25);cursor:pointer;font-size:14px;transition:background .15s" onmouseenter="this.style.background='rgba(52,211,153,.22)'" onmouseleave="this.style.background='rgba(52,211,153,.1)'">⬇</button>
+</div>`;
+    });
+    countLbl=`${labels.length} file type(s) from ${files.length} backup file(s) · filtered to <b style="color:var(--teal)">${clientCode}</b>`;
+    footer=`<div style="font-size:10.5px;color:var(--dim);padding:8px 12px;border-top:1px solid var(--line);background:var(--panel-2)">Each row above downloads as ONE merged file for that type — every matching date's rows stacked together with a Date column, not one file per date.</div>`;
+  } else {
+    // No client code — original behaviour: every individual backup file,
+    // grouped by date, each downloadable (and selectable) on its own.
+    const byDate={};
+    files.forEach(f=>{(byDate[f.date]=byDate[f.date]||[]).push(f);});
+    const dates=Object.keys(byDate).sort((a,b)=>iso(b).localeCompare(iso(a)));
+    dates.forEach((date,di)=>{
+      const dFiles=byDate[date];
+      const p=date.split('-'); const dLabel=p.length===3?`${p[0]} ${MON[parseInt(p[1],10)]||p[1]} ${p[2]}`:date;
+      rows+=`<div style="padding:6px 12px 4px;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);background:var(--panel-2);border-bottom:1px solid var(--line)${di>0?';border-top:1px solid var(--line)':''}">${dLabel} · ${dFiles.length} file(s)</div>`;
+      dFiles.forEach((f,fi)=>{
+        const m=_pxBkRowMeta(f.name);
+        const border=fi<dFiles.length-1?'border-bottom:1px solid rgba(34,41,50,.4)':'';
+        const pEsc=(f.path||'').replace(/"/g,'&quot;');
+        rows+=`<div class="pxBkRow" style="display:flex;align-items:center;gap:10px;padding:9px 12px;${border};transition:background .1s" onmouseenter="this.style.background='rgba(255,255,255,.03)'" onmouseleave="this.style.background=''">
   <input type="checkbox" class="pxBkChk" data-path="${pEsc}" data-fn="${(f.name||'file').replace(/"/g,'&quot;')}" data-date="${f.date||''}" style="flex-shrink:0;accent-color:var(--teal)">
   <span style="display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px;white-space:nowrap;background:color-mix(in srgb,${m.col} 12%,transparent);color:${m.col};border:1px solid color-mix(in srgb,${m.col} 30%,transparent)">${m.icon} ${m.label}</span>
   <div style="flex:1;min-width:0">
     <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${f.name||''}">${f.name||'—'}</div>
     <div style="font-size:10px;color:var(--muted);margin-top:2px">${f.run?`<span style="color:var(--teal);font-weight:600">Run ${f.run}</span> · `:''}${f.time?`<span style="font-weight:600">${f.time}</span> · `:''}${f.date} · ${(f.size/1024).toFixed(1)} KB</div>
   </div>
-  <a href="${_pxBkDlUrl(pipe,f.path||'',clientCode)}" download="${(f.name||'file').replace(/"/g,'')}" title="Download this file${clientCode?' (filtered to '+clientCode+')':''}" style="flex-shrink:0;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.25);text-decoration:none;font-size:14px;transition:background .15s" onmouseenter="this.style.background='rgba(52,211,153,.22)'" onmouseleave="this.style.background='rgba(52,211,153,.1)'">⬇</a>
+  <a href="${_pxBkDlUrl(pipe,f.path||'',clientCode)}" download="${(f.name||'file').replace(/"/g,'')}" title="Download this file" style="flex-shrink:0;width:28px;height:28px;display:grid;place-items:center;border-radius:7px;background:rgba(52,211,153,.1);color:var(--green);border:1px solid rgba(52,211,153,.25);text-decoration:none;font-size:14px;transition:background .15s" onmouseenter="this.style.background='rgba(52,211,153,.22)'" onmouseleave="this.style.background='rgba(52,211,153,.1)'">⬇</a>
 </div>`;
+      });
     });
-  });
+    countLbl=`${files.length} file(s)`;
+    footer=`<div class="sa-field" style="margin-top:10px"><label>Or copy on the RMS machine — destination folder (existing or new)</label><div style="display:flex;gap:8px"><input id="pxBkDest" style="flex:1" placeholder="click Browse to choose"><button type="button" class="sa-tool" onclick="pxBrowseDest()" data-tip="Pick a folder on this machine to copy the backed-up files into.">📁 Browse…</button></div></div>
+<button class="sa-save" style="width:100%" onclick="pxBackupCopy()">⧉ Copy selected → destination</button><div class="sa-msg" id="pxBkMsg"></div>`;
+  }
+
+  const selAllHandler=clientCode
+    ? "document.querySelectorAll('.pxBkGroupChk').forEach(c=>c.checked=this.checked)"
+    : "document.querySelectorAll('.pxBkChk').forEach(c=>c.checked=this.checked)";
   const resHtml=`
 <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
   <button onclick="pxBackup('${pipe}','files')" style="font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer" onmouseenter="this.style.color='var(--ink)'" onmouseleave="this.style.color='var(--muted)'">← Back</button>
-  <span style="font-size:11px;color:var(--muted);flex:1">${files.length} file(s)${clientCode?` · filtered to <b style="color:var(--teal)">${clientCode}</b>`:''} · <label style="cursor:pointer"><input type="checkbox" onchange="document.querySelectorAll('.pxBkChk').forEach(c=>c.checked=this.checked)"> select all</label></span>
+  <span style="font-size:11px;color:var(--muted);flex:1">${countLbl} · <label style="cursor:pointer"><input type="checkbox" checked onchange="${selAllHandler}"> select all</label></span>
   <button onclick="pxBkDownloadSelected()" style="font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px;background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.3);cursor:pointer">⬇ Download to my PC</button>
 </div>
 <div style="max-height:45vh;overflow-y:auto;border:1px solid var(--line);border-radius:12px;overflow-x:hidden">${rows}</div>
 <div id="pxBkDlMsg" style="margin-top:8px;min-height:18px;font-size:12px"></div>
-<div class="sa-field" style="margin-top:10px"><label>Or copy on the RMS machine — destination folder (existing or new)</label><div style="display:flex;gap:8px"><input id="pxBkDest" style="flex:1" placeholder="click Browse to choose"><button type="button" class="sa-tool" onclick="pxBrowseDest()" data-tip="Pick a folder on this machine to copy the backed-up files into.">📁 Browse…</button></div></div>
-<button class="sa-save" style="width:100%" onclick="pxBackupCopy()">⧉ Copy selected → destination</button><div class="sa-msg" id="pxBkMsg"></div>`;
-  saShowModal('📦 File archive · '+files.length+' file(s)', resHtml);
+${footer}`;
+  saShowModal('📦 File archive · '+(clientCode?Object.keys(window._pxBkGroups).length+' type(s)':files.length+' file(s)'), resHtml);
 }
 async function pxBkDownloadSelected(){
   const pipe=window._pxBkPipe||'';
-  const chks=[...document.querySelectorAll('.pxBkChk:checked')];
-  const msg=document.getElementById('pxBkDlMsg');
-  if(!chks.length){ if(msg) msg.innerHTML='<span style="color:var(--amber)">Tick at least one file first.</span>'; return; }
   const clientCode=(window._pxBkClientCode||'').trim();
-  // A client-code filter is set — don't hand back one file per date per
-  // type (5 types × a 30-day range used to mean up to 150 downloads).
-  // Group the checked files by TYPE (same label used for the colored chip
-  // next to each row) and merge each group's matching rows into ONE file
-  // per type, with a Date column so you can still tell which date each row
-  // came from — see /px/backup/download-merged.
-  if(clientCode){ return pxBkDownloadMerged(pipe, chks, clientCode, msg); }
+  const msg=document.getElementById('pxBkDlMsg');
+  // A client-code filter is set — the list above is already grouped by file
+  // TYPE (one row per type, see pxBackupFind), so "download selected" means
+  // "merge+download the checked type-groups", not individual files.
+  if(clientCode){
+    const gchks=[...document.querySelectorAll('.pxBkGroupChk:checked')];
+    if(!gchks.length){ if(msg) msg.innerHTML='<span style="color:var(--amber)">Tick at least one file type first.</span>'; return; }
+    const groupsToDownload={};
+    gchks.forEach(c=>{
+      const label=c.dataset.label;
+      const g=(window._pxBkGroups||{})[label]||[];
+      groupsToDownload[label]=g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file'}));
+    });
+    return pxBkDownloadMerged(pipe, groupsToDownload, clientCode, msg);
+  }
+  const chks=[...document.querySelectorAll('.pxBkChk:checked')];
+  if(!chks.length){ if(msg) msg.innerHTML='<span style="color:var(--amber)">Tick at least one file first.</span>'; return; }
   const items=chks.map(c=>({path:c.dataset.path, fn:c.dataset.fn||'file'}));
   if(msg) msg.innerHTML='<span style="color:var(--muted)">Starting download…</span>';
   // File System Access API (Chrome/Edge) — save into a chosen LOCAL folder
@@ -6101,16 +6150,10 @@ async function pxBkDownloadSelected(){
   }
   _bkDownloadResultModal(ok2, fail2, 'Check your browser\'s Downloads folder.', skipped2);
 }
-async function pxBkDownloadMerged(pipe, chks, clientCode, msg){
-  // Group the checked checkboxes by file TYPE (same label as the colored
-  // chip shown next to each row) — one POST to /px/backup/download-merged
-  // per group, one saved file per group, regardless of how many dates are
-  // in that group.
-  const groups={};
-  chks.forEach(c=>{
-    const label=_pxBkRowMeta(c.dataset.fn||'').label;
-    (groups[label]=groups[label]||[]).push({path:c.dataset.path, date:c.dataset.date||'', name:c.dataset.fn||'file'});
-  });
+async function pxBkDownloadMerged(pipe, groups, clientCode, msg){
+  // `groups`: {label: [{path,date,name}, ...], ...} — one POST to
+  // /px/backup/download-merged per group, one saved file per group,
+  // regardless of how many dates are in that group.
   const labels=Object.keys(groups);
   if(msg) msg.innerHTML=`<span style="color:var(--muted)">Merging ${labels.length} file type(s) across the selected dates…</span>`;
   const dirHandle = ('showDirectoryPicker' in window) ? await (async()=>{
@@ -6148,6 +6191,17 @@ async function pxBkDownloadMerged(pipe, chks, clientCode, msg){
     }catch(e){ fail++; }
   }
   _bkDownloadResultModal(ok, fail, dirHandle?'Saved to the folder you chose — one file per type, all matching dates merged in with a Date column.':'Check your browser\'s Downloads folder — one file per type, all matching dates merged in with a Date column.', skipped);
+}
+async function pxBkDownloadOneGroup(label){
+  // The small ⬇ next to a single type-group row (client-code-filtered view)
+  // — download just that one type's merged file without touching the
+  // checkboxes/"Download to my PC" flow.
+  const pipe=window._pxBkPipe||'';
+  const clientCode=(window._pxBkClientCode||'').trim();
+  const g=(window._pxBkGroups||{})[label]||[];
+  if(!g.length) return;
+  const msg=document.getElementById('pxBkDlMsg');
+  return pxBkDownloadMerged(pipe, {[label]: g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file'}))}, clientCode, msg);
 }
 // ── Run-filter chip helpers ─────────────────────────────────────────────────
 function _pxRunCount(pipe){ return pipe==='ms15'?9:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=9 runs/day
