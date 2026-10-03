@@ -1406,6 +1406,7 @@
     var label = (typeof window._pipeBoxLabel === 'function') ? window._pipeBoxLabel(pipe) : pipe;
     var needsRun = (pipe === 'ctcl' || pipe === 'ms15' || pipe === 'sa');
     var isProbable = (pipe === 'probable');
+    var isCli = (pipe === 'cli');
     var dateNote = isProbable
       ? 'Probable\'s backup folder is named differently from the others — e.g. "21 JUL 2026", not 21-07-2026.'
       : 'Folder name exactly as on disk, e.g. 21-07-2026.';
@@ -1432,35 +1433,56 @@
             '<option value="SHORTAGE">Shortage only</option>' +
           '</select>' +
         '</div>') : '') +
+      (isCli ?
+        ('<div style="margin-bottom:14px;font-size:12px;color:var(--muted)">' +
+          'Got months of backup folders to push at once? Skip the date field above and use ' +
+          '<b>Backfill ALL dates</b> below instead — it finds every DD-MM-YYYY folder under ' +
+          'BACKUPFILES AUTOMATED and archives all of them in one call.</div>') : '') +
       '<div style="display:flex;justify-content:flex-end;gap:10px">' +
         '<button onclick="saCloseModal()" style="padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer">Cancel</button>' +
-        '<button id="pxBackfillGo" style="padding:9px 18px;border-radius:9px;border:none;background:var(--blue);color:#04101f;font-weight:700;cursor:pointer">Confirm</button>' +
+        (isCli ? '<button id="pxBackfillAllGo" style="padding:9px 18px;border-radius:9px;border:1px solid var(--purple,#a78bfa);background:transparent;color:var(--purple,#a78bfa);font-weight:700;cursor:pointer">Backfill ALL dates</button>' : '') +
+        '<button id="pxBackfillGo" style="padding:9px 18px;border-radius:9px;border:none;background:var(--blue);color:#04101f;font-weight:700;cursor:pointer">Confirm (this date only)</button>' +
       '</div>';
     if (typeof window.saShowModal !== 'function') { return; }
     window.saShowModal('☁ Backfill to DB — ' + label, html);
-    var go = document.getElementById('pxBackfillGo');
-    if (go) go.onclick = function () {
-      var date = (document.getElementById('pxBackfillDate').value || '').trim();
+
+    function _doBackfill(dateVal) {
       var run = needsRun ? (parseInt(document.getElementById('pxBackfillRun').value, 10) || 0) : 0;
       var subfolder = isProbable ? (document.getElementById('pxBackfillSubfolder').value || '') : '';
       var url = (pipe === 'sa')
-        ? (API + '/sa/backfill-db?date=' + encodeURIComponent(date) + '&run=' + run + '&password=' + encodeURIComponent(pw || ''))
-        : (API + '/px/backfill-db?pipe=' + encodeURIComponent(pipe) + '&date=' + encodeURIComponent(date) +
+        ? (API + '/sa/backfill-db?date=' + encodeURIComponent(dateVal) + '&run=' + run + '&password=' + encodeURIComponent(pw || ''))
+        : (API + '/px/backfill-db?pipe=' + encodeURIComponent(pipe) + '&date=' + encodeURIComponent(dateVal) +
            '&run=' + run + '&subfolder=' + encodeURIComponent(subfolder) + '&password=' + encodeURIComponent(pw || ''));
       fetch(url, { method: 'POST' })
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (d && d.ok === false) { alert(d.error || 'Failed'); return; }
+          if (typeof window.saCloseModal === 'function') window.saCloseModal();
+          if (dateVal.toUpperCase() === 'ALL') {
+            var nd = (d.dates || []).length;
+            alert('Backfilled ' + nd + ' date folder(s): ' + (d.total_archived || 0) +
+                  ' file(s) archived' + ((d.total_skipped || 0) ? (', ' + d.total_skipped + ' skipped (see server log).') : '.'));
+            return;
+          }
           // Record the backfill so tiles/View can show "DB synced" status
           var now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           var fileCount = (d.archived || []).length;
           if (run) _overrideSaveBackfill(pipe, run, { type: 'backfill', at: now, files: fileCount });
-          if (typeof window.saCloseModal === 'function') window.saCloseModal();
           var n = (d.archived || []).length, s = (d.skipped || []).length;
           alert('Archived ' + n + ' file(s) to Postgres' + (s ? (', ' + s + ' skipped (see server log).') : '.'));
         }).catch(function () {
           if (typeof window.saCloseModal === 'function') window.saCloseModal();
         });
+    }
+
+    var go = document.getElementById('pxBackfillGo');
+    if (go) go.onclick = function () {
+      _doBackfill((document.getElementById('pxBackfillDate').value || '').trim());
+    };
+    var goAll = document.getElementById('pxBackfillAllGo');
+    if (goAll) goAll.onclick = function () {
+      if (!confirm('This will scan every date folder under BACKUPFILES AUTOMATED and archive all of them to Postgres. This can take a while for months of data. Continue?')) return;
+      _doBackfill('ALL');
     };
   }
 

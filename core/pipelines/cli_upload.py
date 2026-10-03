@@ -31,6 +31,7 @@ Tags printed for core.pipeline_box._status():
 """
 import datetime
 import os
+import re
 import shutil
 import time
 
@@ -101,12 +102,32 @@ def backfill_date_to_db(date_str):
     if not os.path.isdir(date_folder):
         return {"ok": False, "error": f"Folder not found: {date_folder}"}
     archived, skipped, tags = [], [], []
-    slot_dirs = [d for d in sorted(os.listdir(date_folder))
-                 if d in ("Morning", "Afternoon", "Evening")
-                 and os.path.isdir(os.path.join(date_folder, d))]
+
+    def _slot_for_subdir(name):
+        """Maps a subfolder name to Morning/Afternoon/Evening for the tag —
+        handles both the word-named folders (Morning/Afternoon/Evening) AND
+        the HH-MM-SS exact-run-time folders some machines actually produce
+        on disk (e.g. "08-36-11", "15-55-53", "20-23-14" — same idea as
+        _cli_time_slot() but classifying from the folder name instead of
+        the current clock). Returns None for anything else (e.g. a loose
+        file sitting directly in the date folder isn't a slot dir)."""
+        if name in ("Morning", "Afternoon", "Evening"):
+            return name
+        m = re.fullmatch(r"(\d{2})-\d{2}-\d{2}", name)
+        if m:
+            hour = int(m.group(1))
+            if hour < 12: return "Morning"
+            if hour < 18: return "Afternoon"
+            return "Evening"
+        return None
+
+    slot_dirs = [(d, _slot_for_subdir(d)) for d in sorted(os.listdir(date_folder))
+                 if os.path.isdir(os.path.join(date_folder, d))]
+    slot_dirs = [(d, slot) for d, slot in slot_dirs if slot is not None]
+
     if slot_dirs:
-        for slot in slot_dirs:
-            slot_path = os.path.join(date_folder, slot)
+        for dirname, slot in slot_dirs:
+            slot_path = os.path.join(date_folder, dirname)
             tag = f"{date_str}/{slot}"
             tags.append(tag)
             for fname in sorted(os.listdir(slot_path)):
@@ -114,9 +135,9 @@ def backfill_date_to_db(date_str):
                 if not os.path.isfile(fpath):
                     continue
                 if _archive_to_db(tag, "backup", fpath):
-                    archived.append(f"{slot}/{fname}")
+                    archived.append(f"{dirname}/{fname}")
                 else:
-                    skipped.append(f"{slot}/{fname}")
+                    skipped.append(f"{dirname}/{fname}")
     else:
         tags.append(date_str)
         for fname in sorted(os.listdir(date_folder)):
@@ -128,6 +149,41 @@ def backfill_date_to_db(date_str):
             else:
                 skipped.append(fname)
     return {"ok": True, "folder": date_folder, "tags": tags, "archived": archived, "skipped": skipped}
+
+
+def backfill_all_to_db():
+    """Loop backfill_date_to_db() over EVERY date folder already sitting
+    under BACKUPFILES AUTOMATED — for pushing months of history into
+    Postgres in one call instead of entering each date by hand through the
+    Backfill-to-DB prompt. Safe to re-run (each file just adds another row,
+    same as backfill_date_to_db itself); skips anything that isn't a
+    DD-MM-YYYY-named folder."""
+    base_folder = os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT")
+    root = os.path.join(base_folder, "BACKUPFILES AUTOMATED")
+    if not os.path.isdir(root):
+        return {"ok": False, "error": f"Folder not found: {root}"}
+    date_re = re.compile(r"^\d{2}-\d{2}-\d{4}$")
+    def _key(d):
+        try: return datetime.datetime.strptime(d, "%d-%m-%Y")
+        except Exception: return datetime.datetime.min
+    date_folders = sorted(
+        (d for d in os.listdir(root)
+         if date_re.match(d) and os.path.isdir(os.path.join(root, d))),
+        key=_key,
+    )
+    if not date_folders:
+        return {"ok": False, "error": f"No DD-MM-YYYY date folders found under {root}"}
+    per_date, total_archived, total_skipped = [], 0, 0
+    for d in date_folders:
+        r = backfill_date_to_db(d)
+        n_arch = len(r.get("archived", [])) if r.get("ok") else 0
+        n_skip = len(r.get("skipped", [])) if r.get("ok") else 0
+        total_archived += n_arch
+        total_skipped += n_skip
+        per_date.append({"date": d, "ok": r.get("ok", False), "error": r.get("error"),
+                          "archived": n_arch, "skipped": n_skip})
+    return {"ok": True, "dates": date_folders, "per_date": per_date,
+            "total_archived": total_archived, "total_skipped": total_skipped}
 
 
 def run_cli_upload():

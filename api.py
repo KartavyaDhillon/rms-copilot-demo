@@ -2115,8 +2115,15 @@ def px_backfill_db(pipe: str = "", date: str = "", run: int = 0, subfolder: str 
     actual on-disk layout:
       - ctcl / ms15: BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\<NN>\\
       - cli:         BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\<Morning|Afternoon|Evening>\\
-                     (older dates before this split may still be flat, no
-                     slot subfolder — backfill_date_to_db() handles both)
+                     OR \\<HH-MM-SS>\\ (exact run time, some machines back up
+                     by timestamp instead of slot name — backfill_date_to_db()
+                     classifies either into Morning/Afternoon/Evening by hour).
+                     Older dates before any split may still be flat, no
+                     subfolder at all — handled too.
+                     Pass date="ALL" to backfill every date folder found under
+                     BACKUPFILES AUTOMATED in one call (backfill_all_to_db()) —
+                     for pushing months of history in one shot instead of one
+                     date at a time.
       - probable:    BACKUPFILES AUTOMATED\\<date>\\RECONCILIATION or SHORTAGE\\
                      (date format is "21 JUL 2026", NOT DD-MM-YYYY — different
                      from the other three)
@@ -2142,7 +2149,9 @@ def px_backfill_db(pipe: str = "", date: str = "", run: int = 0, subfolder: str 
                 return {"ok": False, "error": "run is required for ms15"}
             return backfill_run_to_db(date, int(run))
         elif pipe == "cli":
-            from core.pipelines.cli_upload import backfill_date_to_db
+            from core.pipelines.cli_upload import backfill_date_to_db, backfill_all_to_db
+            if date.strip().upper() == "ALL":
+                return backfill_all_to_db()
             return backfill_date_to_db(date)
         elif pipe == "probable":
             from core.pipelines.probable_full import backfill_run_to_db
