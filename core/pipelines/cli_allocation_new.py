@@ -51,13 +51,16 @@ should be done inside the new run").
 Client Prudential Limit now runs THREE times a day, and which window you are
 in decides what Run NEW actually does:
 
-  MORNING    07:30-10:00   FULL run. Pre-check (RISK_REPORT + Kambala),
+  MORNING    07:00-10:00   FULL run. Pre-check (RISK_REPORT + Kambala),
                            fetch a fresh Allocation_Detail, BUILD
                            CLI_PRUDENTIAL_LIMIT.txt + Intermediate.csv,
                            upload to the plain ALLOCATION folder.
-  AFTERNOON  15:30-17:00   Collateral files ONLY (NSCCL/NCDEX + MCX).
+  AFTERNOON  15:30-17:15   Collateral files ONLY (NSCCL/NCDEX + MCX).
                            Upload to ALLOCATION(AFTERNOON).
-  EVENING    19:00-21:00   Same as afternoon, but ALLOCATION(EVENING).
+  EVENING    19:00-21:30   Same as afternoon, but ALLOCATION(EVENING).
+
+  Each window is overridable per-env without touching code — see
+  CLI_RUN1_WINDOW / CLI_RUN2_WINDOW / CLI_RUN3_WINDOW below (_WINDOWS).
 
 ALLOCATION_DETAIL IS MORNING-ONLY, END TO END
 ─────────────────────────────────────────────
@@ -124,9 +127,9 @@ _ALL_MARKERS = (".cli_slot_upload", ".cli_evening_upload")
 # slot -> (env var, default window, FTP folder suffix). Order matters only for
 # the human-readable error message when the clock is outside all of them.
 _WINDOWS = [
-    ("morning",   "CLI_RUN1_WINDOW", "07:30-10:00", ""),
-    ("afternoon", "CLI_RUN2_WINDOW", "15:30-17:00", "(AFTERNOON)"),
-    ("evening",   "CLI_RUN3_WINDOW", "19:00-21:00", "(EVENING)"),
+    ("morning",   "CLI_RUN1_WINDOW", "07:00-10:00", ""),
+    ("afternoon", "CLI_RUN2_WINDOW", "15:30-17:15", "(AFTERNOON)"),
+    ("evening",   "CLI_RUN3_WINDOW", "19:00-21:30", "(EVENING)"),
 ]
 
 

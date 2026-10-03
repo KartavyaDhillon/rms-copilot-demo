@@ -2152,13 +2152,34 @@ def _pb_backup_roots(pipe):
     base = os.getenv(p.get("backup_root_env", ""), p.get("upload_default", ""))
     return [os.path.join(base, p.get("backup_subdir", "BACKUPFILES AUTOMATED"))]
 
+def _pb_cli_env_window(env_key, default):
+    """Read an 'HH:MM-HH:MM' window from .env (CLI_RUN1_WINDOW /
+    CLI_RUN2_WINDOW / CLI_RUN3_WINDOW — same vars cli_allocation_new.py's
+    run-gate and cli_upload.py's backfill classifier use), falling back to
+    `default` on anything missing/malformed. Returns (start_min, end_min)."""
+    def _mins(hhmm, fallback_mins):
+        try:
+            h, m = (int(x) for x in hhmm.strip().split(":", 1))
+            return h * 60 + m
+        except Exception:
+            return fallback_mins
+    fb_start, _, fb_end = default.partition("-")
+    fh, fm = (int(x) for x in fb_start.split(":"))
+    eh, em = (int(x) for x in fb_end.split(":"))
+    fb_start_mins, fb_end_mins = fh * 60 + fm, eh * 60 + em
+    raw = (os.getenv(env_key) or "").strip() or default
+    start_s, _, end_s = raw.partition("-")
+    return _mins(start_s, fb_start_mins), _mins(end_s, fb_end_mins)
+
+
 def _pb_cli_slot_from_dirname(name):
     """CLI-only: classify an HH-MM-SS exact-run-time folder name (e.g.
     "08-36-11", "15-55-53", "20-23-14" — some machines back up by timestamp
     instead of a Morning/Afternoon/Evening word) into the real CLI run
-    window it actually falls in — Morning 07:00-10:00, Afternoon
-    15:30-18:00, Evening 19:00-22:00, 24-hour clock — falling back to a
-    broad <12/<18/else half-of-day bucket for a stray time outside all
+    window it actually falls in — read from .env (CLI_RUN1_WINDOW /
+    CLI_RUN2_WINDOW / CLI_RUN3_WINDOW), defaulting to Morning 07:00-10:00,
+    Afternoon 15:30-17:15, Evening 19:00-21:30, 24-hour clock — falling back
+    to a broad <12/<18/else half-of-day bucket for a stray time outside all
     three (one-off manual run). Returns None if name isn't HH-MM-SS at all.
     Mirrors cli_upload.py's backfill_date_to_db()._slot_for_subdir() — kept
     in sync by hand since one lives in core/pipelines (backfill path) and
@@ -2168,9 +2189,12 @@ def _pb_cli_slot_from_dirname(name):
         return None
     hour, minute = int(m.group(1)), int(m.group(2))
     mins = hour * 60 + minute
-    if 7 * 60 <= mins <= 10 * 60: return "Morning"
-    if 15 * 60 + 30 <= mins <= 18 * 60: return "Afternoon"
-    if 19 * 60 <= mins <= 22 * 60: return "Evening"
+    m_start, m_end = _pb_cli_env_window("CLI_RUN1_WINDOW", "07:00-10:00")
+    a_start, a_end = _pb_cli_env_window("CLI_RUN2_WINDOW", "15:30-17:15")
+    e_start, e_end = _pb_cli_env_window("CLI_RUN3_WINDOW", "19:00-21:30")
+    if m_start <= mins <= m_end: return "Morning"
+    if a_start <= mins <= a_end: return "Afternoon"
+    if e_start <= mins <= e_end: return "Evening"
     if hour < 12: return "Morning"
     if hour < 18: return "Afternoon"
     return "Evening"

@@ -17,11 +17,13 @@ STEP 1 — FTP upload: same ALWAYS_FILES + DATE_BASED_FILES rules as the origina
 STEP 2 — backup + cleanup (move everything except .py/.bat into
          BACKUPFILES AUTOMATED/<DD-MM-YYYY>/<slot>/, where <slot> is
          Morning/Afternoon/Evening based on the actual clock time this step
-         runs — CLI runs up to 3x/day (07:00-10:00, 15:30-17:00, 19:00-21:00),
-         and before this split every run of the day landed in the same flat
-         date folder, so a later same-day run silently overwrote an earlier
-         run's same-named files on disk (each was still archived to Postgres
-         separately, just not distinguishable on disk). See _cli_time_slot().
+         runs — CLI runs up to 3x/day (07:00-10:00, 15:30-17:15, 19:00-21:30,
+         overridable via CLI_RUN1_WINDOW/CLI_RUN2_WINDOW/CLI_RUN3_WINDOW in
+         .env — see _cli_env_window()), and before this split every run of
+         the day landed in the same flat date folder, so a later same-day
+         run silently overwrote an earlier run's same-named files on disk
+         (each was still archived to Postgres separately, just not
+         distinguishable on disk). See _cli_time_slot().
 
 FTP: FTP_HOST/FTP_USER/FTP_PASS (shared with the Download step and other downloaders).
 
@@ -38,15 +40,38 @@ import time
 from core.error_translator import translate_error
 
 
+def _cli_env_window(env_key, default):
+    """Read an 'HH:MM-HH:MM' window from .env (e.g. CLI_RUN1_WINDOW), falling
+    back to `default` ('HH:MM-HH:MM' string) on anything missing/malformed —
+    a typo in .env must not break backfill classification. Returns
+    (start_minutes, end_minutes) as ints for cheap comparison."""
+    def _mins(hhmm, fallback_mins):
+        try:
+            h, m = (int(x) for x in hhmm.strip().split(":", 1))
+            return h * 60 + m
+        except Exception:
+            return fallback_mins
+
+    fb_start, _, fb_end = default.partition("-")
+    fh, fm = (int(x) for x in fb_start.split(":"))
+    eh, em = (int(x) for x in fb_end.split(":"))
+    fb_start_mins, fb_end_mins = fh * 60 + fm, eh * 60 + em
+
+    raw = (os.getenv(env_key) or "").strip() or default
+    start_s, _, end_s = raw.partition("-")
+    return _mins(start_s, fb_start_mins), _mins(end_s, fb_end_mins)
+
+
 def _cli_time_slot(dt=None):
     """Classify a CLI run's time into Morning / Afternoon / Evening for the
     backup folder + Postgres tag. The pipeline is actually scheduled to run
-    in three windows — 07:00-10:00, 15:30-17:00, 19:00-21:00 — and simple
-    noon / 6pm cutoffs happen to split cleanly around all three (07-10 is
-    all before noon, 15:30-17:00 is all between noon and 6pm, 19-21 is all
-    after 6pm), while still giving a sane bucket for a one-off manual run
-    outside those exact windows instead of erroring or falling back to a
-    4th "unknown" category."""
+    in three windows — 07:00-10:00, 15:30-17:15, 19:00-21:30 by default,
+    overridable via CLI_RUN1_WINDOW/CLI_RUN2_WINDOW/CLI_RUN3_WINDOW in .env —
+    and simple noon / 6pm cutoffs happen to split cleanly around all three
+    (07-10 is all before noon, 15:30-17:15 is all between noon and 6pm,
+    19-21:30 is all after 6pm), while still giving a sane bucket for a
+    one-off manual run outside those exact windows instead of erroring or
+    falling back to a 4th "unknown" category."""
     dt = dt or datetime.datetime.now()
     if dt.hour < 12: return "Morning"
     if dt.hour < 18: return "Afternoon"
@@ -113,22 +138,28 @@ def backfill_date_to_db(date_str):
         file sitting directly in the date folder isn't a slot dir).
 
         For an HH-MM-SS folder, checks the actual CLI run windows first —
-        Morning 07:00-10:00, Afternoon 15:30-18:00, Evening 19:00-22:00
-        (24-hour clock) — and only falls back to the broad <12/<18/else
-        cutoff for a stray time outside all three (e.g. a one-off manual
-        run), so the bucket a file lands in matches when it was ACTUALLY
-        run, not just a rough half-of-day guess."""
+        read from .env (CLI_RUN1_WINDOW / CLI_RUN2_WINDOW / CLI_RUN3_WINDOW,
+        same vars cli_allocation_new.py's run-gate uses — one .env edit now
+        controls both whether a run is allowed to start AND which bucket a
+        backfilled file lands in), defaulting to Morning 07:00-10:00,
+        Afternoon 15:30-17:15, Evening 19:00-21:30 — and only falls back to
+        the broad <12/<18/else cutoff for a stray time outside all three
+        (e.g. a one-off manual run), so the bucket a file lands in matches
+        when it was ACTUALLY run, not just a rough half-of-day guess."""
         if name in ("Morning", "Afternoon", "Evening"):
             return name
         m = re.fullmatch(r"(\d{2})-(\d{2})-\d{2}", name)
         if m:
             hour, minute = int(m.group(1)), int(m.group(2))
             mins = hour * 60 + minute
-            if 7 * 60 <= mins <= 10 * 60:
+            m_start, m_end = _cli_env_window("CLI_RUN1_WINDOW", "07:00-10:00")
+            a_start, a_end = _cli_env_window("CLI_RUN2_WINDOW", "15:30-17:15")
+            e_start, e_end = _cli_env_window("CLI_RUN3_WINDOW", "19:00-21:30")
+            if m_start <= mins <= m_end:
                 return "Morning"
-            if 15 * 60 + 30 <= mins <= 18 * 60:
+            if a_start <= mins <= a_end:
                 return "Afternoon"
-            if 19 * 60 <= mins <= 22 * 60:
+            if e_start <= mins <= e_end:
                 return "Evening"
             # Outside all three real run windows (one-off manual run) —
             # fall back to a sane half-of-day bucket rather than leaving it
