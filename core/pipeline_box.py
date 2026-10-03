@@ -2620,7 +2620,11 @@ def pb_backup_download_merged(pipe, items, client_codes):
         df = _pb_filtered_bytes_to_df(fname, content, media_type)
         if df is None or df.empty:
             continue
-        df.insert(0, "Date", date)
+        # Only insert a Date column if the file doesn't already have one of
+        # its own (some exports carry their own date/timestamp column) —
+        # don't stack a second one on top.
+        if not _pb_col(df, "Date"):
+            df.insert(0, "Date", date)
         frames.append(df)
     if not any_recognized:
         return None   # not a filterable file type at all — caller falls back
