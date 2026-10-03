@@ -6466,7 +6466,7 @@ function pxShowCliLookupPopup(d, codes, selectedSlots){
   </div>`;
 
   const legend=`<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:var(--dim);margin-bottom:14px;padding:6px 10px;background:rgba(255,255,255,.02);border-radius:8px;border:1px solid var(--line)">
-    <span>CM / FO / CO = NSE collaterals (b = Cash allocated, c = Cash-Others, d = Non-cash Securities) &nbsp;·&nbsp; MCX = Client Margin Limit &nbsp;·&nbsp; NCDEX = Total Collateral (Cash+Non Cash)</span>
+    <span>CM / FO / CO Deposit = Cash allocated + Cash-Others + Non-cash Securities &nbsp;·&nbsp; NCDEX Deposit = Total Cash Component + Total Non Cash &nbsp;·&nbsp; MCX Deposit = Client Margin Limit (bifurcation = Margin Utilization, from the same RSK383 file)</span>
   </div>`;
 
   let html=badge+legend;
@@ -6474,31 +6474,49 @@ function pxShowCliLookupPopup(d, codes, selectedSlots){
   if(!ins.length){
     html+=`<div style="text-align:center;padding:40px 20px;color:var(--dim);font-size:13px">No data found for <b style="color:var(--ink)">${codes.join(', ')}</b>.<br>Check codes or widen the date range.</div>`;
   } else {
-    const subTh=(lbl,sub,col,extra)=>`<th style="padding:8px 9px;text-align:right;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${col};border-bottom:2px solid var(--line);white-space:nowrap;${extra||''}">${lbl}<span style="display:block;font-size:7.5px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--dim);margin-top:2px;white-space:normal">(${sub})</span></th>`;
-    const bcdTh=(col)=>`<th style="padding:6px 7px;text-align:right;font-size:8px;font-weight:600;color:${col};border-bottom:2px solid var(--line);white-space:nowrap">b</th><th style="padding:6px 7px;text-align:right;font-size:8px;font-weight:600;color:${col};border-bottom:2px solid var(--line);white-space:nowrap">c</th><th style="padding:6px 7px;text-align:right;font-size:8px;font-weight:600;color:${col};border-bottom:2px solid var(--line);white-space:nowrap">d</th>`;
+    const mainTh=(lbl,col,extra)=>`<th style="padding:8px 9px;text-align:right;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:${col};border-bottom:2px solid var(--line);white-space:nowrap;${extra||''}">${lbl}</th>`;
+    const bfTh=(lbl,col,extra)=>`<th style="padding:6px 7px;text-align:right;font-size:7.5px;font-weight:600;color:${col};border-bottom:2px solid var(--line);white-space:nowrap;${extra||''}">${lbl}</th>`;
 
     const csvH=[...(multi?['Client']:[]),'Date','Run',
-      'CM Deposit','CM (b)','CM (c)','CM (d)',
-      'FO Deposit','FO (b)','FO (c)','FO (d)',
-      'CO Deposit','CO (b)','CO (c)','CO (d)',
-      'MCX Deposit','NCDEX Deposit','Total NMASS'];
+      'CM Deposit','FO Deposit','CO Deposit','NCDEX Deposit','MCX Deposit','Total NMASS',
+      'Cash allocated (b) [CM]','Cash-Others (c) [CM]','Non-cash Securities (d) [CM]',
+      'Cash allocated (b) [FO]','Cash-Others (c) [FO]','Non-cash Securities (d) [FO]',
+      'Cash allocated (b) [CO]','Cash-Others (c) [CO]','Non-cash Securities (d) [CO]',
+      'Total Cash Component [NCDEX]','Total Non Cash [NCDEX]',
+      'Margin Utilization [MCX]'];
     const csvR=ins.map(r=>[...(multi?[r.client_code||'']:[]),r.date,r.slot||'',
-      fmtRaw(r.CM),fmtRaw(r.CM_B),fmtRaw(r.CM_C),fmtRaw(r.CM_D),
-      fmtRaw(r.FO),fmtRaw(r.FO_B),fmtRaw(r.FO_C),fmtRaw(r.FO_D),
-      fmtRaw(r.CO),fmtRaw(r.CO_B),fmtRaw(r.CO_C),fmtRaw(r.CO_D),
-      fmtRaw(r.MCX),fmtRaw(r.NCDEX),fmtRaw(r.TOTAL)].join(','));
+      fmtRaw(r.CM),fmtRaw(r.FO),fmtRaw(r.CO),fmtRaw(r.NCDEX),fmtRaw(r.MCX),fmtRaw(r.TOTAL),
+      fmtRaw(r.CM_B),fmtRaw(r.CM_C),fmtRaw(r.CM_D),
+      fmtRaw(r.FO_B),fmtRaw(r.FO_C),fmtRaw(r.FO_D),
+      fmtRaw(r.CO_B),fmtRaw(r.CO_C),fmtRaw(r.CO_D),
+      fmtRaw(r.NCDEX_CASH),fmtRaw(r.NCDEX_NONCASH),
+      fmtRaw(r.MCX_UTIL)].join(','));
     const csvU='data:text/csv;charset=utf-8,'+encodeURIComponent([csvH.join(','),...csvR].join('\n'));
 
-    let tbl=`<table style="width:100%;border-collapse:collapse;font-size:11px;min-width:1280px"><thead><tr>
+    let tbl=`<table style="width:100%;border-collapse:collapse;font-size:11px;min-width:1680px"><thead><tr>
       ${multi?`<th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line)">Client</th>`:''}
       <th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--line)">Date</th>
       <th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--line)">Run</th>
-      ${subTh('CM Deposit','sum of b+c+d','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}${bcdTh('var(--blue)')}
-      ${subTh('FO Deposit','sum of b+c+d','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}${bcdTh('var(--blue)')}
-      ${subTh('CO Deposit','sum of b+c+d','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}${bcdTh('var(--blue)')}
-      ${subTh('MCX Deposit','Client Margin Limit','#f59e0b','border-left:1px solid rgba(245,158,11,.2)')}
-      ${subTh('NCDEX Deposit','Total Collateral (Cash+Non Cash)','#a78bfa','border-right:1px solid rgba(167,139,250,.2)')}
-      <th style="padding:8px 9px;text-align:right;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--teal);border-bottom:2px solid var(--line);border-left:1px solid rgba(52,211,153,.2)">Total NMASS</th>
+      ${mainTh('CM Deposit','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}
+      ${mainTh('FO Deposit','var(--blue)')}
+      ${mainTh('CO Deposit','var(--blue)')}
+      ${mainTh('NCDEX Deposit','#a78bfa')}
+      ${mainTh('MCX Deposit','#f59e0b')}
+      <th style="padding:8px 9px;text-align:right;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--teal);border-bottom:2px solid var(--line);border-left:1px solid rgba(52,211,153,.2);border-right:2px solid var(--line)">Total NMASS</th>
+      ${bfTh('Cash allocated (b)','var(--blue)','border-left:1px solid rgba(59,130,246,.2)')}${bfTh('Cash-Others (c)','var(--blue)')}${bfTh('Non-cash Securities (d)','var(--blue)')}
+      ${bfTh('Cash allocated (b)','var(--blue)','border-left:1px solid rgba(59,130,246,.12)')}${bfTh('Cash-Others (c)','var(--blue)')}${bfTh('Non-cash Securities (d)','var(--blue)')}
+      ${bfTh('Cash allocated (b)','var(--blue)','border-left:1px solid rgba(59,130,246,.12)')}${bfTh('Cash-Others (c)','var(--blue)')}${bfTh('Non-cash Securities (d)','var(--blue)')}
+      ${bfTh('Total Cash Component','#a78bfa','border-left:1px solid rgba(167,139,250,.2)')}${bfTh('Total Non Cash','#a78bfa')}
+      ${bfTh('Margin Utilization','#f59e0b','border-left:1px solid rgba(245,158,11,.2)')}
+    </tr><tr>
+      ${multi?`<th style="border-bottom:2px solid var(--line)"></th>`:''}
+      <th style="border-bottom:2px solid var(--line)"></th><th style="border-bottom:2px solid var(--line)"></th>
+      <th colspan="6" style="border-bottom:2px solid var(--line)"></th>
+      <th colspan="3" style="padding:3px 7px;text-align:center;font-size:7px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line);border-left:1px solid rgba(59,130,246,.2)">CM bifurcation</th>
+      <th colspan="3" style="padding:3px 7px;text-align:center;font-size:7px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line);border-left:1px solid rgba(59,130,246,.12)">FO bifurcation</th>
+      <th colspan="3" style="padding:3px 7px;text-align:center;font-size:7px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line);border-left:1px solid rgba(59,130,246,.12)">CO bifurcation</th>
+      <th colspan="2" style="padding:3px 7px;text-align:center;font-size:7px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line);border-left:1px solid rgba(167,139,250,.2)">NCDEX bifurcation</th>
+      <th style="padding:3px 7px;text-align:center;font-size:7px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line);border-left:1px solid rgba(245,158,11,.2)">MCX bifurcation</th>
     </tr></thead><tbody>`;
     let lastDate='';
     ins.forEach((r,i)=>{
@@ -6508,14 +6526,16 @@ function pxShowCliLookupPopup(d, codes, selectedSlots){
         <td style="padding:5px 9px;font-family:var(--mono);font-size:10.5px;color:var(--teal);white-space:nowrap">${nd?r.date:'<span style="color:var(--dim);font-size:10px">↳</span>'}</td>
         <td style="padding:5px 9px;white-space:nowrap">${_slotBadge(r.slot)}</td>
         <td style="padding:5px 9px;text-align:right;color:var(--blue);border-left:1px solid rgba(59,130,246,.1)">${fmtBold(r.CM)}</td>
-        <td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_D)}</td>
-        <td style="padding:5px 9px;text-align:right;color:var(--blue);border-left:1px solid rgba(59,130,246,.1)">${fmtBold(r.FO)}</td>
-        <td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_D)}</td>
-        <td style="padding:5px 9px;text-align:right;color:var(--blue);border-left:1px solid rgba(59,130,246,.1)">${fmtBold(r.CO)}</td>
-        <td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_D)}</td>
-        <td style="padding:5px 9px;text-align:right;color:#f59e0b;border-left:1px solid rgba(245,158,11,.1)">${fmt(r.MCX)}</td>
-        <td style="padding:5px 9px;text-align:right;color:#a78bfa;border-right:1px solid rgba(167,139,250,.1)">${fmt(r.NCDEX)}</td>
-        <td style="padding:5px 9px;text-align:right;border-left:1px solid rgba(52,211,153,.1)">${fmtBold(r.TOTAL)}</td>
+        <td style="padding:5px 9px;text-align:right;color:var(--blue)">${fmtBold(r.FO)}</td>
+        <td style="padding:5px 9px;text-align:right;color:var(--blue)">${fmtBold(r.CO)}</td>
+        <td style="padding:5px 9px;text-align:right;color:#a78bfa">${fmt(r.NCDEX)}</td>
+        <td style="padding:5px 9px;text-align:right;color:#f59e0b">${fmt(r.MCX)}</td>
+        <td style="padding:5px 9px;text-align:right;border-left:1px solid rgba(52,211,153,.1);border-right:2px solid var(--line)">${fmtBold(r.TOTAL)}</td>
+        <td style="padding:4px 7px;text-align:right;border-left:1px solid rgba(59,130,246,.1)">${fmtSm(r.CM_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CM_D)}</td>
+        <td style="padding:4px 7px;text-align:right;border-left:1px solid rgba(59,130,246,.06)">${fmtSm(r.FO_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.FO_D)}</td>
+        <td style="padding:4px 7px;text-align:right;border-left:1px solid rgba(59,130,246,.06)">${fmtSm(r.CO_B)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_C)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.CO_D)}</td>
+        <td style="padding:4px 7px;text-align:right;border-left:1px solid rgba(167,139,250,.1)">${fmtSm(r.NCDEX_CASH)}</td><td style="padding:4px 7px;text-align:right">${fmtSm(r.NCDEX_NONCASH)}</td>
+        <td style="padding:4px 7px;text-align:right;border-left:1px solid rgba(245,158,11,.1)">${fmtSm(r.MCX_UTIL)}</td>
       </tr>`;
     });
     tbl+='</tbody></table>';

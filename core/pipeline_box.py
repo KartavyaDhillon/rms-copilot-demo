@@ -3096,6 +3096,12 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
                 if tdf is not None:
                     cc = _pb_col(tdf, "Client/CP Code", "Client Code")
                     vc = _pb_col(tdf, "Total Collateral (Cash and Non Cash)")
+                    # Bifurcation: the NCDEX file's own Total Collateral is
+                    # itself "Total Cash Component" + "Total Non Cash" — same
+                    # idea as CM/FO/CO's b+c+d, just under NCDEX's own column
+                    # names (per user request, show the real column names).
+                    cash_col = _pb_col(tdf, "Total Cash Component")
+                    noncash_col = _pb_col(tdf, "Total Non Cash")
                     if cc and vc:
                         cs = tdf[cc].astype(str).str.strip().str.upper()
                         for code in codes:
@@ -3103,6 +3109,12 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
                             if not sub.empty:
                                 vc_clean = sub[vc].astype(str).str.replace(",", "", regex=False)
                                 vals[code]["NCDEX"] = round(float(pd.to_numeric(vc_clean, errors="coerce").fillna(0).sum()), 2)
+                                if cash_col:
+                                    cc_clean = sub[cash_col].astype(str).str.replace(",", "", regex=False)
+                                    vals[code]["NCDEX_CASH"] = round(float(pd.to_numeric(cc_clean, errors="coerce").fillna(0).sum()), 2)
+                                if noncash_col:
+                                    nc_clean = sub[noncash_col].astype(str).str.replace(",", "", regex=False)
+                                    vals[code]["NCDEX_NONCASH"] = round(float(pd.to_numeric(nc_clean, errors="coerce").fillna(0).sum()), 2)
             except Exception as e:
                 warnings.append(f"{dl} {slot or ''} NCDEX: {e}")
 
@@ -3115,6 +3127,11 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
                 tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Client Margin Limit"])
                 if err or tdf is None: continue
                 cc = _pb_col(tdf, "Client Code"); ml = _pb_col(tdf, "Client Margin Limit")
+                # Bifurcation: the same RSK383 export also carries "Margin
+                # Utilization" alongside "Client Margin Limit" (see
+                # margin_shortage_15min.py's find_mcx_file()) — included when
+                # the column is present so MCX gets a breakdown too.
+                mu = _pb_col(tdf, "Margin Utilization")
                 if not cc or not ml: continue
                 cs = tdf[cc].astype(str).str.strip().str.upper()
                 for code in codes:
@@ -3122,6 +3139,9 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
                     if not sub.empty:
                         ml_clean = sub[ml].astype(str).str.replace(",", "", regex=False)
                         vals[code]["MCX"] = round(float(pd.to_numeric(ml_clean, errors="coerce").fillna(0).sum()), 2)
+                        if mu:
+                            mu_clean = sub[mu].astype(str).str.replace(",", "", regex=False)
+                            vals[code]["MCX_UTIL"] = round(float(pd.to_numeric(mu_clean, errors="coerce").fillna(0).sum()), 2)
                 break
             except Exception: continue
 
@@ -3137,13 +3157,16 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
             co = round(co_b + co_c + co_d, 2)
             ncdex = v.get("NCDEX", 0)
             mcx = v.get("MCX", 0)
+            ncdex_cash, ncdex_noncash = v.get("NCDEX_CASH", 0), v.get("NCDEX_NONCASH", 0)
+            mcx_util = v.get("MCX_UTIL", 0)
             if not d and not v: continue   # nothing found for this code in this slot at all
             inputs.append({
                 "date": dl, "slot": slot, "client_code": code,
                 "CM": cm, "CM_B": cm_b, "CM_C": cm_c, "CM_D": cm_d,
                 "FO": fo, "FO_B": fo_b, "FO_C": fo_c, "FO_D": fo_d,
                 "CO": co, "CO_B": co_b, "CO_C": co_c, "CO_D": co_d,
-                "NCDEX": ncdex, "MCX": mcx,
+                "NCDEX": ncdex, "NCDEX_CASH": ncdex_cash, "NCDEX_NONCASH": ncdex_noncash,
+                "MCX": mcx, "MCX_UTIL": mcx_util,
                 "TOTAL": round(cm + fo + co + ncdex + mcx, 2),
             })
 
