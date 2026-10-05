@@ -119,12 +119,36 @@ def run_cli_download():
                    f"usually takes under a minute; it will be picked up on the next run.")
             else:
                 try:
-                    proc = subprocess.run([python, script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                           text=True, encoding="utf-8", errors="replace", env=env)
-                    for line in proc.stdout.splitlines():
-                        _p(line)
-                        if _AUTH_BAD.search(line):
-                            auth_fail_happened = True
+                    # Stream the login script's output LIVE (it used to be captured
+                    # and only printed after exit, so a hang looked like a silent
+                    # freeze) and enforce a hard timeout so a stuck exchange
+                    # login/captcha can never block the whole run forever.
+                    import threading, time as _t
+                    _timeout = int(os.getenv("CLI_NMASS_TIMEOUT_SEC", "300"))
+                    proc = subprocess.Popen([python, "-u", script], stdout=subprocess.PIPE,
+                                            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                                            errors="replace", env=env)
+                    def _pump():
+                        nonlocal auth_fail_happened
+                        for line in proc.stdout:
+                            line = line.rstrip("\r\n")
+                            _p(line)
+                            if _AUTH_BAD.search(line):
+                                auth_fail_happened = True
+                    _th = threading.Thread(target=_pump, daemon=True)
+                    _th.start()
+                    _t0 = _t.time()
+                    while proc.poll() is None and _t.time() - _t0 < _timeout:
+                        _t.sleep(1)
+                    if proc.poll() is None:
+                        _p(f"⏱️ NMASS/NCDEX login did not finish within {_timeout}s — killing it "
+                           f"(exchange site slow/captcha stuck). Re-run, or place the 4 files manually.")
+                        try:
+                            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                                           capture_output=True)
+                        except Exception:
+                            proc.kill()
+                    _th.join(timeout=5)
                     if proc.returncode == 0:
                         # Files now land directly in base_folder (NMASS_SAVE_DIR
                         # above), so there is nothing to copy across any more —
