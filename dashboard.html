@@ -4859,6 +4859,13 @@ function _r1r2RunOneStep(url, kind, busyBtnId, busyLabel, idleLabel){
     let ok=true;
     const ev=new EventSource(url); _pxSetES('r1r2',ev);
     const _finish=()=>{
+      // Keep the tile that just ran showing its result (SUCCESS / FAILED) and
+      // un-clickable for 60 seconds, so the outcome can't be missed — the tile
+      // used to snap straight back to "Ready — run" the instant the run ended.
+      if(kind==='live'||kind==='afternoon'||kind==='evening'){
+        _r1r2JustFinished={kind:kind, ok:ok, until:Date.now()+60000};
+        setTimeout(function(){ _r1r2LastStatusSig=null; r1r2Status(); }, 60500);
+      }
       _pxMarkDone('r1r2'); _r1r2RunningKind=null;
       _r1r2ToolbarBusy(false);
       if(busyBtnId){ const b=document.getElementById(busyBtnId); if(b) b.textContent=idleLabel; }
@@ -4920,6 +4927,7 @@ function r1r2McxDownload(){
 // slot) — so "ready" here means simply "not done today, and nothing else in
 // this box is running", not a time-of-day comparison.
 var _r1r2LastStatus=null;
+var _r1r2JustFinished=null;   // {kind, ok, until} — result banner on the tile that just ran (60s)
 async function r1r2Status(){
   let s=null;
   try{ const r=await fetch(API+'/r1r2/today-status'); if(r.ok) s=await r.json(); }catch(e){}
@@ -4950,7 +4958,22 @@ function r1r2RenderTiles(s){
     const isRunningThis = busy && _r1r2RunningKind===t.kind;
     const isLockedByOther = busy && _r1r2RunningKind!==t.kind;
     let cls='sa-run', state, btn;
-    if(isDoneToday){
+    const _jf=_r1r2JustFinished;
+    const _jfActive=!!(_jf && Date.now()<_jf.until);
+    if(_jfActive && _jf.kind===t.kind && !busy){
+      // Just finished — plain-language result, not clickable for 60 seconds.
+      if(_jf.ok){
+        cls+=' done'; state='<span style="color:var(--green);font-weight:700">&#9989; SUCCESS &mdash; report is ready</span>';
+        btn='<button class="sa-run-btn" disabled style="background:var(--green);color:#04120a;opacity:1;cursor:not-allowed;font-weight:800">&#10003; SUCCESS</button>';
+      } else {
+        cls+=' error'; state='<span style="color:var(--red);font-weight:700">&#10060; FAILED &mdash; open Logs to see why</span>';
+        btn='<button class="sa-run-btn" disabled style="background:var(--red);color:#fff;opacity:1;cursor:not-allowed;font-weight:800">&#10007; FAILED</button>';
+      }
+    } else if(_jfActive && !busy){
+      // Another tile is showing its result — keep this one quiet and un-clickable too.
+      cls+=' locked'; state='Please wait&hellip;';
+      btn='<button class="sa-run-btn" disabled>Wait&hellip;</button>';
+    } else if(isDoneToday){
       cls+=' done'; state='&#10003; Done today';
       btn='<button class="sa-run-btn" disabled style="opacity:.55;cursor:not-allowed">Done</button>';
     } else if(isRunningThis){

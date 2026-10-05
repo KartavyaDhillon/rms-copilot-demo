@@ -4411,10 +4411,24 @@ def cli_advance_run():
                 n = int(existing_n)
     except Exception:
         pass
-    n += 1
+    # Slot-aware + idempotent: set the counter to THIS run's slot number
+    # (morning=1, afternoon=2, evening=3) instead of blindly adding 1. Adding 1
+    # let a second same-slot run (re-run, retry) push the counter past its slot
+    # and mark the NEXT slot done too, and any missed advance left the slot
+    # looking "not done / still clickable". max() never moves it backwards.
+    try:
+        from core.pipelines.cli_allocation_new import _current_window as _car_cw
+        _slot, _ = _car_cw()
+    except Exception:
+        _slot = None
+    if _slot is None:
+        _h = _car_dt.datetime.now().hour
+        _slot = "morning" if _h < 12 else ("afternoon" if _h < 18 else "evening")
+    _idx = {"morning": 1, "afternoon": 2, "evening": 3}.get(_slot, n + 1)
+    n = max(n, _idx)
     with open(fp, "w", encoding="utf-8") as f:
         f.write(f"{today}|{n}")
-    return {"ok": True, "run_state": n}
+    return {"ok": True, "run_state": n, "slot": _slot}
 
 
 @app.get("/cli/readiness")

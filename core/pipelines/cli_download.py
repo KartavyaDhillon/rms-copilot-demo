@@ -199,7 +199,20 @@ def run_cli_download():
     # ── Kambala (KAMB/DEPO on FTP) — separate single-file fetch, non-fatal ────
     kambala_name = f"Kambala_Omny_Depo_Adhoc_All_level.txt_{today_str}.txt"
     kambala_path = os.path.join(base_folder, kambala_name)
-    if os.path.exists(kambala_path):
+    # Kambala only feeds CLI_PRUDENTIAL_LIMIT.txt (morning-only), so skip it on
+    # the afternoon / evening runs entirely. Slot = the run-window gate; outside
+    # every window fall back to the clock (before 12:00 = morning).
+    try:
+        from core.pipelines.cli_allocation_new import _current_window as _kcw
+        _kslot, _ = _kcw()
+    except Exception:
+        _kslot = None
+    if _kslot is None:
+        _kslot = "morning" if datetime.datetime.now().hour < 12 else "later"
+    if _kslot != "morning":
+        _p("⏭ Skipping Kambala — only needed for the morning run (builds "
+           "CLI_PRUDENTIAL_LIMIT.txt); not needed for afternoon/evening.")
+    elif os.path.exists(kambala_path):
         _p(f"⏭ Kambala already present: {kambala_name}")
     else:
         _p("🚀 Downloading Kambala (FTP KAMB/DEPO)")
