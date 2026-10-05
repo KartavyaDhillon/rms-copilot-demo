@@ -4427,8 +4427,19 @@ def cli_readiness():
     _dir = _clr_os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT")
     _common_dir = _clr_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
     today_str = _clr_dt.datetime.now().strftime("%d%m%Y")
+    # Allocation_Detail, RISK_REPORT and Kambala are MORNING-ONLY inputs (they only
+    # feed CLI_PRUDENTIAL_LIMIT.txt, which afternoon/evening never rebuild). So
+    # they are only listed as "needed" in the morning. Slot = the run-window gate;
+    # outside every window, fall back to the clock (before 12:00 = morning).
+    try:
+        from core.pipelines.cli_allocation_new import _current_window as _clr_cw
+        _clr_slot, _ = _clr_cw()
+    except Exception:
+        _clr_slot = None
+    if _clr_slot is None:
+        _clr_slot = "morning" if _clr_dt.datetime.now().hour < 12 else "later"
+    _clr_morning = (_clr_slot == "morning")
     checks = [
-        ("ALLOCATION_DETAIL",            f"Allocation_Detail_{today_str}.csv"),
         # CM/FO/CO collaterals are .txt (the run requests JSON:TXT, like the original).
         ("CM_CLIENT_LEVEL",              f"CM_ClientLevelCollaterals_{today_str}*.txt"),
         ("FO_CLIENT_LEVEL",              f"FO_ClientLevelCollaterals_{today_str}*.txt"),
@@ -4437,6 +4448,8 @@ def cli_readiness():
         # CLI_PRUDENTIAL_LIMIT.txt is deliberately NOT listed: the run itself
         # builds it from Allocation_Detail, so it can never be an "input".
     ]
+    if _clr_morning:
+        checks.insert(0, ("ALLOCATION_DETAIL", f"Allocation_Detail_{today_str}.csv"))
     items = []
     for key, pat in checks:
         found = bool(_clr_g.glob(_clr_os.path.join(_dir, pat)))
@@ -4448,17 +4461,18 @@ def cli_readiness():
     _mcx_ok = (bool(_clr_g.glob(_clr_os.path.join(_dir, "MCX_WebAllocationDeallocation.csv")))
                or bool(_clr_g.glob(_clr_os.path.join(_dir, f"*-{_ymd}*.xlsx"))))
     items.append({"key": "MCX_WEB_ALLOCATION", "ok": _mcx_ok,
-                  "example": "MCX_WebAllocationDeallocation.csv or <random>-YYYYMMDDHHMMSS.xlsx"})
-    # RISK_REPORT: pre-file check accepts either the CLI base folder or the shared
-    # COMMON FILES folder (the dashboard's "Common files" button uploads it there).
-    risk_found = (bool(_clr_g.glob(_clr_os.path.join(_dir, f"RISK_REPORT_{today_str}.csv")))
-                  or bool(_clr_g.glob(_clr_os.path.join(_common_dir, f"RISK_REPORT_{today_str}.csv"))))
-    items.append({"key": "RISK_REPORT", "ok": risk_found, "example": "RISK_REPORT_*.csv"})
-    # Kambala: pre-file check for the "new" allocation script — must be in the CLI
-    # base folder, dated today. No automated download source yet — manual upload only.
-    kambala_pat = f"Kambala_Omny_Depo_Adhoc_All_level.txt_{today_str}.txt"
-    kambala_found = bool(_clr_g.glob(_clr_os.path.join(_dir, kambala_pat)))
-    items.append({"key": "KAMBALA", "ok": kambala_found, "example": kambala_pat})
+                  "example": "MCX_WebAllocationDeallocation.csv or *-YYYYMMDDHHMMSS.xlsx"})
+    if _clr_morning:
+        # RISK_REPORT: pre-file check accepts either the CLI base folder or the shared
+        # COMMON FILES folder (the dashboard's "Common files" button uploads it there).
+        risk_found = (bool(_clr_g.glob(_clr_os.path.join(_dir, f"RISK_REPORT_{today_str}.csv")))
+                      or bool(_clr_g.glob(_clr_os.path.join(_common_dir, f"RISK_REPORT_{today_str}.csv"))))
+        items.append({"key": "RISK_REPORT", "ok": risk_found, "example": "RISK_REPORT_*.csv"})
+        # Kambala: pre-file check for the "new" allocation script — CLI base folder,
+        # dated today (the run also fetches it from FTP itself if missing).
+        kambala_pat = f"Kambala_Omny_Depo_Adhoc_All_level.txt_{today_str}.txt"
+        kambala_found = bool(_clr_g.glob(_clr_os.path.join(_dir, kambala_pat)))
+        items.append({"key": "KAMBALA", "ok": kambala_found, "example": kambala_pat})
     return {"items": items, "folder": _dir, "common_folder": _common_dir}
 
 
