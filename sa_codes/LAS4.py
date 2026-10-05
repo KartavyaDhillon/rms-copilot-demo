@@ -2651,6 +2651,10 @@ print("🎉 ALL EMAILS SENT SUCCESSFULLY")
 # POST-EMAIL SAFE ADD-ON BLOCK (SCENARIO + LAS REF)
 # ==================================================
 
+# Checkpoint: from here on, a crash (e.g. a missing column in scenario.csv)
+# is recorded as POST_EMAIL — so "Resume" restarts HERE and does NOT re-send the
+# WhatsApp messages / emails that already went out above.
+_ckpt.las_step("POST_EMAIL", script="LAS4")
 print("\n📊 Starting POST-EMAIL Scenario & LAS reference steps")
 
 import pandas as pd

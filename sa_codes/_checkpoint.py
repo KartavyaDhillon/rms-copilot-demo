@@ -58,6 +58,7 @@ LAS_STEP_ORDER = [
     "WA_IMAGES",
     "WA_SEND",
     "EMAILS",
+    "POST_EMAIL",
     "DONE",
 ]
 
@@ -80,6 +81,7 @@ LAS_STEP_NAMES = {
     "WA_IMAGES":    "Export WhatsApp images (zone screenshots)",
     "WA_SEND":      "Send WhatsApp messages",
     "EMAILS":       "Send zone emails",
+    "POST_EMAIL":   "Scenario files & LAS reference (after emails)",
     "DONE":         "Complete",
 }
 
