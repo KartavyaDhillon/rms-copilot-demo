@@ -2004,7 +2004,7 @@ def px_config_get(pipe: str = ""):
 
 
 @app.post("/px/advance-run")
-def px_advance_run(request: Request, pipe: str = "", to: int = 0, password: str = ""):
+def px_advance_run(request: Request, pipe: str = "", to: int = -1, password: str = ""):
     """Manually mark today's run counter forward for ANY pipe — generalizes
     the existing /cli/advance-run (which only ever did this for CLI). Needed
     when a run was genuinely completed OUTSIDE this dashboard (e.g. someone
@@ -2060,10 +2060,26 @@ def px_advance_run(request: Request, pipe: str = "", to: int = 0, password: str 
     except Exception:
         pass
     old_n = n
-    n = int(to) if to else (n + 1)
+    # `to` = 0 is a valid target (RESET: un-mark every run done today). It used
+    # to be treated as "not given" (falsy) and silently advanced by +1 instead,
+    # so a run could never be un-marked. Omitted `to` is now signalled by -1.
+    n = int(to) if to >= 0 else (n + 1)
     n = max(0, min(n, p.get("runs", n)))
     with open(fp, "w", encoding="utf-8") as f:
         f.write(f"{today}|{n}")
+    if n < old_n:
+        # Lowering the counter: drop the manual-override records for the runs
+        # that are no longer done, so their tiles stop showing "marked done".
+        try:
+            import json as _arj
+            _op = _aro.path.join(base, "run_overrides.json")
+            with open(_op, encoding="utf-8") as _f:
+                _od = _arj.load(_f)
+            _od["runs"] = {k: v for k, v in (_od.get("runs") or {}).items() if int(k) <= n}
+            with open(_op, "w", encoding="utf-8") as _f:
+                _arj.dump(_od, _f)
+        except Exception:
+            pass
     if n > old_n:
         try:
             from core.auth import current_user as _ar_cu
