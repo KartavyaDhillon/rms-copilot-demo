@@ -72,6 +72,23 @@ _SA_OUTPUT_DIR = _SAENV("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
 today_excel = datetime.today().strftime("%d-%m-%Y")
 today_csv = datetime.today().strftime("%d%m%Y")
 
+# Helper functions LAS4.py defines BEFORE the marker (e.g. password_protect_excel_force)
+# are needed by the tail too — load just those defs, run none of the earlier steps.
+import time                                            # noqa: E402,F401
+try:
+    import win32com.client as win32                    # noqa: E402,F401
+except Exception:
+    win32 = None
+import ast                                             # noqa: E402
+_full = "\n".join(lines)
+_tree = ast.parse(_full)
+_defs = [n for n in _tree.body
+         if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.lineno <= start]
+if _defs:
+    _mod = ast.Module(body=_defs, type_ignores=[])
+    exec(compile(_mod, src_path, "exec"), globals())
+    print(f"🧩 Loaded helper functions: {', '.join(d.name for d in _defs)}")
+
 print(f"🔁 Resuming LAS4 from the post-email block (LAS4.py line {start + 1})")
 print(f"📂 BASE_FOLDER = {BASE_FOLDER}")
 
