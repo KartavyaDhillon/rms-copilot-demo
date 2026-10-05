@@ -2731,6 +2731,25 @@ _ctcl_last_answered_at: dict = {}   # {source: timestamp} — per-source, NOT sh
                                      # false "previous attempt failed" reason from one login
                                      # context into the other's very first captcha attempt).
 
+def _ctcl_captcha_dir(pending_only=False):
+    """Folder holding the live NMASS/NCDEX .captcha_state. Candidates: CTCL's
+    folder, CLI's folder (cli_download.py points NMASS_SAVE_DIR there), MS15's
+    folder. Returns the first whose state is PENDING, else the CTCL default."""
+    import os as _o, json as _j
+    default = _o.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    cands = [default, _o.getenv("CLI_FOLDER", ""), _o.getenv("MARGIN_SHORTAGE_FOLDER", "")]
+    for d in cands:
+        if not d:
+            continue
+        try:
+            with open(_o.path.join(d, ".captcha_state"), encoding="utf-8") as f:
+                if _j.load(f).get("state") == "PENDING":
+                    return d
+        except Exception:
+            continue
+    return default
+
+
 @app.get("/ctcl/captcha/pending")
 def ctcl_captcha_pending():
     """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input.
@@ -2741,7 +2760,12 @@ def ctcl_captcha_pending():
     NCDEX captcha falsely claim a previous attempt failed."""
     import base64 as _b64, json as _cj, os as _co, time as _ct
     global _ctcl_last_answered_at
-    _dir = _co.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    # The login script writes its popup state into NMASS_SAVE_DIR, which is
+    # the CTCL folder for CTCL runs but CLI's OWN folder for Client Prudential
+    # Limit (cli_download.py). Scan every candidate folder and use the first
+    # one with a PENDING captcha — otherwise a CLI-triggered captcha never
+    # appeared in the dashboard and the run sat waiting for it.
+    _dir = _ctcl_captcha_dir(pending_only=True)
     _sf  = _co.path.join(_dir, ".captcha_state")
     _img = _co.path.join(_dir, ".captcha_nmass.png")
     try:
@@ -2768,7 +2792,7 @@ def ctcl_captcha_answer(a: _CTCLCaptchaAnswer):
     """Submit typed captcha text to the waiting NMASS/NCDEX script."""
     import os as _co, time as _ct, json as _cj
     global _ctcl_last_answered_at
-    _dir = _co.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    _dir = _ctcl_captcha_dir(pending_only=True)
     _sf  = _co.path.join(_dir, ".captcha_state")
     _af  = _co.path.join(_dir, ".captcha_answer")
     try:

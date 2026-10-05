@@ -362,11 +362,10 @@ def run_cli_allocation_new():
     # copy in from common_dir, overwriting anything already at risk_path.
     common_risk_path = os.path.join(common_dir, risk_name)
     if os.path.exists(common_risk_path):
-        try:
-            shutil.copy2(common_risk_path, risk_path)
-            _p(f"✅ Found: {risk_name} (copied fresh from COMMON FILES)")
-        except Exception as _ce:
-            _p(f"⚠️ Found {risk_name} in COMMON FILES but couldn't copy it in: {_ce}")
+        # Read it IN PLACE from COMMON FILES — no copy into the CLI folder
+        # (it is a shared file; copying would leave stray duplicates behind).
+        risk_path = common_risk_path
+        _p(f"✅ Found: {risk_name} (read directly from COMMON FILES)")
     else:
         _p(f"⚠️  {risk_name} not found in COMMON FILES ({common_dir})")
 

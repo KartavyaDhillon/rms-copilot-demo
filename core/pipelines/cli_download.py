@@ -124,7 +124,7 @@ def run_cli_download():
                     # freeze) and enforce a hard timeout so a stuck exchange
                     # login/captcha can never block the whole run forever.
                     import threading, time as _t
-                    _timeout = int(os.getenv("CLI_NMASS_TIMEOUT_SEC", "300"))
+                    _timeout = int(os.getenv("CLI_NMASS_TIMEOUT_SEC", "900"))
                     proc = subprocess.Popen([python, "-u", script], stdout=subprocess.PIPE,
                                             stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                             errors="replace", env=env)

@@ -5493,15 +5493,22 @@ async function pxViewLog(pipe,name){
 function pxLogModalCopy(){
   const v=document.getElementById('pxLogView');
   const text=v ? (v._rawText||v.querySelector('.sa-log-view')?.innerText||'') : '';
-  navigator.clipboard.writeText(text).then(()=>{
+  const _done=()=>{
     const btn=document.getElementById('pxLogModalCopyBtn');
     if(btn){const o=btn.innerHTML;btn.innerHTML='✅ Copied';setTimeout(()=>btn.innerHTML=o,1800);}
-  }).catch(()=>{
+  };
+  const _fallback=()=>{
     const ta=document.createElement('textarea'); ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
-    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-    const btn=document.getElementById('pxLogModalCopyBtn');
-    if(btn){const o=btn.innerHTML;btn.innerHTML='✅ Copied';setTimeout(()=>btn.innerHTML=o,1800);}
-  });
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    try{document.execCommand('copy');}catch(e){}
+    document.body.removeChild(ta); _done();
+  };
+  // navigator.clipboard is UNDEFINED on plain-http pages opened by IP address
+  // (e.g. http://10.10.8.221:...) — calling .writeText on it threw before the
+  // .catch fallback could ever run, so Copy silently did nothing.
+  if(navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(text).then(_done).catch(_fallback);
+  } else { _fallback(); }
 }
 function pxRunTip(pipe){
   if(pipe==='cli') return 'Runs the full automated cycle: downloads whatever\'s missing (Allocation_Detail + NSCCL + NCDEX), gets the MCX Web Allocation file, pushes everything to FTP, then backs up. Skips any step whose file is already there.';
