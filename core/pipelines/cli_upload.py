@@ -325,8 +325,12 @@ def run_cli_upload():
 
     files_to_upload, missing_names = [], []
     for label, pattern in expected:
+        # CM/FO/CO collateral files are .txt only (ditto the original) — a stray
+        # .csv with the same prefix is never uploaded.
+        _exts = (".txt",) if label in ("CM_ClientLevelCollaterals", "FO_ClientLevelCollaterals",
+                                       "CO_ClientLevelCollaterals") else valid_ext
         match = next((f for f in local_files
-                      if pattern.lower() in f.lower() and f.lower().endswith(valid_ext)), None)
+                      if pattern.lower() in f.lower() and f.lower().endswith(_exts)), None)
         if match:
             files_to_upload.append(os.path.join(base_folder, match))
         else:

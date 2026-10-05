@@ -63,9 +63,21 @@ def run_cli_download():
     need_keys = ["CM_ClientLevelCollaterals", "FO_ClientLevelCollaterals",
                  "CO_ClientLevelCollaterals", "ClientNetEffectiveDeposits"]
 
+    # CM/FO/CO must be .txt (original script requests JSON:TXT). A same-day .csv
+    # (e.g. downloaded by CTCL, which requests CSV) is NOT accepted or copied for
+    # CLI — it would be treated as missing and re-downloaded as .txt.
+    # ClientNetEffectiveDeposits has no such restriction (always .csv).
+    _TXT_ONLY = ("CM_ClientLevelCollaterals", "FO_ClientLevelCollaterals",
+                 "CO_ClientLevelCollaterals")
+
+    def _match(f, key):
+        if key not in f or today_str not in f:
+            return False
+        return f.lower().endswith(".txt") if key in _TXT_ONLY else True
+
     def _has_today(folder, key):
         try:
-            return any(key in f and today_str in f for f in os.listdir(folder))
+            return any(_match(f, key) for f in os.listdir(folder))
         except Exception:
             return False
 
@@ -75,7 +87,7 @@ def run_cli_download():
         for k in list(missing_keys):
             if _has_today(ctcl_folder, k):
                 try:
-                    src_name = next(f for f in os.listdir(ctcl_folder) if k in f and today_str in f)
+                    src_name = next(f for f in os.listdir(ctcl_folder) if _match(f, k))
                     shutil.copy2(os.path.join(ctcl_folder, src_name), os.path.join(base_folder, src_name))
                     copied.append(src_name); missing_keys.remove(k)
                 except Exception:
@@ -102,6 +114,9 @@ def run_cli_download():
         # files a 14:55 CTCL run went on to use.) Pointing the script at CLI's
         # own folder keeps each box's downloads to itself.
         env["NMASS_SAVE_DIR"] = base_folder
+        # Ditto the original ALLOCATION_CLI_NMASS_NCDEX.py: request "JSON:TXT" so
+        # CM/FO/CO arrive as .txt from the exchange itself (CTCL/MS15 keep CSV).
+        env["NMASS_DATA_FORMAT"] = "TXT"
         if not os.path.isfile(script):
             _p(f"❌ Script not found: {script}")
         else:
@@ -159,7 +174,7 @@ def run_cli_download():
                             if _has_today(base_folder, k):
                                 try:
                                     landed.append(next(f for f in os.listdir(base_folder)
-                                                       if k in f and today_str in f))
+                                                       if _match(f, k)))
                                 except Exception:
                                     landed.append(k)
                             else:

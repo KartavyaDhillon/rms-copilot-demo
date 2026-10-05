@@ -938,8 +938,13 @@ def download_file(api_url, payload, retry=0):
 
 
 # -----------------------------
-# PAYLOADS 
+# PAYLOADS
 # -----------------------------
+# File format requested from NMASS. CTCL / Margin Shortage use CSV (default).
+# Client Prudential Limit's original script requests TXT, so cli_download.py
+# sets NMASS_DATA_FORMAT=TXT for its run — the exchange then names the CM/FO/CO
+# files .txt natively (no renaming anywhere).
+_DATA_FORMAT = "JSON:" + (os.getenv("NMASS_DATA_FORMAT", "CSV").strip().upper() or "CSV")
 
 cm_payload = {
     "version": "2.0",
@@ -948,7 +953,7 @@ cm_payload = {
         "memCode": CONSCODE,
         "tmCode": "ALL",
         "cliCode": "",
-        "dataFormat": "JSON:CSV"
+        "dataFormat": _DATA_FORMAT
     }
 }
 
@@ -959,7 +964,7 @@ fo_payload = {
         "memCode": "M50154",
         "tmCode": "ALL",
         "cliCode": "",
-        "dataFormat": "JSON:CSV"
+        "dataFormat": _DATA_FORMAT
     }
 }
 
@@ -970,7 +975,7 @@ co_payload = {
         "memCode": "M50154",
         "tmCode": "ALL",
         "cliCode": "",
-        "dataFormat": "JSON:CSV"
+        "dataFormat": _DATA_FORMAT
     }
 }
 
