@@ -89,6 +89,81 @@ if _defs:
     exec(compile(_mod, src_path, "exec"), globals())
     print(f"🧩 Loaded helper functions: {', '.join(d.name for d in _defs)}")
 
+# ── Auto-resolve module-level settings defined before the marker ─────────────
+# (EMAIL_DATE, SMTP_*, EMAIL_ADDRESS, imports …). Instead of guessing names one
+# crash at a time, find every name the tail (and the helper defs above) reads
+# but never defines, and execute ONLY the plain assignments/imports that define
+# them (repeating for names those need). No step logic from before the marker runs.
+import builtins as _bi                                 # noqa: E402
+
+_tail_tree = ast.parse("\n".join(lines[start:]))
+
+
+def _loaded_stored(tree):
+    ld, st = set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name):
+            (ld if isinstance(n.ctx, ast.Load) else st).add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.ClassDef)):
+            st.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                st.add((a.asname or a.name).split(".")[0])
+        elif isinstance(n, ast.arg):
+            st.add(n.arg)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            st.add(n.name)
+    return ld, st
+
+
+def _module_level(stmts):
+    """Statements outside any function/class body (descends into if/try/with/for)."""
+    for s in stmts:
+        if isinstance(s, (ast.FunctionDef, ast.ClassDef)):
+            continue
+        yield s
+        for f in ("body", "orelse", "finalbody"):
+            sub = getattr(s, f, None)
+            if isinstance(sub, list):
+                yield from _module_level(sub)
+        for h in getattr(s, "handlers", []) or []:
+            yield from _module_level(h.body)
+
+
+_ld, _st = _loaded_stored(_tail_tree)
+for d in _defs:
+    _l2, _ = _loaded_stored(d)
+    _ld |= _l2
+_pre = [s for s in _module_level(_tree.body) if s.lineno < start + 1]
+_pre = [s for s in _pre if isinstance(s, (ast.Assign, ast.AnnAssign, ast.Import, ast.ImportFrom))]
+_done = set()
+for _round in range(6):
+    _need = {n for n in _ld if n not in _st and n not in globals() and not hasattr(_bi, n)}
+    _progress = False
+    for s in _pre:
+        if id(s) in _done:
+            continue
+        if isinstance(s, (ast.Import, ast.ImportFrom)):
+            _names = {(a.asname or a.name).split(".")[0] for a in s.names}
+        else:
+            _tg = s.targets if isinstance(s, ast.Assign) else [s.target]
+            _names = {n.id for t in _tg for n in ast.walk(t) if isinstance(n, ast.Name)}
+        if not (_names & _need):
+            continue
+        _done.add(id(s))
+        try:
+            exec(compile(ast.Module(body=[s], type_ignores=[]), src_path, "exec"), globals())
+            _progress = True
+            _l3, _ = _loaded_stored(s)
+            _ld |= _l3
+        except Exception as _e:
+            print(f"⚠️ Could not pre-load {sorted(_names)} (LAS4.py line {s.lineno}): {_e}")
+    if not _progress:
+        break
+_still = sorted(n for n in _ld if n not in _st and n not in globals() and not hasattr(_bi, n))
+if _still:
+    print(f"ℹ️ Names still undefined before start (may be set inside the block): {_still}")
+
 print(f"🔁 Resuming LAS4 from the post-email block (LAS4.py line {start + 1})")
 print(f"📂 BASE_FOLDER = {BASE_FOLDER}")
 
