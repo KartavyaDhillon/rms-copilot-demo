@@ -2193,6 +2193,22 @@ def px_backfill_fix_cli_dates():
     return fix_cli_run_dates()
 
 
+@app.post("/px/cli-delete-backup-rows")
+def px_cli_delete_backup_rows(date: str = "", confirm: bool = False, password: str = ""):
+    """Delete Client Prudential Limit BACKUP rows from Postgres for one date
+    (default today, format YYYY-MM-DD). Only pipeline='cli', kind='backup'.
+    Password-gated (SA_CONFIG_PASSWORD). With confirm=false (default) it is a
+    DRY RUN: nothing is deleted, it just lists what would be. Call again with
+    confirm=true to actually delete."""
+    from core.short_allocation import check_password as _pw
+    if not _pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    if os.getenv("USE_POSTGRES", "false").strip().lower() != "true":
+        return {"ok": False, "error": "USE_POSTGRES is not enabled on this machine"}
+    from core.db_postgres import delete_cli_backup_rows
+    return delete_cli_backup_rows(date or None, confirm)
+
+
 @app.post("/sa/backfill-db")
 def sa_backfill_db(date: str = "", run: int = 0, password: str = ""):
     """Push an ALREADY-on-disk Short Allocation run folder into PostgreSQL —

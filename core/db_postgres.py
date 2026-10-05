@@ -411,6 +411,38 @@ def save_run_file(pipeline: str, kind: str, filename: str, content: bytes,
         conn.close()
 
 
+def delete_cli_backup_rows(run_date: str = None, confirm: bool = False) -> dict:
+    """Delete the Client Prudential Limit ('cli') BACKUP rows for ONE date from
+    run_files (default: today). Touches ONLY pipeline='cli' AND kind='backup'
+    — never logs/outputs, never any other pipeline.
+
+    Safe by default: with confirm=False it deletes nothing and just reports
+    what WOULD be deleted (count + filenames), so it can be reviewed first."""
+    d = date.fromisoformat(run_date) if run_date else date.today()
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, filename, tag FROM run_files "
+                        "WHERE pipeline = %s AND kind = %s AND run_date = %s ORDER BY id",
+                        ("cli", "backup", d))
+            rows = cur.fetchall()
+            files = [{"id": r[0], "filename": r[1], "tag": r[2]} for r in rows]
+            if not confirm:
+                conn.rollback()
+                return {"ok": True, "dry_run": True, "date": d.isoformat(),
+                        "would_delete": len(files), "files": files}
+            cur.execute("DELETE FROM run_files WHERE pipeline = %s AND kind = %s AND run_date = %s",
+                        ("cli", "backup", d))
+            deleted = cur.rowcount
+        conn.commit()
+        return {"ok": True, "dry_run": False, "date": d.isoformat(), "deleted": deleted, "files": files}
+    except Exception as e:
+        conn.rollback()
+        return {"ok": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
 def fix_cli_run_dates() -> dict:
     """One-off repair: every CLI row archived via backfill_date_to_db() /
     the live backup step's own save_run_file() call BEFORE run_date was
