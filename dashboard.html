@@ -1577,7 +1577,7 @@ function runClientInspection() {
 
   function copyMsg(btn, encoded) {
     const text = decodeURIComponent(encoded);
-    navigator.clipboard.writeText(text).then(() => {
+    _copyText(text).then(() => {
       const old = btn.innerHTML;
       btn.innerHTML = ICON_CHECK;
       setTimeout(() => { btn.innerHTML = old; }, 1200);
@@ -3165,6 +3165,23 @@ function saAddEvent(ok,msg,what){
   div.innerHTML=`<span class="ic">${ok?'✓':'!'}</span><span>${String(msg||'').replace(/[<>]/g,'')}</span><span class="what">${what||''}</span>`;
   box.appendChild(div);
 }
+// Clipboard that also works on plain-http pages opened by IP/hostname, where
+// navigator.clipboard is undefined (calling .writeText on it threw, so Copy did nothing).
+function _copyText(text){
+  return new Promise((resolve,reject)=>{
+    if(navigator.clipboard && window.isSecureContext){
+      navigator.clipboard.writeText(text).then(resolve).catch(()=>{ _copyFallback(text)?resolve():reject(); });
+    } else { _copyFallback(text)?resolve():reject(); }
+  });
+}
+function _copyFallback(text){
+  try{
+    const ta=document.createElement('textarea'); ta.value=text;
+    ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok=document.execCommand('copy'); document.body.removeChild(ta); return ok;
+  }catch(e){ return false; }
+}
 function saLogCopy(){
   const box=document.getElementById('saEvents'); if(!box) return;
   const lines=[...box.querySelectorAll('.sa-ev')].map(el=>{
@@ -3174,7 +3191,7 @@ function saLogCopy(){
     const what=spans[2]?.textContent||'';
     return what ? `${ic} [${what}] ${msg}` : `${ic} ${msg}`;
   }).join('\n');
-  navigator.clipboard.writeText(lines).then(()=>{
+  _copyText(lines).then(()=>{
     const btn=document.getElementById('saLogCopyBtn');
     if(btn){const orig=btn.innerHTML; btn.innerHTML='✅ Copied'; setTimeout(()=>{btn.innerHTML=orig;},1800);}
   }).catch(()=>{
@@ -3623,7 +3640,7 @@ async function saViewLog(name){
 function saLogModalCopy(){
   const v=document.getElementById('saLogView');
   const text=v ? (v._rawText||v.querySelector('.sa-log-view')?.innerText||'') : '';
-  navigator.clipboard.writeText(text).then(()=>{
+  _copyText(text).then(()=>{
     const btn=document.getElementById('saLogModalCopyBtn');
     if(btn){const o=btn.innerHTML;btn.innerHTML='✅ Copied';setTimeout(()=>btn.innerHTML=o,1800);}
   }).catch(()=>{
@@ -4160,7 +4177,7 @@ function _ctclAddEv(ok,msg,tag){
 function ctclLogCopy(){
   const box=document.getElementById('ctclEvents'); if(!box) return;
   const text=[...box.querySelectorAll('.sa-ev')].map(e=>e.textContent.trim()).join('\n');
-  navigator.clipboard.writeText(text).catch(()=>{});
+  _copyText(text).catch(()=>{});
 }
 
 var _ctclCurrentPhase='ctcl';  // tracks which phase we're in for email labelling
