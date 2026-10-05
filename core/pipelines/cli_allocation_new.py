@@ -426,7 +426,7 @@ def run_cli_allocation_new():
         cols = ["CMCreditObligation", "StockDiff", "EpiCredit", "MtfCashColl",
                 "ExchRepledgeAdj", "FnoDebitBill", "EPNLimit", "HoldCashMgn", "MTFExcess"]
         for col in cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0) if col in df.columns else 0
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
         df["AccountID"] = df["AccountID"].astype(str).str.strip()
         df_grouped = df.groupby("AccountID")[cols].sum().reset_index()
         df_grouped["Sum"] = df_grouped[cols].sum(axis=1)

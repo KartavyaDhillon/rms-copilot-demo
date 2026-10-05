@@ -405,7 +405,19 @@ def run_cli_upload():
     try:
         today_folder = datetime.datetime.now().strftime("%d-%m-%Y")
         slot = _cli_time_slot()
-        backup_path = os.path.join(base_folder, "BACKUPFILES AUTOMATED", today_folder, slot)
+        # ⚠️ Ditto-same as the original MCX_UPLOAD_BACKUP.py: the run subfolder
+        # is a BARE HH-MM-SS timestamp, NOT the slot word. The original script
+        # has this exact warning: "It used to be prefixed with the slot name
+        # (morning_08-14-32 etc.), which read more nicely but broke another
+        # script that parses these folder names. Do not re-add the prefix."
+        # Reverted here for the same reason — also fixes the real collision
+        # risk where two runs in the same window on the same day would
+        # otherwise overwrite each other's files in the identical Morning/
+        # Afternoon/Evening folder. `slot` is still used for the Postgres tag
+        # below (readable in the Backup Files browser) — only the on-disk
+        # folder name changes.
+        run_time = datetime.datetime.now().strftime("%H-%M-%S")
+        backup_path = os.path.join(base_folder, "BACKUPFILES AUTOMATED", today_folder, run_time)
         os.makedirs(backup_path, exist_ok=True)
         tag = f"{today_folder}/{slot}"
         valid_ext2 = (".csv", ".txt", ".xlsx")
