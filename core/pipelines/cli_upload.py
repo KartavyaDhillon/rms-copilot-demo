@@ -408,7 +408,12 @@ def run_cli_upload():
     _p("🚀 STEP 2: Backup + cleanup")
     try:
         today_folder = datetime.datetime.now().strftime("%d-%m-%Y")
-        slot = _cli_time_slot()
+        # Slot label for the Postgres tag comes from the RUN's own decision (the
+        # window gate in cli_allocation_new.py leaves a marker for afternoon/
+        # evening; no marker = the morning flow), NOT from the wall clock — a
+        # morning run done at 14:50 is still a Morning run. Clock-based
+        # _cli_time_slot() is only the fallback if that can't be determined.
+        slot = _slot_name.capitalize() if _slot_name in ("afternoon", "evening") else "Morning"
         # ⚠️ Ditto-same as the original MCX_UPLOAD_BACKUP.py: the run subfolder
         # is a BARE HH-MM-SS timestamp, NOT the slot word. The original script
         # has this exact warning: "It used to be prefixed with the slot name

@@ -4429,17 +4429,26 @@ def cli_readiness():
     today_str = _clr_dt.datetime.now().strftime("%d%m%Y")
     checks = [
         ("ALLOCATION_DETAIL",            f"Allocation_Detail_{today_str}.csv"),
-        ("CM_CLIENT_LEVEL",              "CM_ClientLevelCollaterals_*.csv"),
-        ("FO_CLIENT_LEVEL",              "FO_ClientLevelCollaterals_*.csv"),
-        ("CO_CLIENT_LEVEL",              "CO_ClientLevelCollaterals_*.csv"),
+        # CM/FO/CO collaterals are .txt (the run requests JSON:TXT, like the original).
+        ("CM_CLIENT_LEVEL",              f"CM_ClientLevelCollaterals_{today_str}*.txt"),
+        ("FO_CLIENT_LEVEL",              f"FO_ClientLevelCollaterals_{today_str}*.txt"),
+        ("CO_CLIENT_LEVEL",              f"CO_ClientLevelCollaterals_{today_str}*.txt"),
         ("CLIENT_NET_EFFECTIVE_DEPOSITS","ClientNetEffectiveDeposits_*.csv"),
-        ("CLI_PRUDENTIAL_LIMIT",         "CLI_PRUDENTIAL_LIMIT.txt"),
-        ("MCX_WEB_ALLOCATION",           "MCX_WebAllocationDeallocation.csv"),
+        # CLI_PRUDENTIAL_LIMIT.txt is deliberately NOT listed: the run itself
+        # builds it from Allocation_Detail, so it can never be an "input".
     ]
     items = []
     for key, pat in checks:
         found = bool(_clr_g.glob(_clr_os.path.join(_dir, pat)))
         items.append({"key": key, "ok": found, "example": pat})
+    # MCX Web Allocation: satisfied by the converted MCX_WebAllocationDeallocation.csv
+    # OR a raw random-named RSK383 export for today (<random>-YYYYMMDDHHMMSS.xlsx) —
+    # the run converts the raw export itself, so either one means "present".
+    _ymd = _clr_dt.datetime.now().strftime("%Y%m%d")
+    _mcx_ok = (bool(_clr_g.glob(_clr_os.path.join(_dir, "MCX_WebAllocationDeallocation.csv")))
+               or bool(_clr_g.glob(_clr_os.path.join(_dir, f"*-{_ymd}*.xlsx"))))
+    items.append({"key": "MCX_WEB_ALLOCATION", "ok": _mcx_ok,
+                  "example": "MCX_WebAllocationDeallocation.csv or <random>-YYYYMMDDHHMMSS.xlsx"})
     # RISK_REPORT: pre-file check accepts either the CLI base folder or the shared
     # COMMON FILES folder (the dashboard's "Common files" button uploads it there).
     risk_found = (bool(_clr_g.glob(_clr_os.path.join(_dir, f"RISK_REPORT_{today_str}.csv")))
