@@ -1552,6 +1552,11 @@ def pb_update(pipe, password, updates):
     for i in range(1, p.get("runs", 0) + 1): allowed.add(f"{pipe.upper()}_RUN{i}_WINDOW")
     upd = {k: v for k, v in (updates or {}).items() if k in allowed}
     _write_env(upd)
+    # Also update the running server's environment: run subprocesses inherit it,
+    # and load_dotenv() never overrides an already-set variable — so without this
+    # an edited To/CC (or password) would not apply until the server restarted.
+    for _k, _v in upd.items():
+        os.environ[_k] = str(_v)
     return {"ok": True, "saved": len(upd)}
 
 

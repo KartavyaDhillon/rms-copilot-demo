@@ -707,6 +707,7 @@ body {
           <div class="sa-title-wrap"><div class="sa-logo">R2</div><div><div class="sa-title">R1-R2 Comparison Report</div><div class="sa-sub">First 5 files are always today's CLI Morning backup (fixed baseline). Live Snapshot downloads/reuses the second 5 itself and can be run any number of times; Afternoon/Evening each pull from CLI's own backup for that slot and can only run once per day. Every run's diff is always vs this morning, never vs whatever ran last.</div></div></div>
           <div class="sa-tools">
             <button class="sa-tool" onclick="pxCredentials('r1r2')" data-tip="Change logins/passwords for NSCCL, NCDEX and MCX RSK383 — shared with CTCL vs NMASS / Short Allocation / CLI where the same accounts are used. Only needed for Live Snapshot's downloads.">🔑 Credentials</button>
+            <button class="sa-tool" onclick="pxConfig('r1r2')" data-tip="Change which email addresses get the R1-R2 comparison report (To / CC). Add or remove addresses here — saved to .env, applies from the next run.">✉️ Email To / CC</button>
             <button class="sa-tool" id="r1r2DownloadBtn" onclick="r1r2Download()" data-tip="Downloads CM/FO/CO/ClientNetEffectiveDeposits only (shared NMASS/NCDEX login, same as CTCL/MS15/PROBABLE — never collides with them) — skips it if today's 4 files are already here. Same step Live Snapshot does automatically; this is for retrying it on its own." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download</button>
             <button class="sa-tool" id="r1r2McxBtn" onclick="r1r2McxDownload()" data-tip="Logs in to TCS BANCS (RSK383) and downloads the MCX file — skips the login entirely if today's MCX file is already here. Same TCS BANCS session SA's MCX Deposit / CLI's MCX Web Allocation buttons use." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX Deposit</button>
             <button class="sa-tool" onclick="r1r2UploadFiles()" data-tip="Manually add a file yourself into the base folder if the automatic download couldn't get it — only recognised filenames are accepted. If this machine can't reach the base folder, files go to a temp folder instead." style="border-color:rgba(52,211,153,.45);color:var(--green)">⬆️ Upload files</button>
@@ -4875,7 +4876,9 @@ function _r1r2RunOneStep(url, kind, busyBtnId, busyLabel, idleLabel){
     captchaStartPoller();
     let ok=true;
     const ev=new EventSource(url); _pxSetES('r1r2',ev);
+    let _fin=false;
     const _finish=()=>{
+      if(_fin) return; _fin=true;   // runs once even if both 'done' and 'end'/onerror fire
       // Keep the tile that just ran showing its result (SUCCESS / FAILED) and
       // un-clickable for 60 seconds, so the outcome can't be missed — the tile
       // used to snap straight back to "Ready — run" the instant the run ended.
@@ -4901,6 +4904,14 @@ function _r1r2RunOneStep(url, kind, busyBtnId, busyLabel, idleLabel){
       } else if(d.type==='done'||d.type==='error'){
         if(d.ok===false||d.type==='error') ok=false;
         if(strip && d.type==='done') strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+(d.ok?'✅ Done':'⚠️ Finished with errors')+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
+        // The run IS over at this point — don't wait for the stream's trailing
+        // 'end' event (it can lag or never arrive, which left the tile stuck on
+        // "Running…" long after the log said Done). Finish right away.
+        if(d.type==='done'){
+          try{ ev.close(); }catch(_){}
+          _pxClearES('r1r2'); captchaStopPoller();
+          _finish(); resolve(ok);
+        }
       } else if(d.type==='end'){
         ev.close(); _pxClearES('r1r2');
         captchaStopPoller();
@@ -4980,11 +4991,11 @@ function r1r2RenderTiles(s){
     if(_jfActive && _jf.kind===t.kind && !busy){
       // Just finished — plain-language result, not clickable for 60 seconds.
       if(_jf.ok){
-        cls+=' done'; state='<span style="color:var(--green);font-weight:700">&#9989; SUCCESS &mdash; report is ready</span>';
-        btn='<button class="sa-run-btn" disabled style="background:var(--green);color:#04120a;opacity:1;cursor:not-allowed;font-weight:800">&#10003; SUCCESS</button>';
+        cls+=' done'; state='<span style="color:var(--green);font-weight:800;font-size:13px">&#9989; SUCCESS &mdash; report is ready</span>';
+        btn='<button class="sa-run-btn" disabled style="background:var(--green);color:#04120a;opacity:1;cursor:not-allowed;font-weight:800;font-size:16px;padding:14px 10px;letter-spacing:.5px">&#10003; DONE &mdash; SUCCESS</button>';
       } else {
-        cls+=' error'; state='<span style="color:var(--red);font-weight:700">&#10060; FAILED &mdash; open Logs to see why</span>';
-        btn='<button class="sa-run-btn" disabled style="background:var(--red);color:#fff;opacity:1;cursor:not-allowed;font-weight:800">&#10007; FAILED</button>';
+        cls+=' error'; state='<span style="color:var(--red);font-weight:800;font-size:13px">&#10060; FAILED &mdash; open Logs to see why</span>';
+        btn='<button class="sa-run-btn" disabled style="background:var(--red);color:#fff;opacity:1;cursor:not-allowed;font-weight:800;font-size:16px;padding:14px 10px;letter-spacing:.5px">&#10007; FAILED</button>';
       }
     } else if(_jfActive && !busy){
       // Another tile is showing its result — keep this one quiet and un-clickable too.
