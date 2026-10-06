@@ -4318,7 +4318,7 @@ def reco_today_status():
 
 
 @app.post("/reco/upload")
-async def reco_upload(files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+async def reco_upload(target: str = "", files: _SA_List[_SA_UploadFile] = _SA_File(...)):
     """ONE upload button for everything: HOLDING_/RISK_REPORT_ → COMMON FILES (the previous
     day's copy is archived automatically), EXCEPTION → its permanent folder (replacing archives
     the old file), PositionBook / SearchResults → today's drop folder."""
@@ -4330,7 +4330,7 @@ async def reco_upload(files: _SA_List[_SA_UploadFile] = _SA_File(...)):
         with open(tmp, "wb") as out:
             _sh.copyfileobj(f.file, out)
         saved.append(tmp)
-    return _rc.route_uploads(saved)
+    return _rc.route_uploads(saved, target if target in ("common", "main") else "")
 
 
 @app.get("/reco/holidays")

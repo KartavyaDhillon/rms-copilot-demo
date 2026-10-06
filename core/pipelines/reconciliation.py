@@ -427,13 +427,31 @@ def check_files(procs, today=None):
 # ─────────────────────────────────────────────────────────────────────────────
 # Upload routing  (one "Upload files" button for everything)
 # ─────────────────────────────────────────────────────────────────────────────
-def route_uploads(paths):
-    """paths = temp files saved by the API. Routes each by name and returns a result dict."""
+def route_uploads(paths, target=""):
+    """paths = temp files saved by the API. Routes each by name and returns a result dict.
+    target='common' → only HOLDING_ / RISK_REPORT_ files are accepted (COMMON FILES);
+    target='main'   → only EXCEPTION / PositionBook / SearchResults files (RECONCILIATION folder);
+    target=''       → anything recognised."""
     ensure_dirs()
     common_items, ok, rejected, notes = [], [], [], []
     for fp in paths:
         base = os.path.basename(fp)
         n = base.lower()
+        is_common = bool(re.match(r"^(risk_report|holding)_\d{8}.*\.csv$", n))
+        if target == "common" and not is_common:
+            rejected.append(f"{base}: this button is for HOLDING_DDMMYYYY.csv / RISK_REPORT_DDMMYYYY.csv only")
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
+            continue
+        if target == "main" and is_common:
+            rejected.append(f"{base}: HOLDING / RISK_REPORT files go in the COMMON FILES button")
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
+            continue
         try:
             if re.match(r"^(risk_report|holding)_\d{8}.*\.csv$", n):
                 common_items.append(fp)

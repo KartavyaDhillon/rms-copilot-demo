@@ -5309,38 +5309,41 @@ async function recoUploadFiles(){
      +(it.file?' <span style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">'+it.file+'</span>':'')
      +((!it.ok&&it.why)?'<div style="margin-left:18px;font-size:10.5px;color:var(--amber)">'+it.why+'</div>':'')+'</div>').join('');
   const exc=d&&d.exception;
-  const excBox='<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:10px">'
-     +'<div style="font-weight:650;margin-bottom:4px">EXCEPTION file <span style="font-weight:400;color:var(--dim);font-size:11px">(kept once — never deleted by any backup)</span></div>'
-     +(exc?'<div style="font-size:11.5px;margin-bottom:8px">Current: <span style="font-family:var(--mono)">'+exc.file+'</span> <span style="color:var(--dim)">(uploaded '+exc.date+')</span></div>'
-          :'<div style="font-size:11.5px;color:var(--red);margin-bottom:8px">No EXCEPTION file yet.</div>')
-     +'<button class="sa-save" style="width:100%;background:var(--amber);color:#1a0d00" onclick="recoPickFiles(true)">&#128257; '+(exc?'Replace EXCEPTION file':'Upload EXCEPTION file')+'</button>'
-     +'<div style="font-size:10px;color:var(--dim);margin-top:6px">The file name must start with EXCEPTION. The old one is archived, not deleted.</div></div>';
+  const excLine='<div style="font-size:11px;color:var(--dim);margin-top:6px">EXCEPTION file: '
+     +(exc?'<span style="font-family:var(--mono);color:var(--ink)">'+exc.file+'</span> (kept once — never deleted by a backup). To replace it, upload a new file named EXCEPTION… with the RECONCILIATION button; the old one is archived, not deleted.'
+          :'<span style="color:var(--red)">none yet</span> — upload one named EXCEPTION… with the RECONCILIATION button (it stays after that).')
+     +'</div>';
   saShowModal('Upload files', `
-<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">One place for everything. HOLDING_DDMMYYYY.csv and RISK_REPORT_DDMMYYYY.csv go to COMMON FILES (yesterday's copy is archived automatically); PositionBook.xlsx goes to today's drop folder; an EXCEPTION file is kept once.
+<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Pick the folder the file belongs to.
 <br><b style="color:var(--ink)">First day only:</b> upload yesterday's HOLDING too (two HOLDING files) — afterwards the previous one is picked up automatically.</div>
-<div style="border:1px dashed var(--line-2);border-radius:10px;padding:10px;margin-bottom:10px">${rows||'<span style="color:var(--dim)">—</span>'}</div>
-<button class="sa-save" style="width:100%;background:var(--green);color:var(--green-d)" onclick="recoPickFiles(false)">&#128193; Choose files</button>
-${excBox}
-<div style="font-size:10px;color:var(--dim);margin-top:10px;font-family:var(--mono)">COMMON FILES → ${(d&&d.common_folder)||''}<br>RECONCILIATION → ${(d&&d.folder)||''}</div>`);
+<div style="border:1px dashed var(--line-2);border-radius:10px;padding:10px;margin-bottom:12px">${rows||'<span style="color:var(--dim)">—</span>'}${excLine}</div>
+<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+  <button class="sa-save" style="flex:1;min-width:190px;background:var(--teal);color:#003311" onclick="recoPickFiles('common')">&#128193; COMMON FILES</button>
+  <button class="sa-save" style="flex:1;min-width:190px;background:var(--blue);color:var(--blue-d)" onclick="recoPickFiles('main')">&#128193; RECONCILIATION</button>
+</div>
+<div style="font-size:10px;color:var(--dim);margin-bottom:10px;font-family:var(--mono)">COMMON FILES → ${(d&&d.common_folder)||''}<br>RECONCILIATION → ${(d&&d.folder)||''}</div>
+<div style="margin-top:8px;padding:10px 14px;border:1px dashed var(--line-2);border-radius:10px;font-size:11.5px;line-height:1.8">
+  <b style="color:var(--ink);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase">COMMON FILES takes</b><br>
+  <span style="font-family:var(--mono);color:var(--teal)">HOLDING_DDMMYYYY.csv</span>, <span style="font-family:var(--mono);color:var(--teal)">RISK_REPORT_DDMMYYYY.csv</span> <span style="color:var(--dim)">(yesterday's copy is archived automatically)</span><br>
+  <b style="color:var(--ink);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase">RECONCILIATION takes</b><br>
+  <span style="font-family:var(--mono);color:var(--teal)">PositionBook.xlsx</span> <span style="color:var(--dim)">(today's, with MCX)</span>, <span style="font-family:var(--mono);color:var(--teal)">EXCEPTION_….xlsx</span> <span style="color:var(--dim)">(kept once)</span>, <span style="font-family:var(--mono);color:var(--dim)">SearchResults.xlsx (optional — skips the MCX token step)</span>
+</div>`);
 }
-function recoPickFiles(excOnly){
-  window._recoExcOnly=!!excOnly;
+function recoPickFiles(target){
+  window._recoUpTarget=(target==='common'||target==='main')?target:'';
   saCloseModal();
   const i=document.getElementById('recoUploadInput'); if(i) i.click();
 }
 async function recoDoUpload(inp){
   if(!inp.files.length) return;
   const files=[...inp.files];
-  if(window._recoExcOnly){
-    const bad=files.filter(f=>!/^exception/i.test(f.name));
-    if(bad.length){ inp.value=''; saShowModal('Wrong file', '<div style="color:var(--red);font-size:13px">The EXCEPTION file name must start with &ldquo;EXCEPTION&rdquo; — you chose: '+bad.map(f=>f.name).join(', ')+'</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>'); return; }
-  }
+  const tgt=window._recoUpTarget||'';
   saShowModal('Uploading…', '<div style="color:var(--muted);font-size:13px">Copying '+files.length+' file(s)…</div>');
   const fd=new FormData(); files.forEach(f=>fd.append('files', f));
   const ctl=new AbortController(); window._saUploadCtl=ctl;
   const to=setTimeout(()=>ctl.abort(), 180000);
   try{
-    const r=await fetch(API+'/reco/upload', {method:'POST', body:fd, signal:ctl.signal});
+    const r=await fetch(API+'/reco/upload'+(tgt?('?target='+tgt):''), {method:'POST', body:fd, signal:ctl.signal});
     clearTimeout(to);
     if(ctl.signal.aborted) return;
     if(!r.ok){ let t=''; try{ t=await r.text(); }catch(_){ } throw new Error('Server '+r.status+(t?(' — '+t.slice(0,160)):'')); }
@@ -5354,7 +5357,7 @@ async function recoDoUpload(inp){
   }catch(e){
     if(ctl.signal.aborted) return;
     saShowModal('Upload failed', '<div style="color:var(--red);font-size:13px">'+((e&&e.message)?e.message:String(e))+'</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>');
-  }finally{ window._saUploadCtl=null; inp.value=''; window._recoExcOnly=false; }
+  }finally{ window._saUploadCtl=null; inp.value=''; window._recoUpTarget=''; }
 }
 async function recoHolidays(prefillIso){
   let d=null; try{ d=await (await fetch(API+'/reco/holidays')).json(); }catch(e){}
