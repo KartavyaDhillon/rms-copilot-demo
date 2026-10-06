@@ -4293,8 +4293,19 @@ def reco_download_stream(kind: str = ""):
     k = (kind or "").strip().lower()
     if k not in ("nse", "ftp", "search"):
         return JSONResponse({"ok": False, "error": "unknown download"}, status_code=400)
-    return _reco_stream_endpoint(
-        f"from core.pipelines.reconciliation import run_download as _f; _f({k!r})", "reco_dl_" + k)
+    import json as _rc_json
+    from core.pipeline_box import _stream_code_act
+    code = f"from core.pipelines.reconciliation import run_download as _f; _f({k!r})"
+    def gen():
+        try:
+            # own action slot per download → NSE / FTP / BANCS run side by side and never block Run
+            for ev in _stream_code_act(code, "reco", "dl_" + k, "reco_dl_" + k):
+                yield f"data: {_rc_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_rc_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
 @app.get("/reco/readiness")
@@ -4391,6 +4402,12 @@ def reco_stop(request: Request):
         return JSONResponse({"ok": False, "error": why}, status_code=403)
     from core.pipeline_box import stop_pipeline as _rc_sp
     _rc_sp("reco")
+    try:
+        from core.pipeline_box import stop_action as _rc_sa
+        for _a in ("dl_nse", "dl_ftp", "dl_search"):
+            _rc_sa("reco", _a)
+    except Exception:
+        pass
     # a stopped run never cleans up its own pending RSA-token pop-up
     try:
         _d = _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")

@@ -98,7 +98,13 @@ def log(msg=""):
 
 
 def reco_base():
-    return Path(os.getenv("RECO_FOLDER", str(_REPO / "data" / "RECONCILIATION")))
+    v = os.getenv("RECO_FOLDER", "").strip()
+    if v:
+        return Path(v)
+    sc = os.getenv("SA_COMMON_DIR", "").strip()
+    if sc:      # sit next to COMMON FILES, e.g. D:\CONSOLE\data\COMMON FILES -> D:\CONSOLE\data\RECONCILIATION
+        return Path(sc).parent / "RECONCILIATION"
+    return _REPO / "data" / "RECONCILIATION"
 
 
 def common_dir():
@@ -144,7 +150,7 @@ def runtime_dir():
 
 
 def downloads_dir():
-    return reco_base() / "_downloads"
+    return reco_base() / "DOWNLOADS"
 
 
 def leftovers_dir():
@@ -278,10 +284,11 @@ def find_holding(d):
         return p
     root = common_backup_root()
     if root.is_dir():
-        for sub in sorted(root.iterdir(), reverse=True):
-            if sub.is_dir():
-                for p in sub.glob(pat):
-                    return p
+        try:
+            for p in sorted(root.rglob(pat), reverse=True):     # any depth, any sub-folder name
+                return p
+        except OSError:
+            pass
     return None
 
 
@@ -291,9 +298,10 @@ def latest_previous_holding(today):
     cands = list(common_dir().glob("HOLDING_*.csv"))
     root = common_backup_root()
     if root.is_dir():
-        for sub in root.iterdir():
-            if sub.is_dir():
-                cands += list(sub.glob("HOLDING_*.csv"))
+        try:
+            cands += list(root.rglob("HOLDING_*.csv"))
+        except OSError:
+            pass
     for p in cands:
         m = re.match(r"^holding_(\d{8})", p.name.lower())
         d = parse_dmy(m.group(1)) if m else None

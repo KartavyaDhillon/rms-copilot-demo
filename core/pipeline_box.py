@@ -554,6 +554,9 @@ _ACT_LABELS = {
     "nmass": "NMASS/NCDEX download",
     "mcx90": "MCX 90% download",
     "tcs":   "TCS BANCS download (DEPOSIT+90%)",
+    "dl_nse":    "NSE member-portal download",
+    "dl_ftp":    "FTP download",
+    "dl_search": "Search Result (BANCS) download",
 }
 
 
