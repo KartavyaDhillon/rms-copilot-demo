@@ -5202,7 +5202,7 @@ function _recoRun(url, kind){
         if(strip && d.type==='done'){
           const kept=strip.getAttribute('data-keep')==='1';
           const prev=strip.innerHTML;
-          if(d.ok&&isDl) strip.innerHTML='<div style="font-weight:700;color:var(--green)">✅ Download complete <span style="font-weight:400;color:var(--dim)">— saved in RECONCILIATION → DOWNLOADS → today's date (exact path in 🗂️ Logs)</span></div>';
+          if(d.ok&&isDl) strip.innerHTML='<div style="font-weight:700;color:var(--green)">✅ Download complete <span style="font-weight:400;color:var(--dim)">— saved in RECONCILIATION → DOWNLOADS → the date folder (exact path in 🗂️ Logs)</span></div>';
           else if(d.ok) strip.innerHTML='<div style="font-weight:700;color:var(--green)">✅ Done — '+emails+' report e-mail(s) sent <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
           else strip.innerHTML=(kept?prev:'')+'<div style="font-weight:700;color:var(--amber);margin-top:4px">⚠️ Not completed'+(kept?' — see the message above':'')+' / 🗂️ Logs.</div>';
         }
