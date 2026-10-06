@@ -15,6 +15,10 @@ The console never edits them. For every run it writes a patched COPY into
 for search_results.py, the desktop pop-ups replaced by the dashboard's RSA-token pop-up),
 and runs that copy.
 
+PYTHON: the scripts need pandas 2.x (the console itself may have 3.x). Double-click
+setup_reco_python.bat ONCE — it builds recon_codes\.venv, which the console uses automatically
+(or point RECO_PYTHON in .env at any other python.exe).
+
 A different location can be set with RECO_CODES_DIR in .env.
 
 .env keys for this box (all optional — defaults shown)

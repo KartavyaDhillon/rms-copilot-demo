@@ -734,7 +734,10 @@ body {
             <button class="sa-tool" onclick="pxCredentials('reco')" data-tip="Logins used by this box: e-mail sender, NSE extranet, MCX (T1 SearchResults) and FTP. Blank = the login written inside the scripts is used.">🔑 Credentials</button>
             <button class="sa-tool" onclick="pxConfig('reco')" data-tip="Change who gets each of the 4 reports (To / CC) — HOLDING, T1 HOLDING, NFO BFO MTFS, KAMBALA POSITION. Saved to .env, applies from the next run.">✉️ Email To / CC</button>
             <button class="sa-tool" onclick="recoUploadFiles()" data-tip="ONE place for every file: HOLDING and RISK_REPORT go to COMMON FILES (yesterday's copy is archived automatically), PositionBook goes to today's drop folder, and the EXCEPTION file is kept once and can be replaced here." style="border-color:rgba(52,211,153,.45);color:var(--green)">⬆️ Upload files</button>
-            <button class="sa-tool" onclick="recoHolidays()" data-tip="Market holidays. If NSE has no file for a day and we have no HOLDING for it, it is added here automatically — add or remove dates yourself too." style="border-color:rgba(251,191,36,.45);color:var(--amber)">📅 Holidays</button>
+            <button class="sa-tool" onclick="recoDownload('nse')" data-tip="Downloads the previous trading day's SEC_PLEDGE (C and F) files from the NSE member portal into RECONCILIATION\_downloads\&lt;today&gt;\nse. Also confirms the trading day. Run all re-uses them." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 NSE Member Portal Files</button>
+            <button class="sa-tool" onclick="recoDownload('ftp')" data-tip="Downloads today's Kambala / Symphony / Noren position files from the FTP into RECONCILIATION\_downloads\&lt;today&gt;\ftp." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 FTP Files</button>
+            <button class="sa-tool" onclick="recoDownload('search')" data-tip="Logs in to TCS BANCS (MCX) and downloads SearchResults.xlsx for T1 HOLDING into RECONCILIATION\_downloads\&lt;today&gt;. An RSA-token pop-up appears. Run all / T1 HOLDING re-use it, so no second token." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Search Result (BANCS)</button>
+            <button class="sa-tool" onclick="recoHolidays()" data-tip="Market holidays. If NSE has no file for a day and we have no HOLDING for it, you get a warning here — add the date yourself." style="border-color:rgba(251,191,36,.45);color:var(--amber)">📅 Holidays</button>
             <button class="sa-tool" onclick="pxBackup('reco')" data-tip="Browse past runs' report files. (HOLDING / RISK_REPORT are not duplicated here — they live in COMMON FILES and its backup.)">📦 Backup files</button>
             <button class="sa-tool" onclick="pxStop('reco')" data-tip="Kills whatever is currently running for this box, immediately." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="pxLogs('reco')" data-tip="View the full saved output of past RECONCILIATION runs.">🗂️ Logs</button>
@@ -5146,11 +5149,14 @@ function _recoRun(url, kind){
     if(strip){ strip.removeAttribute('data-keep'); strip.style.display='block'; strip.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Running — full output saved to 🗂️ Logs. A token pop-up may appear for the MCX SearchResults (T1 HOLDING). Click Stop to cancel.</span></div>'; }
     captchaStartPoller();
     let ok=true, emails=0, fin=false;
+    const isDl=String(kind).indexOf('dl_')===0;
     const ev=new EventSource(url); _pxSetES('reco',ev);
     const finish=()=>{
       if(fin) return; fin=true;
-      _recoJustFinished={kind:kind, ok:ok, until:Date.now()+60000};
-      setTimeout(function(){ _recoLastSig=null; recoStatus(true); }, 60500);
+      if(!isDl){
+        _recoJustFinished={kind:kind, ok:ok, until:Date.now()+60000};
+        setTimeout(function(){ _recoLastSig=null; recoStatus(true); }, 60500);
+      }
       _pxMarkDone('reco'); _recoRunningKind=null;
       recoStatus(true); recoLoadReady();
     };
@@ -5182,7 +5188,8 @@ function _recoRun(url, kind){
         if(strip && d.type==='done'){
           const kept=strip.getAttribute('data-keep')==='1';
           const prev=strip.innerHTML;
-          if(d.ok) strip.innerHTML='<div style="font-weight:700;color:var(--green)">✅ Done — '+emails+' report e-mail(s) sent <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
+          if(d.ok&&isDl) strip.innerHTML='<div style="font-weight:700;color:var(--green)">✅ Download complete <span style="font-weight:400;color:var(--dim)">— files are in the RECONCILIATION → _downloads folder (see 🗂️ Logs)</span></div>';
+          else if(d.ok) strip.innerHTML='<div style="font-weight:700;color:var(--green)">✅ Done — '+emails+' report e-mail(s) sent <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
           else strip.innerHTML=(kept?prev:'')+'<div style="font-weight:700;color:var(--amber);margin-top:4px">⚠️ Not completed'+(kept?' — see the message above':'')+' / 🗂️ Logs.</div>';
         }
         if(d.type==='done'){
@@ -5203,6 +5210,7 @@ function _recoRun(url, kind){
     };
   });
 }
+function recoDownload(kind){ if(_recoBusy()) return; return _recoRun(API+'/reco/download-stream?kind='+encodeURIComponent(kind), 'dl_'+kind); }
 function recoRunAll(){ if(_recoBusy()) return; return _recoRun(API+'/reco/run-all-stream','all'); }
 function recoRunOne(key){ if(_recoBusy()) return; return _recoRun(API+'/reco/run-stream?proc='+encodeURIComponent(key), key); }
 async function recoStatus(force){

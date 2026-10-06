@@ -4287,6 +4287,16 @@ def reco_run_stream(proc: str = ""):
         "reco_" + key.lower())
 
 
+@app.get("/reco/download-stream")
+def reco_download_stream(kind: str = ""):
+    """SSE: stand-alone download — kind = nse | ftp | search."""
+    k = (kind or "").strip().lower()
+    if k not in ("nse", "ftp", "search"):
+        return JSONResponse({"ok": False, "error": "unknown download"}, status_code=400)
+    return _reco_stream_endpoint(
+        f"from core.pipelines.reconciliation import run_download as _f; _f({k!r})", "reco_dl_" + k)
+
+
 @app.get("/reco/readiness")
 def reco_readiness():
     """Every file the four processes need (strict — all must be ok to run) + EXCEPTION info."""

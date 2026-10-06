@@ -837,7 +837,7 @@ def run_script(script, cwd, timeout_min):
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
-    p = subprocess.Popen([sys.executable, "-u", str(script)], cwd=str(cwd),
+    p = subprocess.Popen([script_python(), "-u", str(script)], cwd=str(cwd),
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     q = queue.Queue()
 
@@ -972,21 +972,48 @@ def collect_backup(proc, t0, today):
                 pass
 
 
-def _missing_pkgs():
-    miss = []
-    for mod, pipn in [("requests", "requests"), ("pandas", "pandas"), ("polars", "polars"),
-                      ("openpyxl", "openpyxl"), ("xlsxwriter", "xlsxwriter"), ("Crypto", "pycryptodome"),
-                      ("bs4", "beautifulsoup4"), ("pyarrow", "pyarrow"), ("xlrd", "xlrd")]:
-        try:
-            __import__(mod)
-        except Exception:
-            miss.append(pipn)
+def script_python():
+    """Interpreter used to run the reconciliation scripts (they need pandas 2.x).
+    RECO_PYTHON in .env, else <RECO_CODES>\\.venv, else the console's own Python."""
+    p = os.getenv("RECO_PYTHON", "").strip().strip('"')
+    if p and Path(p).exists():
+        return p
+    v = codes_dir() / ".venv" / "Scripts" / "python.exe"
+    if v.exists():
+        return str(v)
+    return sys.executable
+
+
+_PKG_CHECK = r'''
+import sys
+miss = []
+for mod, pipn in [("requests","requests"),("pandas","pandas"),("polars","polars"),("openpyxl","openpyxl"),
+                  ("xlsxwriter","xlsxwriter"),("Crypto","pycryptodome"),("bs4","beautifulsoup4"),
+                  ("pyarrow","pyarrow"),("xlrd","xlrd")]:
     try:
-        import pandas as _pd
-        if int(_pd.__version__.split(".")[0]) >= 3:
-            miss.append(f"pandas 2.x (found {_pd.__version__}; the reconciliation scripts need 2.x)")
+        __import__(mod)
     except Exception:
-        pass
+        miss.append(pipn)
+try:
+    import pandas as pd
+    if int(pd.__version__.split(".")[0]) >= 3:
+        miss.append("pandas 2.x (found " + pd.__version__ + ")")
+except Exception:
+    pass
+print("MISSING:" + ",".join(miss))
+'''
+
+
+def _missing_pkgs():
+    py = script_python()
+    try:
+        r = subprocess.run([py, "-c", _PKG_CHECK], capture_output=True, text=True, timeout=120)
+        line = [l for l in r.stdout.splitlines() if l.startswith("MISSING:")]
+        miss = [x for x in (line[-1][8:].split(",") if line else []) if x]
+    except Exception as e:
+        return [f"could not start Python ({py}): {e}"]
+    if miss and any("pandas 2.x" in m for m in miss):
+        miss.append("-> run recon_codes\\setup_reco_python.bat once, then set RECO_PYTHON in .env")
     return miss
 
 
@@ -1036,14 +1063,32 @@ def fetch_search_results(t1_dir, stamp):
                 copy_to(p, t1_dir, "SearchResults.xlsx")
                 log(f"   ✔ Using the SearchResults you uploaded ({n} rows) — MCX login skipped")
                 return
+    cached = downloads_dir() / dmy(date.today()) / "SearchResults.xlsx"
+    if cached.exists() and datetime.fromtimestamp(cached.stat().st_mtime).date() == date.today():
+        try:
+            n = search_rows(cached)
+        except Exception:
+            n = 0
+        if n > 0:
+            copy_to(cached, t1_dir, "SearchResults.xlsx")
+            log(f"   ✔ Using today's already-downloaded SearchResults ({n} rows) — MCX login skipped")
+            return
+    sr = download_search()
+    copy_to(sr, t1_dir, "SearchResults.xlsx")
+
+
+def download_search():
+    """Download MCX SearchResults.xlsx (RSA token) into DOWNLOADS\\<ddmmyyyy>\\. Returns the file path."""
     src = script_path(SEARCH_SCRIPT_NAME)
     if not src:
         raise RecoStop(f"{SEARCH_SCRIPT_NAME} not found in {codes_dir()}")
-    patched = patch_search_script(src, runtime_dir() / "search_results_run.py", t1_dir)
+    save_dir = downloads_dir() / dmy(date.today())
+    save_dir.mkdir(parents=True, exist_ok=True)
+    patched = patch_search_script(src, runtime_dir() / "search_results_run.py", save_dir)
     log("   A token pop-up will appear in the dashboard — enter the RSA token.")
     t0 = time.time()
     rc, lines, to = run_script(patched, runtime_dir(), SEARCH_TIMEOUT_MIN)
-    sr = Path(t1_dir) / "SearchResults.xlsx"
+    sr = save_dir / "SearchResults.xlsx"
     if to:
         raise RecoStop(f"SearchResults download took longer than {SEARCH_TIMEOUT_MIN} minutes.")
     if not sr.exists() or sr.stat().st_mtime < t0 - 5:
@@ -1051,7 +1096,68 @@ def fetch_search_results(t1_dir, stamp):
     n = search_rows(sr)
     if n <= 0:
         raise RecoStop("SearchResults.xlsx has no data rows.")
-    log(f"   ✔ SearchResults.xlsx downloaded ({n} rows)")
+    log(f"   ✔ SearchResults.xlsx downloaded ({n} rows)  →  {sr}")
+    return sr
+
+
+def download_nse():
+    """Previous trading day (NSE + holiday list) and its C / F SEC_PLEDGE files."""
+    today = date.today()
+    ensure_dirs()
+    nse = NseClient()
+    nse.login()
+    trade_day = resolve_trade_day(today, nse)
+    log(f"   ✔ Previous trading day = {trade_day:%A %d-%m-%Y}")
+    out = downloads_dir() / dmy(today) / "nse"
+    member = nse.creds["memberCode"]
+    miss = []
+    for prefix, seg in (("C", "CM"), ("F", "FO")):
+        name = f"{prefix}_{member}_SEC_PLEDGE_{trade_day:%d%m%Y}_02.csv.gz"
+        gz = nse.fetch(seg, name, out / name)
+        if not gz:
+            log(f"   ✘ MISSING on NSE: {name[:-3]}")
+            miss.append(name[:-3])
+            continue
+        f = _gunzip(gz)
+        log(f"   ✔ {f.name}  →  {out}")
+    if miss:
+        log(f"[MISSING_FILE] {miss[0]}")
+        raise RecoStop("NSE does not have these yet — try again later: " + ", ".join(miss))
+
+
+def download_ftp():
+    today = date.today()
+    ensure_dirs()
+    out = downloads_dir() / dmy(today) / "ftp"
+    res = ftp_download(today, out, ["T1", "NFO", "KAMB"])
+    lacking = [FTP_FILES[k][1].format(d=dmy(today)) for k, v in FTP_FILES.items() if v[3] and not res.get(k)]
+    log(f"   Saved in: {out}")
+    if lacking:
+        for n in lacking:
+            log(f"[MISSING_FILE] {n}")
+        raise RecoStop("Today's FTP file(s) are not available yet:\n" + "\n".join(f"    ✘ {n}" for n in lacking))
+
+
+def run_download(kind):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        _title({"nse": "NSE MEMBER-PORTAL FILES", "ftp": "FTP FILES", "search": "SEARCH RESULTS (TCS BANCS / MCX)"}[kind]
+               + f"  -  {nice(date.today())}")
+        if kind == "search":
+            miss = _missing_pkgs()
+            if miss:
+                raise RecoStop("Some required Python packages are not installed: " + ", ".join(miss))
+        {"nse": download_nse, "ftp": download_ftp, "search": download_search}[kind]()
+        log("\n  DONE.")
+    except RecoStop as e:
+        log("")
+        log(f"  STOPPED — {e}")
+        log("[FRIENDLY_MSG] " + " ".join(str(e).split()))
+        sys.exit(1)
+    sys.exit(0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

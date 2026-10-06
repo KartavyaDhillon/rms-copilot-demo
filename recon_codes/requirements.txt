@@ -1,0 +1,12 @@
+pandas<3
+numpy<2.3
+polars
+pyarrow
+openpyxl
+xlsxwriter
+xlrd
+pycryptodome
+beautifulsoup4
+requests
+python-dotenv
+pywin32
