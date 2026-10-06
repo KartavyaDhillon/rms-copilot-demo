@@ -163,7 +163,7 @@ def backup_root():
 
 def ensure_dirs():
     for d in [reco_base(), uploads_dir(), exception_dir(), state_dir(), runtime_dir(),
-              downloads_dir(), leftovers_dir(), backup_root()] + list(work_dirs().values()):
+              downloads_dir(), leftovers_dir(), backup_root(), runtime_dir() / "holding_scratch"] + list(work_dirs().values()):
         d.mkdir(parents=True, exist_ok=True)
     try:                                   # empty list on day one → the scripts stop warning "file not found"
         if not holidays_file().exists():
@@ -815,7 +815,7 @@ def patch_script(proc, src, dest):
     b = reco_base()
     # 1) folders
     if proc == "HOLDING":
-        rep = {r"C:\T1 HOLDING": str(b / "HOLDING_DOWNLOADS"),     # NSE C/F downloads of this script
+        rep = {r"C:\T1 HOLDING": str(runtime_dir() / "holding_scratch"),     # scratch folder of this script
                r"C:\HOLDING": str(wd["HOLDING"])}
     elif proc == "T1 HOLDING":
         rep = {r"C:\T1 HOLDING": str(wd["T1 HOLDING"])}
@@ -857,6 +857,10 @@ def patch_script(proc, src, dest):
         if a in txt:
             txt = txt.replace(a, a +
                 f"    _cg = os.path.join({cache}, filename)\n"
+                "    if (not os.path.exists(_cg)) and os.path.exists(_cg[:-3]) and os.path.getsize(_cg[:-3]) > 0:\n"
+                "        import gzip as _gzc\n"
+                "        with open(_cg[:-3], 'rb') as _fi, _gzc.open(_cg, 'wb') as _fo:\n"
+                "            _fo.write(_fi.read())\n"
                 "    if os.path.exists(_cg) and os.path.getsize(_cg) > 0:\n"
                 "        import shutil as _shc\n"
                 "        os.makedirs(INPUT_FOLDER, exist_ok=True)\n"
@@ -1150,7 +1154,8 @@ def set_current(key, phase, pending=None):
         state_dir().mkdir(parents=True, exist_ok=True)
         (state_dir() / "current.json").write_text(json.dumps({
             "date": date.today().isoformat(), "proc": key, "phase": phase,
-            "pending": [PKEY[p] for p in (pending or [])]}), encoding="utf-8")
+            "pending": ([PKEY[p] for p in pending] if pending else (get_current() or {}).get("pending", []))}),
+            encoding="utf-8")
     except Exception:
         pass
 
@@ -1239,6 +1244,7 @@ def fetch_search_results(t1_dir, stamp):
             copy_to(cached, t1_dir, "SearchResults.xlsx")
             log(f"   ✔ Using today's already-downloaded SearchResults ({n} rows) — MCX login skipped")
             return
+    set_current(None, "Search Result (BANCS) — token needed")      # only when a real download is needed
     sr = download_search()
     copy_to(sr, t1_dir, "SearchResults.xlsx")
 
@@ -1466,7 +1472,7 @@ def _run(procs):
     wd = work_dirs()
     if need_t1:
         _title("STEP 5 of 5 — MCX SearchResults for T1 HOLDING (RSA token needed)")
-        set_current(None, "Search Result (BANCS) — token needed", pending)
+        set_current(None, "Preparing Search Result", pending)
         park_leftovers(wd["T1 HOLDING"], "T1 HOLDING", stamp)
         fetch_search_results(wd["T1 HOLDING"], stamp)
     else:
@@ -1495,7 +1501,7 @@ def _run(procs):
         try:
             if proc == "HOLDING":
                 park_leftovers(wd["HOLDING"], "HOLDING", stamp)
-                park_leftovers(reco_base() / "HOLDING_DOWNLOADS", "HOLDING_DL", stamp)
+                park_leftovers(runtime_dir() / "holding_scratch", "HOLDING_DL", stamp)
                 old_h = find_holding(trade_day)
                 copy_to(old_h, wd["HOLDING"], f"HOLDING_{dmy(trade_day)}.csv", age_seconds=7200)
                 copy_to(today_hold, wd["HOLDING"], f"HOLDING_{dmy(today)}.csv", age_seconds=3600)
@@ -1533,7 +1539,7 @@ def _run(procs):
         rc, lines, to = run_script(patched, runtime_dir(), PROCESS_TIMEOUT_MIN)
         status, reason = judge(rc, lines, to, PROCESS_TIMEOUT_MIN)
         if proc == "HOLDING":
-            park_leftovers(reco_base() / "HOLDING_DOWNLOADS", "HOLDING_DL_after", stamp)
+            park_leftovers(runtime_dir() / "holding_scratch", "HOLDING_DL_after", stamp)
         try:
             strip_shared_from_script_backups(proc)
         except Exception as e:

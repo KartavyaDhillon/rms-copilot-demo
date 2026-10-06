@@ -4417,7 +4417,7 @@ async def reco_holidays_add(req: Request):
     except Exception:
         return {"ok": False, "error": "Pick a valid date"}
     try:
-        _by, _adm = _actor(request)
+        _by, _adm = _actor(req)
     except Exception:
         _by = ""
     _who = (_by or "unknown user").replace(",", " ").strip()
