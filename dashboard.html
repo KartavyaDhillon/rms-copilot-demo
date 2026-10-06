@@ -512,6 +512,7 @@ body {
       <input type="file" id="pxUploadInput" multiple style="display:none" onchange="pxDoUpload(this)">
       <input type="file" id="cliUploadInput" multiple style="display:none" onchange="cliDoUpload(this)">
       <input type="file" id="r1r2UploadInput" multiple style="display:none" onchange="r1r2DoUpload(this)">
+      <input type="file" id="recoUploadInput" multiple style="display:none" onchange="recoDoUpload(this)">
       <div id="globalTip"></div>
       <div class="sa-modal" id="saModal"><div class="sa-modal-card">
         <div class="sa-modal-head"><h3 id="saModalTitle">…</h3><button class="sa-modal-x" onclick="saCloseModal()" data-tip="Close this without saving.">×</button></div>
@@ -722,6 +723,29 @@ body {
         <div id="r1r2Strip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>
         <div class="sa-runs" id="pxRuns-r1r2"></div>
         <div class="sa-status" id="pxStatus-r1r2"><div class="sa-status-empty">Run status appears here. Full output is saved to Logs.</div></div>
+      </div>
+
+      <!-- ===== RECONCILIATION (HOLDING / T1 HOLDING / NFO BFO MTFS / KAMBALA POSITION) ===== -->
+      <div class="sec">RECONCILIATION</div>
+      <div class="sa-box" id="pxBox-reco">
+        <div class="sa-head" style="flex-direction:column;gap:10px">
+          <div class="sa-title-wrap"><div class="sa-logo">RC</div><div><div class="sa-title">RECONCILIATION</div><div class="sa-sub">HOLDING · T1 HOLDING · NFO BFO MTFS · KAMBALA POSITION. Each runs once every morning. Upload today's files first — if even one required file is missing, nothing runs and nothing is e-mailed.</div></div></div>
+          <div class="sa-tools">
+            <button class="sa-tool" onclick="pxCredentials('reco')" data-tip="Logins used by this box: e-mail sender, NSE extranet, MCX (T1 SearchResults) and FTP. Blank = the login written inside the scripts is used.">🔑 Credentials</button>
+            <button class="sa-tool" onclick="pxConfig('reco')" data-tip="Change who gets each of the 4 reports (To / CC) — HOLDING, T1 HOLDING, NFO BFO MTFS, KAMBALA POSITION. Saved to .env, applies from the next run.">✉️ Email To / CC</button>
+            <button class="sa-tool" onclick="recoUploadFiles()" data-tip="ONE place for every file: HOLDING and RISK_REPORT go to COMMON FILES (yesterday's copy is archived automatically), PositionBook goes to today's drop folder, and the EXCEPTION file is kept once and can be replaced here." style="border-color:rgba(52,211,153,.45);color:var(--green)">⬆️ Upload files</button>
+            <button class="sa-tool" onclick="recoHolidays()" data-tip="Market holidays. If NSE has no file for a day and we have no HOLDING for it, it is added here automatically — add or remove dates yourself too." style="border-color:rgba(251,191,36,.45);color:var(--amber)">📅 Holidays</button>
+            <button class="sa-tool" onclick="pxBackup('reco')" data-tip="Browse past runs' report files. (HOLDING / RISK_REPORT are not duplicated here — they live in COMMON FILES and its backup.)">📦 Backup files</button>
+            <button class="sa-tool" onclick="pxStop('reco')" data-tip="Kills whatever is currently running for this box, immediately." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
+            <button class="sa-tool" onclick="pxLogs('reco')" data-tip="View the full saved output of past RECONCILIATION runs.">🗂️ Logs</button>
+          </div>
+        </div>
+        <div class="sa-banner" id="pxBanner-reco"><span class="dot"></span><span class="t"></span></div>
+        <div class="sa-ready" id="recoReady" style="display:block"><span style="color:var(--dim)">Checking today's files…</span></div>
+        <div id="recoStrip" style="display:none;font-size:10.5px;font-family:var(--mono);margin:0 0 10px;padding:8px 14px;border:1px solid rgba(96,165,250,.2);border-radius:9px;background:rgba(96,165,250,.04);line-height:1.7"></div>
+        <div id="recoRunAllWrap" style="margin:0 0 10px"></div>
+        <div class="sa-runs" id="pxRuns-reco"></div>
+        <div class="sa-status" id="pxStatus-reco"><div class="sa-status-empty">Run status appears here. Full output is saved to Logs.</div></div>
       </div>
 
       <div class="sec">Peak Margin</div>
@@ -2301,7 +2325,7 @@ let _tokenCaller='sa';
 // the modal so it's never ambiguous WHICH box/screen a pending captcha or RSA
 // token belongs to when several pipes/people are active at once.
 function _pipeBoxLabel(src){
-  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit', r1r2:'R1-R2 Comparison Report'}[src] || src;
+  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit', r1r2:'R1-R2 Comparison Report', reco:'RECONCILIATION'}[src] || src;
 }
 function captchaStartPoller(){
   if(_captchaPoller) return;
@@ -2545,6 +2569,7 @@ async function tokenCancel(){
   try{
     if(_tokenSource==='ctcl'){ await fetch(API+'/ctcl/stop',{method:'POST'}); }
     else if(_tokenSource==='ms15'){ await fetch(API+'/ms15/stop',{method:'POST'}); }
+    else if(_tokenSource==='sa' && _tokenCaller==='reco'){ await fetch(API+'/reco/stop',{method:'POST'}); }
     else { await fetch(API+'/sa/stop',{method:'POST'}); }
   }catch(e){}
 }
@@ -5096,6 +5121,267 @@ async function r1r2DoUpload(inp){
     saShowModal('Upload failed', `<div style="color:var(--red);font-size:13px">${(e&&e.message)?e.message:String(e)}</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>`);
   }finally{ window._saUploadCtl=null; inp.value=''; }
 }
+// ═════════════════════════════════════════════════════════════════════════
+// RECONCILIATION box — HOLDING / T1 HOLDING / NFO BFO MTFS / KAMBALA POSITION
+// Own run slot ('reco'), own SSE endpoints (/reco/*). "Run all" runs the four in
+// order; each tile can also be run alone. Every process runs ONCE per day.
+// ═════════════════════════════════════════════════════════════════════════
+var _recoRunningKind=null;            // 'all' | 'HOLDING' | 'T1' | 'NFO' | 'KAMB' while busy
+var _recoLastStatus=null, _recoLastSig=null;
+var _recoJustFinished=null;           // {kind, ok, until} — big SUCCESS / FAILED for 60 s
+var _recoReadyAll=false, _recoReadyData=null;
+var _RECO_TILES=[
+  {key:'HOLDING', label:'📊 HOLDING',          what:'Yesterday + trades vs today'},
+  {key:'T1',      label:'📑 T1 HOLDING',       what:'T1 vs SEC_PLEDGE + MCX'},
+  {key:'NFO',     label:'📈 NFO BFO MTFS',     what:'PositionBook vs Kambala'},
+  {key:'KAMB',    label:'🥇 KAMBALA POSITION', what:'MCX positions vs Kambala'}
+];
+function _recoBusy(){ return _pxIsRunning('reco'); }
+function _recoRun(url, kind){
+  return new Promise((resolve)=>{
+    if(!_pxMarkRunning('reco')){ resolve(false); return; }
+    _recoRunningKind=kind;
+    recoRenderTiles(_recoLastStatus);
+    const strip=document.getElementById('recoStrip');
+    if(strip){ strip.removeAttribute('data-keep'); strip.style.display='block'; strip.innerHTML='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Running — full output saved to 🗂️ Logs. A token pop-up may appear for the MCX SearchResults (T1 HOLDING). Click Stop to cancel.</span></div>'; }
+    captchaStartPoller();
+    let ok=true, emails=0, fin=false;
+    const ev=new EventSource(url); _pxSetES('reco',ev);
+    const finish=()=>{
+      if(fin) return; fin=true;
+      _recoJustFinished={kind:kind, ok:ok, until:Date.now()+60000};
+      setTimeout(function(){ _recoLastSig=null; recoStatus(true); }, 60500);
+      _pxMarkDone('reco'); _recoRunningKind=null;
+      recoStatus(true); recoLoadReady();
+    };
+    ev.onmessage=m=>{
+      let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
+      if(d.type==='login_failed'){
+        ok=false; loginFailedPopup(d.server,d.reason);
+        if(strip) strip.innerHTML='<div style="font-weight:700;color:var(--red)">🔒 Login failed for '+(d.server||'a server')+' — see popup</div>';
+      } else if(d.type==='email'){
+        if(d.ok) emails++;
+        if(strip) strip.innerHTML='<div style="color:var(--green)">📧 '+emails+' report e-mail(s) sent so far…</div>';
+      } else if(d.type==='note'){
+        if(strip){
+          const msg=String(d.msg||'');
+          let h='<div style="font-weight:700;color:var(--amber);white-space:normal">'+msg.replace(/[<>]/g,s=>s==='<'?'&lt;':'&gt;')+'</div>';
+          // "looks like a holiday" warning → one click opens the Holidays list with the date filled in
+          const dm=msg.match(/dates to add:\s*([0-9,\-\s]+)/);
+          if(/holiday/i.test(msg) && dm){
+            const first=(dm[1].split(',')[0]||'').trim();
+            if(/^\d{4}-\d{2}-\d{2}$/.test(first)) h+='<div style="margin-top:6px"><button class="sa-tool" style="border-color:rgba(251,191,36,.5);color:var(--amber)" onclick="recoHolidays(\''+first+'\')">📅 Add '+first.split('-').reverse().join('-')+' as a holiday…</button></div>';
+          }
+          strip.innerHTML=h; strip.setAttribute('data-keep','1');
+        }
+      } else if(d.type==='stopped'){
+        ok=false;
+        if(strip) strip.innerHTML='<div style="font-weight:700;color:var(--red)">⛔ Stopped</div>';
+      } else if(d.type==='done'||d.type==='error'){
+        if(d.ok===false||d.type==='error') ok=false;
+        if(strip && d.type==='done'){
+          const kept=strip.getAttribute('data-keep')==='1';
+          const prev=strip.innerHTML;
+          if(d.ok) strip.innerHTML='<div style="font-weight:700;color:var(--green)">✅ Done — '+emails+' report e-mail(s) sent <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
+          else strip.innerHTML=(kept?prev:'')+'<div style="font-weight:700;color:var(--amber);margin-top:4px">⚠️ Not completed'+(kept?' — see the message above':'')+' / 🗂️ Logs.</div>';
+        }
+        if(d.type==='done'){
+          try{ ev.close(); }catch(_){}
+          _pxClearES('reco'); captchaStopPoller();
+          finish(); resolve(ok);
+        }
+      } else if(d.type==='end'){
+        ev.close(); _pxClearES('reco'); captchaStopPoller();
+        finish(); resolve(ok);
+      }
+    };
+    ev.onerror=()=>{
+      ev.close(); _pxClearES('reco'); captchaStopPoller();
+      ok=false; finish();
+      if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>';
+      resolve(false);
+    };
+  });
+}
+function recoRunAll(){ if(_recoBusy()) return; return _recoRun(API+'/reco/run-all-stream','all'); }
+function recoRunOne(key){ if(_recoBusy()) return; return _recoRun(API+'/reco/run-stream?proc='+encodeURIComponent(key), key); }
+async function recoStatus(force){
+  let s=null;
+  try{ const r=await fetch(API+'/reco/today-status'); if(r.ok) s=await r.json(); }catch(e){}
+  const sig=JSON.stringify(s)+'|'+_recoBusy()+'|'+_recoReadyAll;
+  if(!force && sig===_recoLastSig) return;
+  _recoLastSig=sig; _recoLastStatus=s;
+  recoRenderTiles(s);
+}
+function recoRenderTiles(s){
+  const wrap=document.getElementById('pxRuns-reco'); if(!wrap) return;
+  const allWrap=document.getElementById('recoRunAllWrap');
+  if(!s){ wrap.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--amber);font-size:12.5px;padding:14px;border:1px dashed rgba(251,191,36,.4);border-radius:10px;background:rgba(251,191,36,.06)">&#9888; Backend not reachable — start uvicorn.</div>'; if(allWrap) allWrap.innerHTML=''; return; }
+  const done=s.done||[], st=s.state||{};
+  const busy=_recoBusy();
+  const jf=_recoJustFinished, jfActive=!!(jf && Date.now()<jf.until && !busy);
+  const left=_RECO_TILES.filter(t=>done.indexOf(t.key)===-1).length;
+  // ── Run all button ──
+  if(allWrap){
+    let b;
+    const base='width:100%;padding:14px 10px;font-size:15px;font-weight:800;border-radius:10px;border:0;letter-spacing:.4px;';
+    if(jfActive && jf.kind==='all'){
+      b=jf.ok ? '<button disabled style="'+base+'background:var(--green);color:#04120a;cursor:not-allowed">&#10003; DONE &mdash; SUCCESS</button>'
+              : '<button disabled style="'+base+'background:var(--red);color:#fff;cursor:not-allowed">&#10007; NOT COMPLETED &mdash; see message / Logs</button>';
+    } else if(busy && _recoRunningKind==='all'){
+      b='<button disabled style="'+base+'background:var(--blue);color:var(--blue-d);cursor:not-allowed">&#9654; Running all 4&hellip;</button>';
+    } else if(left===0){
+      b='<button disabled style="'+base+'background:rgba(52,211,153,.15);color:var(--green);cursor:not-allowed;border:1px solid rgba(52,211,153,.4)">&#10003; ALL 4 DONE TODAY</button>';
+    } else if(busy || jfActive){
+      b='<button disabled style="'+base+'opacity:.5;cursor:not-allowed">Wait&hellip;</button>';
+    } else if(!_recoReadyAll){
+      b='<button disabled style="'+base+'opacity:.55;cursor:not-allowed" data-tip="Upload every required file first (see the red list above) — nothing runs until all of them are present.">&#9654; RUN ALL &mdash; upload the missing files first</button>';
+    } else {
+      b='<button onclick="recoRunAll()" style="'+base+'background:var(--green);color:#04120a;cursor:pointer">&#9654; RUN ALL ('+left+' left)</button>';
+    }
+    allWrap.innerHTML=b;
+  }
+  // ── 4 tiles ──
+  let html='';
+  _RECO_TILES.forEach(function(t){
+    const isDone=done.indexOf(t.key)!==-1;
+    const mine=busy && (_recoRunningKind===t.key);
+    const viaAll=busy && _recoRunningKind==='all';
+    const sx=(st[t.key]||{});
+    let cls='sa-run', state, btn;
+    if(jfActive && jf.kind===t.key){
+      if(jf.ok){ cls+=' done'; state='<span style="color:var(--green);font-weight:800;font-size:13px">&#9989; SUCCESS &mdash; e-mail sent</span>';
+        btn='<button class="sa-run-btn" disabled style="background:var(--green);color:#04120a;opacity:1;cursor:not-allowed;font-weight:800;font-size:16px;padding:14px 10px">&#10003; DONE &mdash; SUCCESS</button>'; }
+      else { cls+=' error'; state='<span style="color:var(--red);font-weight:800;font-size:13px">&#10060; NOT COMPLETED &mdash; see message / Logs</span>';
+        btn='<button class="sa-run-btn" disabled style="background:var(--red);color:#fff;opacity:1;cursor:not-allowed;font-weight:800;font-size:16px;padding:14px 10px">&#10007; FAILED</button>'; }
+    } else if(isDone){
+      cls+=' done'; state='&#10003; Done today';
+      btn='<button class="sa-run-btn" disabled style="opacity:.55;cursor:not-allowed">Done</button>';
+    } else if(mine || viaAll){
+      cls+=' locked'; state='&#9654; '+(mine?'Running':'Queued / running')+'&hellip;';
+      btn='<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button>';
+    } else if(busy || jfActive){
+      cls+=' locked'; state=busy?'Busy &mdash; another RECONCILIATION action is running':'Please wait&hellip;';
+      btn='<button class="sa-run-btn" disabled>Wait&hellip;</button>';
+    } else {
+      cls+=' active-win pending';
+      if(sx.status==='FAILED'||sx.status==='EMAIL FAILED'||sx.status==='NOT RUN'){
+        state='<span style="color:var(--amber)">&#9888; Last try: '+sx.status+(sx.reason?(' &mdash; '+String(sx.reason).replace(/[<>]/g,'').slice(0,70)):'')+'</span>';
+      } else { state='&#11044; Ready &mdash; run'; }
+      btn='<button class="sa-run-btn" onclick="recoRunOne(\''+t.key+'\')">&#9654; Run</button>';
+    }
+    html+='<div class="'+cls+'"><div class="sa-run-id">'+t.label+'</div><div class="sa-run-win">'+t.what+'</div><div class="sa-run-state">'+state+'</div>'+btn+'</div>';
+  });
+  wrap.innerHTML=html;
+  wrap.style.gridTemplateColumns='repeat(auto-fit, minmax(190px, 1fr))';
+}
+async function recoLoadReady(){
+  const box=document.getElementById('recoReady'); if(!box) return;
+  box.style.display='block';
+  if(_recoBusy()){ box.innerHTML='<span style="color:var(--dim)">Run in progress…</span>'; return; }
+  let d; try{ d=await (await fetch(API+'/reco/readiness')).json(); }
+  catch(e){ box.innerHTML='<span style="color:var(--dim)">—</span>'; return; }
+  _recoReadyData=d;
+  const items=(d&&d.items)||[];
+  const missing=items.filter(it=>!it.ok);
+  const was=_recoReadyAll;
+  _recoReadyAll=(items.length>0 && !missing.length);
+  let html='';
+  if(d && d.scripts_missing && d.scripts_missing.length){
+    html+='<div style="color:var(--red);margin-bottom:6px">&#9888; Script file(s) missing in <span style="font-family:var(--mono)">'+(d.codes_dir||'recon_codes')+'</span>: '+d.scripts_missing.join(', ')+'</div>';
+  }
+  if(!missing.length){
+    html+='<span style="color:var(--green)">&#10003; All required files are present &mdash; ready to run.</span>';
+  } else {
+    const chips=missing.map(it=>'<span class="missing" title="'+String(it.why||'').replace(/"/g,'')+'">'+it.label+'</span>').join('');
+    html+='<b>&#9888; Files needed before running</b><div class="sr-row"><span class="sr-label">Missing</span>'+chips+'</div>'
+        +'<div style="font-size:10.5px;color:var(--dim);margin-top:4px">Nothing runs until every file is here. Use &#11014;&#65039; Upload files. (FTP / NSE / MCX files are downloaded automatically.)</div>';
+  }
+  box.innerHTML=html;
+  if(was!==_recoReadyAll) recoRenderTiles(_recoLastStatus);
+}
+async function recoUploadFiles(){
+  saShowModal('Upload files', '<div style="color:var(--muted);font-size:12px">Checking what is already here…</div>');
+  let d=null; try{ d=await (await fetch(API+'/reco/readiness')).json(); }catch(e){}
+  const items=(d&&d.items)||[];
+  const rows=items.map(it=>'<div style="margin:3px 0">'+(it.ok?'<span style="color:var(--green)">&#10003;</span>':'<span style="color:var(--red)">&#10007;</span>')
+     +' <span style="font-size:12px">'+it.label+'</span>'
+     +(it.file?' <span style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">'+it.file+'</span>':'')
+     +((!it.ok&&it.why)?'<div style="margin-left:18px;font-size:10.5px;color:var(--amber)">'+it.why+'</div>':'')+'</div>').join('');
+  const exc=d&&d.exception;
+  const excBox='<div style="margin-top:12px;border:1px solid var(--line);border-radius:10px;padding:10px">'
+     +'<div style="font-weight:650;margin-bottom:4px">EXCEPTION file <span style="font-weight:400;color:var(--dim);font-size:11px">(kept once — never deleted by any backup)</span></div>'
+     +(exc?'<div style="font-size:11.5px;margin-bottom:8px">Current: <span style="font-family:var(--mono)">'+exc.file+'</span> <span style="color:var(--dim)">(uploaded '+exc.date+')</span></div>'
+          :'<div style="font-size:11.5px;color:var(--red);margin-bottom:8px">No EXCEPTION file yet.</div>')
+     +'<button class="sa-save" style="width:100%;background:var(--amber);color:#1a0d00" onclick="recoPickFiles(true)">&#128257; '+(exc?'Replace EXCEPTION file':'Upload EXCEPTION file')+'</button>'
+     +'<div style="font-size:10px;color:var(--dim);margin-top:6px">The file name must start with EXCEPTION. The old one is archived, not deleted.</div></div>';
+  saShowModal('Upload files', `
+<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">One place for everything. HOLDING_DDMMYYYY.csv and RISK_REPORT_DDMMYYYY.csv go to COMMON FILES (yesterday's copy is archived automatically); PositionBook.xlsx goes to today's drop folder; an EXCEPTION file is kept once.
+<br><b style="color:var(--ink)">First day only:</b> upload yesterday's HOLDING too (two HOLDING files) — afterwards the previous one is picked up automatically.</div>
+<div style="border:1px dashed var(--line-2);border-radius:10px;padding:10px;margin-bottom:10px">${rows||'<span style="color:var(--dim)">—</span>'}</div>
+<button class="sa-save" style="width:100%;background:var(--green);color:var(--green-d)" onclick="recoPickFiles(false)">&#128193; Choose files</button>
+${excBox}
+<div style="font-size:10px;color:var(--dim);margin-top:10px;font-family:var(--mono)">COMMON FILES → ${(d&&d.common_folder)||''}<br>RECONCILIATION → ${(d&&d.folder)||''}</div>`);
+}
+function recoPickFiles(excOnly){
+  window._recoExcOnly=!!excOnly;
+  saCloseModal();
+  const i=document.getElementById('recoUploadInput'); if(i) i.click();
+}
+async function recoDoUpload(inp){
+  if(!inp.files.length) return;
+  const files=[...inp.files];
+  if(window._recoExcOnly){
+    const bad=files.filter(f=>!/^exception/i.test(f.name));
+    if(bad.length){ inp.value=''; saShowModal('Wrong file', '<div style="color:var(--red);font-size:13px">The EXCEPTION file name must start with &ldquo;EXCEPTION&rdquo; — you chose: '+bad.map(f=>f.name).join(', ')+'</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>'); return; }
+  }
+  saShowModal('Uploading…', '<div style="color:var(--muted);font-size:13px">Copying '+files.length+' file(s)…</div>');
+  const fd=new FormData(); files.forEach(f=>fd.append('files', f));
+  const ctl=new AbortController(); window._saUploadCtl=ctl;
+  const to=setTimeout(()=>ctl.abort(), 180000);
+  try{
+    const r=await fetch(API+'/reco/upload', {method:'POST', body:fd, signal:ctl.signal});
+    clearTimeout(to);
+    if(ctl.signal.aborted) return;
+    if(!r.ok){ let t=''; try{ t=await r.text(); }catch(_){ } throw new Error('Server '+r.status+(t?(' — '+t.slice(0,160)):'')); }
+    const d=await r.json();
+    let html='';
+    (d.ok||[]).forEach(m=>{ html+='<div class="sa-ev ok"><span class="ic">✓</span><span>'+m+'</span><span class="what">uploaded</span></div>'; });
+    (d.rejected||[]).forEach(m=>{ html+='<div class="sa-ev bad"><span class="ic">✕</span><span>'+m+'</span><span class="what">not recognised</span></div>'; });
+    (d.notes||[]).forEach(m=>{ html+='<div style="font-size:11.5px;color:var(--amber);margin:6px 0">'+m+'</div>'; });
+    html+='<button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal();recoLoadReady();recoStatus(true)">Done</button>';
+    saShowModal('Upload result', html);
+  }catch(e){
+    if(ctl.signal.aborted) return;
+    saShowModal('Upload failed', '<div style="color:var(--red);font-size:13px">'+((e&&e.message)?e.message:String(e))+'</div><button class="sa-save" style="width:100%;margin-top:14px" onclick="saCloseModal()">Close</button>');
+  }finally{ window._saUploadCtl=null; inp.value=''; window._recoExcOnly=false; }
+}
+async function recoHolidays(prefillIso){
+  let d=null; try{ d=await (await fetch(API+'/reco/holidays')).json(); }catch(e){}
+  const items=(d&&d.items)||[];
+  const rows=items.length?items.map(it=>'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line)"><span style="flex:1;font-size:12.5px">'+it.date+' <span style="color:var(--dim)">'+it.weekday+'</span></span>'
+       +'<span style="font-size:10.5px;color:'+(it.note==='auto'?'var(--amber)':'var(--dim)')+'">'+(it.note==='auto'?'added automatically':'added by you')+'</span>'
+       +'<button class="sa-tool" style="padding:2px 8px" onclick="recoHolRemove(\''+it.iso+'\')">✕</button></div>').join('')
+     :'<div style="color:var(--dim);font-size:12px;padding:6px 0">No holidays listed yet.</div>';
+  saShowModal('📅 Market holidays', `
+<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Days the market was closed (besides Saturday / Sunday). If a run stops with "this looks like a market holiday", add that date here and run again. Nothing is added automatically.</div>
+<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"><input type="date" id="recoHolDate" value="${prefillIso||''}" style="flex:1;min-width:150px"><input type="password" id="recoHolPw" placeholder="config password" style="flex:1;min-width:130px"><button class="sa-save" style="padding:8px 14px" onclick="recoHolAdd()">Add holiday</button></div>
+<div id="recoHolMsg" style="font-size:11.5px;color:var(--red);min-height:16px"></div>
+<div style="max-height:260px;overflow:auto">${rows}</div>
+<div style="font-size:10px;color:var(--dim);margin-top:8px;font-family:var(--mono)">${(d&&d.file)||''}</div>`);
+}
+async function _recoHolCall(path, iso){
+  const pw=(document.getElementById('recoHolPw')||{}).value||'';
+  const msg=document.getElementById('recoHolMsg');
+  if(!iso){ if(msg) msg.textContent='Pick a date first.'; return; }
+  if(!pw){ if(msg) msg.textContent='Enter the config password to change the list.'; return; }
+  let r; try{ r=await (await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:iso,password:pw})})).json(); }
+  catch(e){ if(msg) msg.textContent=String(e); return; }
+  if(!r.ok){ if(msg) msg.textContent=r.error||'Failed'; return; }
+  recoHolidays();
+}
+function recoHolAdd(){ _recoHolCall('/reco/holidays/add', (document.getElementById('recoHolDate')||{}).value||''); }
+function recoHolRemove(iso){ _recoHolCall('/reco/holidays/remove', iso); }
 // _cliLastVariant holds {variant,ok,ts} from the backend — used to show which
 // of OLD/NEW last ran + a green tick, and to dim the one that DIDN'T run.
 var _cliLastVariant={variant:null,ok:null,ts:null};
@@ -5446,7 +5732,7 @@ async function pxStop(pipe){
   // Ownership check happens SERVER-side (api.py's _can_stop()) — ask first and
   // bail out without touching any UI state if denied, so a rejected Stop can
   // never make this browser's screen claim the run stopped when it didn't.
-  var _su=pipe==='ctcl'?'/ctcl/stop':(pipe==='cli'?'/cli/stop':(pipe==='ms15'?'/ms15/stop':(pipe==='r1r2'?'/r1r2/stop':'/px/stop')));
+  var _su=pipe==='ctcl'?'/ctcl/stop':(pipe==='cli'?'/cli/stop':(pipe==='ms15'?'/ms15/stop':(pipe==='r1r2'?'/r1r2/stop':(pipe==='reco'?'/reco/stop':'/px/stop'))));
   try{
     const r=await fetch(API+_su,{method:'POST'});
     if(r.status===403){ const d=await r.json().catch(()=>({})); alert(d.error||"You didn't start this run, so you can't stop it. Ask the person who started it, or an admin."); return; }
@@ -5485,6 +5771,15 @@ async function pxStop(pipe){
     if(strip){ strip.style.display='block'; strip.innerHTML='<div style="font-weight:700;color:var(--red)">⛔ Stopped by user</div>'; }
     captchaStopPoller();
     r1r2Status(); r1r2LoadReady();
+  }
+  if(pipe==='reco'){
+    _recoRunningKind=null;
+    const strip=document.getElementById('recoStrip');
+    if(strip){ strip.style.display='block'; strip.innerHTML='<div style="font-weight:700;color:var(--red)">⛔ Stopped by user</div>'; }
+    captchaStopPoller();
+    try{ tokenHideModal(); }catch(_){}
+    _pxMarkDone('reco');
+    recoStatus(true); recoLoadReady();
   }
   _pxMarkDone(pipe);
   if(pipe==='ctcl'){
@@ -6763,6 +7058,9 @@ pxStatus('ms15'); setInterval(()=>{ if(!_pxIsRunning('ms15')) pxStatus('ms15'); 
 ms15LoadReady(); setInterval(()=>{ ms15LoadReady(); },30000);
 r1r2Status(); setInterval(()=>{ if(!_pxIsRunning('r1r2')) r1r2Status(); },5000);
 r1r2LoadReady(); setInterval(()=>{ r1r2LoadReady(); },30000);
+recoLoadReady(); recoStatus(true);
+setInterval(()=>{ if(!_pxIsRunning('reco')) recoStatus(); },5000);
+setInterval(()=>{ recoLoadReady(); },30000);
 // Restore the generic "View / Explain error" button for any pipe whose last run
 // (from this browser, possibly a previous page load) is still remembered.
 Object.keys(_pxRunLog).forEach(p=>pxInjectViewBtn(p));

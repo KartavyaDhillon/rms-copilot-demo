@@ -219,6 +219,46 @@ PIPELINES = {
                  ["MCX (RSK383 export / Web Allocation)", "*.xlsx,MCX_WebAllocationDeallocation.csv", "<random>-<YYYYMMDDHHMMSS>.xlsx"],
                  ["R1-R2 Comparison Report (output)", "R1-R2_COMPARISON_REPORT.xlsx", "R1-R2_COMPARISON_REPORT.xlsx"],
              ]},
+    # RECONCILIATION — 4 daily processes (HOLDING / T1 HOLDING / NFO BFO MTFS / KAMBALA
+    # POSITION) + "Run all". Bespoke SSE endpoints (/reco/*, api.py) driven by
+    # core/pipelines/reconciliation.py — this entry is for the shared infra (Credentials,
+    # Email To/CC, Upload to COMMON FILES, Backup browser, Logs). HOLDING_*.csv and
+    # RISK_REPORT_*.csv are COMMON FILES types: uploading a new day's file archives the
+    # old one into COMMON FILES\BACKUP FILES AUTOMATED\<its date> (that archive is
+    # where "previous HOLDING" is read from).
+    "reco": {"name": "RECONCILIATION", "logdir": "reco", "runs": 1,
+             "state_dir_env": "RECO_FOLDER", "state_default": os.path.join(REPO, "data", "RECONCILIATION"),
+             "state_file": "run_counter.txt",
+             "email_default": "kartavya.dhillon@mastertrust.co.in",
+             "email_keys": {"HOLDING": ["RECO_HOLDING_TO", "RECO_HOLDING_CC"],
+                            "T1 HOLDING": ["RECO_T1_TO", "RECO_T1_CC"],
+                            "NFO BFO MTFS": ["RECO_NFO_TO", "RECO_NFO_CC"],
+                            "KAMBALA POSITION": ["RECO_KAMB_TO", "RECO_KAMB_CC"]},
+             "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
+                       "pass_key": "SENDER_PASSWORD",
+                       "note": "the account the four reports are sent from. Leave blank to keep the login written inside the scripts."},
+                      "NSE extranet (member code / login / password)": {"user_key": "RECO_NSE_LOGIN_ID",
+                       "pass_key": "RECO_NSE_PASSWORD",
+                       "note": "connect2nse.com extranet login (Trade + SEC_PLEDGE files). Blank = the login inside HOLDING_final.py is used."},
+                      "NSE member code": {"single_key": "RECO_NSE_MEMBER",
+                       "note": "e.g. 06436. Blank = taken from HOLDING_final.py."},
+                      "MCX RSK136 (T1 SearchResults) login": {"user_key": "RECO_MCX_USER",
+                       "pass_key": "RECO_MCX_PASSWORD",
+                       "note": "eclear.mcxccl.com login used by search_results.py (RSA token is asked in the dashboard). Blank = the one inside the script."},
+                      "FTP (Kambala / Symphony / Noren files)": {"user_key": "FTP_USER",
+                       "pass_key": "FTP_PASS",
+                       "note": "same FTP the CLI box uploads to"}},
+             "upload_dir_env": "RECO_FOLDER", "upload_default": os.path.join(REPO, "data", "RECONCILIATION"),
+             "common_dir_env": "SA_COMMON_DIR", "common_default": r"C:\COMMON FILES",
+             "common_globs": ["HOLDING_*.csv", "RISK_REPORT_*.csv"], "common_label": "COMMON FILES",
+             "backup_root_env": "RECO_FOLDER", "backup_subdir": "Backup",
+             "file_types": [
+                 ["HOLDING (COMMON FILES)", "HOLDING_*.csv", "HOLDING_<DDMMYYYY>.csv"],
+                 ["RISK_REPORT (COMMON FILES)", "RISK_REPORT_*.csv", "RISK_REPORT_<DDMMYYYY>.csv"],
+                 ["EXCEPTION (kept once)", "EXCEPTION*.xls,EXCEPTION*.xlsx,EXCEPTION*.xlsm", "EXCEPTION_<date>.xlsx"],
+                 ["PositionBook (with MCX)", "*position*.xlsx", "PositionBook.xlsx"],
+                 ["Reconciliation outputs", "*.xlsx,*.csv,*.txt", "—"],
+             ]},
     # Margin Shortage (15-min) — runs 11x/day, ported from 15minutesfinal_whatsapp.PY.
     # (Was 9; 16:30 and 16:50 added when the desk's shift extended. The night
     # shift after 16:50 still runs the original batch script on another machine —
@@ -1244,6 +1284,15 @@ _LOG_LABELS = {
         ("UPLOAD",            "📤 Upload"),
         ("RESTORE",           "♻️ Restore"),
     ],
+    "reco": [
+        ("reco_all",      "▶ Run all"),
+        ("reco_holding",  "HOLDING"),
+        ("reco_t1",       "T1 HOLDING"),
+        ("reco_nfo",      "NFO BFO MTFS"),
+        ("reco_kamb",     "KAMBALA POSITION"),
+        ("UPLOAD",        "📤 Upload"),
+        ("RESTORE",       "♻️ Restore"),
+    ],
     "ms15": [
         ("ms15_download",     "📥 NMASS/NCDEX"),
         ("ms15_mcx90",        "📥 MCX 90%"),
@@ -1513,7 +1562,8 @@ def pb_status(pipe):
 
 def pb_get_config(pipe):
     p = PIPELINES.get(pipe, {}); g = os.getenv
-    emails = {lbl: {"to": g(tk, ""), "cc": g(ck, ""), "to_key": tk, "cc_key": ck}
+    _ed = p.get("email_default", "")
+    emails = {lbl: {"to": g(tk, _ed), "cc": g(ck, _ed), "to_key": tk, "cc_key": ck}
               for lbl, (tk, ck) in p.get("email_keys", {}).items()}
     creds = {}
     for lbl, c in p.get("cred", {}).items():

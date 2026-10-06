@@ -4249,6 +4249,150 @@ def r1r2_stop(request: Request):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# RECONCILIATION  (HOLDING / T1 HOLDING / NFO BFO MTFS / KAMBALA POSITION)
+# Logic lives in core/pipelines/reconciliation.py — these endpoints are plumbing.
+# Own "reco" run slot: never blocks (or is blocked by) CTCL / CLI / R1-R2 / SA.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _reco_stream_endpoint(code, logname_prefix):
+    import json as _rc_json
+    from core.pipeline_box import _stream_code
+    def gen():
+        try:
+            for ev in _stream_code(code, "reco", logname_prefix):
+                yield f"data: {_rc_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_rc_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/reco/run-all-stream")
+def reco_run_all_stream():
+    """SSE: all four processes, in order. Strict file check first — if anything is
+    missing nothing is downloaded, run or e-mailed. Already-DONE processes are skipped."""
+    return _reco_stream_endpoint(
+        "from core.pipelines.reconciliation import run_reco_all as _f; _f()", "reco_all")
+
+
+@app.get("/reco/run-stream")
+def reco_run_stream(proc: str = ""):
+    """SSE: ONE process (HOLDING | T1 | NFO | KAMB)."""
+    key = (proc or "").strip().upper()
+    if key not in ("HOLDING", "T1", "NFO", "KAMB"):
+        return JSONResponse({"ok": False, "error": "unknown process"}, status_code=400)
+    return _reco_stream_endpoint(
+        f"from core.pipelines.reconciliation import run_reco_one as _f; _f({key!r})",
+        "reco_" + key.lower())
+
+
+@app.get("/reco/readiness")
+def reco_readiness():
+    """Every file the four processes need (strict — all must be ok to run) + EXCEPTION info."""
+    from core.pipelines import reconciliation as _rc
+    import datetime as _rcdt
+    _rc.ensure_dirs()
+    items = _rc.check_files(_rc.PROCS)
+    exc = _rc.find_exception()
+    sr = _rc.find_uploaded("search")
+    sr_today = bool(sr) and _rcdt.datetime.fromtimestamp(sr[0].stat().st_mtime).date() == _rcdt.date.today()
+    return {"items": items, "folder": str(_rc.reco_base()), "common_folder": str(_rc.common_dir()),
+            "exception": ({"file": exc.name,
+                           "date": _rcdt.datetime.fromtimestamp(exc.stat().st_mtime).strftime("%d-%m-%Y")}
+                          if exc else None),
+            "search_results_uploaded": sr_today,
+            "scripts_missing": [n for n in list(_rc.SCRIPT_NAMES.values()) + [_rc.SEARCH_SCRIPT_NAME]
+                                if not _rc.script_path(n)],
+            "codes_dir": str(_rc.codes_dir())}
+
+
+@app.get("/reco/today-status")
+def reco_today_status():
+    from core.pipelines import reconciliation as _rc
+    import datetime as _rcdt
+    d = _rcdt.date.today()
+    st = _rc.load_state(d)
+    return {"date": d.strftime("%d-%m-%Y"), "done": _rc.done_keys(d),
+            "state": {_rc.PKEY[p]: st.get(p, {}) for p in _rc.PROCS}}
+
+
+@app.post("/reco/upload")
+async def reco_upload(files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+    """ONE upload button for everything: HOLDING_/RISK_REPORT_ → COMMON FILES (the previous
+    day's copy is archived automatically), EXCEPTION → its permanent folder (replacing archives
+    the old file), PositionBook / SearchResults → today's drop folder."""
+    import shutil as _sh
+    from core.pipelines import reconciliation as _rc
+    saved = []
+    for f in files:
+        tmp = _sa_os.path.join(_sa_tmp.gettempdir(), _sa_os.path.basename(f.filename))
+        with open(tmp, "wb") as out:
+            _sh.copyfileobj(f.file, out)
+        saved.append(tmp)
+    return _rc.route_uploads(saved)
+
+
+@app.get("/reco/holidays")
+def reco_holidays():
+    from core.pipelines import reconciliation as _rc
+    rows = _rc.load_holidays()
+    items = [{"iso": d.isoformat(), "date": d.strftime("%d-%m-%Y"), "weekday": d.strftime("%A"),
+              "note": n} for d, n in sorted(rows.items(), reverse=True)]
+    return {"items": items, "file": str(_rc.holidays_file())}
+
+
+@app.post("/reco/holidays/add")
+async def reco_holidays_add(req: Request):
+    from core.short_allocation import check_password as _rc_pw
+    from core.pipelines import reconciliation as _rc
+    import datetime as _rcdt
+    b = await req.json()
+    if not _rc_pw(b.get("password", "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        d = _rcdt.date.fromisoformat((b.get("date") or "").strip())
+    except Exception:
+        return {"ok": False, "error": "Pick a valid date"}
+    _rc.add_holiday(d, "manual")
+    return {"ok": True}
+
+
+@app.post("/reco/holidays/remove")
+async def reco_holidays_remove(req: Request):
+    from core.short_allocation import check_password as _rc_pw
+    from core.pipelines import reconciliation as _rc
+    import datetime as _rcdt
+    b = await req.json()
+    if not _rc_pw(b.get("password", "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        d = _rcdt.date.fromisoformat((b.get("date") or "").strip())
+    except Exception:
+        return {"ok": False, "error": "Pick a valid date"}
+    _rc.remove_holiday(d)
+    return {"ok": True}
+
+
+@app.post("/reco/stop")
+def reco_stop(request: Request):
+    allowed, why = _can_stop("px_reco", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
+    from core.pipeline_box import stop_pipeline as _rc_sp
+    _rc_sp("reco")
+    # a stopped run never cleans up its own pending RSA-token pop-up
+    try:
+        _d = _sa_os.getenv("SA_OUTPUT_DIR", r"C:\SHORT ALLOCATION")
+        for _f in (".token_state", ".token_answer"):
+            try: _sa_os.remove(_sa_os.path.join(_d, _f))
+            except OSError: pass
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # MARGIN SHORTAGE (15-min) — SHORTFALL ALLOCATION UPLOAD PROMPT
 #
 # Uploading sends real allocation instructions to the exchange, so there is no
