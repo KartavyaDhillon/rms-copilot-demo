@@ -165,6 +165,11 @@ def ensure_dirs():
     for d in [reco_base(), uploads_dir(), exception_dir(), state_dir(), runtime_dir(),
               downloads_dir(), leftovers_dir(), backup_root()] + list(work_dirs().values()):
         d.mkdir(parents=True, exist_ok=True)
+    try:                                   # empty list on day one → the scripts stop warning "file not found"
+        if not holidays_file().exists():
+            holidays_file().write_text("Date,Note\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def emails_for(proc):
@@ -590,12 +595,80 @@ class NseClient:
 
 
 def _gunzip(gz):
+    """Extract next to the .gz. The .gz is KEPT — it is the cache the scripts reuse."""
     gz = Path(gz)
     out = gz.with_suffix("")
     with gzip.open(gz, "rb") as fi, open(out, "wb") as fo:
         fo.write(fi.read())
-    gz.unlink(missing_ok=True)
     return out
+
+
+def nse_dir(today=None):
+    return downloads_dir() / dmy(today or date.today()) / "nse"
+
+
+def get_trade_day(today, nse=None):
+    """Previous trading day. Remembered for the day, so the NSE probe runs only once."""
+    f = downloads_dir() / dmy(today) / "trade_day.txt"
+    try:
+        d = parse_dmy(f.read_text(encoding="utf-8").strip())
+        if d and find_holding(d):
+            return d, nse
+    except Exception:
+        pass
+    if nse is None:
+        nse = NseClient()
+        nse.login()
+    d = resolve_trade_day(today, nse)
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(dmy(d), encoding="utf-8")
+    except Exception:
+        pass
+    return d, nse
+
+
+def ensure_trade_file(trade_day, nse=None):
+    """CM trade file of the trading day → NSE folder (skipped when already there)."""
+    member = nse_creds()["memberCode"]
+    name = trade_name(member, trade_day)
+    p = nse_dir() / name
+    if p.exists() and p.stat().st_size > 0:
+        log(f"   ✔ already downloaded: {name[:-3]}")
+        return nse
+    if nse is None:
+        nse = NseClient()
+        nse.login()
+    if not nse.fetch("CM", name, p):
+        log(f"[MISSING_FILE] {name[:-3]}")
+        raise RecoStop(f"NSE does not have {name[:-3]} yet — try again later.")
+    log(f"   ✔ {name[:-3]}")
+    return nse
+
+
+def fetch_pledge_files(trade_day, nse=None):
+    """C and F SEC_PLEDGE csv files. Reuses what is already in the NSE folder."""
+    member = nse_creds()["memberCode"]
+    out = nse_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    res = {}
+    for prefix, seg in (("C", "CM"), ("F", "FO")):
+        name = f"{prefix}_{member}_SEC_PLEDGE_{trade_day:%d%m%Y}_02.csv.gz"
+        csvp = out / name[:-3]
+        if csvp.exists() and csvp.stat().st_size > 0:
+            res[prefix] = csvp
+            log(f"   ✔ already downloaded: {csvp.name}")
+            continue
+        if nse is None:
+            nse = NseClient()
+            nse.login()
+        gz = nse.fetch(seg, name, out / name)
+        if not gz:
+            log(f"[MISSING_FILE] {name[:-3]}")
+            raise RecoStop(f"NSE does not have {name[:-3]} yet — try again later.")
+        res[prefix] = _gunzip(gz)
+        log(f"   ✔ {res[prefix].name}")
+    return res, nse
 
 
 def trade_name(member, d):
@@ -610,7 +683,7 @@ def resolve_trade_day(today, nse):
     d = today - timedelta(days=1)
     tried = 0
     suspects = []          # days with neither an NSE trade file nor our HOLDING — probably holidays
-    tmp = downloads_dir() / "_probe"
+    tmp = nse_dir(today)        # the trade file found here is KEPT (the HOLDING script reuses it)
 
     def _stop_for_suspects():
         names = ", ".join(f"{x:%A %d-%m-%Y}" for x in suspects)
@@ -625,13 +698,12 @@ def resolve_trade_day(today, nse):
             d -= timedelta(days=1)
             continue
         tried += 1
-        gz = nse.fetch("CM", trade_name(member, d), tmp / trade_name(member, d))
+        _tp = tmp / trade_name(member, d)
+        if _tp.exists() and _tp.stat().st_size > 0:
+            gz = _tp
+        else:
+            gz = nse.fetch("CM", trade_name(member, d), _tp)
         has_trade = bool(gz)
-        if gz:
-            try:
-                gz.unlink()
-            except Exception:
-                pass
         has_hold = find_holding(d) is not None
         if has_trade and has_hold:
             if suspects:
@@ -669,6 +741,16 @@ def ftp_download(day, dest_dir, groups):
     dest_dir.mkdir(parents=True, exist_ok=True)
     wanted = {k: v for k, v in FTP_FILES.items() if v[2] in groups}
     result = {k: None for k in wanted}
+    # already downloaded today (e.g. with the FTP button) → reuse, don't download again
+    existing = {p.name.lower(): p for p in dest_dir.iterdir() if p.is_file() and p.stat().st_size > 0}
+    for k, v in wanted.items():
+        _fn = v[1].format(d=d).lower()
+        if _fn in existing:
+            result[k] = existing[_fn]
+            log(f"   ✔ already downloaded: {existing[_fn].name}")
+    wanted = {k: v for k, v in wanted.items() if result[k] is None}
+    if not wanted:
+        return result
     ftp, last = None, None
     for i in range(1, 4):
         try:
@@ -768,6 +850,28 @@ def patch_script(proc, src, dest):
             v = os.getenv(envk, "").strip()
             if v:
                 txt = re.sub(r'("%s"\s*:\s*)"[^"]*"' % k, lambda m: m.group(1) + json.dumps(v), txt, count=1)
+    # 6) HOLDING script: reuse NSE files the console already downloaded today (no second download)
+    if proc == "HOLDING":
+        cache = _pylit(str(nse_dir()))
+        a = "    local_gz = os.path.join(INPUT_FOLDER, filename)\n"
+        if a in txt:
+            txt = txt.replace(a, a +
+                f"    _cg = os.path.join({cache}, filename)\n"
+                "    if os.path.exists(_cg) and os.path.getsize(_cg) > 0:\n"
+                "        import shutil as _shc\n"
+                "        os.makedirs(INPUT_FOLDER, exist_ok=True)\n"
+                "        _shc.copy2(_cg, local_gz)\n"
+                "        print(f'✅ Already downloaded today — using {_cg}')\n"
+                "        return local_gz, token\n", 1)
+        b = '            print(f"✅ Downloaded → {local_gz}")\n'
+        if b in txt:
+            txt = txt.replace(b, b +
+                "            try:\n"
+                "                import shutil as _shc2\n"
+                f"                os.makedirs({cache}, exist_ok=True)\n"
+                f"                _shc2.copy2(local_gz, os.path.join({cache}, filename))\n"
+                "            except Exception:\n"
+                "                pass\n", 1)
     Path(dest).parent.mkdir(parents=True, exist_ok=True)
     Path(dest).write_text(txt, encoding="utf-8")
     return Path(dest)
@@ -1016,6 +1120,56 @@ print("MISSING:" + ",".join(miss))
 '''
 
 
+def strip_shared_from_script_backups(proc):
+    """HOLDING_ / RISK_REPORT_ files are backed up once, by COMMON FILES. The desk's scripts also
+    move them into their own 'BACKUP FILES AUTOMATED\\<date>' folder — remove those copies."""
+    root = work_dirs()[proc] / "BACKUP FILES AUTOMATED"
+    if not root.is_dir():
+        return
+    pat = re.compile(r"^(holding_|risk_report_)", re.I)
+    n = 0
+    for sub in root.iterdir():
+        if not sub.is_dir():
+            continue
+        if datetime.fromtimestamp(sub.stat().st_mtime).date() != date.today():
+            continue
+        for f in sub.rglob("*"):
+            if f.is_file() and pat.match(f.name):
+                try:
+                    f.unlink()
+                    n += 1
+                except Exception:
+                    pass
+    if n:
+        log(f"   (HOLDING / RISK_REPORT removed from this folder's backup — COMMON FILES keeps them: {n})")
+
+
+def set_current(key, phase, pending=None):
+    """Live progress for the dashboard tiles."""
+    try:
+        state_dir().mkdir(parents=True, exist_ok=True)
+        (state_dir() / "current.json").write_text(json.dumps({
+            "date": date.today().isoformat(), "proc": key, "phase": phase,
+            "pending": [PKEY[p] for p in (pending or [])]}), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def get_current():
+    try:
+        d = json.loads((state_dir() / "current.json").read_text(encoding="utf-8"))
+        return d if d.get("date") == date.today().isoformat() else None
+    except Exception:
+        return None
+
+
+def clear_current():
+    try:
+        (state_dir() / "current.json").unlink()
+    except Exception:
+        pass
+
+
 def _missing_pkgs():
     py = script_python()
     try:
@@ -1116,25 +1270,11 @@ def download_nse():
     """Previous trading day (NSE + holiday list) and its C / F SEC_PLEDGE files."""
     today = date.today()
     ensure_dirs()
-    nse = NseClient()
-    nse.login()
-    trade_day = resolve_trade_day(today, nse)
+    trade_day, nse = get_trade_day(today)
     log(f"   ✔ Previous trading day = {trade_day:%A %d-%m-%Y}")
-    out = downloads_dir() / dmy(today) / "nse"
-    member = nse.creds["memberCode"]
-    miss = []
-    for prefix, seg in (("C", "CM"), ("F", "FO")):
-        name = f"{prefix}_{member}_SEC_PLEDGE_{trade_day:%d%m%Y}_02.csv.gz"
-        gz = nse.fetch(seg, name, out / name)
-        if not gz:
-            log(f"   ✘ MISSING on NSE: {name[:-3]}")
-            miss.append(name[:-3])
-            continue
-        f = _gunzip(gz)
-        log(f"   ✔ {f.name}  →  {out}")
-    if miss:
-        log(f"[MISSING_FILE] {miss[0]}")
-        raise RecoStop("NSE does not have these yet — try again later: " + ", ".join(miss))
+    nse = ensure_trade_file(trade_day, nse)
+    fetch_pledge_files(trade_day, nse)
+    log(f"   Saved in: {nse_dir()}")
 
 
 def download_ftp():
@@ -1212,7 +1352,10 @@ def run_reco(procs=None):
     except Exception:
         pass
     try:
-        ok = _run(list(procs) if procs else list(PROCS))
+        try:
+            ok = _run(list(procs) if procs else list(PROCS))
+        finally:
+            clear_current()
     except RecoStop as e:
         log("")
         log("=" * 68)
@@ -1278,10 +1421,11 @@ def _run(procs):
     nse = None
     if need_hold or need_t1:
         _title("STEP 2 of 5 — Finding the previous trading day (NSE + holiday list)")
-        nse = NseClient()
-        nse.login()
-        trade_day = resolve_trade_day(today, nse)
+        set_current(None, "Finding trading day", pending)
+        trade_day, nse = get_trade_day(today)
         log(f"   ✔ Previous trading day = {trade_day:%A %d-%m-%Y}")
+        if need_hold:
+            nse = ensure_trade_file(trade_day, nse)      # the HOLDING script reuses this file
     else:
         _title("STEP 2 of 5 — (not needed)")
 
@@ -1296,6 +1440,7 @@ def _run(procs):
         groups.append("KAMB")
     ftp_files = {}
     if groups:
+        set_current(None, "Downloading FTP files", pending)
         ftp_files = ftp_download(today, downloads_dir() / dmy(today) / "ftp", groups)
         lacking = [FTP_FILES[k][1].format(d=dmy(today)) for k, v in FTP_FILES.items()
                    if v[2] in groups and v[3] and not ftp_files.get(k)]
@@ -1312,15 +1457,8 @@ def _run(procs):
     cf = {}
     if need_t1:
         _title("STEP 4 of 5 — NSE SEC_PLEDGE files (C and F) for T1 HOLDING")
-        member = nse.creds["memberCode"]
-        for prefix, seg in (("C", "CM"), ("F", "FO")):
-            name = f"{prefix}_{member}_SEC_PLEDGE_{trade_day:%d%m%Y}_02.csv.gz"
-            gz = nse.fetch(seg, name, downloads_dir() / dmy(today) / "nse" / name)
-            if not gz:
-                log(f"[MISSING_FILE] {name[:-3]}")
-                raise RecoStop(f"NSE does not have {name[:-3]} yet — try again later.")
-            cf[prefix] = _gunzip(gz)
-            log(f"   ✔ {cf[prefix].name}")
+        set_current(None, "Downloading NSE files", pending)
+        cf, nse = fetch_pledge_files(trade_day, nse)
     else:
         _title("STEP 4 of 5 — (not needed)")
 
@@ -1328,6 +1466,7 @@ def _run(procs):
     wd = work_dirs()
     if need_t1:
         _title("STEP 5 of 5 — MCX SearchResults for T1 HOLDING (RSA token needed)")
+        set_current(None, "Search Result (BANCS) — token needed", pending)
         park_leftovers(wd["T1 HOLDING"], "T1 HOLDING", stamp)
         fetch_search_results(wd["T1 HOLDING"], stamp)
     else:
@@ -1351,6 +1490,7 @@ def _run(procs):
         if proc not in pending:
             continue
         log(f"\n▶ {proc}")
+        set_current(PKEY[proc], "Running", pending)
         t0 = time.time()
         try:
             if proc == "HOLDING":
@@ -1395,10 +1535,14 @@ def _run(procs):
         if proc == "HOLDING":
             park_leftovers(reco_base() / "HOLDING_DOWNLOADS", "HOLDING_DL_after", stamp)
         try:
+            strip_shared_from_script_backups(proc)
+        except Exception as e:
+            log(f"   ⚠ could not tidy the script's backup folder: {e}")
+        try:
             collect_backup(proc, t0, today)
         except Exception as e:
             log(f"   ⚠ backup copy problem: {e}")
-        state[proc] = {"status": status, "reason": reason, "time": stamp}
+        state[proc] = {"status": status, "reason": reason, "time": datetime.now().strftime("%H:%M"), "stamp": stamp}
         save_state(today, state)
         log(f"   => {proc}: {status}{(' - ' + reason) if reason else ''}")
 

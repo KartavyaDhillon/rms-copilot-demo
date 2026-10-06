@@ -5171,7 +5171,11 @@ function _recoRun(url, kind){
         _recoRunningKind=null;
       }
       _pxMarkDone(slotKey);
-      if(isDl) recoDlButtons();
+      if(isDl){
+        recoDlButtons();
+        // the result line disappears 60 s after the download ends
+        setTimeout(function(){ if(strip && !_pxIsRunning(slotKey) && strip.parentNode) strip.parentNode.removeChild(strip); }, 60000);
+      }
       recoStatus(true); recoLoadReady();
     };
     ev.onmessage=m=>{
@@ -5268,7 +5272,7 @@ function recoRenderTiles(s){
   const wrap=document.getElementById('pxRuns-reco'); if(!wrap) return;
   const allWrap=document.getElementById('recoRunAllWrap');
   if(!s){ wrap.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--amber);font-size:12.5px;padding:14px;border:1px dashed rgba(251,191,36,.4);border-radius:10px;background:rgba(251,191,36,.06)">&#9888; Backend not reachable — start uvicorn.</div>'; if(allWrap) allWrap.innerHTML=''; return; }
-  const done=s.done||[], st=s.state||{};
+  const done=s.done||[], st=s.state||{}, cur=s.current||null;
   const busy=_recoBusy();
   const jf=_recoJustFinished, jfActive=!!(jf && Date.now()<jf.until && !busy);
   const left=_RECO_TILES.filter(t=>done.indexOf(t.key)===-1).length;
@@ -5280,7 +5284,12 @@ function recoRenderTiles(s){
       b=jf.ok ? '<button disabled style="'+base+'background:var(--green);color:#04120a;cursor:not-allowed">&#10003; DONE &mdash; SUCCESS</button>'
               : '<button disabled style="'+base+'background:var(--red);color:#fff;cursor:not-allowed">&#10007; NOT COMPLETED &mdash; see message / Logs</button>';
     } else if(busy && _recoRunningKind==='all'){
-      b='<button disabled style="'+base+'background:var(--blue);color:var(--blue-d);cursor:not-allowed">&#9654; Running all 4&hellip;</button>';
+      let _what='starting';
+      if(cur){
+        if(cur.proc){ const _t=_RECO_TILES.filter(x=>x.key===cur.proc)[0]; _what=(_t?_t.label:cur.proc)+(cur.pending&&cur.pending.length>1?(' ('+(cur.pending.indexOf(cur.proc)+1)+' of '+cur.pending.length+')'):''); }
+        else if(cur.phase){ _what=String(cur.phase).replace(/[<>]/g,''); }
+      }
+      b='<button disabled style="'+base+'background:var(--blue);color:var(--blue-d);cursor:not-allowed"><span style="display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid var(--blue-d);border-top-color:transparent;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:8px"></span>Running &mdash; '+_what+'</button>';
     } else if(left===0){
       b='<button disabled style="'+base+'background:rgba(52,211,153,.15);color:var(--green);cursor:not-allowed;border:1px solid rgba(52,211,153,.4)">&#10003; ALL 4 DONE TODAY</button>';
     } else if(busy || jfActive){
@@ -5306,11 +5315,19 @@ function recoRenderTiles(s){
       else { cls+=' error'; state='<span style="color:var(--red);font-weight:800;font-size:13px">&#10060; NOT COMPLETED &mdash; see message / Logs</span>';
         btn='<button class="sa-run-btn" disabled style="background:var(--red);color:#fff;opacity:1;cursor:not-allowed;font-weight:800;font-size:16px;padding:14px 10px">&#10007; FAILED</button>'; }
     } else if(isDone){
-      cls+=' done'; state='&#10003; Done today';
-      btn='<button class="sa-run-btn" disabled style="opacity:.55;cursor:not-allowed">Done</button>';
+      cls+=' done'; state='<span style="color:var(--green);font-weight:700">&#9989; Done'+(sx.time?(' at '+String(sx.time).replace(/[<>]/g,'')):' today')+' &mdash; e-mail sent</span>';
+      btn='<button class="sa-run-btn" disabled style="background:rgba(52,211,153,.18);color:var(--green);opacity:1;cursor:not-allowed;font-weight:800">&#10003; DONE</button>';
+    } else if((mine || viaAll) && cur && cur.proc===t.key){
+      cls+=' locked'; state='<span style="display:inline-flex;align-items:center;gap:7px;color:var(--blue)"><span style="width:11px;height:11px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite"></span>RUNNING NOW&hellip;</span>';
+      btn='<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed"><span style="display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid var(--blue-d);border-top-color:transparent;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px"></span>Running&hellip;</button>';
+    } else if((mine || viaAll) && sx.status && sx.status!=='DONE' && cur && cur.pending && cur.pending.indexOf(t.key)!==-1 && cur.proc && cur.pending.indexOf(cur.proc)>cur.pending.indexOf(t.key)){
+      cls+=' error'; state='<span style="color:var(--red);font-weight:700">&#10060; Failed &mdash; see Logs</span>';
+      btn='<button class="sa-run-btn" disabled style="background:var(--red);color:#fff;opacity:1;cursor:not-allowed">&#10007; FAILED</button>';
     } else if(mine || viaAll){
-      cls+=' locked'; state='&#9654; '+(mine?'Running':'Queued / running')+'&hellip;';
-      btn='<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button>';
+      cls+=' locked';
+      const ph=(cur && !cur.proc && cur.phase)?(' &mdash; '+String(cur.phase).replace(/[<>]/g,'')):'';
+      state='<span style="color:var(--amber)">&#9203; Waiting'+(mine?ph:(cur&&cur.proc?' &mdash; not started yet':ph))+'</span>';
+      btn='<button class="sa-run-btn" disabled style="opacity:.6;cursor:not-allowed">&#9203; Waiting&hellip;</button>';
     } else if(busy || jfActive){
       cls+=' locked'; state=busy?'Busy &mdash; another RECONCILIATION action is running':'Please wait&hellip;';
       btn='<button class="sa-run-btn" disabled>Wait&hellip;</button>';
@@ -5330,8 +5347,10 @@ async function recoLoadReady(){
   const box=document.getElementById('recoReady'); if(!box) return;
   box.style.display='block';
   if(_recoBusy()){ box.innerHTML='<span style="color:var(--dim)">Run in progress…</span>'; return; }
+  const mySeq=(window._recoReadySeq=(window._recoReadySeq||0)+1);
   let d; try{ d=await (await fetch(API+'/reco/readiness')).json(); }
-  catch(e){ box.innerHTML='<span style="color:var(--dim)">—</span>'; return; }
+  catch(e){ return; }                       // keep whatever is shown — a failed check is not "missing"
+  if(mySeq!==window._recoReadySeq) return;  // an older answer arriving late must not overwrite a newer one
   _recoReadyData=d;
   const items=(d&&d.items)||[];
   const missing=items.filter(it=>!it.ok);
@@ -5341,7 +5360,9 @@ async function recoLoadReady(){
   if(d && d.scripts_missing && d.scripts_missing.length){
     html+='<div style="color:var(--red);margin-bottom:6px">&#9888; Script file(s) missing in <span style="font-family:var(--mono)">'+(d.codes_dir||'recon_codes')+'</span>: '+d.scripts_missing.join(', ')+'</div>';
   }
-  if(!missing.length){
+  if(d && d.all_done){
+    html+='<span style="color:var(--green)">&#10003; All 4 reconciliations are done for today &mdash; nothing more is needed.</span>';
+  } else if(!missing.length){
     html+='<span style="color:var(--green)">&#10003; All required files are present &mdash; ready to run.</span>';
   } else {
     const chips=missing.map(it=>'<span class="missing" title="'+String(it.why||'').replace(/"/g,'')+'">'+it.label+'</span>').join('');
@@ -5413,13 +5434,14 @@ async function recoDoUpload(inp){
 async function recoHolidays(prefillIso){
   let d=null; try{ d=await (await fetch(API+'/reco/holidays')).json(); }catch(e){}
   const items=(d&&d.items)||[];
-  const rows=items.length?items.map(it=>'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line)"><span style="flex:1;font-size:12.5px">'+it.date+' <span style="color:var(--dim)">'+it.weekday+'</span></span>'
-       +'<span style="font-size:10.5px;color:'+(it.note==='auto'?'var(--amber)':'var(--dim)')+'">'+(it.note==='auto'?'added automatically':'added by you')+'</span>'
+  const _esc=s=>String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const rows=items.length?items.map(it=>'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--line)"><span style="flex:1;font-size:12.5px">'+it.date.replace(/-/g,'/')+' <span style="color:var(--dim)">'+it.weekday+'</span></span>'
+       +'<span style="font-size:10.5px;color:'+(it.note==='auto'?'var(--amber)':'var(--dim)')+'">'+(it.note==='auto'?'added automatically':(it.note&&it.note!=='manual'?('added by '+_esc(it.note)):'added by (unknown)'))+'</span>'
        +'<button class="sa-tool" style="padding:2px 8px" onclick="recoHolRemove(\''+it.iso+'\')">✕</button></div>').join('')
      :'<div style="color:var(--dim);font-size:12px;padding:6px 0">No holidays listed yet.</div>';
   saShowModal('📅 Market holidays', `
 <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">Days the market was closed (besides Saturday / Sunday). If a run stops with "this looks like a market holiday", add that date here and run again. Nothing is added automatically.</div>
-<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"><input type="date" id="recoHolDate" value="${prefillIso||''}" style="flex:1;min-width:150px"><input type="password" id="recoHolPw" placeholder="config password" style="flex:1;min-width:130px"><button class="sa-save" style="padding:8px 14px" onclick="recoHolAdd()">Add holiday</button></div>
+<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"><input type="text" id="recoHolDate" inputmode="numeric" maxlength="10" placeholder="dd/mm/yyyy" value="${prefillIso?prefillIso.split('-').reverse().join('/'):''}" oninput="recoHolMask(this)" style="flex:1;min-width:150px"><input type="password" id="recoHolPw" placeholder="config password" style="flex:1;min-width:130px"><button class="sa-save" style="padding:8px 14px" onclick="recoHolAdd()">Add holiday</button></div>
 <div id="recoHolMsg" style="font-size:11.5px;color:var(--red);min-height:16px"></div>
 <div style="max-height:260px;overflow:auto">${rows}</div>
 <div style="font-size:10px;color:var(--dim);margin-top:8px;font-family:var(--mono)">${(d&&d.file)||''}</div>`);
@@ -5434,7 +5456,19 @@ async function _recoHolCall(path, iso){
   if(!r.ok){ if(msg) msg.textContent=r.error||'Failed'; return; }
   recoHolidays();
 }
-function recoHolAdd(){ _recoHolCall('/reco/holidays/add', (document.getElementById('recoHolDate')||{}).value||''); }
+function recoHolMask(el){
+  let v=el.value.replace(/\D/g,'').slice(0,8), o=v.slice(0,2);
+  if(v.length>2) o+='/'+v.slice(2,4);
+  if(v.length>4) o+='/'+v.slice(4);
+  el.value=o;
+}
+function recoHolAdd(){
+  const raw=((document.getElementById('recoHolDate')||{}).value||'').trim();
+  const m=raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const msg=document.getElementById('recoHolMsg');
+  if(!m){ if(msg) msg.textContent='Type the date as dd/mm/yyyy.'; return; }
+  _recoHolCall('/reco/holidays/add', m[3]+'-'+m[2]+'-'+m[1]);
+}
 function recoHolRemove(iso){ _recoHolCall('/reco/holidays/remove', iso); }
 // _cliLastVariant holds {variant,ok,ts} from the backend — used to show which
 // of OLD/NEW last ran + a green tick, and to dim the one that DIDN'T run.
@@ -7113,7 +7147,7 @@ ms15LoadReady(); setInterval(()=>{ ms15LoadReady(); },30000);
 r1r2Status(); setInterval(()=>{ if(!_pxIsRunning('r1r2')) r1r2Status(); },5000);
 r1r2LoadReady(); setInterval(()=>{ r1r2LoadReady(); },30000);
 recoLoadReady(); recoStatus(true);
-setInterval(()=>{ if(!_pxIsRunning('reco')) recoStatus(); },5000);
+setInterval(()=>{ recoStatus(); },3000);          // also while running → tiles show live progress
 setInterval(()=>{ recoLoadReady(); },30000);
 // Restore the generic "View / Explain error" button for any pipe whose last run
 // (from this browser, possibly a previous page load) is still remembered.

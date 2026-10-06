@@ -4335,11 +4335,23 @@ def reco_readiness():
     from core.pipelines import reconciliation as _rc
     import datetime as _rcdt
     _rc.ensure_dirs()
-    items = _rc.check_files(_rc.PROCS)
+    import time as _rct
+    _done = set(_rc.done_keys())
+    _pend = [p for p in _rc.PROCS if _rc.PKEY[p] not in _done]      # only what is still to run
+    all_done = not _pend
+    items = _rc.check_files(_pend) if _pend else []
+    if any(not i["ok"] for i in items):
+        # a file can look missing for a moment (share/antivirus/another process) — look again before saying so
+        _rct.sleep(0.7)
+        items2 = _rc.check_files(_pend)
+        if sum(1 for i in items2 if not i["ok"]) < sum(1 for i in items if not i["ok"]):
+            print("[reco] readiness flicker: " + ", ".join(i["key"] for i in items if not i["ok"])
+                  + " looked missing on the first look but present on the second")
+        items = items2
     exc = _rc.find_exception()
     sr = _rc.find_uploaded("search")
     sr_today = bool(sr) and _rcdt.datetime.fromtimestamp(sr[0].stat().st_mtime).date() == _rcdt.date.today()
-    return {"items": items, "folder": str(_rc.reco_base()), "common_folder": str(_rc.common_dir()),
+    return {"items": items, "all_done": all_done, "folder": str(_rc.reco_base()), "common_folder": str(_rc.common_dir()),
             "exception": ({"file": exc.name,
                            "date": _rcdt.datetime.fromtimestamp(exc.stat().st_mtime).strftime("%d-%m-%Y")}
                           if exc else None),
@@ -4355,8 +4367,16 @@ def reco_today_status():
     import datetime as _rcdt
     d = _rcdt.date.today()
     st = _rc.load_state(d)
+    cur = None
+    try:
+        from core.pipeline_box import _PB as _rc_pb
+        if _rc_pb.get("reco", {}).get("running"):
+            cur = _rc.get_current()
+    except Exception:
+        cur = None
     return {"date": d.strftime("%d-%m-%Y"), "done": _rc.done_keys(d),
-            "state": {_rc.PKEY[p]: st.get(p, {}) for p in _rc.PROCS}}
+            "state": {_rc.PKEY[p]: st.get(p, {}) for p in _rc.PROCS},
+            "current": cur}
 
 
 @app.post("/reco/upload")
@@ -4396,7 +4416,12 @@ async def reco_holidays_add(req: Request):
         d = _rcdt.date.fromisoformat((b.get("date") or "").strip())
     except Exception:
         return {"ok": False, "error": "Pick a valid date"}
-    _rc.add_holiday(d, "manual")
+    try:
+        _by, _adm = _actor(request)
+    except Exception:
+        _by = ""
+    _who = (_by or "unknown user").replace(",", " ").strip()
+    _rc.add_holiday(d, f"{_who} on {_rcdt.datetime.now():%d/%m/%Y %H:%M}")
     return {"ok": True}
 
 
