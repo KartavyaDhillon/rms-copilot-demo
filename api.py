@@ -4308,6 +4308,27 @@ def reco_download_stream(kind: str = ""):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
+@app.get("/reco/dl-status")
+def reco_dl_status():
+    """Outcome of the three stand-alone downloads (so the page never keeps spinning)."""
+    import datetime as _rcdt
+    from core.pipelines import reconciliation as _rc
+    from core.pipeline_box import act_slot as _rc_as
+    st = _rc.read_dl_states()
+    out = {}
+    today = _rcdt.date.today().isoformat()
+    for k in ("nse", "ftp", "search"):
+        slot, _ = _rc_as("reco", "dl_" + k)
+        s = st.get(k) or {}
+        status = s.get("status") if s.get("date") == today else None
+        if status == "running" and not slot.get("running"):
+            status = "failed"                      # stopped / killed
+            s = {**s, "msg": s.get("msg") or "stopped"}
+        out[k] = {"running": bool(slot.get("running")), "status": status,
+                  "msg": s.get("msg", ""), "time": s.get("time", "")}
+    return out
+
+
 @app.get("/reco/readiness")
 def reco_readiness():
     """Every file the four processes need (strict — all must be ok to run) + EXCEPTION info."""

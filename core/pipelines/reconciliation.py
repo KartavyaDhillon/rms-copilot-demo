@@ -746,7 +746,8 @@ def patch_script(proc, src, dest):
     # T1 copies RISK_REPORT to folders of the desk's old PC — not wanted on the console
     txt = re.sub(r"^RISK_COPY_PATHS\s*=\s*\[.*?\]", "RISK_COPY_PATHS = []", txt, flags=re.S | re.M)
     # 2) holiday list location (HOLDING + T1 scripts)
-    txt = re.sub(r"^HOLIDAYS_FILE\s*=.*$", "HOLIDAYS_FILE = " + _pylit(str(holidays_file())), txt, flags=re.M)
+    _hf = "HOLIDAYS_FILE = " + _pylit(str(holidays_file()))      # lambda: backslashes must not be read as escapes
+    txt = re.sub(r"^HOLIDAYS_FILE\s*=.*$", lambda m: _hf, txt, flags=re.M)
     # 3) e-mail To / CC
     to, cc = emails_for(proc)
     txt = re.sub(r"^(\s*)(TO_LIST|to_emails)\s*=\s*\[[^\]]*\]",
@@ -822,12 +823,15 @@ def update_password_in_file(new_password):
 
 def patch_search_script(src, dest, save_dir):
     txt = Path(src).read_text(encoding="utf-8", errors="replace")
-    txt = re.sub(r"^SEARCH_FOLDER\s*=.*$", "SEARCH_FOLDER = " + _pylit(str(save_dir)), txt, flags=re.M)
+    _sf = "SEARCH_FOLDER = " + _pylit(str(save_dir))
+    txt = re.sub(r"^SEARCH_FOLDER\s*=.*$", lambda m: _sf, txt, flags=re.M)
     u, pw = os.getenv("RECO_MCX_USER", "").strip(), os.getenv("RECO_MCX_PASSWORD", "")
     if u:
-        txt = re.sub(r"^USER_ID\s*=.*$", "USER_ID = " + _pylit(u), txt, flags=re.M)
+        _u = "USER_ID = " + _pylit(u)
+        txt = re.sub(r"^USER_ID\s*=.*$", lambda m: _u, txt, flags=re.M)
     if pw:
-        txt = re.sub(r"^PASSWORD\s*=.*$", "PASSWORD = " + _pylit(pw), txt, flags=re.M)
+        _p = "PASSWORD = " + _pylit(pw)
+        txt = re.sub(r"^PASSWORD\s*=.*$", lambda m: _p, txt, flags=re.M)
     m = re.search(r"^session = requests\.Session\(\)", txt, flags=re.M)
     if not m:
         raise RecoStop("search_results.py has a different layout than expected — cannot patch it.")
@@ -1071,7 +1075,7 @@ def fetch_search_results(t1_dir, stamp):
                 copy_to(p, t1_dir, "SearchResults.xlsx")
                 log(f"   ✔ Using the SearchResults you uploaded ({n} rows) — MCX login skipped")
                 return
-    cached = downloads_dir() / dmy(date.today()) / "SearchResults.xlsx"
+    cached = downloads_dir() / dmy(date.today()) / "bancs" / "SearchResults.xlsx"
     if cached.exists() and datetime.fromtimestamp(cached.stat().st_mtime).date() == date.today():
         try:
             n = search_rows(cached)
@@ -1090,7 +1094,7 @@ def download_search():
     src = script_path(SEARCH_SCRIPT_NAME)
     if not src:
         raise RecoStop(f"{SEARCH_SCRIPT_NAME} not found in {codes_dir()}")
-    save_dir = downloads_dir() / dmy(date.today())
+    save_dir = downloads_dir() / dmy(date.today()) / "bancs"
     save_dir.mkdir(parents=True, exist_ok=True)
     patched = patch_search_script(src, runtime_dir() / "search_results_run.py", save_dir)
     log("   A token pop-up will appear in the dashboard — enter the RSA token.")
@@ -1146,11 +1150,36 @@ def download_ftp():
         raise RecoStop("Today's FTP file(s) are not available yet:\n" + "\n".join(f"    ✘ {n}" for n in lacking))
 
 
+def _dl_state_file(kind):
+    return state_dir() / f"download_{kind}.json"
+
+
+def write_dl_state(kind, status, msg=""):
+    try:
+        state_dir().mkdir(parents=True, exist_ok=True)
+        _dl_state_file(kind).write_text(json.dumps(
+            {"status": status, "msg": msg, "date": date.today().isoformat(),
+             "time": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def read_dl_states():
+    out = {}
+    for k in ("nse", "ftp", "search"):
+        try:
+            out[k] = json.loads(_dl_state_file(k).read_text(encoding="utf-8"))
+        except Exception:
+            out[k] = None
+    return out
+
+
 def run_download(kind):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+    write_dl_state(kind, "running")
     try:
         _title({"nse": "NSE MEMBER-PORTAL FILES", "ftp": "FTP FILES", "search": "SEARCH RESULTS (TCS BANCS / MCX)"}[kind]
                + f"  -  {nice(date.today())}")
@@ -1164,7 +1193,12 @@ def run_download(kind):
         log("")
         log(f"  STOPPED — {e}")
         log("[FRIENDLY_MSG] " + " ".join(str(e).split()))
+        write_dl_state(kind, "failed", " ".join(str(e).split())[:300])
         sys.exit(1)
+    except Exception as e:
+        write_dl_state(kind, "failed", str(e)[:300])
+        raise
+    write_dl_state(kind, "done")
     sys.exit(0)
 
 

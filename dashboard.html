@@ -5222,6 +5222,27 @@ function _recoRun(url, kind){
       if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>';
       resolve(false);
     };
+    // Safety net for the downloads: if the stream's final event never reaches this page, ask the
+    // server how the download ended instead of spinning forever.
+    if(isDl){
+      const k=kind.slice(3), t0=Date.now();
+      const wd=setInterval(async function(){
+        if(fin){ clearInterval(wd); return; }
+        if(Date.now()-t0<8000) return;
+        try{
+          const r=await fetch(API+'/reco/dl-status'); if(!r.ok) return;
+          const s=(await r.json())[k]; if(!s || s.running || fin) return;
+          clearInterval(wd);
+          try{ ev.close(); }catch(_){}
+          _pxClearES(slotKey); _stopTok();
+          ok=(s.status==='done');
+          if(strip) strip.innerHTML= ok
+            ? '<div style="font-weight:700;color:var(--green)">✅ '+_dlName+' downloaded <span style="font-weight:400;color:var(--dim)">— saved in RECONCILIATION → DOWNLOADS → date folder</span></div>'
+            : '<div style="font-weight:700;color:var(--amber);white-space:normal">⚠️ '+_dlName+': '+String(s.msg||'not completed — see 🗂️ Logs').replace(/[<>]/g,'')+'</div>';
+          finish(); resolve(ok);
+        }catch(e){}
+      }, 4000);
+    }
   });
 }
 function recoDownload(kind){ if(_pxIsRunning('reco:dl_'+kind)) return; return _recoRun(API+'/reco/download-stream?kind='+encodeURIComponent(kind), 'dl_'+kind); }
