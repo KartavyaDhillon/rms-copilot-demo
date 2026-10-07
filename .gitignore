@@ -58,3 +58,6 @@ sa_codes/captcha*.png
 
 # Self-signed HTTPS cert/key (generate_ssl_cert.py) — machine-specific, private key must never be committed
 certs/
+
+# Test-machine launcher with auto-reload — never pushed, so the live START_SERVER.bat stays untouched.
+START_DEV.bat

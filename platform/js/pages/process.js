@@ -27,7 +27,7 @@
       el.innerHTML =
         '<div class="pc-bar"><div class="l"></div>' +
         '<div style="display:flex;gap:8px">' +
-        '<button class="btn sm ghost" id="pcCommon" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
+        '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
         '<a class="btn sm ghost" href="/legacy" target="_blank" title="Original console with sidebar and internal views, in a new tab">' + RMS.icon("external") + " Standalone</a></div></div>" +
         '<iframe class="pc-frame" id="pcFrame" src="/legacy?embed=1"></iframe>';
@@ -60,6 +60,7 @@
     let st;
     try { st = await (await fetch("/common/status", { credentials: "same-origin" })).json(); }
     catch (e) { popup("Upload Common Files", "Could not reach the server: " + e.message, false); return; }
+    if (!st.items) { popup("Upload Common Files", "The server has not been updated with this feature yet. Copy the new api.py to the live folder and restart the console.", false); return; }
     const rows = (st.items || []).map((i) =>
       "<tr><td><b>" + esc(i.name) + "</b></td><td style='text-align:right'>" +
       (i.present ? '<span class="badge ok">Present · ' + esc(i.modified) + "</span>" : '<span class="badge warn">Missing</span>') + "</td></tr>").join("");
@@ -74,7 +75,25 @@
     $("#pcCommonFile").onchange = async () => {
       const list = Array.from($("#pcCommonFile").files || []);
       if (!list.length) return;
-      $("#pcCommonMsg").textContent = "Uploading…";
+      const names = (st.items || []).map((i) => i.name.toLowerCase());
+      const bad = list.filter((f) => !names.includes(f.name.toLowerCase()));
+      if (bad.length) {
+        const today = (st.items[0].name.match(/(\d{2})(\d{2})(\d{4})/) || []).slice(1).join("-");
+        close();
+        popup("Not today's file", bad.map((f) => {
+          const m = f.name.match(/^(HOLDING|RISK_REPORT)_(\d{2})(\d{2})(\d{4})\.csv$/i);
+          return m ? f.name + " is dated " + m[2] + "-" + m[3] + "-" + m[4] + ". Only today's file (" + today + ") is accepted."
+                   : f.name + " is not allowed. Only today's HOLDING_" + today.replace(/-/g, "") + ".csv and RISK_REPORT_" + today.replace(/-/g, "") + ".csv are accepted.";
+        }).join("\n\n"), false);
+        return;
+      }
+      $("#pcCommonPick").disabled = true;
+      $("#pcCommonPick").style.opacity = ".5";
+      $("#pcCommonMsg").innerHTML =
+        '<style>@keyframes pcspin{to{transform:rotate(360deg)}}</style>' +
+        '<div style="display:flex;align-items:center;justify-content:center;gap:10px;color:var(--ink);font-weight:600;padding:6px 0">' +
+        '<span style="width:20px;height:20px;border:3px solid rgba(255,255,255,.2);border-top-color:var(--accent,#fbbf24);border-radius:50%;display:inline-block;animation:pcspin .8s linear infinite"></span>' +
+        "Uploading " + list.length + " file" + (list.length > 1 ? "s" : "") + "…</div>";
       const fd = new FormData();
       list.forEach((f) => fd.append("files", f));
       try {
@@ -85,7 +104,10 @@
         if (saved.length && !rej.length) popup("Upload successful", saved.join("\n") + "\nsaved to COMMON FILES.", true);
         else if (saved.length) popup("Partly uploaded", "Saved: " + saved.join(", ") + "\n\nRejected:\n" + rej.join("\n"), false);
         else popup("Not uploaded", rej.join("\n") || d.error || ("HTTP " + r.status), false);
-      } catch (e) { $("#pcCommonMsg").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; }
+      } catch (e) {
+        $("#pcCommonPick").disabled = false; $("#pcCommonPick").style.opacity = "";
+        $("#pcCommonMsg").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>";
+      }
     };
   }
 })();

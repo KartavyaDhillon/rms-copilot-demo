@@ -361,6 +361,14 @@ def _ms15_alloc_prompt_and_upload(alloc_files, total_fungible, total_rows, base_
     wait_seconds = int(os.getenv("MS15_ALLOC_PROMPT_WAIT", "180"))
     info_path, state_path = _alloc_prompt_paths(base_dir)
 
+    # Only a run started by an ADMIN may ask about / perform the NMASS upload.
+    # Everyone else (and scheduled / unknown starters) finishes here — no prompt, no wait.
+    if os.getenv("MS15_ALLOW_UPLOAD", "0") != "1":
+        _alloc_clear_prompt(base_dir)
+        print("↩️  Allocation upload skipped — only an administrator's run can upload. "
+              "The file is on disk and backed up.")
+        return
+
     _alloc_clear_prompt(base_dir)
     try:
         with open(info_path, "w", encoding="utf-8") as f:

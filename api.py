@@ -1955,6 +1955,10 @@ def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time
     # Never silently defaulted by THIS route — the modal always sends a real
     # value; the "9:30 AM" fallback only applies if somehow called without one.
     _extra_env = {"PROBABLE_MARKET_TIME": market_time.strip()} if (pipe == "probable" and market_time.strip()) else None
+    if pipe == "ms15":
+        # The NMASS allocation-upload question is only ever asked when an ADMIN started this run.
+        # Any other user's run finishes before that step (file stays on disk, backed up).
+        _extra_env = {"MS15_ALLOW_UPLOAD": "1" if _actor(request)[1] else "0"}
     def gen():
         for ev in _px_stream(pipe, run_no=run_no if run_no else None, extra_env=_extra_env,
                               by=_by, ip=_ip, force=force):
@@ -4462,7 +4466,12 @@ async def common_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_
         raw = (f.filename or "").replace("\\", "/").split("/")[-1]
         want = allowed.get(raw.lower())
         if not want:
-            rejected.append(f"{raw or '(no name)'}: only today's {', '.join(allowed.values())} are accepted")
+            _m = _re.match(r"^(HOLDING|RISK_REPORT)_(\d{2})(\d{2})(\d{4})\.csv$", raw, _re.I)
+            if _m:
+                rejected.append(f"{raw} is dated {_m.group(2)}-{_m.group(3)}-{_m.group(4)}. Only today's file "
+                                f"({_cdt.date.today():%d-%m-%Y}) is accepted.")
+            else:
+                rejected.append(f"{raw or '(no name)'} is not allowed. Only {', '.join(allowed.values())} are accepted.")
             continue
         part = _sa_os.path.join(folder, want + ".part")
         try:
@@ -4587,10 +4596,12 @@ def _ms15_alloc_prompt_files():
 
 
 @app.get("/ms15/alloc/prompt")
-def ms15_alloc_prompt():
+def ms15_alloc_prompt(request: Request):
     """Is a 15-min run waiting on an upload decision? Polled by the dashboard
-    while the box is running."""
+    while the box is running. Only an admin is ever shown the question."""
     import json as _ap_json
+    if not _actor(request)[1]:
+        return {"pending": False}
     info_f, state_f = _ms15_alloc_prompt_files()
     try:
         if open(state_f, encoding="utf-8").read().strip().upper() != "PENDING":
@@ -4608,7 +4619,7 @@ class _AllocPromptAnswer(BaseModel):
 
 
 @app.post("/ms15/alloc/prompt/answer")
-def ms15_alloc_prompt_answer(a: _AllocPromptAnswer):
+def ms15_alloc_prompt_answer(a: _AllocPromptAnswer, request: Request):
     """Answer the pending upload question.
 
     The password is checked HERE, server-side. A modal that only hides a button
@@ -4618,6 +4629,8 @@ def ms15_alloc_prompt_answer(a: _AllocPromptAnswer):
 
     Skipping needs no password: choosing NOT to send is always allowed.
     """
+    if not _actor(request)[1]:
+        return {"ok": False, "error": "Only an administrator can upload the allocation files."}
     info_f, state_f = _ms15_alloc_prompt_files()
     try:
         if open(state_f, encoding="utf-8").read().strip().upper() != "PENDING":
