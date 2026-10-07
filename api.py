@@ -47,6 +47,34 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 PENDING = {}
 
+# ── SCHEDULER / AUTOMATION CENTER (core/scheduler/) ─────────────────────────
+# Own routes (/sched/*), own tables, own tick loop. Wrapped so that a problem in the
+# scheduler can never stop the rest of the console from booting. The tick loop only
+# runs when SCHEDULER_ENABLED=true in .env.
+try:
+    from core.scheduler.routes import router as _sched_router
+    app.include_router(_sched_router)
+except Exception as _e:
+    print(f"⚠️  Scheduler routes not loaded: {type(_e).__name__}: {_e}")
+
+
+@app.on_event("startup")
+def _scheduler_startup():
+    try:
+        from core.scheduler import engine as _sched_engine
+        _sched_engine.start_if_enabled()
+    except Exception as _e:
+        print(f"⚠️  Scheduler startup failed: {type(_e).__name__}: {_e}")
+
+
+@app.on_event("shutdown")
+def _scheduler_shutdown():
+    try:
+        from core.scheduler import engine as _sched_engine
+        _sched_engine.shutdown()
+    except Exception:
+        pass
+
 # Ensure shared common folder exists on startup
 _common_dir = os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
 try:
