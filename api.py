@@ -4423,6 +4423,80 @@ async def reco_upload(target: str = "", files: _SA_List[_SA_UploadFile] = _SA_Fi
     return _rc.route_uploads(saved, target if target in ("common", "main") else "")
 
 
+def _common_names_today():
+    import datetime as _cdt
+    d = _cdt.date.today().strftime("%d%m%Y")
+    return {"HOLDING": f"HOLDING_{d}.csv", "RISK REPORT": f"RISK_REPORT_{d}.csv"}
+
+
+@app.get("/common/status")
+def common_status():
+    """Process Center 'Upload common files': is today's HOLDING / RISK_REPORT in COMMON FILES?"""
+    folder = _sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
+    items = []
+    for label, name in _common_names_today().items():
+        p = _sa_os.path.join(folder, name)
+        have = _sa_os.path.isfile(p)
+        mod = ""
+        if have:
+            import datetime as _cdt
+            mod = _cdt.datetime.fromtimestamp(_sa_os.path.getmtime(p)).strftime("%H:%M:%S")
+        items.append({"label": label, "name": name, "present": have, "modified": mod})
+    return {"items": items}
+
+
+@app.post("/common/upload")
+async def common_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+    """Process Center 'Upload common files'. STRICT: only today's HOLDING_<DDMMYYYY>.csv and
+    RISK_REPORT_<DDMMYYYY>.csv are accepted — nothing else, and no other date. Same-day file is
+    replaced; older HOLDING/RISK_REPORT files are archived by the existing COMMON FILES housekeeping."""
+    import shutil as _sh, re as _re, datetime as _cdt
+    allowed = {n.lower(): n for n in _common_names_today().values()}
+    folder = _sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
+    try:
+        _sa_os.makedirs(folder, exist_ok=True)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Cannot reach the COMMON FILES folder: {e}"}, status_code=500)
+    ok, rejected = [], []
+    for f in files:
+        raw = (f.filename or "").replace("\\", "/").split("/")[-1]
+        want = allowed.get(raw.lower())
+        if not want:
+            rejected.append(f"{raw or '(no name)'}: only today's {', '.join(allowed.values())} are accepted")
+            continue
+        part = _sa_os.path.join(folder, want + ".part")
+        try:
+            with open(part, "wb") as out:
+                _sh.copyfileobj(f.file, out)
+            size = _sa_os.path.getsize(part)
+            if size == 0:
+                raise ValueError("file is empty")
+            with open(part, "rb") as fh:
+                head = fh.readline(65536).decode("utf-8-sig", "replace").upper()
+            if want.startswith("RISK_REPORT") and "ACCOUNTID" not in head:
+                raise ValueError("this does not look like a risk report (no ACCOUNTID column)")
+            if "," not in head and ";" not in head and "\t" not in head:
+                raise ValueError("this does not look like a CSV file")
+            _sa_os.replace(part, _sa_os.path.join(folder, want))
+            ok.append(want)
+        except Exception as e:
+            rejected.append(f"{raw}: {e}")
+            try: _sa_os.remove(part)
+            except OSError: pass
+    if ok:
+        try:
+            from core.short_allocation import housekeep_common_files as _hk
+            _hk()
+        except Exception as e:
+            print(f"⚠️  common upload: housekeeping skipped: {e}")
+        try:
+            _by, _adm = _actor(request)
+        except Exception:
+            _by = ""
+        print(f"📤 COMMON FILES upload by {_by or 'unknown'}: {', '.join(ok)}", flush=True)
+    return {"ok": bool(ok) or not rejected, "saved": ok, "rejected": rejected}
+
+
 @app.get("/reco/holidays")
 def reco_holidays():
     from core.pipelines import reconciliation as _rc
