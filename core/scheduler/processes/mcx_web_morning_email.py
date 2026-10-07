@@ -58,6 +58,13 @@ def _locate(ctx) -> Path:
         shutil.copy2(f, dest)                          # copy only — the CLI run still owns its file
         ctx.log(f"Picked up from CLI Prudential folder: {f.name} (copied; original left in place)")
         return dest
+    if getattr(ctx, "trigger", "") == H.MANUAL:           # Run Now to send again: reuse today's already-processed file
+        f = _newest(paths.proc_dir(FOLDER, "backup") / H.today_dash())
+        if f:
+            dest = inputs / f.name
+            shutil.copy2(f, dest)
+            ctx.log(f"Run Now: re-using today's file from backup: {f.name}")
+            return dest
     raise FileNotFoundError("Today's MCX RSK file was not found — neither uploaded on this process's Files tab nor in the "
                             f"CLI Prudential folder ({cli}). Run the CLI morning run, or upload the file and use Run Now.")
 

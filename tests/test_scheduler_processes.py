@@ -268,6 +268,21 @@ class McxMorning(Base):
         up = self._rsk(paths.proc_dir(m.FOLDER, "inputs"), "MCX_DEPOSIT_09.15.xlsx")
         self.assertEqual(m._locate(Ctx()), up if up.stat().st_mtime >= got.stat().st_mtime else got)
 
+    def test_run_now_sends_again_even_after_todays_run_and_reuses_the_backed_up_file(self):
+        from core.scheduler import paths
+        from core.scheduler.processes import mcx_web_morning_email as m
+        stamp = dt.datetime.now().strftime("%Y%m%d%H%M%S")
+        self._rsk(paths.proc_dir(m.FOLDER, "inputs"), f"zz9-{stamp}.xlsx")
+        self.write_risk([["SN327", 0, 0, 0, 0, 0, "ZOCHND", ""], ["SN359", 0, 0, 0, 0, 0, "ZOLUDH", ""]])
+        mails = []
+        fake = lambda s, b, to, cc, att, ctx, **k: mails.append(s)
+        p = {"zochnd_to": "a@x.com", "zoludh_to": "b@x.com"}
+        with mock.patch("core.scheduler.helpers.send_email", side_effect=fake):
+            m._run(p, Ctx())                                           # first run: sends, file goes to backup
+            self.assertEqual(len(mails), 2)
+            m._run(p, Ctx("MANUAL_RUN_NOW"))                           # Run Now: NO protection, sends again
+        self.assertEqual(len(mails), 4)
+
     def test_no_file_fails_fast_without_any_login(self):
         from core.scheduler.processes import mcx_web_morning_email as m
         with self.assertRaises(FileNotFoundError) as e:
