@@ -35,14 +35,20 @@ class Ctx:
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.old = {k: os.environ.get(k) for k in ("SCHED_DATA_ROOT", "SA_COMMON_DIR", "CLI_FOLDER")}
+        self.old = {k: os.environ.get(k) for k in ("SCHED_DATA_ROOT", "SCHED_ENV_DIR", "SA_COMMON_DIR", "CLI_FOLDER")}
+        self.old_sched = {k: v for k, v in os.environ.items() if k.startswith("SCHED_") and k not in self.old}
         os.environ["SCHED_DATA_ROOT"] = str(self.tmp / "data")
+        os.environ["SCHED_ENV_DIR"] = str(self.tmp / "envdir")           # never touch the real .env
+        (self.tmp / "envdir").mkdir()
         os.environ["SA_COMMON_DIR"] = str(self.tmp / "COMMON")
         os.environ["CLI_FOLDER"] = str(self.tmp / "CLI")
         (self.tmp / "COMMON").mkdir()
         (self.tmp / "CLI").mkdir()
 
     def tearDown(self):
+        for k in [k for k in os.environ if k.startswith("SCHED_") and k not in self.old]:
+            os.environ.pop(k, None)                                         # values written by saves
+        os.environ.update(self.old_sched)
         for k, v in self.old.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -127,6 +133,11 @@ class Connections(Base):
         shown = json.dumps(C.view())
         self.assertNotIn("SUPERSECRET", shown)
         self.assertIn("1234", shown)                                                      # only the hint
+        env, local = (self.tmp / "envdir" / ".env").read_text(), (self.tmp / "envdir" / ".env.local").read_text()
+        self.assertIn("SCHED_WHATSAPP_TEMPLATE_NAME='t1'", env)
+        self.assertNotIn("SUPERSECRET", env)                                              # secrets only in .env.local
+        self.assertIn("SCHED_WHATSAPP_AUTH_TOKEN='SUPERSECRETTOKEN1234'", local)
+        self.assertIn("# scheduler connection: WhatsApp", env)
         with self.assertRaises(KeyError):
             C.update("nope", {}, "me")
 
@@ -134,7 +145,8 @@ class Connections(Base):
         from core.scheduler import connections as C
         with self.assertRaises(RuntimeError) as e:
             C.require("smtp", "password")
-        self.assertIn("Connections", str(e.exception))
+        self.assertIn("Credentials", str(e.exception))
+        self.assertIn("'password' is not set", str(e.exception))
 
 
 class ProcessSettings(Base):
@@ -152,9 +164,15 @@ class ProcessSettings(Base):
             with self.assertRaises(ValueError):
                 proc_settings.save(d, {"to": ""}, "me")                         # required
             proc_settings.save(d, {"to": "+919812345678, +917541827310"}, "me")
-        self.assertEqual(proc_settings.get(d)["to"], "+919812345678, +917541827310")
+        self.assertEqual(proc_settings.get(d)["to"], "+919812345678,+917541827310")
+        env = (self.tmp / "envdir" / ".env").read_text()
+        self.assertIn("# scheduler process: SN327 WHATSAPP", env)                 # visible in .env under the process name
+        self.assertIn("SCHED_SN327_WHATSAPP_TO='+919812345678,+917541827310'", env)
+        with mock.patch("core.scheduler.store.audit"):
+            proc_settings.save(d, {"to": "+919812345678"}, "me")                   # edit in place, no duplicate line
+        self.assertEqual((self.tmp / "envdir" / ".env").read_text().count("SCHED_SN327_WHATSAPP_TO="), 1)
         eff = catalog.effective_params(d, {"account": "SN327", "to": "+910000000000"})
-        self.assertEqual(eff["to"], "+919812345678, +917541827310")             # process-level wins
+        self.assertEqual(eff["to"], "+919812345678")                               # process-level wins
         self.assertEqual(eff["account"], "SN327")
 
     def test_schedules_cannot_carry_process_level_params(self):

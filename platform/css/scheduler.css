@@ -3,7 +3,7 @@
 @media (max-width: 1100px) { .sch-grid { grid-template-columns: 1fr; } }
 
 .sch-box {
-  position: relative; overflow: hidden; padding: 22px 22px 18px; min-height: 270px;
+  position: relative; overflow: hidden; padding: 18px 20px 16px; min-height: 215px;
   display: flex; flex-direction: column;
   background: linear-gradient(180deg, var(--surface), var(--surface-2));
   border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--sh-1);
@@ -12,16 +12,16 @@
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
   background: linear-gradient(90deg, var(--ok), var(--info), #a78bfa);
 }
-.sch-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
+.sch-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
 .sch-tw { flex: 1; min-width: 0; }
-.sch-title { font-size: 18px; font-weight: 750; letter-spacing: -.3px; line-height: 1.2; }
+.sch-title { font-size: 16px; font-weight: 750; letter-spacing: -.3px; line-height: 1.2; }
 .sch-sub {
   font-size: 12px; color: var(--text-2); margin-top: 5px; line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 36px;
 }
 .sch-logo {
-  width: 46px; height: 46px; border-radius: 12px; flex: none; display: grid; place-items: center;
-  font-weight: 800; font-size: 15px; color: #06231a; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08);
+  width: 40px; height: 40px; border-radius: 11px; flex: none; display: grid; place-items: center;
+  font-weight: 800; font-size: 13.5px; color: #06231a; box-shadow: 0 0 0 1px rgba(255, 255, 255, .08);
   background: conic-gradient(from 210deg, #34d399, #2dd4bf, #60a5fa, #34d399);
 }
 .sch-logo.wa   { background: conic-gradient(from 210deg, #34d399, #22c55e, #2dd4bf, #34d399); }
@@ -29,15 +29,16 @@
 .sch-head .badge { flex: none; white-space: nowrap; }
 
 /* uniform buttons: 3 per row, same size */
-.sch-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.sch-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .sch-tool {
-  font-family: var(--sans); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
-  height: 38px; padding: 0 10px; text-align: center; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--sans); font-size: 11.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  height: 30px; padding: 0 8px; text-align: center; overflow: hidden; text-overflow: ellipsis;
   background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2);
-  border-radius: 10px; transition: all var(--ease);
+  border-radius: 8px; transition: all var(--ease);
 }
 .sch-tool:hover { border-color: var(--line-2); color: var(--text); background: var(--surface-3); transform: translateY(-1px); }
 .sch-tool.wide  { grid-column: span 2; }
+.sch-tool.full  { grid-column: 1 / -1; }
 .sch-tool.blue  { border-color: color-mix(in srgb, var(--info) 45%, transparent); color: var(--info); }
 .sch-tool.green { border-color: color-mix(in srgb, var(--ok) 45%, transparent); color: var(--ok); }
 .sch-tool.warn  { border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); background: var(--warn-soft); }

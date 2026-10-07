@@ -52,6 +52,27 @@ def _guard(request: Request, admin: bool):
     return who, None
 
 
+def _gate(request: Request, body: dict):
+    """Who may change recipients / credentials: an administrator, OR anyone signed in who supplies the same console
+    password the Process Center asks for (its Email To/CC and Credentials buttons work the same way).
+    Always removes the '_password' field from `body` so it can never be stored."""
+    pw = str((body or {}).pop("_password", "") or "")
+    who, is_admin, signed = _who(request)
+    if not signed:
+        return None, _deny("Please sign in first.", 401)
+    if is_admin:
+        return who, None
+    ok = False
+    try:
+        from core.short_allocation import check_password
+        ok = bool(pw) and bool(check_password(pw))
+    except Exception:
+        ok = False
+    if not ok:
+        return None, _deny("Wrong or missing password — enter the console password (the one the Process Center asks for).", 403)
+    return who, None
+
+
 async def _json(request: Request) -> dict:
     try:
         d = await request.json()
@@ -250,16 +271,30 @@ def connections_get(request: Request):
     who, err = _guard(request, False)
     if err:
         return err
-    return {"groups": connections.view(), "can_edit": _who(request)[1]}
+    return {"groups": connections.view(), "can_edit": True, "needs_password": not _who(request)[1]}
+
+
+@router.post("/verify-password")
+async def verify_password(request: Request):
+    """Checked BEFORE the recipients / credentials forms open (same flow as the Process Center)."""
+    body = await _json(request)
+    who, err = _gate(request, {"_password": body.get("password", "")})
+    return err or {"ok": True}
 
 
 @router.put("/connections/{group}")
 async def connections_put(group: str, request: Request):
-    who, err = _guard(request, True)
+    body = await _json(request)
+    who, err = _gate(request, body)
     if err:
         return err
-    body = await _json(request)
-    out, e = _safe(lambda: connections.update(group, body, who))
+
+    def go():
+        try:
+            return connections.update(group, body, who)
+        except ValueError as ex:
+            raise service.ValidationFailed([str(ex)])
+    out, e = _safe(go)
     return e or {"ok": True, "changed": out}
 
 
@@ -390,17 +425,18 @@ def settings_get(pkey: str, request: Request):
     def go():
         d = _pdef(pkey)
         return {"process": d.name, "values": proc_settings.view(d),
-                "params": [p.to_dict() for p in d.params if p.scope == "process"], "can_edit": _who(request)[1]}
+                "params": [p.to_dict() for p in d.params if p.scope == "process"],
+                "can_edit": True, "needs_password": not _who(request)[1]}
     out, e = _safe(go)
     return e or out
 
 
 @router.put("/process-settings/{pkey}")
 async def settings_put(pkey: str, request: Request):
-    who, err = _guard(request, True)
+    body = await _json(request)
+    who, err = _gate(request, body)
     if err:
         return err
-    body = await _json(request)
     try:
         clean = proc_settings.save(_pdef(pkey), body, who)
         return {"ok": True, "values": clean}

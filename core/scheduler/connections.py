@@ -1,24 +1,19 @@
-"""Shared connection settings for scheduled processes (WhatsApp, SMTP, POP3).
+"""Shared connection settings for scheduled processes (WhatsApp, SMTP, POP3), stored in the .env files.
 
-Why one place: the WhatsApp token / mail passwords used to be pasted into every script.  Here they are
-entered once on Scheduler → Connections and every process reads them from here.
+    .env        # scheduler connection: <name>   SCHED_<GROUP>_<FIELD>=…   (server, port, URLs, user names …)
+    .env.local  the same, for passwords and tokens only (machine + secret — never carried between machines)
 
-Safety
-------
-* Stored in data/scheduler/_connections.json on THIS server (same exposure as the .env file — protect the
-  data folder with Windows permissions).  Never written to the database, the run logs or the audit trail
-  (audit records only WHICH fields changed).
-* The API never returns a secret: it returns {"set": true, "hint": "…ab12"}.  Saving a blank secret keeps
-  the existing one.  Only an administrator can change anything.
+Changes apply at once (the running server's environment is updated too) — no restart.
+
+Safety: the API never returns a secret (only {"set": true, "hint": "…ab12"}); saving a blank secret keeps
+the old one; audit records only WHICH fields changed; run logs scrub secret-looking values.
 """
 from __future__ import annotations
 
-import json
 import os
-import threading
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from core.scheduler import paths
+from core.scheduler import envstore
 
 # name, label, secret?, default
 GROUPS: Dict[str, dict] = {
@@ -52,35 +47,6 @@ GROUPS: Dict[str, dict] = {
     },
 }
 
-_LOCK = threading.Lock()
-
-
-def _file():
-    return paths.sched_root() / "_connections.json"
-
-
-def _load() -> dict:
-    try:
-        with open(_file(), "r", encoding="utf-8") as f:
-            d = json.load(f)
-        return d if isinstance(d, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
-
-
-def _save(d: dict):
-    p = _file()
-    tmp = p.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f, indent=2)
-    os.replace(tmp, p)
-    try:
-        os.chmod(p, 0o600)
-    except Exception:
-        pass
-
 
 def _spec(group: str) -> dict:
     if group not in GROUPS:
@@ -88,12 +54,14 @@ def _spec(group: str) -> dict:
     return GROUPS[group]
 
 
+def _raw(group: str, field: str) -> str:
+    return (os.getenv(envstore.conn_key(group, field)) or "").strip()
+
+
 def get(group: str) -> Dict[str, str]:
     """Full values (defaults filled in) — for process code only, never for the API."""
     spec = _spec(group)
-    with _LOCK:
-        stored = _load().get(group, {})
-    return {k: str(stored.get(k, dflt) if stored.get(k, "") != "" else dflt) for k, _l, _s, dflt in spec["fields"]}
+    return {k: (_raw(group, k) or dflt) for k, _l, _s, dflt in spec["fields"]}
 
 
 def require(group: str, *keys: str) -> Dict[str, str]:
@@ -101,20 +69,18 @@ def require(group: str, *keys: str) -> Dict[str, str]:
     v = get(group)
     missing = [k for k in keys if not v.get(k)]
     if missing:
-        label = GROUPS[group]["label"]
-        raise RuntimeError(f"{label}: '{', '.join(missing)}' is not set — add it in Scheduler → Connections.")
+        raise RuntimeError(f"{GROUPS[group]['label']}: '{', '.join(missing)}' is not set — "
+                           f"add it with the 🔑 Credentials button on the Scheduler's Processes tab.")
     return v
 
 
 def view() -> List[dict]:
     """Masked, for the UI."""
     out = []
-    with _LOCK:
-        stored = _load()
     for g, spec in GROUPS.items():
         fields = []
         for k, label, secret, dflt in spec["fields"]:
-            raw = str(stored.get(g, {}).get(k, "") or "")
+            raw = _raw(g, k)
             if secret:
                 fields.append({"name": k, "label": label, "secret": True, "set": bool(raw),
                                "hint": ("…" + raw[-4:]) if len(raw) > 8 else ("set" if raw else "")})
@@ -127,22 +93,24 @@ def view() -> List[dict]:
 def update(group: str, values: dict, user: str) -> List[str]:
     """Save the supplied fields. Blank secret = keep the old one. Returns the names of changed fields."""
     spec = _spec(group)
-    known = {k: secret for k, _l, secret, _d in spec["fields"]}
-    changed: List[str] = []
-    with _LOCK:
-        d = _load()
-        cur = d.setdefault(group, {})
-        for k, v in (values or {}).items():
-            if k not in known:
-                continue
-            v = "" if v is None else str(v).strip()
-            if known[k] and v == "":
-                continue                                    # keep existing secret
-            if str(cur.get(k, "")) != v:
-                cur[k] = v
-                changed.append(k)
-        if changed:
-            _save(d)
+    secret = {k: s for k, _l, s, _d in spec["fields"]}
+    plain, secrets, changed = {}, {}, []
+    for k, v in (values or {}).items():
+        if k not in secret:
+            continue
+        v = "" if v is None else str(v).strip()
+        if secret[k] and v == "":
+            continue                                        # keep the existing secret
+        if "\n" in v or "\r" in v:
+            raise ValueError(f"'{k}' must be a single line.")
+        if _raw(group, k) != v and (v or not secret[k]):
+            (secrets if secret[k] else plain)[envstore.conn_key(group, k)] = v
+            changed.append(k)
+    title = f"connection: {spec['label']}"
+    if plain:
+        envstore.write(envstore.shared_file(), title, plain)
+    if secrets:
+        envstore.write(envstore.local_file(), title, secrets)
     if changed:
         try:
             from core.scheduler import store

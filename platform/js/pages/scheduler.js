@@ -53,7 +53,7 @@
   function shell() {
     return '<div class="card" style="margin-bottom:12px"><div class="filters">' +
       '<div class="seg" id="scTabs"><button data-t="schedules" class="on">Schedules</button><button data-t="processes">Processes</button>' +
-      '<button data-t="history">History</button><button data-t="audit">Audit</button><button data-t="connections">Connections</button>' +
+      '<button data-t="history">History</button><button data-t="audit">Audit</button>' +
       '<button data-t="today">Today</button></div>' +
       '<div class="spacer"></div><span class="card-sub" id="scMeta"></span>' +
       '<button class="btn sm ghost" id="scRefresh">' + RMS.icon("refresh") + "</button></div></div>" +
@@ -62,7 +62,7 @@
 
   function setTab(t) {
     S.tab = t;
-    if (t === "processes") S.pview = "";
+    S.pw = "";                                  // a verified console password never outlives the tab it was typed on
     $("#scTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.t === t));
     load();
   }
@@ -89,9 +89,6 @@
         await Promise.all(S.procs.filter((p) => (p.params || []).some((q) => q.scope === "process")).map(async (p) => {
           try { S.pset[p.key] = (await jget("/sched/process-settings/" + encodeURIComponent(p.key))).values || {}; } catch (e) { S.pset[p.key] = {}; }
         }));
-        S.files = S.pview ? await jget("/sched/files/" + encodeURIComponent(S.pview)) : null;
-      } else if (S.tab === "connections") {
-        S.conns = await jget("/sched/connections");
       } else {
         S.today = await RMS.api("/ops/timeline");
       }
@@ -106,8 +103,7 @@
       $("#scBody").innerHTML = '<div class="card"><div class="bm-empty" style="color:var(--err)">' + esc(S.err) + "</div></div>";
       return;
     }
-    ({ schedules: renderSchedules, history: renderHistory, audit: renderAudit, processes: renderProcesses,
-       connections: renderConnections, today: renderToday })[S.tab]();
+    ({ schedules: renderSchedules, history: renderHistory, audit: renderAudit, processes: renderProcesses, today: renderToday })[S.tab]();
   }
 
   /* ═══════════════════════ SCHEDULES TAB ═══════════════════════════════ */
@@ -521,7 +517,6 @@
   const LOGO = { mcx_web_morning_email: "MX", partic_id_email: "PI", sn327_whatsapp: "327", sn359_whatsapp: "359" };
 
   function renderProcesses() {
-    if (S.pview) return renderFiles();
     if (!S.procs.length) {
       $("#scBody").innerHTML = '<div class="card"><div class="bm-empty">No schedulable processes are registered yet.</div></div>';
       return;
@@ -552,9 +547,9 @@
         '<div class="sch-tools">' +
         (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
         ((p.uses || []).length ? '<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>' : "") +
-        (p.upload_exts && p.upload_exts.length ? '<button class="sch-tool green" data-files="' + esc(p.key) + '">⬆️ Upload / Files</button>' : '<button class="sch-tool" data-files="' + esc(p.key) + '">📁 Files</button>') +
+        (p.upload_exts && p.upload_exts.length ? '<button class="sch-tool green" data-upload="' + esc(p.key) + '">⬆️ Upload files</button>' : "") +
         '<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>' +
-        '<button class="sch-tool blue wide" data-add="' + esc(p.key) + '">⏰ Add schedule</button></div>' +
+        '<button class="sch-tool blue ' + (p.upload_exts && p.upload_exts.length ? "wide" : "full") + '" data-add="' + esc(p.key) + '">⏰ Add schedule</button></div>' +
         '<div class="sch-foot">' + (sched || '<div class="sch-none">No schedule yet</div>') + "</div></div>";
     };
     $("#scBody").innerHTML = '<div class="card-sub" style="margin-bottom:10px">Every process the scheduler can run, with who it sends to, its connections and its folder. ' +
@@ -563,8 +558,7 @@
     const b = $("#scBody");
     b.querySelectorAll("[data-edit]").forEach((x) => { x.onclick = () => openEditor(S.schedules.find((s) => s.id === x.dataset.edit)); });
     b.querySelectorAll("[data-add]").forEach((x) => { x.onclick = () => openEditor(null, x.dataset.add); });
-    b.querySelectorAll("[data-files]").forEach((x) => { x.onclick = () => { S.pview = x.dataset.files; load(); }; });
-    b.querySelectorAll("[data-conn]").forEach((x) => { x.onclick = () => setTab("connections"); });
+    b.querySelectorAll("[data-upload]").forEach((x) => { x.onclick = () => openUpload(x.dataset.upload); });
     b.querySelectorAll("[data-recip]").forEach((x) => { x.onclick = () => openRecipients(x.dataset.recip); });
     b.querySelectorAll("[data-cred]").forEach((x) => { x.onclick = () => openCredentials(x.dataset.cred); });
     b.querySelectorAll("[data-logs]").forEach((x) => { x.onclick = () => openLogs(x.dataset.logs); });
@@ -576,18 +570,21 @@
       const d = await jget("/sched/process-settings/" + encodeURIComponent(key));
       const p = S.procs.find((x) => x.key === key) || { name: key };
       const phone = d.params.some((q) => q.fmt === "phones");
+      const pwd = await unlock(d.needs_password, (phone ? "WhatsApp numbers — " : "Email To / CC — ") + p.name);
+      if (pwd === null) return;
       const body = '<div id="rcErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
         '<div class="card-sub" style="margin-bottom:10px">' + (phone ? "One number per line or separated by commas, with country code, e.g. +919812345678. Add more numbers here for 'CC'." : "One address per line or separated by commas.") +
-        " These apply to every schedule of <b>" + esc(p.name) + "</b>." + (d.can_edit ? "" : " <b>Only an administrator can change them.</b>") + "</div>" +
+        " These apply to every schedule of <b>" + esc(p.name) + "</b>. Saved in the .env file under “# scheduler process: " + esc(p.name) + "”.</div>" +
         d.params.map((q) => field(esc(q.label) + (q.required ? " *" : ""),
-          '<textarea class="f-input" data-rc="' + q.name + '" rows="3" style="width:100%"' + (d.can_edit ? "" : " disabled") + ">" + esc(d.values[q.name] || "") + "</textarea>", esc(q.help || ""))).join("") +
-        (d.can_edit ? '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="rcCancel">Cancel</button><button class="btn primary" id="rcSave">Save</button></div>' : "");
+          '<textarea class="f-input" data-rc="' + q.name + '" rows="2" style="width:100%">' + esc(d.values[q.name] || "").replace(/,/g, ",\n") + "</textarea>", esc(q.help || ""))).join("") +
+        '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="rcCancel">Cancel</button><button class="btn primary" id="rcSave">Save</button></div>';
       const close = RMS.modal((phone ? "WhatsApp numbers — " : "Email To / CC — ") + p.name, body, { width: 620, icon: phone ? "bell" : "mail" });
       const cancel = $("#rcCancel"); if (cancel) cancel.onclick = close;
       const save = $("#rcSave");
       if (save) save.onclick = async () => {
         const v = {};
         document.querySelectorAll("[data-rc]").forEach((t) => { v[t.dataset.rc] = t.value.trim(); });
+        if (pwd) v._password = pwd;
         save.disabled = true;
         try { await call("PUT", "/sched/process-settings/" + encodeURIComponent(key), v); close(); RMS.toast("ok", "Saved", p.name); load(); }
         catch (e) { $("#rcErr").textContent = e.message; save.disabled = false; }
@@ -610,6 +607,7 @@
       b.onclick = async () => {
         const box = b.closest("[data-g]"), body = {};
         box.querySelectorAll("[data-f]").forEach((i) => { body[i.dataset.f] = i.value; });
+        if (S.pw) body._password = S.pw;
         try {
           const r = await call("PUT", "/sched/connections/" + b.dataset.save, body);
           RMS.toast("ok", "Saved", r.changed && r.changed.length ? r.changed.length + " field(s) updated" : "nothing changed");
@@ -624,10 +622,13 @@
       const c = await jget("/sched/connections");
       const p = S.procs.find((x) => x.key === key) || { name: key, uses: [] };
       const groups = c.groups.filter((g) => (p.uses || []).includes(g.group));
+      const pwd = await unlock(c.needs_password, "Credentials — " + p.name);
+      if (pwd === null) return;
+      S.pw = pwd;
       const close = RMS.modal("Credentials — " + p.name,
-        '<div class="card-sub" style="margin-bottom:10px">Shared with every process that uses the same connection. Secrets are never shown again; leave blank to keep the current one.' +
-        (c.can_edit ? "" : " <b>Only an administrator can change them.</b>") + "</div>" + groups.map((g) => connGroupHtml(g, c.can_edit)).join(""), { width: 760, icon: "settings" });
-      bindConnSave(document, () => { close(); load(); });
+        '<div class="card-sub" style="margin-bottom:10px">Shared with every process that uses the same connection. Saved in the .env files under “# scheduler connection”; passwords and tokens go to .env.local. Secrets are never shown again — leave blank to keep the current one.</div>' +
+        groups.map((g) => connGroupHtml(g, true)).join(""), { width: 760, icon: "settings" });
+      bindConnSave(document, () => { S.pw = ""; close(); load(); });
     } catch (e) { RMS.toast("err", "Could not open", e.message); }
   }
 
@@ -652,80 +653,73 @@
     } catch (e) { RMS.toast("err", "Could not open", e.message); }
   }
 
-  /* ═══════════════════════ FILES & LOGS (detail of one process) ═════════ */
+  /* ═══════════════════════ UPLOAD POPUP ═════════════════════════════════ */
   function fmtSize(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
 
-  function renderFiles() {
-    const f = S.files || {}, key = S.pview, enc = encodeURIComponent(key);
-    const pd = S.procs.find((p) => p.key === key) || { name: key };
-    const table = (area, items, canDel) => '<div class="card" style="padding:0;overflow:hidden;margin-bottom:12px"><div class="sec-head" style="padding:10px 14px"><h3>' +
-      area[0].toUpperCase() + area.slice(1) + "</h3><span>" + items.length + "</span></div><table class='htable'><tbody>" +
-      (items.length ? items.map((i) => "<tr><td>" + esc(i.name) + "</td><td class='card-sub'>" + fmtSize(i.size) + "</td><td class='card-sub'>" + esc(i.modified) + "</td><td style='white-space:nowrap'>" +
-        "<a class='btn sm ghost' href='/sched/files/" + enc + "/download?area=" + area + "&name=" + encodeURIComponent(i.name) + "'>Download</a>" +
-        (canDel ? " <button class='btn sm ghost' data-del='" + esc(i.name) + "'>Remove</button>" : "") + "</td></tr>").join("")
-        : "<tr><td><div class='bm-empty'>Empty</div></td></tr>") + "</tbody></table></div>";
-    const exts = (f.upload_exts || []).join(", ");
-    $("#scBody").innerHTML = '<div class="card" style="margin-bottom:12px"><div class="filters">' +
-      '<button class="btn sm ghost" id="flBack">← Processes</button><b style="font-size:15px">' + esc(pd.name) + " — files &amp; logs</b>" +
-      '<div class="spacer"></div>' +
-      (f.upload_exts && f.upload_exts.length ? '<input type="file" id="flFile" accept="' + esc(exts) + '" style="display:none"><button class="btn primary" id="flUp">Upload file</button>' : "") +
-      '</div><div class="card-sub" style="margin-top:8px">Folder on the server: <code>' + esc(f.folder || "") + "</code></div>" +
-      (f.upload_help ? '<div class="card-sub" style="margin-top:4px">' + esc(f.upload_help) + "</div>" : "") +
-      (f.upload_exts && f.upload_exts.length ? '<div class="card-sub" style="margin-top:6px">After uploading, use <b>Run Now</b> on the Schedules tab if you do not want to wait for the next scheduled time.</div>' : "") +
-      "</div>" +
-      table("inputs", f.inputs || [], true) + table("outputs", f.outputs || [], false) + table("logs", f.logs || [], false) +
-      '<div class="card"><div class="sec-head"><h3>Backup</h3><span>' + (f.backup || []).length + " day(s)</span></div>" +
-      ((f.backup || []).length ? (f.backup || []).map((b) => "<div class='card-sub'><b>" + esc(b.name) + "</b> — " + esc((b.files || []).join(", ") || "empty") + "</div>").join("")
-        : "<div class='bm-empty'>Nothing backed up yet</div>") + "</div>";
-    $("#flBack").onclick = () => { S.pview = ""; load(); };
-    const up = $("#flUp");
-    if (up) {
-      up.onclick = () => $("#flFile").click();
-      $("#flFile").onchange = async () => {
-        const file = $("#flFile").files[0];
+  async function openUpload(key) {
+    try {
+      const f = await jget("/sched/files/" + encodeURIComponent(key));
+      const enc = encodeURIComponent(key), exts = (f.upload_exts || []).join(", ");
+      const close = RMS.modal("Upload — " + f.process,
+        '<div class="card-sub" style="margin-bottom:10px">' + esc(f.upload_help || "") + " Allowed: <b>" + esc(exts) + "</b>.</div>" +
+        '<input type="file" id="upFile" accept="' + esc(exts) + '" style="display:none">' +
+        '<button class="btn primary" id="upPick" style="width:100%;justify-content:center;height:44px;margin-bottom:6px">⬆️ Choose file to upload</button>' +
+        '<div id="upMsg" class="card-sub" style="min-height:18px;margin-bottom:8px"></div>' +
+        '<div class="card-sub" style="font-weight:800;margin:8px 0 4px">FILES WAITING FOR THE NEXT RUN</div>' +
+        '<table class="htable"><tbody>' + ((f.inputs || []).length ? f.inputs.map((i) => "<tr><td>" + esc(i.name) + "</td><td class='card-sub'>" + fmtSize(i.size) + "</td><td class='card-sub'>" +
+          esc(i.modified) + "</td><td style='text-align:right'><button class='btn sm ghost' data-del='" + esc(i.name) + "'>Remove</button></td></tr>").join("")
+          : "<tr><td><div class='bm-empty'>Nothing uploaded</div></td></tr>") + "</tbody></table>" +
+        '<div class="card-sub" style="margin-top:10px">After uploading, use <b>Run Now</b> on the Schedules tab if you do not want to wait for the next scheduled time.</div>', { width: 620, icon: "download" });
+      $("#upPick").onclick = () => $("#upFile").click();
+      $("#upFile").onchange = async () => {
+        const file = $("#upFile").files[0];
         if (!file) return;
+        $("#upMsg").textContent = "Uploading " + file.name + "…";
         const fd = new FormData(); fd.append("file", file);
         try {
           const r = await fetch("/sched/files/" + enc + "/upload", { method: "POST", body: fd, credentials: "same-origin" });
           const d = await r.json().catch(() => ({}));
           if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
           RMS.toast("ok", "Uploaded", d.name);
-        } catch (e) { RMS.toast("err", "Upload failed", e.message); }
-        load();
+          close(); openUpload(key);
+        } catch (e) { $("#upMsg").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; }
       };
-    }
-    $("#scBody").querySelectorAll("[data-del]").forEach((b) => {
-      b.onclick = async () => {
-        if (!confirm("Remove " + b.dataset.del + " from inputs?")) return;
-        try { await call("DELETE", "/sched/files/" + enc + "?name=" + encodeURIComponent(b.dataset.del)); load(); }
-        catch (e) { RMS.toast("err", "Not removed", e.message); }
+      document.querySelectorAll("[data-del]").forEach((b) => {
+        b.onclick = async () => {
+          if (!confirm("Remove " + b.dataset.del + "?")) return;
+          try { await call("DELETE", "/sched/files/" + enc + "?name=" + encodeURIComponent(b.dataset.del)); close(); openUpload(key); }
+          catch (e) { RMS.toast("err", "Not removed", e.message); }
+        };
+      });
+    } catch (e) { RMS.toast("err", "Could not open", e.message); }
+  }
+
+  /* ── password gate: asked BEFORE the form opens (same as the Process Center) ── */
+  function askPassword(title) {
+    return new Promise((resolve) => {
+      const close = RMS.modal(title,
+        '<div class="card-sub" style="margin-bottom:10px">Enter the console password to continue (the same one the Process Center asks for).</div>' +
+        '<div id="pwErr" style="color:var(--err);font-size:12.5px;min-height:18px;margin-bottom:6px"></div>' +
+        '<input type="password" id="pwIn" class="f-input" style="width:100%;height:42px;box-sizing:border-box" autocomplete="new-password" placeholder="Password">' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px"><button class="btn ghost" id="pwCancel">Cancel</button><button class="btn primary" id="pwOk">Continue</button></div>',
+        { width: 420, icon: "settings" });
+      const go = async () => {
+        const v = $("#pwIn").value;
+        if (!v) return;
+        try { await call("POST", "/sched/verify-password", { password: v }); close(); resolve(v); }
+        catch (e) { $("#pwErr").textContent = e.message; $("#pwIn").select(); }
       };
+      $("#pwOk").onclick = go;
+      $("#pwIn").onkeydown = (e) => { if (e.key === "Enter") go(); };
+      $("#pwCancel").onclick = () => { close(); resolve(null); };
+      $("#pwIn").focus();
     });
   }
 
-  /* ═══════════════════════ CONNECTIONS TAB ═════════════════════════════ */
-  function renderConnections() {
-    const c = S.conns || { groups: [], can_edit: false };
-    $("#scBody").innerHTML = '<div class="card-sub" style="margin-bottom:10px">Settings shared by every scheduled process. Secrets are stored on the server only, are never shown again, ' +
-      "and never appear in logs or the audit trail. Leave a secret blank to keep the current one." +
-      (c.can_edit ? "" : " <b>Only an administrator can change these.</b>") + "</div>" +
-      c.groups.map((g) => '<div class="card" style="margin-bottom:12px" data-g="' + g.group + '"><div class="sec-head"><h3>' + esc(g.label) + "</h3></div>" +
-        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px">' +
-        g.fields.map((f) => field(esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge warn">not set</span>') : ""),
-          '<input class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '" ' + (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') +
-          (c.can_edit ? "" : " disabled") + ">")).join("") +
-        "</div>" + (c.can_edit ? '<div style="margin-top:8px"><button class="btn primary" data-save="' + g.group + '">Save ' + esc(g.label) + "</button></div>" : "") + "</div>").join("");
-    $("#scBody").querySelectorAll("[data-save]").forEach((b) => {
-      b.onclick = async () => {
-        const box = b.closest("[data-g]"), body = {};
-        box.querySelectorAll("[data-f]").forEach((i) => { body[i.dataset.f] = i.value; });
-        try {
-          const r = await call("PUT", "/sched/connections/" + b.dataset.save, body);
-          RMS.toast("ok", "Saved", r.changed && r.changed.length ? r.changed.length + " field(s) updated" : "nothing changed");
-          load();
-        } catch (e) { RMS.toast("err", "Not saved", e.message); }
-      };
-    });
+  /* resolves "" for an administrator, the verified password for everyone else, null if cancelled */
+  async function unlock(needsPassword, title) {
+    if (!needsPassword) return "";
+    return askPassword(title);
   }
 
   /* ═══════════════════════ TODAY TAB (unchanged timeline) ═══════════════ */
@@ -800,7 +794,7 @@
         $("#scTabs").querySelectorAll("button").forEach((b) => { b.onclick = () => setTab(b.dataset.t); });
         $("#scRefresh").onclick = load;
         RMS.poll(() => {
-          if (!ED && document.getElementById("scBody") && S.tab !== "connections" && !(S.tab === "processes" && S.pview)) load();
+          if (!ED && document.getElementById("scBody")) load();
         }, 15000);
         booted = true;
       } else load();
