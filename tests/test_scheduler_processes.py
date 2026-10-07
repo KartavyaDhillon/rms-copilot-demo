@@ -198,6 +198,10 @@ class Registration(Base):
         names = {d.name for d in catalog.all_defs()}
         for n in ("MCX WEB MORNING EMAIL", "SN327 WHATSAPP", "SN359 WHATSAPP", "PARTIC ID EMAIL"):
             self.assertIn(n, names)
+        from core.scheduler.processes import ALL_NAMES            # the full agreed list (see processes/__init__.py)
+        catalog.load_builtin()
+        for n in ALL_NAMES:
+            self.assertIn(n, {d.name for d in catalog.all_defs()}, n)
         for d in catalog.all_defs():
             self.assertFalse(d.retry_safe)                  # sends are never auto-retried by the scheduler
             self.assertEqual(d.folder, d.name)

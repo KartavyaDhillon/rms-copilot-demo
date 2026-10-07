@@ -1,0 +1,116 @@
+"""NSE Extranet client for scheduled processes (login token cached 55 min, one session at a time).
+
+Credentials come from Scheduler → Connections → "NSE Extranet" (never from code).
+URLs are built by hand (no percent-encoding of the folder path) exactly like the old extranetlib did,
+because the NSE API expects '/' and spaces as typed.
+"""
+from __future__ import annotations
+
+import base64
+import datetime as dt
+import threading
+from pathlib import Path
+from typing import Optional
+
+from core.scheduler import connections, helpers as H
+
+BASE = "https://www.connect2nse.com/extranet-api"
+_LOCK = threading.RLock()                    # NSE may allow only one live session per login → serialise
+_TOKEN = {"token": None, "at": None}
+
+
+def _encrypt(password: str, b64_key: str) -> str:
+    cryptography = H.need("cryptography")
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    key = base64.standard_b64decode(b64_key)
+    if len(key) != 32:
+        raise RuntimeError("NSE AES key must decode to 32 bytes — check Connections → NSE Extranet.")
+    pad = padding.PKCS7(128).padder()
+    data = pad.update(password.encode("utf-8")) + pad.finalize()
+    enc = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
+    return base64.standard_b64encode(enc.update(data) + enc.finalize()).decode()
+
+
+def _login(ctx=None) -> str:
+    requests = H.need("requests")
+    c = connections.require("nse", "member_code", "login_id")
+    enc = c.get("encrypted_password")
+    if not enc:
+        connections.require("nse", "password", "aes_key")
+        enc = _encrypt(c["password"], c["aes_key"])
+    r = requests.post(f"{BASE}/login/2.0", json={"memberCode": c["member_code"], "loginId": c["login_id"],
+                                                  "password": enc}, timeout=40)
+    try:
+        j = r.json()
+    except Exception:
+        raise RuntimeError(f"NSE login: unreadable answer (HTTP {r.status_code}).")
+    if j.get("status") != "success" or not j.get("token"):
+        raise RuntimeError(f"NSE login refused: {str(j)[:200]}")
+    _TOKEN.update(token=j["token"], at=dt.datetime.now())
+    if ctx:
+        ctx.log("NSE login OK.")
+    return _TOKEN["token"]
+
+
+def _token(ctx=None, force=False) -> str:
+    with _LOCK:
+        at = _TOKEN["at"]
+        if force or not _TOKEN["token"] or not at or dt.datetime.now() > at + dt.timedelta(minutes=55):
+            return _login(ctx)
+        return _TOKEN["token"]
+
+
+def _bad_token(r) -> bool:
+    if r.status_code in (401, 403):
+        return True
+    try:
+        codes = r.json().get("responseCode", [])
+        return any(x in ("802", "803") for x in (codes if isinstance(codes, list) else [codes]))
+    except Exception:
+        return False
+
+
+def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path, ctx,
+             date: Optional[str] = None) -> Optional[Path]:
+    """kind 'member' | 'common'.  Returns the saved path, or None when NSE says the file is not there (yet)."""
+    requests = H.need("requests")
+    if kind not in ("member", "common"):
+        raise ValueError("kind must be 'member' or 'common'")
+    url = f"{BASE}/{kind}/file/download/2.0?segment={segment}&folderPath={folder}&filename={filename}"
+    if date:
+        url += f"&date={date}"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    with _LOCK:
+        r = requests.get(url, headers={"Authorization": f"Bearer {_token(ctx)}"}, timeout=120)
+        if _bad_token(r):
+            r = requests.get(url, headers={"Authorization": f"Bearer {_token(ctx, True)}"}, timeout=120)
+    if r.status_code == 404:
+        ctx.log(f"NSE: {filename} not available yet (404).")
+        return None
+    if r.status_code != 200:
+        raise RuntimeError(f"NSE download of {filename} failed — HTTP {r.status_code}: {r.text[:160]}")
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    if "json" in ctype and len(r.content) < 2000:          # an error body, not a file
+        raise RuntimeError(f"NSE answered with a message instead of {filename}: {r.text[:160]}")
+    out = dest_dir / filename
+    tmp = out.with_suffix(out.suffix + ".part")
+    tmp.write_bytes(r.content)
+    tmp.replace(out)
+    ctx.log(f"NSE: downloaded {filename} ({len(r.content):,} bytes).")
+    return out
+
+
+def download_wait(kind, segment, folder, filename, dest_dir, ctx, wait_minutes: int = 0,
+                  date: Optional[str] = None) -> Path:
+    """download(), repeated every 60 s for up to wait_minutes; raises FileNotFoundError when it never shows up."""
+    import time
+    t0 = time.time()
+    while True:
+        p = download(kind, segment, folder, filename, dest_dir, ctx, date)
+        if p:
+            return p
+        if time.time() - t0 >= max(0, wait_minutes) * 60 or getattr(ctx, "cancelled", False):
+            raise FileNotFoundError(f"{filename} is not on NSE yet. Try Run Now later, or raise 'Wait for the file'.")
+        ctx.log("Checking again in 60 s…")
+        time.sleep(60)

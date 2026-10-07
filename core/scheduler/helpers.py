@@ -124,6 +124,63 @@ def need(mod: str, pip: str = ""):
         raise RuntimeError(f"Python package '{pip or mod}' is not installed on the server — run: pip install {pip or mod}")
 
 
+# ───────────────────────── trading days / waiting ─────────────────────────
+def holidays() -> set:
+    """Market holidays (date objects) from the console's holiday file; empty set when it can't be read."""
+    try:
+        from core.pipelines import reconciliation as R
+        return set(R.load_holidays())
+    except Exception:
+        return set()
+
+
+def is_trading_day(d: dt.date, hol: Optional[set] = None) -> bool:
+    hol = holidays() if hol is None else hol
+    return d.weekday() < 5 and d not in hol
+
+
+def prev_trading_day(d: Optional[dt.date] = None, n: int = 1) -> dt.date:
+    d = d or dt.date.today()
+    hol = holidays()
+    while n > 0:
+        d -= dt.timedelta(days=1)
+        if is_trading_day(d, hol):
+            n -= 1
+    return d
+
+
+def wait_for_file(finder: Callable[[], Optional[Path]], wait_minutes: int, ctx, what: str,
+                  every: float = 30.0) -> Path:
+    """Call finder() until it returns a path (polling), for at most wait_minutes (0 = once)."""
+    t0 = time.time()
+    while True:
+        p = finder()
+        if p:
+            return Path(p)
+        if time.time() - t0 >= max(0, int(wait_minutes or 0)) * 60 or getattr(ctx, "cancelled", False):
+            raise FileNotFoundError(f"{what} was not found. Run it later, or raise 'Wait for the file (minutes)'.")
+        ctx.log(f"{what} not there yet — checking again in {int(every)} s…")
+        time.sleep(every)
+
+
+def ctcl_run1_file(ctx=None) -> Optional[Path]:
+    """FULL_FILE_CTCL_VS_NMASS_01.xlsx produced today by the CTCL vs NMASS pipeline (run 1) — read only."""
+    name = "FULL_FILE_CTCL_VS_NMASS_01.xlsx"
+    base = Path(os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS"))
+    bk = base / "BACKUPFILES AUTOMATED" / today_dash()
+    cands = [base / name, bk / "01" / name, bk / name]
+    start = dt.datetime.combine(dt.date.today(), dt.time(0, 0)).timestamp()
+    for c in cands:
+        try:
+            if c.is_file() and c.stat().st_mtime >= start:     # must be today's output, not yesterday's leftover
+                if ctx:
+                    ctx.log(f"CTCL vs NMASS run-1 file: {c}")
+                return c
+        except OSError:
+            pass
+    return None
+
+
 # ───────────────────────── risk report (read-only, COMMON FILES) ─────────────────────────
 def common_dir() -> Path:
     return Path(os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES"))
@@ -303,8 +360,11 @@ def whatsapp_send_image(image: Path, to: str, label: str, date_text: str, ctx,
 
 # ───────────────────────── e-mail (SMTP) ─────────────────────────
 def send_email(subject: str, body: str, to: List[str], cc: List[str], attachments: List[Path], ctx,
-               html: bool = False, attempts: int = 3, delay: float = 10.0):
-    c = connections.require("smtp", "server", "port", "email", "password")
+               html: bool = False, attempts: int = 3, delay: float = 10.0,
+               group: str = "smtp", inline_images: Optional[dict] = None):
+    """group: 'smtp' (default) or 'smtpb' (second mailbox).  inline_images: {cid: Path} shown inside an HTML body
+    as <img src="cid:…">."""
+    c = connections.require(group, "server", "port", "email", "password")
     if not to:
         raise ValueError("No 'To' e-mail address configured for this schedule.")
     msg = EmailMessage()
@@ -318,6 +378,12 @@ def send_email(subject: str, body: str, to: List[str], cc: List[str], attachment
         msg.add_alternative(body, subtype="html")
     else:
         msg.set_content(body)
+    if inline_images and html:
+        part = msg.get_payload()[-1]
+        for cid, img in inline_images.items():
+            img = Path(img)
+            sub = "jpeg" if img.suffix.lower() in (".jpg", ".jpeg") else "png"
+            part.add_related(img.read_bytes(), maintype="image", subtype=sub, cid=f"<{cid}>")
     for a in attachments:
         a = Path(a)
         sub = "vnd.openxmlformats-officedocument.spreadsheetml.sheet" if a.suffix.lower() == ".xlsx" else "octet-stream"

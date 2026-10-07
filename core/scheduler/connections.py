@@ -45,6 +45,76 @@ GROUPS: Dict[str, dict] = {
             ("password", "Password", True, ""),
         ],
     },
+    "smtpb": {
+        "label": "E-mail sending — second mailbox (SMTP)",
+        "fields": [
+            ("server", "SMTP server", False, "smtp3.netcore.co.in"),
+            ("port", "Port", False, "587"),
+            ("email", "Sender e-mail (login)", False, ""),
+            ("password", "Password", True, ""),
+        ],
+    },
+    "pop3b": {
+        "label": "Mailbox reading — second mailbox (POP3)",
+        "fields": [
+            ("server", "POP3 server", False, "pop9.netcore.co.in"),
+            ("port", "Port", False, "995"),
+            ("username", "Mailbox user name", False, ""),
+            ("password", "Password", True, ""),
+        ],
+    },
+    "nse": {
+        "label": "NSE Extranet (connect2nse.com)",
+        "fields": [
+            ("member_code", "Member code", False, "06436"),
+            ("login_id", "Login ID", False, ""),
+            ("password", "Password (plain)", True, ""),
+            ("aes_key", "AES key (base64)", True, ""),
+            ("encrypted_password", "OR already-encrypted password", True, ""),
+        ],
+    },
+    "mcx_sftp": {
+        "label": "MCX file portal (sftp.mcxindia.com)",
+        "fields": [
+            ("user", "User name", False, ""),
+            ("password", "Password", True, ""),
+            ("password2", "Second password to try", True, ""),
+            ("totp_secret", "MFA (TOTP) secret", True, ""),
+        ],
+    },
+    "mcx_eclear": {
+        "label": "MCX eclear (surveillance)",
+        "fields": [
+            ("user_id", "User ID", False, ""),
+            ("password", "Password", True, ""),
+            ("rsa_zip", "RSA MAKER token zip (path on this PC)", False, ""),
+            ("rsa_sdtid", "OR extracted .sdtid file (path)", False, ""),
+        ],
+    },
+    "client_margin": {
+        "label": "Client margin Excel passwords",
+        "fields": [
+            ("source_password", "Password of the incoming ClientMargin files", True, ""),
+            ("output_password", "Password to put on the Top-20 report", True, ""),
+        ],
+    },
+    "atom": {
+        "label": "ATOM merchant console",
+        "fields": [
+            ("username", "User name", False, ""),
+            ("password", "Password", True, ""),
+        ],
+    },
+    "backoffice": {
+        "label": "Back-office API (Bank alerts)",
+        "fields": [
+            ("base_url", "API address", False, "http://boapi.mastertrust.co.in:15000"),
+            ("username", "User name", False, ""),
+            ("password", "Password", True, ""),
+            ("client_ip", "Client IP sent with login", False, ""),
+            ("client_mac", "Client MAC sent with login", False, ""),
+        ],
+    },
 }
 
 

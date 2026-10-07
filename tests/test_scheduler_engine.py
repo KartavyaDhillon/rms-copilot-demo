@@ -83,8 +83,8 @@ class TestScheduling(Base):
     def test_only_the_agreed_processes_are_registered(self):
         for k in ("t.ok", "t.fail", "t.flaky", "t.other", "t.pipe"):
             catalog.unregister(k)
-        self.assertEqual({d.name for d in catalog.all_defs()},
-                         {"MCX WEB MORNING EMAIL", "SN327 WHATSAPP", "SN359 WHATSAPP", "PARTIC ID EMAIL"})
+        from core.scheduler.processes import ALL_NAMES
+        self.assertEqual({d.name for d in catalog.all_defs()}, set(ALL_NAMES))
 
     def test_runs_once_at_the_scheduled_time(self):
         self.mk()

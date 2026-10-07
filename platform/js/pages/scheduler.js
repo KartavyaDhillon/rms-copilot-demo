@@ -534,8 +534,14 @@
     const g = ((S.conns && S.conns.groups) || []).find((x) => x.group === group);
     return !!g && g.fields.every((f) => (f.secret ? f.set : !!f.value));
   }
-  const CONN_NAME = { whatsapp: "WhatsApp", smtp: "E-mail (SMTP)", pop3: "Mailbox (POP3)" };
-  const LOGO = { mcx_web_morning_email: "MX", partic_id_email: "PI", sn327_whatsapp: "327", sn359_whatsapp: "359" };
+  const CONN_NAME = { whatsapp: "WhatsApp", smtp: "E-mail (SMTP)", pop3: "Mailbox (POP3)",
+    smtpb: "E-mail 2 (SMTP)", pop3b: "Mailbox 2 (POP3)", nse: "NSE Extranet", mcx_sftp: "MCX portal",
+    mcx_eclear: "MCX eclear", atom: "ATOM", backoffice: "Back-office API", client_margin: "Excel passwords" };
+  const LOGO = { mcx_web_morning_email: "MX", partic_id_email: "PI", sn327_whatsapp: "327", sn359_whatsapp: "359",
+    co_bo_blocking_file: "CB", otm_3_9_blocking_files: "3-9", contract_delta: "CD", persistent_noise_creators: "PN",
+    cm_deloi_file: "DL", slbm_reports: "SL", fo_reports: "FO", mcx_restricted_basket: "MR", circuit_validation: "CV",
+    atom_vs_bank_alert: "AB", mcx_hourly_surveillance: "MH", active_client_report: "AC", nmass_deposit_image: "NM",
+    ctcl_deposit_image: "CT", zone_wise_top20_margin: "Z20", peak_margin_report: "PM" };
 
   function renderProcesses() {
     if (!S.procs.length) {
