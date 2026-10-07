@@ -300,7 +300,7 @@
         const initials = me.display_name.trim().split(/\s+/).slice(0, 2)
           .map((w) => w[0]).join("").toUpperCase() || "?";
         btn.textContent = initials;
-        btn.title = me.display_name + " (" + me.employee_id + ")";
+        btn.title = me.display_name + " (" + me.employee_id + ")" + (me.is_admin ? " — Admin" : "");
       }
       // Not signed in (or auth not enforced and nobody ever logged in): leave
       // the default "MT" avatar as-is — nothing to sign out of.
@@ -313,7 +313,8 @@
       if (me.signed_in) {
         menu.innerHTML =
           '<div class="um-head"><span class="um-name">' + RMS.esc(me.display_name) + '</span>' +
-          '<span class="um-id">' + RMS.esc(me.employee_id) + '</span></div>' +
+          '<span class="um-id">' + RMS.esc(me.employee_id) + '</span>' +
+          (me.is_admin ? '<span style="display:inline-block;margin-top:6px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(251,191,36,.18);color:#fbbf24;border:1px solid rgba(251,191,36,.5)">ADMIN</span>' : "") + '</div>' +
           '<div class="um-body"><button class="um-signout" id="umSignOut">Sign out</button></div>';
         $("#umSignOut").onclick = () => {
           fetch("/auth/logout", { method: "POST" }).finally(() => { location.href = "/login"; });

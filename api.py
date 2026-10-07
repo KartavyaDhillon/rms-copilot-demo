@@ -412,6 +412,7 @@ def auth_me(request: Request):
     return {"signed_in": bool(u),
             "employee_id": (u or {}).get("sub"),
             "display_name": (u or {}).get("name"),
+            "is_admin": bool((u or {}).get("is_admin")),
             "auth_required": _a.auth_required()}
 
 
