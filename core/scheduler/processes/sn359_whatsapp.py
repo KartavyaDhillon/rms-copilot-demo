@@ -49,6 +49,8 @@ def _run(params, ctx):
 
     if failures:
         raise RuntimeError(f"{len(failures)} send(s) failed, {sent} succeeded. " + " | ".join(failures))
+    if not images and not sent and skipped:
+        raise H.Skipped(H.skip_message(FOLDER, [f"{g[0]}|{p}" for g in groups for p in g[2]], "sent"))
     if images:
         H.backup_files(FOLDER, images, ctx)
     return f"{sent} WhatsApp message(s) sent" + (f", {skipped} skipped (already sent today)" if skipped else "")

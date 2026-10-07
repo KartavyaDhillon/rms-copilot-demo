@@ -186,15 +186,19 @@
       if (a === "edit") return openEditor(s);
       if (a === "more") return openMore(s);
       if (a === "run") {
-        if (!confirm("Run “" + s.name + "” now?\n\nThis really runs the process (for example it sends the WhatsApp / e-mail), even if it already ran today. The normal schedule is not changed.")) return;
-        await call("POST", "/sched/schedules/" + id + "/run-now");
-        RMS.toast("ok", "Started", s.name);
+        if (!(await confirmBox("Run now — " + s.name, "This really runs the process now (for example it sends the WhatsApp / e-mail), even if it already ran today. The normal schedule is not changed.", "Run now"))) return;
+        const pw = await unlock(needsPw(), "Run now — " + s.name);
+        if (pw === null) return;
+        await call("POST", "/sched/schedules/" + id + "/run-now", pw ? { _password: pw } : undefined);
+        toast("ok", "Started", s.name);
       } else {
-        await call("POST", "/sched/schedules/" + id + "/" + a);
-        RMS.toast("ok", { pause: "Paused", resume: "Resumed", enable: "Enabled", disable: "Disabled" }[a] || "Done", s.name);
+        const pw = await unlock(needsPw(), { pause: "Pause", resume: "Resume", enable: "Enable", disable: "Disable" }[a] + " — " + s.name);
+        if (pw === null) return;
+        await call("POST", "/sched/schedules/" + id + "/" + a, pw ? { _password: pw } : undefined);
+        toast("ok", { pause: "Paused", resume: "Resumed", enable: "Enabled", disable: "Disabled" }[a] || "Done", s.name);
       }
       load();
-    } catch (e) { RMS.toast("err", "Not done", e.message); load(); }
+    } catch (e) { toast("err", "Not done", e.message); load(); }
   }
 
   function openMore(s) {
@@ -206,12 +210,15 @@
       b.onclick = async () => {
         const m = b.dataset.m;
         if (m === "history") { close(); S.histF = { date: "", process: "", schedule: s.id, status: "" }; setTab("history"); return; }
-        if (m === "delete" && !confirm("Delete “" + s.name + "” permanently?\nIts run history is kept; the configuration cannot be recovered.")) return;
+        if (m === "delete" && !(await confirmBox("Delete — " + s.name, "Delete this schedule permanently? Its run history is kept; the configuration cannot be recovered.", "Delete", true))) return;
+        close();
+        const pw = await unlock(needsPw(), (m === "delete" ? "Delete" : "Disable") + " — " + s.name);
+        if (pw === null) return;
         try {
-          if (m === "delete") await call("DELETE", "/sched/schedules/" + s.id);
-          else await call("POST", "/sched/schedules/" + s.id + "/disable");
-          close(); RMS.toast("ok", m === "delete" ? "Deleted" : "Disabled", s.name); load();
-        } catch (e) { RMS.toast("err", "Not done", e.message); }
+          if (m === "delete") await call("DELETE", "/sched/schedules/" + s.id, pw ? { _password: pw } : undefined);
+          else await call("POST", "/sched/schedules/" + s.id + "/disable", pw ? { _password: pw } : undefined);
+          toast("ok", m === "delete" ? "Deleted" : "Disabled", s.name); load();
+        } catch (e) { toast("err", "Not done", e.message); }
       };
     });
   }
@@ -232,12 +239,21 @@
   }
   const optHtml = (arr, sel) => arr.map(([v, l]) => '<option value="' + esc(v) + '"' + (String(v) === String(sel) ? " selected" : "") + ">" + esc(l) + "</option>").join("");
 
-  function openEditor(s, presetKey) {
+  const needsPw = () => !!((S.summary && S.summary.needs_password) || (S.conns && S.conns.needs_password));
+
+  /* create / edit: console password first (unless administrator), exactly like the Process Center */
+  async function openEditor(s, presetKey) {
+    const pw = await unlock(needsPw(), s ? "Edit schedule — " + s.name : "Create schedule");
+    if (pw === null) return;
+    openEditorForm(s, presetKey, pw);
+  }
+
+  function openEditorForm(s, presetKey, pw) {
     const d = s ? JSON.parse(JSON.stringify(s)) : blank();
     if (!s && presetKey) d.process_key = presetKey;
     d.retry = Object.assign({ enabled: false, max: 3, delay_min: 5, backoff: false }, d.retry || {});
     if (d.rule && d.rule.type === "interval" && !d.rule.days) d.rule.days = null;
-    ED = { id: s ? s.id : null, draft: d, timer: null };
+    ED = { id: s ? s.id : null, draft: d, timer: null, pw: pw || "" };
     const body =
       '<div id="edForm" style="max-height:72vh;overflow:auto;padding-right:6px">' +
       '<div id="edErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
@@ -439,9 +455,10 @@
     const btn = $("#edSave"); btn.disabled = true;
     try {
       const body = readForm();
+      if (ED.pw) body._password = ED.pw;
       if (ED.id) await call("PUT", "/sched/schedules/" + ED.id, body); else await call("POST", "/sched/schedules", body);
       ED.close(); ED = null;
-      RMS.toast("ok", "Saved", body.name);
+      toast("ok", "Saved", body.name);
       load();
     } catch (e) {
       $("#edErr").textContent = e.errors ? e.errors.join("\n") : e.message;
@@ -485,7 +502,7 @@
         (r.error_type ? row("Error", "<span style='color:var(--err)'>" + esc(r.error_type) + ": " + esc(r.error_msg || "") + "</span>") : (r.error_msg ? row("Note", esc(r.error_msg)) : "")) +
         '<div class="card-sub" style="margin:10px 0 4px;font-weight:800">LOG</div><pre class="logview" style="max-height:340px;overflow:auto;white-space:pre-wrap;font-size:11.5px">' +
         (r.log_text ? RMS.colorizeLog(r.log_text) : "(no log text)") + "</pre>", { width: 760 });
-    } catch (e) { RMS.toast("err", "Could not open", e.message); }
+    } catch (e) { toast("err", "Could not open", e.message); }
   }
 
   /* ═══════════════════════ AUDIT TAB ═══════════════════════════════════ */
@@ -586,10 +603,10 @@
         document.querySelectorAll("[data-rc]").forEach((t) => { v[t.dataset.rc] = t.value.trim(); });
         if (pwd) v._password = pwd;
         save.disabled = true;
-        try { await call("PUT", "/sched/process-settings/" + encodeURIComponent(key), v); close(); RMS.toast("ok", "Saved", p.name); load(); }
+        try { await call("PUT", "/sched/process-settings/" + encodeURIComponent(key), v); close(); toast("ok", "Saved", p.name); load(); }
         catch (e) { $("#rcErr").textContent = e.message; save.disabled = false; }
       };
-    } catch (e) { RMS.toast("err", "Could not open", e.message); }
+    } catch (e) { toast("err", "Could not open", e.message); }
   }
 
   /* ── Credentials: the connection groups this process uses ── */
@@ -610,9 +627,9 @@
         if (S.pw) body._password = S.pw;
         try {
           const r = await call("PUT", "/sched/connections/" + b.dataset.save, body);
-          RMS.toast("ok", "Saved", r.changed && r.changed.length ? r.changed.length + " field(s) updated" : "nothing changed");
+          toast("ok", "Saved", r.changed && r.changed.length ? r.changed.length + " field(s) updated" : "nothing changed");
           after();
-        } catch (e) { RMS.toast("err", "Not saved", e.message); }
+        } catch (e) { toast("err", "Not saved", e.message); }
       };
     });
   }
@@ -629,7 +646,7 @@
         '<div class="card-sub" style="margin-bottom:10px">Shared with every process that uses the same connection. Saved in the .env files under “# scheduler connection”; passwords and tokens go to .env.local. Secrets are never shown again — leave blank to keep the current one.</div>' +
         groups.map((g) => connGroupHtml(g, true)).join(""), { width: 760, icon: "settings" });
       bindConnSave(document, () => { S.pw = ""; close(); load(); });
-    } catch (e) { RMS.toast("err", "Could not open", e.message); }
+    } catch (e) { toast("err", "Could not open", e.message); }
   }
 
   /* ── Logs of the last runs of this process ── */
@@ -638,7 +655,7 @@
       const f = await jget("/sched/files/" + encodeURIComponent(key));
       const close = RMS.modal("Logs — " + f.process,
         '<div class="card-sub" style="margin-bottom:8px">Last runs of this process (newest first). Folder: <code>' + esc(f.folder) + "\\logs</code></div>" +
-        '<table class="htable"><tbody>' + ((f.logs || []).length ? f.logs.map((l) => "<tr><td>" + esc(l.modified) + "</td><td>" + (l.name.includes("_FAILED") ? '<span class="badge err">Failed</span>' : '<span class="badge ok">OK</span>') +
+        '<table class="htable"><tbody>' + ((f.logs || []).length ? f.logs.map((l) => "<tr><td>" + esc(l.modified) + "</td><td>" + (l.name.includes("_FAILED") ? '<span class="badge err">Failed</span>' : l.name.includes("_SKIPPED") ? '<span class="badge dim">Skipped</span>' : '<span class="badge ok">OK</span>') +
           "</td><td style='text-align:right'><button class='btn sm ghost' data-lg='" + esc(l.name) + "'>View</button> <a class='btn sm ghost' href='/sched/files/" + encodeURIComponent(key) + "/download?area=logs&name=" + encodeURIComponent(l.name) + "'>Download</a></td></tr>").join("")
           : "<tr><td><div class='bm-empty'>No runs yet</div></td></tr>") + "</tbody></table>", { width: 720, icon: "terminal" });
       document.querySelectorAll("[data-lg]").forEach((b) => {
@@ -647,10 +664,10 @@
             const t = await jget("/sched/files/" + encodeURIComponent(key) + "/log?name=" + encodeURIComponent(b.dataset.lg));
             close();
             RMS.modal(t.name, '<pre class="logview" style="max-height:460px;overflow:auto;white-space:pre-wrap;font-size:11.5px">' + RMS.colorizeLog(t.text) + "</pre>", { width: 820, icon: "terminal" });
-          } catch (e) { RMS.toast("err", "Could not open", e.message); }
+          } catch (e) { toast("err", "Could not open", e.message); }
         };
       });
-    } catch (e) { RMS.toast("err", "Could not open", e.message); }
+    } catch (e) { toast("err", "Could not open", e.message); }
   }
 
   /* ═══════════════════════ UPLOAD POPUP ═════════════════════════════════ */
@@ -680,18 +697,47 @@
           const r = await fetch("/sched/files/" + enc + "/upload", { method: "POST", body: fd, credentials: "same-origin" });
           const d = await r.json().catch(() => ({}));
           if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
-          RMS.toast("ok", "Uploaded", d.name);
-          close(); openUpload(key);
+          close();
+          notice("Upload successful", d.name + " is saved and will be used by the next run.");
         } catch (e) { $("#upMsg").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; }
       };
       document.querySelectorAll("[data-del]").forEach((b) => {
         b.onclick = async () => {
-          if (!confirm("Remove " + b.dataset.del + "?")) return;
-          try { await call("DELETE", "/sched/files/" + enc + "?name=" + encodeURIComponent(b.dataset.del)); close(); openUpload(key); }
-          catch (e) { RMS.toast("err", "Not removed", e.message); }
+          try { await call("DELETE", "/sched/files/" + enc + "?name=" + encodeURIComponent(b.dataset.del)); close(); notice("File removed", b.dataset.del + " has been removed."); }
+          catch (e) { close(); notice("Could not remove", e.message, "err"); }
         };
       });
-    } catch (e) { RMS.toast("err", "Could not open", e.message); }
+    } catch (e) { toast("err", "Could not open", e.message); }
+  }
+
+  /* ── in-app popups (no browser "localhost says" boxes, no toasts at the screen edge) ── */
+  function notice(title, msg, kind) {
+    const ok = kind !== "err";
+    const close = RMS.modal(title,
+      '<div style="text-align:center;padding:6px 4px 2px"><div style="font-size:40px;line-height:1.1">' + (ok ? "✅" : "⚠️") + "</div>" +
+      '<div style="margin:12px 0 4px;font-size:13.5px;line-height:1.5;word-break:break-word">' + esc(msg) + "</div>" +
+      '<button class="btn primary" id="ntOk" style="margin-top:14px;min-width:120px;justify-content:center">OK</button></div>',
+      { width: 400, icon: ok ? "check" : "alert" });
+    const b = $("#ntOk");
+    b.onclick = close;
+    b.focus();
+    if (ok) setTimeout(() => { try { close(); } catch (e) { /* already closed */ } }, 4000);
+  }
+
+  /* every result message on this page is a centred popup, never an edge toast */
+  function toast(kind, title, msg) { notice(title, msg || "", kind === "err" ? "err" : "ok"); }
+
+  function confirmBox(title, msg, okLabel, danger) {
+    return new Promise((resolve) => {
+      const close = RMS.modal(title,
+        '<div style="font-size:13.5px;line-height:1.55;margin-bottom:16px">' + esc(msg) + "</div>" +
+        '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="cbNo">Cancel</button>' +
+        '<button class="btn primary" id="cbYes"' + (danger ? ' style="background:var(--err);border-color:var(--err);color:#fff"' : "") + ">" + esc(okLabel || "OK") + "</button></div>",
+        { width: 440, icon: danger ? "alert" : "info" });
+      $("#cbYes").onclick = () => { close(); resolve(true); };
+      $("#cbNo").onclick = () => { close(); resolve(false); };
+      $("#cbNo").focus();
+    });
   }
 
   /* ── password gate: asked BEFORE the form opens (same as the Process Center) ── */

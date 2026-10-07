@@ -36,6 +36,11 @@ from typing import Any, Callable, Dict, List, Optional
 PARAM_TYPES = ("str", "text", "int", "bool", "choice")
 
 
+class Skipped(Exception):
+    """Raised by a process that deliberately did nothing (e.g. 'already e-mailed today').
+    The run is recorded as SKIPPED with this message — not as a success and not as a failure."""
+
+
 @dataclass
 class Param:
     name: str

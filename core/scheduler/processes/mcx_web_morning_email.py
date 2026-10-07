@@ -92,7 +92,7 @@ def _run(params, ctx):
 
     pending = [z for z in zones if not H.already_sent(FOLDER, f"zone|{z[0]}", ctx)]
     if not pending:
-        return "already e-mailed today — nothing to do"
+        raise H.Skipped(H.skip_message(FOLDER, [f"zone|{z[0]}" for z in zones], "e-mailed"))
 
     # wait for the file (optional) — one run row, no failure noise
     wait_s = max(0, int(params.get("wait_minutes") or 0)) * 60
@@ -160,7 +160,7 @@ register(
     key="mcx_web_morning_email",
     name="MCX WEB MORNING EMAIL",
     description="Adds the Zone column to today's MCX RSK383 file, splits it by zone and e-mails ZOCHND and ZOLUDH. "
-                "File-only: never logs in to MCX. Picks the file from this process's Files tab (upload) or the CLI morning run.",
+                "File-only: never logs in to MCX. Picks the file uploaded with the Upload files button, or the one left by the CLI morning run.",
     run=_run,
     params=[
         Param("zochnd_to", "ZOCHND — To", "text", required=True, fmt="emails", scope="process", help="E-mail addresses, comma or new-line separated."),

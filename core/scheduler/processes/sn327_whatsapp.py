@@ -26,7 +26,7 @@ def _run(params, ctx):
 
     todo = [p for p in phones if not H.already_sent(FOLDER, f"{account}|{p}", ctx)]
     if not todo:
-        return "already sent today to everyone — nothing to do"
+        raise H.Skipped(H.skip_message(FOLDER, [f"{account}|{p}" for p in phones], "sent"))
 
     risk = H.find_risk_report(ctx)
     df = imaging.load_risk_rows(risk, [account])

@@ -255,6 +255,20 @@ class TestFailures(Base):
         full = store.get_execution(bad["id"])
         self.assertNotIn("hunter2", full["log_text"])
 
+    def test_deliberate_skip_is_recorded_as_skipped_with_its_reason(self):
+        def nothing(params, ctx):
+            raise catalog.Skipped("Already sent today at 12:07:01 — nothing to do.")
+        catalog.register("t.skip", "Skipping process", nothing)
+        try:
+            self.mk(process="t.skip", name="SK")
+            self.at(7, 45, 5)
+            r = self.rows()[0]
+            self.assertEqual(r["status"], "SKIPPED")                   # not SUCCESS, not FAILED
+            self.assertIn("12:07:01", r["error_msg"])
+            self.assertIn("Skipped", store.get_execution(r["id"])["log_text"])
+        finally:
+            catalog.unregister("t.skip")
+
     def test_unknown_process_does_not_crash_the_tick(self):
         s = self.mk()
         store._write("UPDATE sched_schedules SET process_key='gone.process' WHERE id=?", (s["id"],))

@@ -109,7 +109,10 @@ def summary(request: Request):
     if err:
         return err
     out, e = _safe(lambda: service.summary(health=engine.get_engine().health()))
-    return e or out
+    if e:
+        return e
+    out["needs_password"] = not _who(request)[1]            # the UI asks for the console password first when True
+    return out
 
 
 @router.get("/schedules")
@@ -198,20 +201,20 @@ def audit(request: Request, limit: int = 200):
 # ── write ───────────────────────────────────────────────────────────────────
 @router.post("/schedules")
 async def create(request: Request):
-    who, err = _guard(request, True)
+    body = await _json(request)
+    who, err = _gate(request, body)
     if err:
         return err
-    body = await _json(request)
     out, e = _safe(lambda: service.view(service.create(body, who)))
     return e or {"ok": True, "schedule": out}
 
 
 @router.put("/schedules/{sid}")
 async def edit(sid: str, request: Request):
-    who, err = _guard(request, True)
+    body = await _json(request)
+    who, err = _gate(request, body)
     if err:
         return err
-    body = await _json(request)
 
     def go():
         s = service.update(sid, body, who)
@@ -224,7 +227,7 @@ async def edit(sid: str, request: Request):
 
 def _action(fn_name):
     async def handler(sid: str, request: Request):
-        who, err = _guard(request, True)
+        who, err = _gate(request, await _json(request))
         if err:
             return err
 
@@ -244,7 +247,7 @@ for _name in ("pause", "resume", "enable", "disable"):
 
 @router.delete("/schedules/{sid}")
 async def delete(sid: str, request: Request):
-    who, err = _guard(request, True)
+    who, err = _gate(request, await _json(request))
     if err:
         return err
 
@@ -258,7 +261,7 @@ async def delete(sid: str, request: Request):
 
 @router.post("/schedules/{sid}/run-now")
 async def run_now(sid: str, request: Request):
-    who, err = _guard(request, False)
+    who, err = _gate(request, await _json(request))     # admin, or the console password — nobody runs it by chance
     if err:
         return err
     out, e = _safe(lambda: engine.get_engine().run_now(sid, who))
@@ -450,8 +453,8 @@ async def settings_put(pkey: str, request: Request):
 
 @router.delete("/files/{pkey}")
 async def files_delete(pkey: str, request: Request, name: str = ""):
-    """Remove a wrongly uploaded input file (inputs only; administrators)."""
-    who, err = _guard(request, True)
+    """Remove a wrongly uploaded input file (inputs only; any signed-in user, like uploading)."""
+    who, err = _guard(request, False)
     if err:
         return err
     try:

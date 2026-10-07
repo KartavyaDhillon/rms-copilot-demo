@@ -238,6 +238,9 @@ class SchedulerEngine:
             result = pdef.run(catalog.effective_params(pdef, s.get("params") or {}), ctx)
             if result:
                 ctx.log(f"Result: {result}")
+        except catalog.Skipped as e:                        # deliberate no-op: recorded as SKIPPED, with the reason
+            status, etype, emsg = "SKIPPED", "Skipped", _scrub(str(e))[:2000]
+            ctx.log("Skipped — " + emsg)
         except Exception as e:                              # isolated: stored, never propagated
             status, etype = "FAILED", type(e).__name__
             emsg = _scrub(str(e))[:2000]

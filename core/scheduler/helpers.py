@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable, Iterable, List, Optional
 
 from core.scheduler import connections, paths
+from core.scheduler.catalog import Skipped      # noqa: F401  (processes raise H.Skipped(...) for a deliberate no-op)
 
 MANUAL = "MANUAL_RUN_NOW"
 
@@ -103,9 +104,14 @@ def logged(folder: str):
     def deco(fn: Callable):
         def wrapper(params, ctx):
             paths.ensure_process_dirs(folder)
-            err = None
+            err, skipped, result = None, False, None
             try:
-                return fn(params, ctx)
+                result = fn(params, ctx)
+                return result
+            except Skipped as e:
+                skipped = True
+                ctx.log(f"SKIPPED: {e}")
+                raise
             except Exception as e:
                 err = e
                 ctx.log(f"FAILED: {type(e).__name__}: {e}")
@@ -113,8 +119,10 @@ def logged(folder: str):
             finally:
                 try:
                     stamp = dt.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-                    p = paths.proc_dir(folder, "logs") / f"{stamp}_{'FAILED' if err else 'OK'}.log"
-                    p.write_text(ctx.text() + "\n", encoding="utf-8")
+                    tag = "FAILED" if err else "SKIPPED" if skipped else "OK"
+                    text = ctx.text() + (f"\n[{dt.datetime.now():%H:%M:%S}] Result: {result}" if result else "")
+                    p = paths.proc_dir(folder, "logs") / f"{stamp}_{tag}.log"
+                    p.write_text(text + "\n", encoding="utf-8")
                     _trim_logs(paths.proc_dir(folder, "logs"))
                 except Exception:
                     pass
@@ -138,24 +146,36 @@ def _marker_file(folder: str) -> Path:
     return paths.proc_dir(folder, "state") / f"sent_{today_ddmmyyyy()}.json"
 
 
+def _markers(folder: str) -> dict:
+    """{key: 'HH:MM:SS'} for today (older files stored a plain list — still understood)."""
+    try:
+        d = json.loads(_marker_file(folder).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {k: "earlier" for k in d}
+
+
+def sent_at(folder: str, key: str) -> str:
+    return _markers(folder).get(key, "")
+
+
 def already_sent(folder: str, key: str, ctx) -> bool:
     """True when a scheduled/recovery run must skip because this exact send already succeeded today."""
     if getattr(ctx, "trigger", "") == MANUAL:
         return False
-    try:
-        return key in json.loads(_marker_file(folder).read_text(encoding="utf-8"))
-    except Exception:
-        return False
+    return key in _markers(folder)
+
+
+def skip_message(folder: str, keys, what: str = "sent") -> str:
+    times = sorted({sent_at(folder, k) for k in keys if sent_at(folder, k)})
+    when = f" at {times[0]}" if times and times[0] != "earlier" else " earlier"
+    return f"Already {what} today{when} — nothing to do. (Run Now sends again if you really need it.)"
 
 
 def mark_sent(folder: str, key: str):
     f = _marker_file(folder)
-    try:
-        cur = json.loads(f.read_text(encoding="utf-8"))
-    except Exception:
-        cur = []
-    if key not in cur:
-        cur.append(key)
+    cur = _markers(folder)
+    cur.setdefault(key, dt.datetime.now().strftime("%H:%M:%S"))
     f.write_text(json.dumps(cur), encoding="utf-8")
     for old in f.parent.glob("sent_*.json"):              # keep only the last 7 days of markers
         if old != f and (time.time() - old.stat().st_mtime) > 7 * 86400:

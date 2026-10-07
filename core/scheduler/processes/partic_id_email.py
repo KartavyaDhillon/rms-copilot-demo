@@ -29,7 +29,7 @@ def _run(params, ctx):
     if not to:
         raise ValueError("No 'To' e-mail address set.")
     if H.already_sent(FOLDER, "report", ctx):
-        return "report already e-mailed today — nothing to do"
+        raise H.Skipped(H.skip_message(FOLDER, ["report"], "e-mailed"))
 
     inputs = paths.proc_dir(FOLDER, "inputs")
     sender = (params.get("sender") or "support@mastertrust.co.in").strip()
@@ -94,7 +94,7 @@ register(
     key="partic_id_email",
     name="PARTIC ID EMAIL",
     description="Matches the MASTER-PARTICID file against today's risk-report CP codes and e-mails the Excel report. "
-                "Uses the file on the Files tab if present, otherwise downloads it from the mailbox.",
+                "Uses the file uploaded with the Upload files button if present, otherwise downloads it from the mailbox.",
     run=_run,
     params=[
         Param("to", "To", "text", required=True, fmt="emails", scope="process", help="E-mail addresses, comma or new-line separated."),

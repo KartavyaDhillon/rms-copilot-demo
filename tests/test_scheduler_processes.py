@@ -213,8 +213,11 @@ class WhatsApp(Base):
         self.assertEqual(len(calls), 2)
         self.assertIn("2 WhatsApp", out)
         self.assertTrue(risk.exists())
+        from core.scheduler.catalog import Skipped
         with mock.patch("core.scheduler.helpers.whatsapp_send_image") as send:    # scheduled again the same day → nothing
-            m._run({"main_to": "+919810000001", "second_to": "+917540000002"}, Ctx())
+            with self.assertRaises(Skipped) as sk:
+                m._run({"main_to": "+919810000001", "second_to": "+917540000002"}, Ctx())
+            self.assertIn("Already sent today at", str(sk.exception))              # says WHEN, not a silent success
             send.assert_not_called()
             m._run({"main_to": "+919810000001"}, Ctx("MANUAL_RUN_NOW"))             # Run Now sends again
             self.assertEqual(send.call_count, 1)
@@ -283,9 +286,14 @@ class McxMorning(Base):
         self.assertEqual(len(mails), 2)
         self.assertTrue(risk.exists())
         self.assertIn("2 zone", out)
+        from core.scheduler.catalog import Skipped
         with mock.patch("core.scheduler.helpers.send_email") as se:                # same day again → no duplicate mails
-            self.assertIn("already", m._run({"zochnd_to": "a@x.com", "zoludh_to": "b@x.com"}, Ctx()))
+            with self.assertRaises(Skipped) as sk:
+                m._run({"zochnd_to": "a@x.com", "zoludh_to": "b@x.com"}, Ctx())
+            self.assertIn("Already e-mailed today at", str(sk.exception))
             se.assert_not_called()
+        logs = list(paths.proc_dir(m.FOLDER, "logs").glob("*_SKIPPED.log"))        # the skip is explained in the log file
+        self.assertTrue(logs and "SKIPPED: Already e-mailed" in logs[0].read_text())
 
 
 class ParticMatching(unittest.TestCase):
