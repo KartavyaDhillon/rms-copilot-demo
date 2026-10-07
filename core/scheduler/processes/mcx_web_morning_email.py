@@ -163,10 +163,10 @@ register(
                 "File-only: never logs in to MCX. Picks the file from this process's Files tab (upload) or the CLI morning run.",
     run=_run,
     params=[
-        Param("zochnd_to", "ZOCHND — To", "text", required=True, fmt="emails", help="E-mail addresses, comma or new-line separated."),
-        Param("zochnd_cc", "ZOCHND — Cc", "text", fmt="emails"),
-        Param("zoludh_to", "ZOLUDH — To", "text", required=True, fmt="emails"),
-        Param("zoludh_cc", "ZOLUDH — Cc", "text", fmt="emails"),
+        Param("zochnd_to", "ZOCHND — To", "text", required=True, fmt="emails", scope="process", help="E-mail addresses, comma or new-line separated."),
+        Param("zochnd_cc", "ZOCHND — Cc", "text", fmt="emails", scope="process"),
+        Param("zoludh_to", "ZOLUDH — To", "text", required=True, fmt="emails", scope="process"),
+        Param("zoludh_cc", "ZOLUDH — Cc", "text", fmt="emails", scope="process"),
         Param("signature", "E-mail signature", "text", default="Kartavya Dhillon\nMaster Capital Services Ltd\nTel: 011-66331000 | Ext. 84"),
         Param("wait_minutes", "Wait for the file (minutes)", "int", default=0,
               help="0 = fail at once if the file is not there. Or wait up to this long for the CLI morning run to leave it."),
@@ -175,6 +175,7 @@ register(
     parallel_safe=False,
     category="Reports",
     folder=FOLDER,
+    uses=("smtp",),
     upload_exts=(".xlsx",),
     upload_help="Upload today's MCX RSK383 export (MCX_DEPOSIT_….xlsx or the raw <name>-<14 digits>.xlsx) if it did not arrive from the CLI morning run.",
 )

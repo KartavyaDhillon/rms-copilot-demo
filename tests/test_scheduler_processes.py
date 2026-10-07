@@ -137,6 +137,35 @@ class Connections(Base):
         self.assertIn("Connections", str(e.exception))
 
 
+class ProcessSettings(Base):
+    def _pdef(self):
+        from core.scheduler import catalog
+        importlib.reload(importlib.import_module("core.scheduler.processes.sn327_whatsapp"))
+        return catalog.get("sn327_whatsapp")
+
+    def test_recipients_are_validated_saved_once_and_win_over_schedule_params(self):
+        from core.scheduler import catalog, proc_settings
+        d = self._pdef()
+        with mock.patch("core.scheduler.store.audit"):
+            with self.assertRaises(ValueError):
+                proc_settings.save(d, {"to": "9812345678"}, "me")               # no country code
+            with self.assertRaises(ValueError):
+                proc_settings.save(d, {"to": ""}, "me")                         # required
+            proc_settings.save(d, {"to": "+919812345678, +917541827310"}, "me")
+        self.assertEqual(proc_settings.get(d)["to"], "+919812345678, +917541827310")
+        eff = catalog.effective_params(d, {"account": "SN327", "to": "+910000000000"})
+        self.assertEqual(eff["to"], "+919812345678, +917541827310")             # process-level wins
+        self.assertEqual(eff["account"], "SN327")
+
+    def test_schedules_cannot_carry_process_level_params(self):
+        from core.scheduler import catalog
+        d = self._pdef()
+        errs, clean = catalog.validate_params(d, {"account": "SN327"})            # recipients not required on a schedule
+        self.assertEqual(errs, [])
+        errs, _ = catalog.validate_params(d, {"to": "+919812345678"})
+        self.assertTrue(errs)
+
+
 class Registration(Base):
     def test_four_processes_registered_with_the_agreed_names(self):
         from core.scheduler import catalog

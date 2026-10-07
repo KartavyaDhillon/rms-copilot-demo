@@ -45,11 +45,13 @@ class Param:
     default: Any = None
     choices: Optional[List[str]] = None
     help: str = ""
-    fmt: str = ""                          # "phones" | "emails" → checked when the schedule is saved
+    fmt: str = ""                          # "phones" | "emails" → checked when saved
+    scope: str = "schedule"                # "process" = a setting of the process itself (recipients …), edited on the
+                                           # Processes tab and shared by every schedule of that process
 
     def to_dict(self):
         return {"name": self.name, "label": self.label, "type": self.type, "required": self.required,
-                "default": self.default, "choices": self.choices, "help": self.help}
+                "default": self.default, "choices": self.choices, "help": self.help, "fmt": self.fmt, "scope": self.scope}
 
 
 @dataclass
@@ -66,12 +68,14 @@ class ProcessDef:
     folder: str = ""                       # data/scheduler/<folder>/ — inputs, outputs, backup, logs
     upload_exts: tuple = ()                # e.g. (".xlsx",) → the Files tab shows an Upload button
     upload_help: str = ""
+    uses: tuple = ()                       # Connections groups this process needs: "whatsapp" | "smtp" | "pop3"
 
     def to_dict(self):
         return {"key": self.key, "name": self.name, "description": self.description, "category": self.category,
                 "params": [p.to_dict() for p in self.params],
                 "retry_safe": self.retry_safe, "parallel_safe": self.parallel_safe,
-                "folder": self.folder, "upload_exts": list(self.upload_exts), "upload_help": self.upload_help}
+                "folder": self.folder, "upload_exts": list(self.upload_exts), "upload_help": self.upload_help,
+                "uses": list(self.uses)}
 
 
 _REG: Dict[str, ProcessDef] = {}
@@ -80,7 +84,8 @@ _LOADED = False
 
 
 def register(key, name, run, description="", params=None, retry_safe=False, parallel_safe=False,
-             lock_pipe=None, category="General", folder="", upload_exts=(), upload_help="") -> ProcessDef:
+             lock_pipe=None, category="General", folder="", upload_exts=(), upload_help="",
+             uses=()) -> ProcessDef:
     if not key or not callable(run):
         raise ValueError("register(): key and a callable run are required")
     for p in params or []:
@@ -89,7 +94,8 @@ def register(key, name, run, description="", params=None, retry_safe=False, para
                              f"(secrets are deliberately not supported — keep them in .env)")
     d = ProcessDef(key=key, name=name, run=run, description=description, params=list(params or []),
                    retry_safe=retry_safe, parallel_safe=parallel_safe, lock_pipe=lock_pipe, category=category,
-                   folder=folder, upload_exts=tuple(e.lower() for e in upload_exts), upload_help=upload_help)
+                   folder=folder, upload_exts=tuple(e.lower() for e in upload_exts), upload_help=upload_help,
+                   uses=tuple(uses))
     with _LOCK:
         _REG[key] = d
     return d
@@ -129,15 +135,26 @@ def all_defs() -> List[ProcessDef]:
     return sorted(_REG.values(), key=lambda d: (d.category, d.name))
 
 
-def validate_params(pdef: ProcessDef, values: dict) -> (list, dict):
-    """-> (errors, cleaned values). Unknown keys are rejected; types are coerced."""
+def effective_params(pdef: ProcessDef, schedule_params: dict) -> dict:
+    """What the process actually receives: the schedule's own parameters + the process-level settings
+    (recipients …) saved on the Processes tab. Process-level settings always win."""
+    from core.scheduler import proc_settings
+    out = dict(schedule_params or {})
+    out.update(proc_settings.get(pdef))
+    return out
+
+
+def validate_params(pdef: ProcessDef, values: dict, scope: str = "schedule") -> (list, dict):
+    """-> (errors, cleaned values). Unknown keys are rejected; types are coerced.
+    Only parameters of the given scope are considered ("schedule" or "process")."""
     errs, out = [], {}
     values = dict(values or {})
-    known = {p.name: p for p in pdef.params}
+    plist = [p for p in pdef.params if p.scope == scope]
+    known = {p.name: p for p in plist}
     for k in values:
         if k not in known:
             errs.append(f"Unknown parameter '{k}'.")
-    for p in pdef.params:
+    for p in plist:
         v = values.get(p.name, p.default)
         if v in (None, ""):
             if p.required:

@@ -57,7 +57,7 @@ register(
     description="Margin report card (ledger / FD / pledge / NOV / margin used) for SN327 sent on WhatsApp.",
     run=_run,
     params=[
-        Param("to", "Send to (WhatsApp numbers)", "text", required=True, fmt="phones",
+        Param("to", "Send to (WhatsApp numbers)", "text", required=True, fmt="phones", scope="process",
               help="International form, separated by commas or new lines, e.g. +919812345678. Add more numbers here for 'CC'."),
         Param("account", "Account", "str", default="SN327"),
         Param("label", "Message heading", "str", default="MARGIN_REPORT", help="First variable of the WhatsApp template."),
@@ -66,4 +66,5 @@ register(
     parallel_safe=False,
     category="Reports",
     folder=FOLDER,
+    uses=("whatsapp",),
 )

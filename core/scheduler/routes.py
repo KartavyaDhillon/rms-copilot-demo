@@ -16,7 +16,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from core.scheduler import catalog, connections, engine, paths, rules, service, store
+from core.scheduler import catalog, connections, engine, paths, proc_settings, rules, service, store
 
 router = APIRouter(prefix="/sched", tags=["scheduler"])
 UTC = dt.timezone.utc
@@ -360,6 +360,56 @@ def files_download(pkey: str, request: Request, area: str = "outputs", name: str
         return _deny(str(ex).strip("'\""), 404)
     except ValueError as ex:
         return _deny(str(ex), 400)
+
+
+@router.get("/files/{pkey}/log")
+def files_log(pkey: str, request: Request, name: str = ""):
+    """Text of one run log (last ~200 KB)."""
+    who, err = _guard(request, False)
+    if err:
+        return err
+    try:
+        p = paths.resolve_inside(_pdef(pkey).folder, "logs", name)
+        if not p.is_file():
+            return _deny("File not found.", 404)
+        data = p.read_bytes()[-200_000:]
+        return {"name": p.name, "text": data.decode("utf-8", errors="replace")}
+    except KeyError as ex:
+        return _deny(str(ex).strip("'\""), 404)
+    except ValueError as ex:
+        return _deny(str(ex), 400)
+
+
+# ── process-level settings (recipients …) ───────────────────────────────────
+@router.get("/process-settings/{pkey}")
+def settings_get(pkey: str, request: Request):
+    who, err = _guard(request, False)
+    if err:
+        return err
+
+    def go():
+        d = _pdef(pkey)
+        return {"process": d.name, "values": proc_settings.view(d),
+                "params": [p.to_dict() for p in d.params if p.scope == "process"], "can_edit": _who(request)[1]}
+    out, e = _safe(go)
+    return e or out
+
+
+@router.put("/process-settings/{pkey}")
+async def settings_put(pkey: str, request: Request):
+    who, err = _guard(request, True)
+    if err:
+        return err
+    body = await _json(request)
+    try:
+        clean = proc_settings.save(_pdef(pkey), body, who)
+        return {"ok": True, "values": clean}
+    except KeyError as ex:
+        return _deny(str(ex).strip("'\""), 404)
+    except ValueError as ex:
+        return _deny(str(ex), 422)
+    except Exception as ex:
+        return _deny(f"{type(ex).__name__}: {ex}", 500)
 
 
 @router.delete("/files/{pkey}")

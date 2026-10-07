@@ -60,10 +60,10 @@ register(
     description="Risk-report image for SN359 (and optionally SN232 + SN233) sent on WhatsApp.",
     run=_run,
     params=[
-        Param("main_to", "Send to (WhatsApp numbers)", "text", required=True, fmt="phones",
+        Param("main_to", "Send to (WhatsApp numbers)", "text", required=True, fmt="phones", scope="process",
               help="International form, separated by commas or new lines, e.g. +919812345678. Add more numbers here for 'CC'."),
         Param("main_accounts", "Accounts in the first image", "str", default="SN359"),
-        Param("second_to", "Second group send to", "text", fmt="phones", help="Numbers that get the SN232 + SN233 image. Leave blank to skip it."),
+        Param("second_to", "Second group send to", "text", fmt="phones", scope="process", help="Numbers that get the SN232 + SN233 image. Leave blank to skip it."),
         Param("second_accounts", "Accounts in the second image", "str", default="SN232, SN233"),
         Param("label", "Message heading", "str", default="DEPOSIT", help="First variable of the WhatsApp template."),
     ],
@@ -71,4 +71,5 @@ register(
     parallel_safe=False,
     category="Reports",
     folder=FOLDER,
+    uses=("whatsapp",),
 )

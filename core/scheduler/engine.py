@@ -235,7 +235,7 @@ class SchedulerEngine:
         ctx = ExecContext(eid, s, trigger)
         status, etype, emsg = "SUCCESS", "", ""
         try:
-            result = pdef.run(dict(s.get("params") or {}), ctx)
+            result = pdef.run(catalog.effective_params(pdef, s.get("params") or {}), ctx)
             if result:
                 ctx.log(f"Result: {result}")
         except Exception as e:                              # isolated: stored, never propagated

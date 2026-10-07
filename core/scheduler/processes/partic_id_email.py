@@ -97,8 +97,8 @@ register(
                 "Uses the file on the Files tab if present, otherwise downloads it from the mailbox.",
     run=_run,
     params=[
-        Param("to", "To", "text", required=True, fmt="emails", help="E-mail addresses, comma or new-line separated."),
-        Param("cc", "Cc", "text", fmt="emails"),
+        Param("to", "To", "text", required=True, fmt="emails", scope="process", help="E-mail addresses, comma or new-line separated."),
+        Param("cc", "Cc", "text", fmt="emails", scope="process"),
         Param("sender", "Mail from", "str", default="support@mastertrust.co.in", help="Only mail from this address is used."),
         Param("subject", "Mail subject (exact)", "str", default="MASTER-PARTICID details"),
         Param("scan_start", "Look for today's mail from", "str", default="06:00", help="HH:MM, India time."),
@@ -110,6 +110,7 @@ register(
     parallel_safe=False,
     category="Reports",
     folder=FOLDER,
+    uses=("pop3", "smtp"),
     upload_exts=(".txt", ".csv", ".xlsx", ".xls"),
     upload_help="Upload the partic id file (output / PARTIC_ID / Partic_Id …) if the mailbox download is not working.",
 )
