@@ -45,6 +45,7 @@ class Param:
     default: Any = None
     choices: Optional[List[str]] = None
     help: str = ""
+    fmt: str = ""                          # "phones" | "emails" → checked when the schedule is saved
 
     def to_dict(self):
         return {"name": self.name, "label": self.label, "type": self.type, "required": self.required,
@@ -62,11 +63,15 @@ class ProcessDef:
     parallel_safe: bool = False
     lock_pipe: Optional[str] = None
     category: str = "General"
+    folder: str = ""                       # data/scheduler/<folder>/ — inputs, outputs, backup, logs
+    upload_exts: tuple = ()                # e.g. (".xlsx",) → the Files tab shows an Upload button
+    upload_help: str = ""
 
     def to_dict(self):
         return {"key": self.key, "name": self.name, "description": self.description, "category": self.category,
                 "params": [p.to_dict() for p in self.params],
-                "retry_safe": self.retry_safe, "parallel_safe": self.parallel_safe}
+                "retry_safe": self.retry_safe, "parallel_safe": self.parallel_safe,
+                "folder": self.folder, "upload_exts": list(self.upload_exts), "upload_help": self.upload_help}
 
 
 _REG: Dict[str, ProcessDef] = {}
@@ -75,7 +80,7 @@ _LOADED = False
 
 
 def register(key, name, run, description="", params=None, retry_safe=False, parallel_safe=False,
-             lock_pipe=None, category="General") -> ProcessDef:
+             lock_pipe=None, category="General", folder="", upload_exts=(), upload_help="") -> ProcessDef:
     if not key or not callable(run):
         raise ValueError("register(): key and a callable run are required")
     for p in params or []:
@@ -83,7 +88,8 @@ def register(key, name, run, description="", params=None, retry_safe=False, para
             raise ValueError(f"{key}: parameter '{p.name}' has unsupported type '{p.type}' "
                              f"(secrets are deliberately not supported — keep them in .env)")
     d = ProcessDef(key=key, name=name, run=run, description=description, params=list(params or []),
-                   retry_safe=retry_safe, parallel_safe=parallel_safe, lock_pipe=lock_pipe, category=category)
+                   retry_safe=retry_safe, parallel_safe=parallel_safe, lock_pipe=lock_pipe, category=category,
+                   folder=folder, upload_exts=tuple(e.lower() for e in upload_exts), upload_help=upload_help)
     with _LOCK:
         _REG[key] = d
     return d
@@ -147,8 +153,11 @@ def validate_params(pdef: ProcessDef, values: dict) -> (list, dict):
                     raise ValueError
             else:
                 v = str(v)
-        except (TypeError, ValueError):
-            errs.append(f"'{p.label}' has an invalid value.")
+                if p.fmt:
+                    from core.scheduler import helpers
+                    {"phones": helpers.parse_phones, "emails": helpers.parse_emails}[p.fmt](v)
+        except (TypeError, ValueError) as ex:
+            errs.append(f"'{p.label}': {ex}" if p.fmt and str(ex) else f"'{p.label}' has an invalid value.")
             continue
         out[p.name] = v
     return errs, out

@@ -13,10 +13,10 @@ import datetime as dt
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, File, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 
-from core.scheduler import catalog, engine, rules, service, store
+from core.scheduler import catalog, connections, engine, paths, rules, service, store
 
 router = APIRouter(prefix="/sched", tags=["scheduler"])
 UTC = dt.timezone.utc
@@ -242,3 +242,141 @@ async def run_now(sid: str, request: Request):
         return err
     out, e = _safe(lambda: engine.get_engine().run_now(sid, who))
     return e or {"ok": True, "execution_id": out}
+
+
+# ── connections (WhatsApp / SMTP / POP3) — secrets are never returned ───────
+@router.get("/connections")
+def connections_get(request: Request):
+    who, err = _guard(request, False)
+    if err:
+        return err
+    return {"groups": connections.view(), "can_edit": _who(request)[1]}
+
+
+@router.put("/connections/{group}")
+async def connections_put(group: str, request: Request):
+    who, err = _guard(request, True)
+    if err:
+        return err
+    body = await _json(request)
+    out, e = _safe(lambda: connections.update(group, body, who))
+    return e or {"ok": True, "changed": out}
+
+
+# ── per-process files: data/scheduler/<PROCESS NAME>/{inputs,outputs,logs,backup} ──
+_MAX_UPLOAD = 100 * 1024 * 1024
+
+
+def _pdef(pkey: str):
+    d = catalog.get(pkey)
+    if not d or not d.folder:
+        raise KeyError("Unknown process.")
+    return d
+
+
+def _list_dir(d, limit=60):
+    out = []
+    if d.is_dir():
+        for p in sorted((x for x in d.iterdir() if x.is_file()), key=lambda x: x.stat().st_mtime, reverse=True)[:limit]:
+            st = p.stat()
+            out.append({"name": p.name, "size": st.st_size,
+                        "modified": dt.datetime.fromtimestamp(st.st_mtime).strftime("%d/%m/%Y %H:%M:%S")})
+    return out
+
+
+@router.get("/files/{pkey}")
+def files_list(pkey: str, request: Request):
+    who, err = _guard(request, False)
+    if err:
+        return err
+
+    def go():
+        d = _pdef(pkey)
+        paths.ensure_process_dirs(d.folder)
+        backups = []
+        bdir = paths.proc_dir(d.folder, "backup")
+        for p in sorted((x for x in bdir.iterdir() if x.is_dir()), key=lambda x: x.stat().st_mtime, reverse=True)[:10]:
+            backups.append({"name": p.name, "files": [f.name for f in p.iterdir() if f.is_file()]})
+        return {"process": d.name, "folder": str(paths.proc_dir(d.folder)),
+                "upload_exts": list(d.upload_exts), "upload_help": d.upload_help,
+                "inputs": _list_dir(paths.proc_dir(d.folder, "inputs")),
+                "outputs": _list_dir(paths.proc_dir(d.folder, "outputs")),
+                "logs": _list_dir(paths.proc_dir(d.folder, "logs")),
+                "backup": backups}
+    out, e = _safe(go)
+    return e or out
+
+
+@router.post("/files/{pkey}/upload")
+async def files_upload(pkey: str, request: Request, file: UploadFile = File(...)):
+    who, err = _guard(request, False)
+    if err:
+        return err
+
+    async def go():
+        d = _pdef(pkey)
+        if not d.upload_exts:
+            raise ValueError("This process does not take uploaded files.")
+        name = paths.safe_name(file.filename or "")
+        ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext not in d.upload_exts:
+            raise ValueError(f"Only {', '.join(d.upload_exts)} files can be uploaded here.")
+        data = await file.read()
+        if not data:
+            raise ValueError("The file is empty.")
+        if len(data) > _MAX_UPLOAD:
+            raise ValueError("The file is larger than 100 MB.")
+        dest = paths.proc_dir(d.folder, "inputs") / name
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        tmp.write_bytes(data)
+        tmp.replace(dest)                                   # a run never sees a half-written file
+        store.audit(who, "file.upload", {"id": None, "name": d.name}, after={"file": name, "bytes": len(data)})
+        return name
+    try:
+        name = await go()
+        return {"ok": True, "name": name}
+    except KeyError as ex:
+        return _deny(str(ex).strip("'\""), 404)
+    except ValueError as ex:
+        return _deny(str(ex), 422)
+    except Exception as ex:
+        return _deny(f"{type(ex).__name__}: {ex}", 500)
+
+
+@router.get("/files/{pkey}/download")
+def files_download(pkey: str, request: Request, area: str = "outputs", name: str = ""):
+    who, err = _guard(request, False)
+    if err:
+        return err
+    try:
+        d = _pdef(pkey)
+        if area not in ("inputs", "outputs", "logs"):
+            return _deny("Not allowed.", 400)
+        p = paths.resolve_inside(d.folder, area, name)
+        if not p.is_file():
+            return _deny("File not found.", 404)
+        return FileResponse(str(p), filename=p.name)
+    except KeyError as ex:
+        return _deny(str(ex).strip("'\""), 404)
+    except ValueError as ex:
+        return _deny(str(ex), 400)
+
+
+@router.delete("/files/{pkey}")
+async def files_delete(pkey: str, request: Request, name: str = ""):
+    """Remove a wrongly uploaded input file (inputs only; administrators)."""
+    who, err = _guard(request, True)
+    if err:
+        return err
+    try:
+        d = _pdef(pkey)
+        p = paths.resolve_inside(d.folder, "inputs", name)
+        if not p.is_file():
+            return _deny("File not found.", 404)
+        p.unlink()
+        store.audit(who, "file.delete", {"id": None, "name": d.name}, before={"file": p.name})
+        return {"ok": True}
+    except KeyError as ex:
+        return _deny(str(ex).strip("'\""), 404)
+    except ValueError as ex:
+        return _deny(str(ex), 400)

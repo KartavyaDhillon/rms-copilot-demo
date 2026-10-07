@@ -80,10 +80,11 @@ class Base(unittest.TestCase):
 
 
 class TestScheduling(Base):
-    def test_no_real_process_is_registered_by_default(self):
-        for k in ("t.ok", "t.fail", "t.flaky", "t.other"):
+    def test_only_the_agreed_processes_are_registered(self):
+        for k in ("t.ok", "t.fail", "t.flaky", "t.other", "t.pipe"):
             catalog.unregister(k)
-        self.assertEqual(catalog.all_defs(), [])
+        self.assertEqual({d.name for d in catalog.all_defs()},
+                         {"MCX WEB MORNING EMAIL", "SN327 WHATSAPP", "SN359 WHATSAPP", "PARTIC ID EMAIL"})
 
     def test_runs_once_at_the_scheduled_time(self):
         self.mk()
