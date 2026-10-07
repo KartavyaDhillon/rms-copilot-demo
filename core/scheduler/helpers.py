@@ -51,22 +51,69 @@ def parse_list(text, split_spaces: bool = True) -> List[str]:
     return out
 
 
-def parse_phones(text) -> List[str]:
+def _entries(text):
+    """'9812345678 #Ravi, 9876543210 #Amit' (commas, ';' or new lines) → [('9812345678','Ravi'), ('9876543210','Amit')].
+    Everything after '#' on an entry is the person's name (a label for humans — never used for sending)."""
+    if isinstance(text, (list, tuple)):
+        text = "\n".join(str(x) for x in text)
     out = []
-    for p in parse_list(text, split_spaces=False):          # "+91 98123 45678" is one number
-        d = re.sub(r"[^\d+]", "", p)
-        if not re.fullmatch(r"\+\d{10,15}", d):
-            raise ValueError(f"'{p}' is not a valid phone number — use the international form, e.g. +919812345678.")
-        out.append(d)
+    for raw in re.split(r"[,;\r\n]+", str(text or "")):
+        raw = raw.strip()
+        if not raw:
+            continue
+        val, _, name = raw.partition("#")
+        out.append((val.strip(), re.sub(r"\s+", " ", name).strip()))
     return out
+
+
+def _phone(val: str) -> str:
+    """10-digit Indian numbers get +91 automatically; other countries must be typed with + and country code."""
+    d = re.sub(r"[^\d+]", "", val)
+    if re.fullmatch(r"0?\d{10}", d):
+        return "+91" + d[-10:]
+    if re.fullmatch(r"91\d{10}", d):
+        return "+" + d
+    if re.fullmatch(r"\+\d{11,15}", d):
+        return d
+    raise ValueError(f"'{val}' is not a valid phone number — type the 10-digit mobile number "
+                     "(+91 is added automatically), e.g. 9812345678 #Ravi.")
+
+
+def phone_entries(text):
+    """[(+91number, name)] — duplicates removed, order kept."""
+    out, seen = [], set()
+    for val, name in _entries(text):
+        n = _phone(val)
+        if n not in seen:
+            seen.add(n)
+            out.append((n, name))
+    return out
+
+
+def email_entries(text):
+    out, seen = [], set()
+    for val, name in _entries(text):
+        for e in val.split():
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+                raise ValueError(f"'{e}' is not a valid e-mail address.")
+            if e.lower() not in seen:
+                seen.add(e.lower())
+                out.append((e, name))
+    return out
+
+
+def parse_phones(text) -> List[str]:
+    return [n for n, _ in phone_entries(text)]
 
 
 def parse_emails(text) -> List[str]:
-    out = parse_list(text)
-    for e in out:
-        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
-            raise ValueError(f"'{e}' is not a valid e-mail address.")
-    return out
+    return [e for e, _ in email_entries(text)]
+
+
+def normalise_list(fmt: str, text) -> str:
+    """Canonical one-line form kept in .env:  '+919812345678 #Ravi,+917541827310 #Amit'."""
+    ents = phone_entries(text) if fmt == "phones" else email_entries(text)
+    return ",".join(f"{v} #{n}" if n else v for v, n in ents)
 
 
 def need(mod: str, pip: str = ""):

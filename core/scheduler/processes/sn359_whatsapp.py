@@ -17,7 +17,7 @@ def _run(params, ctx):
     groups = []
     main_acc, main_to = H.parse_list(params.get("main_accounts") or "SN359"), H.parse_phones(params.get("main_to"))
     groups.append(("SN359", main_acc, main_to, True))
-    if H.parse_list(params.get("second_to")):
+    if H.parse_phones(params.get("second_to")):
         groups.append(("SN232_SN233", H.parse_list(params.get("second_accounts") or "SN232, SN233"),
                        H.parse_phones(params.get("second_to")), False))
     if not main_to:

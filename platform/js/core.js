@@ -104,6 +104,7 @@
   /* ── modal ───────────────────────────────────────────────────────────── */
   RMS.modal = function (title, bodyHTML, opts) {
     const root = $("#modalRoot");
+    const mySeq = (RMS._modalSeq = (RMS._modalSeq || 0) + 1);   // which modal is on screen right now
     root.innerHTML =
       '<div class="modal"' + ((opts && opts.width) ? ' style="width:min(' + opts.width + 'px,94vw)"' : "") + ">" +
       '<div class="modal-head">' + ((opts && opts.icon) ? RMS.icon(opts.icon) : "") +
@@ -111,7 +112,13 @@
       (opts && opts.raw ? bodyHTML : '<div class="modal-body">' + bodyHTML + "</div>") +
       "</div>";
     root.hidden = false;
-    const close = () => { root.hidden = true; root.innerHTML = ""; document.removeEventListener("keydown", onKey); };
+    // A close() from an OLDER modal (e.g. a success popup's 4-second auto-close timer) must never close a
+    // newer modal that was opened in the meantime — that was the "window closes by itself" bug.
+    const close = () => {
+      document.removeEventListener("keydown", onKey);
+      if (RMS._modalSeq !== mySeq) return;
+      root.hidden = true; root.innerHTML = "";
+    };
     const onKey = (e) => { if (e.key === "Escape") close(); };
     document.addEventListener("keydown", onKey);
     $("#modalX").onclick = close;

@@ -14,10 +14,8 @@ from core.scheduler import envstore, helpers
 
 def _norm(p, v: str) -> str:
     """Store lists on one line: 'a@x.com,b@x.com'."""
-    if p.fmt == "phones":
-        return ",".join(helpers.parse_phones(v))
-    if p.fmt == "emails":
-        return ",".join(helpers.parse_emails(v))
+    if p.fmt in ("phones", "emails"):
+        return helpers.normalise_list(p.fmt, v)           # keeps '#name' labels, adds +91 to 10-digit numbers
     return v.strip()
 
 

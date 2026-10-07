@@ -73,8 +73,14 @@ class Helpers(Base):
         from core.scheduler import helpers as H
         self.assertEqual(H.parse_list("a@x.com, b@x.com;a@x.com\nc"), ["a@x.com", "b@x.com", "c"])
         self.assertEqual(H.parse_phones("+91 98123-45678, +917541827310"), ["+919812345678", "+917541827310"])
+        self.assertEqual(H.parse_phones("9812345678"), ["+919812345678"])          # +91 added automatically
+        self.assertEqual(H.parse_phones("09812345678\n919876543210"), ["+919812345678", "+919876543210"])
+        self.assertEqual(H.phone_entries("9812345678 #Ravi Sharma, 9876543210"),
+                         [("+919812345678", "Ravi Sharma"), ("+919876543210", "")])
+        self.assertEqual(H.normalise_list("phones", "9812345678 #Ravi\n9876543210"), "+919812345678 #Ravi,+919876543210")
+        self.assertEqual(H.parse_emails("a@x.com #Ravi, b@x.com"), ["a@x.com", "b@x.com"])
         with self.assertRaises(ValueError):
-            H.parse_phones("9812345678")                  # no country code
+            H.parse_phones("12345")                       # too short
         with self.assertRaises(ValueError):
             H.parse_emails("not-an-email")
 

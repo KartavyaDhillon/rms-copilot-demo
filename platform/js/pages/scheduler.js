@@ -143,7 +143,8 @@
     const rows = S.schedules.filter(matches).map((s) => {
       const paused = s.status === "paused", off = s.status === "disabled";
       return "<tr data-id='" + s.id + "'><td><b>" + esc(s.name) + "</b>" + (s.description ? "<div class='card-sub'>" + esc(s.description) + "</div>" : "") + "</td>" +
-        "<td>" + esc(s.process_name) + (s.process_missing ? " <span class='badge err'>missing</span>" : "") + "</td>" +
+        "<td><a href='javascript:void(0)' class='sch-plink' data-pk='" + esc(s.process_key) + "' title='Open this process (logs, recipients, files)'>" + esc(s.process_name) + "</a>" +
+        (s.process_missing ? " <span class='badge err'>missing</span>" : "") + "</td>" +
         "<td>" + esc(s.trigger_text) + "</td><td>" + esc(s.days_text) + "</td>" +
         "<td>" + esc(s.next_run_text) + "</td><td>" + esc(s.last_run_text) + "</td>" +
         "<td>" + (s.last_result && s.last_result !== "—" ? (RBADGE[s.last_result] || esc(s.last_result)) : "—") + "</td>" +
@@ -174,6 +175,9 @@
     const se = $("#scSearch");
     se.oninput = () => { S.q = se.value; const pos = se.selectionStart; renderSchedules(); const n = $("#scSearch"); n.focus(); n.setSelectionRange(pos, pos); };
     $("#scCreate").onclick = () => openEditor(null);
+    $("#scBody").querySelectorAll(".sch-plink").forEach((a) => {
+      a.onclick = () => { S.focusProc = a.dataset.pk; setTab("processes"); };
+    });
     $("#scBody").querySelectorAll("tbody button[data-a]").forEach((b) => {
       b.onclick = () => rowAction(b.dataset.a, b.closest("tr").dataset.id);
     });
@@ -559,7 +563,7 @@
         esc(CONN_NAME[g] || g) + (connReady(g) ? " ✓" : " — not set") + "</span>").join(" ");
       const wa = (p.uses || []).includes("whatsapp");
       const logo = LOGO[p.key] || p.name.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-      return '<div class="sch-box"><div class="sch-head"><div class="sch-logo ' + (wa ? "wa" : "mail") + '">' + esc(logo) + "</div>" +
+      return '<div class="sch-box" data-pk="' + esc(p.key) + '"><div class="sch-head"><div class="sch-logo ' + (wa ? "wa" : "mail") + '">' + esc(logo) + "</div>" +
         '<div class="sch-tw"><div class="sch-title">' + esc(p.name) + '</div><div class="sch-sub">' + esc(p.description || "") + "</div></div>" + state + "</div>" +
         '<div class="sch-tools">' +
         (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
@@ -579,6 +583,15 @@
     b.querySelectorAll("[data-recip]").forEach((x) => { x.onclick = () => openRecipients(x.dataset.recip); });
     b.querySelectorAll("[data-cred]").forEach((x) => { x.onclick = () => openCredentials(x.dataset.cred); });
     b.querySelectorAll("[data-logs]").forEach((x) => { x.onclick = () => openLogs(x.dataset.logs); });
+    if (S.focusProc) {                              // arrived by clicking a process name on the Schedules tab
+      const box = b.querySelector('.sch-box[data-pk="' + S.focusProc + '"]');
+      S.focusProc = "";
+      if (box) {
+        box.scrollIntoView({ block: "center", behavior: "smooth" });
+        box.classList.add("sch-focus");
+        setTimeout(() => box.classList.remove("sch-focus"), 2500);
+      }
+    }
   }
 
   /* ── Email To/CC · WhatsApp numbers (process-level, shared by all its schedules) ── */
@@ -590,10 +603,11 @@
       const pwd = await unlock(d.needs_password, (phone ? "WhatsApp numbers — " : "Email To / CC — ") + p.name);
       if (pwd === null) return;
       const body = '<div id="rcErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
-        '<div class="card-sub" style="margin-bottom:10px">' + (phone ? "One number per line or separated by commas, with country code, e.g. +919812345678. Add more numbers here for 'CC'." : "One address per line or separated by commas.") +
+        '<div class="card-sub" style="margin-bottom:10px">' + (phone ? "One number per line, only the 10-digit mobile number (+91 is added automatically). Add the person's name after # so the list is easy to read, e.g. <b>9812345678 #Ravi Sharma</b>. Add more numbers here for 'CC'."
+               : "One address per line or separated by commas. Optional name after #, e.g. <b>ravi@mastertrust.co.in #Ravi</b>.") +
         " These apply to every schedule of <b>" + esc(p.name) + "</b>. Saved in the .env file under “# scheduler process: " + esc(p.name) + "”.</div>" +
         d.params.map((q) => field(esc(q.label) + (q.required ? " *" : ""),
-          '<textarea class="f-input" data-rc="' + q.name + '" rows="2" style="width:100%">' + esc(d.values[q.name] || "").replace(/,/g, ",\n") + "</textarea>", esc(q.help || ""))).join("") +
+          '<textarea class="f-input" data-rc="' + q.name + '" rows="4" style="width:100%" placeholder="' + (q.fmt === "phones" ? "9812345678 #Name" : "name@company.com #Name") + '">' + esc(d.values[q.name] || "").replace(/,/g, ",\n") + "</textarea>", esc(q.help || ""))).join("") +
         '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="rcCancel">Cancel</button><button class="btn primary" id="rcSave">Save</button></div>';
       const close = RMS.modal((phone ? "WhatsApp numbers — " : "Email To / CC — ") + p.name, body, { width: 620, icon: phone ? "bell" : "mail" });
       const cancel = $("#rcCancel"); if (cancel) cancel.onclick = close;
