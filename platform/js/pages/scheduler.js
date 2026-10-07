@@ -539,27 +539,23 @@
         return '<div class="sch-rrow"><span class="k">' + esc(q.label) + '</span><span class="v">' + (vals.length ? vals.map((v) => '<i>' + esc(v) + "</i>").join("") :
           '<em class="' + (q.required ? "bad" : "") + '">' + (q.required ? "not set" : "—") + "</em>") + "</span></div>";
       }).join("");
-      const sched = mine.map((s) => {
-        return '<div class="sch-sched"><div class="top"><b>' + esc(s.name) + "</b>" + (BADGE[s.display_status] || "") +
-          '<div class="spacer"></div><button class="sch-tool" data-edit="' + s.id + '">Edit</button></div>' +
-          '<div class="card-sub">' + esc(s.trigger_text) + " · " + esc(s.days_text) + "</div>" +
-          '<div class="card-sub">Next: ' + esc(s.next_run_text) + " · Last: " + esc(s.last_run_text) + (s.last_result && s.last_result !== "—" ? " (" + esc(s.last_result) + ")" : "") + "</div></div>";
-      }).join("");
+      const sched = mine.slice(0, 2).map((s) =>
+        '<div class="sch-line"><span class="t">' + esc(s.trigger_text) + " · " + esc(s.days_text) + '</span><span class="n">Next ' + esc(s.next_run_text) +
+        '</span><button class="sch-link" data-edit="' + s.id + '">Edit</button></div>').join("") +
+        (mine.length > 2 ? '<div class="sch-none">+ ' + (mine.length - 2) + " more on the Schedules tab</div>" : "");
       const chips = (p.uses || []).map((g) => '<span class="badge ' + (connReady(g) ? "ok" : "warn") + '" data-cred="' + esc(p.key) + '" style="cursor:pointer" title="Open credentials">' +
         esc(CONN_NAME[g] || g) + (connReady(g) ? " ✓" : " — not set") + "</span>").join(" ");
       const wa = (p.uses || []).includes("whatsapp");
       const logo = LOGO[p.key] || p.name.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
       return '<div class="sch-box"><div class="sch-head"><div class="sch-logo ' + (wa ? "wa" : "mail") + '">' + esc(logo) + "</div>" +
         '<div class="sch-tw"><div class="sch-title">' + esc(p.name) + '</div><div class="sch-sub">' + esc(p.description || "") + "</div></div>" + state + "</div>" +
-        '<div class="sch-chips">' + chips + "</div>" +
-        (rec ? '<div class="sch-recip">' + rec + "</div>" : "") +
         '<div class="sch-tools">' +
         (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
-        ((p.uses || []).length ? '<button class="sch-tool" data-cred="' + esc(p.key) + '">🔑 Credentials</button>' : "") +
+        ((p.uses || []).length ? '<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>' : "") +
         (p.upload_exts && p.upload_exts.length ? '<button class="sch-tool green" data-files="' + esc(p.key) + '">⬆️ Upload / Files</button>' : '<button class="sch-tool" data-files="' + esc(p.key) + '">📁 Files</button>') +
         '<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>' +
-        '<button class="sch-tool blue" data-add="' + esc(p.key) + '">⏰ Add schedule</button></div>' +
-        sched + "</div>";
+        '<button class="sch-tool blue wide" data-add="' + esc(p.key) + '">⏰ Add schedule</button></div>' +
+        '<div class="sch-foot">' + (sched || '<div class="sch-none">No schedule yet</div>') + "</div></div>";
     };
     $("#scBody").innerHTML = '<div class="card-sub" style="margin-bottom:10px">Every process the scheduler can run, with who it sends to, its connections and its folder. ' +
       "To run one right now use <b>Run Now</b> on the Schedules tab.</div>" +
