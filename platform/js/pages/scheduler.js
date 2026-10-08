@@ -277,6 +277,7 @@
       '<div id="edParams"></div>' +
       '<div class="card-sub" style="font-weight:800;margin:14px 0 8px">WHEN TO RUN</div>' +
       field("Run", '<select class="f-select" id="edType">' + optHtml([["times", "At specific times (daily / selected weekdays)"], ["interval", "Repeat every X minutes / hours"],
+        ["multi", "Combine several timings (each with its own days)"],
         ["monthly", "Monthly"], ["once", "One-time dates (run exactly once each)"]], d.rule.type) + "</select>") +
       '<div id="edWhen"></div>' +
       '<div class="card-sub" style="font-weight:800;margin:14px 0 8px">TIME SETTINGS</div>' +
@@ -285,7 +286,7 @@
       field("End date (optional)", '<input type="date" class="f-input" id="edEd" value="' + esc(d.end_date || "") + '">') +
       field("Timezone", '<input class="f-input" id="edTz" list="edTzList" value="' + esc(d.tz) + '"><datalist id="edTzList">' +
         TZS.map((z) => '<option value="' + z + '">').join("") + "</datalist>") + "</div>" +
-      '<label style="font-size:12.5px"><input type="checkbox" id="edHol"' + (d.skip_holidays ? " checked" : "") + '> Skip market holidays (uses the shared holiday list)</label>' +
+      '<label style="font-size:12.5px"><input type="checkbox" id="edHol"' + (d.skip_holidays ? " checked" : "") + '> Skip market holidays (uses the shared holiday list; applies to every timing)</label>' +
       '<div class="card-sub" style="font-weight:800;margin:14px 0 8px">SAFETY</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
       field("If a run was missed (server was off)", '<select class="f-select" id="edMiss" style="width:100%">' + optHtml([["latest", "Run the latest missed execution"],
@@ -387,8 +388,68 @@
       '<button type="button" class="btn sm ghost" data-sc="all">Every day</button></div>');
   }
 
+  /* one timing block of a combined schedule: its own kind (repeat / specific times) and its own days */
+  function partHtml(p) {
+    const t = p.type === "interval" ? "interval" : "times";
+    let h = '<div class="ed-part card" style="padding:10px;margin-bottom:10px"><div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">' +
+      '<select class="f-select ed-ptype">' + optHtml([["interval", "Repeat every X minutes / hours"], ["times", "At specific times"]], t) + "</select>" +
+      '<button type="button" class="btn sm ghost ed-pdel" style="margin-left:auto">Remove</button></div>';
+    if (t === "interval") {
+      h += field("Repeat every", '<div style="display:flex;gap:8px"><input type="number" min="1" class="f-input ed-every" style="width:90px" value="' + (p.every || 1) + '">' +
+        '<select class="f-select ed-unit">' + optHtml([["minutes", "Minutes"], ["hours", "Hours"]], p.unit || "hours") + "</select></div>") +
+        field("Between", '<div style="display:flex;gap:8px;align-items:center"><input type="time" class="f-input ed-start" value="' + (p.start || "09:00") +
+          '"> and <input type="time" class="f-input ed-end" value="' + (p.end || "23:00") + '"></div>');
+    } else {
+      h += field("At", '<div class="ed-times">' + ((p.times && p.times.length) ? p.times : ["07:45"]).map(timeRow).join("") +
+        '</div><button type="button" class="btn sm ed-padd">+ Add another time</button>');
+    }
+    return h + daysBlock(p.days === undefined ? [0, 1, 2, 3, 4] : p.days) + "</div>";
+  }
+
+  function renderMulti(r) {
+    const parts = (r.parts && r.parts.length) ? r.parts
+      : [{ type: "interval", every: 1, unit: "hours", start: "09:00", end: "23:00", days: [0, 1, 2, 3, 4] },
+         { type: "times", times: ["00:00"], days: [1, 2, 3, 4, 5] }];
+    const box = $("#edWhen");
+    box.innerHTML = '<div id="edParts">' + parts.map(partHtml).join("") + "</div>" +
+      '<button type="button" class="btn sm" id="edAddPart">+ Add another timing</button>' +
+      '<div class="card-sub" style="margin-top:6px">All timings run the same process in ONE schedule. A time that appears in two timings runs once. “Skip market holidays” below applies to every timing.</div>';
+    const redraw = () => { const cur = readMulti().parts; $("#edParts").innerHTML = cur.map(partHtml).join(""); };
+    $("#edAddPart").onclick = () => {
+      if (box.querySelectorAll(".ed-part").length >= 6) return;
+      $("#edParts").insertAdjacentHTML("beforeend", partHtml({ type: "times", times: [""], days: [0, 1, 2, 3, 4] })); schedulePreview();
+    };
+    box.onchange = (e) => { if (e.target.classList.contains("ed-ptype")) { const p = e.target.closest(".ed-part"); const all = Array.from(box.querySelectorAll(".ed-part")); const cur = readMulti().parts; cur[all.indexOf(p)] = { type: e.target.value, days: cur[all.indexOf(p)].days }; $("#edParts").innerHTML = cur.map(partHtml).join(""); schedulePreview(); } };
+    box.onclick = (e) => {
+      const part = e.target.closest(".ed-part");
+      if (e.target.closest(".ed-pdel")) { if (box.querySelectorAll(".ed-part").length > 1) { part.remove(); schedulePreview(); } return; }
+      if (e.target.closest(".ed-padd")) { part.querySelector(".ed-times").insertAdjacentHTML("beforeend", timeRow("")); schedulePreview(); return; }
+      const del = e.target.closest(".ed-del");
+      if (del) { del.parentNode.remove(); schedulePreview(); return; }
+      const sc = e.target.closest("[data-sc]");
+      if (sc && part) {
+        const set = { wk: [0, 1, 2, 3, 4], we: [5, 6], all: [0, 1, 2, 3, 4, 5, 6] }[sc.dataset.sc];
+        part.querySelectorAll(".ed-day").forEach((c) => { c.checked = set.includes(Number(c.dataset.d)); });
+        schedulePreview();
+      }
+    };
+  }
+
+  function readMulti() {
+    const parts = Array.from(document.querySelectorAll("#edWhen .ed-part")).map((p) => {
+      const days = Array.from(p.querySelectorAll(".ed-day")).filter((c) => c.checked).map((c) => Number(c.dataset.d));
+      if (p.querySelector(".ed-ptype").value === "interval")
+        return { type: "interval", every: parseInt(p.querySelector(".ed-every").value, 10), unit: p.querySelector(".ed-unit").value,
+          start: p.querySelector(".ed-start").value, end: p.querySelector(".ed-end").value, days };
+      return { type: "times", times: Array.from(p.querySelectorAll(".ed-time")).map((i) => i.value).filter(Boolean), days };
+    });
+    return { type: "multi", parts };
+  }
+
   function renderWhen(r) {
     const t = r.type || "times", box = $("#edWhen");
+    if (t === "multi") { renderMulti(r); return; }
+    box.onchange = null;
     let h = "";
     if (t === "times") {
       const times = (r.times && r.times.length) ? r.times : ["07:45"];
@@ -426,6 +487,7 @@
 
   function readRule() {
     const t = $("#edType").value;
+    if (t === "multi") return readMulti();
     const days = () => {
       const d = []; document.querySelectorAll("#edWhen .ed-day").forEach((c) => { if (c.checked) d.push(Number(c.dataset.d)); });
       return d;
@@ -892,6 +954,12 @@
         if (S.loaded.schedules) render();
         load();
       }
+    },
+    // Clicking "Scheduler" in the side menu while already here: refresh and go back to the first tab (Schedules).
+    reselect(el) {
+      S.filter = "all"; S.q = "";
+      this.mount(el);
+      const body = $("#scBody"); if (body) body.scrollTop = 0;
     },
   };
 })();

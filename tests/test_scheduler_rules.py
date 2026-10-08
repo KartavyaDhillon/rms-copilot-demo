@@ -80,6 +80,77 @@ class Interval(unittest.TestCase):
         self.assertEqual(len(rules.between(s1, ist(2026, 10, 7, 0, 0), ist(2026, 10, 7, 23, 59))), 4)
 
 
+class IntervalPlusSpecificTimes(unittest.TestCase):
+    """One schedule: repeat every hour 09:00–23:00 AND also at 00:00."""
+    RULE = {"type": "interval", "every": 1, "unit": "hours", "start": "09:00", "end": "23:00",
+            "times": ["00:00"], "days": [0, 1, 2, 3, 4]}
+
+    def test_both_parts_run(self):
+        s = S(self.RULE)
+        ups = rules.between(s, ist(2026, 10, 6, 23, 59), ist(2026, 10, 7, 23, 59))      # Wednesday
+        self.assertEqual(local(ups[0]), "2026-10-07 00:00")
+        self.assertEqual(local(ups[1]), "2026-10-07 09:00")
+        self.assertEqual(local(ups[-1]), "2026-10-07 23:00")
+        self.assertEqual(len(ups), 16)                                                    # 00:00 + 09:00 … 23:00
+
+    def test_a_time_in_both_lists_runs_once(self):
+        s = S({**self.RULE, "times": ["10:00", "12:00"]})
+        ups = rules.between(s, ist(2026, 10, 6, 23, 59), ist(2026, 10, 7, 23, 59))
+        self.assertEqual(len(ups), 15)                                                    # still 09:00 … 23:00 only
+
+    def test_extra_time_outside_the_repeat_window(self):
+        s = S({**self.RULE, "times": ["07:30"]})
+        ups = rules.between(s, ist(2026, 10, 6, 23, 59), ist(2026, 10, 7, 23, 59))
+        self.assertEqual(local(ups[0]), "2026-10-07 07:30")
+
+    def test_without_extra_times_nothing_changes(self):
+        s = S({k: v for k, v in self.RULE.items() if k != "times"})
+        self.assertEqual(len(rules.between(s, ist(2026, 10, 6, 23, 59), ist(2026, 10, 7, 23, 59))), 15)
+
+    def test_bad_extra_time_is_rejected(self):
+        self.assertTrue(rules.validate_rule({**self.RULE, "times": ["25:00"]}))
+
+    def test_description_lists_the_extra_time(self):
+        self.assertIn("12:00 AM", rules.describe(S(self.RULE))["trigger"])
+
+
+class MultiTimings(unittest.TestCase):
+    """MCX hourly: every hour 09:00–23:00 Mon–Fri, plus 00:00 Tue–Sat (= the Mon–Fri night's last run)."""
+    RULE = {"type": "multi", "parts": [
+        {"type": "interval", "every": 1, "unit": "hours", "start": "09:00", "end": "23:00", "days": [0, 1, 2, 3, 4]},
+        {"type": "times", "times": ["00:00"], "days": [1, 2, 3, 4, 5]}]}
+
+    def test_valid(self):
+        self.assertEqual(rules.validate_rule(self.RULE), [])
+
+    def test_weekday_has_both_parts(self):
+        ups = rules.between(S(self.RULE), ist(2026, 10, 6, 23, 59), ist(2026, 10, 7, 23, 59))     # Wednesday
+        self.assertEqual(len(ups), 16)
+        self.assertEqual(local(ups[0]), "2026-10-07 00:00")
+
+    def test_monday_starts_at_nine_and_saturday_only_midnight(self):
+        ups = rules.between(S(self.RULE), ist(2026, 10, 4, 12), ist(2026, 10, 5, 23, 59))        # Sun→Mon
+        self.assertEqual(local(ups[0]), "2026-10-05 09:00")
+        ups = rules.between(S(self.RULE), ist(2026, 10, 9, 23, 30), ist(2026, 10, 11, 23, 59))   # Fri→Sun
+        self.assertEqual([local(u) for u in ups], ["2026-10-10 00:00"])
+
+    def test_holiday_skips_all_parts(self):
+        hol = lambda d: d == dt.date(2026, 10, 7)
+        s = S(self.RULE, skip_holidays=True)
+        ups = rules.between(s, ist(2026, 10, 6, 23, 59), ist(2026, 10, 7, 23, 59), hol)
+        self.assertEqual(ups, [])
+
+    def test_bad_parts_rejected(self):
+        self.assertTrue(rules.validate_rule({"type": "multi", "parts": []}))
+        self.assertTrue(rules.validate_rule({"type": "multi", "parts": [{"type": "times", "times": [], "days": [0]}]}))
+
+    def test_describe(self):
+        d = rules.describe(S(self.RULE))
+        self.assertIn("Every 1 hour", d["trigger"])
+        self.assertIn("12:00 AM", d["trigger"])
+        self.assertIn("Mon–Fri", d["days"])
+
+
 class Monthly(unittest.TestCase):
     def test_first_of_month(self):
         s = S({"type": "monthly", "day": 1, "times": ["08:30"]})

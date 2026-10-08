@@ -18,11 +18,14 @@ def _run(params, ctx):
         raise H.Skipped(H.skip_message(FOLDER, ["mail"], "e-mailed"))
     inp, out = paths.proc_dir(FOLDER, "inputs"), paths.proc_dir(FOLDER, "outputs")
     bday = H.prev_trading_day(dt.date.today())
+    ctx.log(f"Step 1/3: FO Bhavcopy of the previous trading day {bday:%d-%m-%Y}…")
     z = nse.download_wait("common", "FO", "/Bhavcopy", f"BhavCopy_NSE_FO_0_0_0_{bday:%Y%m%d}_F_0000.csv.zip",
                           inp, ctx, K.wait_of(params))
     bhav = K.unzip_first(z, inp)
+    ctx.log(f"Unzipped → {bhav.name} ({bhav.stat().st_size / 1024:,.0f} KB). Step 2/3: selecting stock options 3–9 % OTM…")
 
     df = pd.read_csv(bhav)
+    ctx.log(f"Bhavcopy rows: {len(df):,}.")
     df = df[df["FinInstrmTp"] == "STO"].copy()
     df["XpryDt"] = pd.to_datetime(df["XpryDt"], errors="coerce")
     df = df.dropna(subset=["XpryDt"])

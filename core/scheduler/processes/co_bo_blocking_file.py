@@ -21,12 +21,17 @@ def _run(params, ctx):
     inp, out = paths.proc_dir(FOLDER, "inputs"), paths.proc_dir(FOLDER, "outputs")
     wait = K.wait_of(params)
 
+    ctx.log(f"Step 1/4: option contract file for {today:%d-%m-%Y} from NSE (Limit Files)…")
     gz = nse.download_wait("common", "FO", "/Limit Files", f"F_AEL_OPT_CONTRACTS_{today:%d%m%Y}.csv.gz", inp, ctx, wait)
     opt_csv = K.gunzip(gz)
+    ctx.log(f"Unzipped → {opt_csv.name} ({opt_csv.stat().st_size / 1024:,.0f} KB).")
     bday = H.prev_trading_day(today)
+    ctx.log(f"Step 2/4: FO Bhavcopy of the previous trading day {bday:%d-%m-%Y}…")
     z = nse.download_wait("common", "FO", "/Bhavcopy", f"BhavCopy_NSE_FO_0_0_0_{bday:%Y%m%d}_F_0000.csv.zip", inp, ctx, wait)
     bhav_csv = K.unzip_first(z, inp)
+    ctx.log(f"Unzipped → {bhav_csv.name} ({bhav_csv.stat().st_size / 1024:,.0f} KB).")
 
+    ctx.log("Step 3/4: filtering NIFTY / BANKNIFTY puts and building the blocking lists…")
     df = pd.read_csv(opt_csv, header=None).iloc[:, :5]
     df.columns = ["Instrument", "Symbol", "Expiry", "Strike", "OptionType"]
     df = df[(df["Instrument"] == "OPTIDX") & (df["Symbol"].isin(["BANKNIFTY", "NIFTY"])) & (df["OptionType"] == "PE")]
@@ -37,6 +42,7 @@ def _run(params, ctx):
     nn = (nm + dt.timedelta(days=32)).replace(day=1)                  # 1st of month after next
     end = nn - dt.timedelta(days=1)                                   # last day of next month
     df = df[(df["Expiry"] >= pd.Timestamp(prev_month)) & (df["Expiry"] <= pd.Timestamp(end))]
+    ctx.log(f"{len(df)} index PUT contract(s) with expiry {prev_month:%d-%b-%Y} … {end:%d-%b-%Y}.")
 
     bh = pd.read_csv(bhav_csv)
     bh = bh[bh["TckrSymb"].isin(["BANKNIFTY", "NIFTY"])]
@@ -71,6 +77,7 @@ def _run(params, ctx):
             "<ul><li><b>CO Blocking File</b></li><li><b>BO Blocking File</b></li></ul>"
             "<p>These files are prepared as per defined strike and expiry logic and are intended for upload in the system.</p>"
             f"<p>Best regards,<br>{K.sig(params)}</p></body></html>")
+    ctx.log("Step 4/4: e-mailing the CO and BO files…")
     H.send_email("NFO Restricted Basket – CO & BO Blocking Files", body, to, cc, files, ctx, html=True)
     H.mark_sent(FOLDER, "mail")
     H.backup_files(FOLDER, [opt_csv, bhav_csv] + files, ctx)

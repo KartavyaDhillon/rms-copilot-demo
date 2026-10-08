@@ -24,7 +24,8 @@ def _run(params, ctx):
     d, gz, used = H.prev_trading_day(dt.date.today()), None, None
     for i in range(3):
         name = f"F_CM_DELOI_{mem}_{d:%d%m%Y}.CSV.gz"
-        gz = nse.download_wait("member", "FO", "Reports", name, inp, ctx, wait) if (wait and i == 0) else \
+        ctx.log(f"Looking for the CM_DELOI file of {d:%d-%m-%Y} (try {i + 1}/3)…")
+        gz =nse.download_wait("member", "FO", "Reports", name, inp, ctx, wait) if (wait and i == 0) else \
             nse.download("member", "FO", "Reports", name, inp, ctx)
         if gz:
             used = d
@@ -35,6 +36,7 @@ def _run(params, ctx):
     csv_all = K.gunzip(gz)
 
     df = pd.read_csv(csv_all)
+    ctx.log(f"Unzipped {csv_all.name}: {len(df):,} row(s), {len(df.columns)} column(s).")
     df.columns = [c.strip() for c in df.columns]
     col = "Client Account /CP Code"
     if col not in df.columns:

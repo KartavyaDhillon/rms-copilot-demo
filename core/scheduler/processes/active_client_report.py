@@ -19,12 +19,15 @@ def _run(params, ctx):
     risk = H.find_risk_report(ctx)
     src = C.get_run1(params, ctx)
 
+    ctx.log(f"CTCL run-1 file: {getattr(src, 'name', src)}")
     rk = pd.read_csv(risk, low_memory=False)
+    ctx.log(f"Risk report read: {len(rk):,} row(s).")
     rk.columns = rk.columns.str.strip()
     if "ClientStatus" not in rk.columns:
         raise RuntimeError("The risk report has no ClientStatus column — cannot find the ACTIVE clients.")
     status = rk[["ACCOUNTID", "ClientStatus"]].drop_duplicates(subset="ACCOUNTID", keep="first")
     dep = C.read_run1(src, ["ACCOUNTID", "DEPOSIT CTCL", "DEPOSIT NMASS"])[["ACCOUNTID", "DEPOSIT CTCL", "DEPOSIT NMASS"]]
+    ctx.log(f"Deposits read from run 1: {len(dep):,} client(s). Joining with the risk report's ClientStatus…")
     merged = pd.merge(dep, status, on="ACCOUNTID", how="left")
     final = pd.DataFrame({"CLIENTID": merged["ACCOUNTID"], "Test1": merged["DEPOSIT CTCL"],
                           "Test2": merged["DEPOSIT NMASS"], "Test3": 0, "Test4": 0,

@@ -52,6 +52,8 @@ def _in_window(now, first, last, sat_cut):
         return False
     if wd == 5 and cur > sat_cut:
         return False                                   # Saturday only for Friday's after-midnight carry-over
+    if wd == 0 and cur < first:
+        return False                                   # Monday before the first run = Sunday night's carry-over: no session
     return (first <= cur <= last) if first <= last else (cur >= first or cur <= last)
 
 

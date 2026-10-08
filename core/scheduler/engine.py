@@ -149,7 +149,9 @@ class SchedulerEngine:
         if not store.advance_cursor(s["id"], s.get("last_eval_utc"), now, nxt):
             return
         on_time, missed = rules.classify(due, now, LATE_TOLERANCE_S)
-        if missed and on_time and s["rule"].get("type") == "interval":
+        _r = s["rule"]
+        if missed and on_time and (_r.get("type") == "interval"
+                                   or any(p.get("type") == "interval" for p in _r.get("parts") or [])):
             # an on-time run is happening right now — replaying an older interval tick would double up
             run_missed, skipped = None, list(missed)
         else:

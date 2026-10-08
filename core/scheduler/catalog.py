@@ -86,6 +86,8 @@ class ProcessDef:
 _REG: Dict[str, ProcessDef] = {}
 _LOCK = threading.Lock()
 _LOADED = False
+_LOADING = False                       # True only while the first load is running (guards same-thread re-entry)
+_LOAD_LOCK = threading.RLock()
 
 
 def register(key, name, run, description="", params=None, retry_safe=False, parallel_safe=False,
@@ -113,21 +115,31 @@ def unregister(key):
 
 def load_builtin():
     """Import every module in core/scheduler/processes/ once (each registers itself)."""
-    global _LOADED
+    global _LOADED, _LOADING
     if _LOADED:
         return
-    _LOADED = True
-    try:
-        from core.scheduler import processes as pkg
-        for m in pkgutil.iter_modules(pkg.__path__):
-            if m.name.startswith("_"):
-                continue
-            try:
-                importlib.import_module(f"core.scheduler.processes.{m.name}")
-            except Exception as e:                    # one broken process file must not break the rest
-                print(f"[scheduler] could not load process module '{m.name}': {type(e).__name__}: {e}", flush=True)
-    except Exception as e:
-        print(f"[scheduler] process package not loadable: {e}", flush=True)
+    # The Scheduler page asks for /schedules and /processes at the same moment.  Before, the first request marked the
+    # catalogue "loaded" and started importing, and the second saw "loaded" and read it while it was still EMPTY, so
+    # the page showed "(not registered) missing" until the next refresh.  Now every caller waits here until the
+    # import has finished, and _LOADED is only set at the end.
+    with _LOAD_LOCK:
+        if _LOADED or _LOADING:        # done already, or this very thread is mid-import (a module asked the catalogue)
+            return
+        _LOADING = True
+        try:
+            from core.scheduler import processes as pkg
+            for m in pkgutil.iter_modules(pkg.__path__):
+                if m.name.startswith("_"):
+                    continue
+                try:
+                    importlib.import_module(f"core.scheduler.processes.{m.name}")
+                except Exception as e:                # one broken process file must not break the rest
+                    print(f"[scheduler] could not load process module '{m.name}': {type(e).__name__}: {e}", flush=True)
+        except Exception as e:
+            print(f"[scheduler] process package not loadable: {e}", flush=True)
+        finally:
+            _LOADING = False
+        _LOADED = True
 
 
 def get(key) -> Optional[ProcessDef]:

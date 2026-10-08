@@ -177,6 +177,19 @@
       };
     });
 
+    // Clicking the menu item of the page you are already on does not change the URL, so nothing happened.
+    // A page that defines reselect(el) (the Scheduler does) now refreshes itself and returns to its first tab.
+    document.querySelectorAll(".nav-item[data-route]").forEach((a) => {
+      a.addEventListener("click", () => {
+        const r = a.dataset.route;
+        if (r !== currentRoute()) return;
+        const def = RMS.pages[r], page = $("#page-" + r);
+        if (def && typeof def.reselect === "function" && page) {
+          try { def.reselect(page); window.scrollTo(0, 0); } catch (err) { console.error("[RMS] reselect failed:", err); }
+        }
+      });
+    });
+
     document.addEventListener("keydown", onKey);
     window.addEventListener("hashchange", navigate);
 

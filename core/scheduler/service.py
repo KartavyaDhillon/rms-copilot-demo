@@ -20,6 +20,9 @@ def _now() -> dt.datetime:
 def _clean_rule(rule: dict) -> dict:
     r = dict(rule or {})
     t = r.get("type")
+    if t == "multi":
+        r["parts"] = [_clean_rule(p) for p in (r.get("parts") or []) if isinstance(p, dict)]
+        return r
     if t in ("times", "monthly"):
         r["times"] = sorted({str(x).strip() for x in (r.get("times") or [])})
     if t in ("times", "interval") and r.get("days") is not None:
@@ -35,6 +38,7 @@ def _clean_rule(rule: dict) -> dict:
             r["every"] = int(r.get("every"))
         except (TypeError, ValueError):
             pass
+        r["times"] = sorted({str(x).strip() for x in (r.get("times") or []) if str(x).strip()})   # optional extra times
     if t == "monthly" and r.get("day") != "last":
         try:
             r["day"] = int(r.get("day"))

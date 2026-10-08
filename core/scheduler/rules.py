@@ -28,7 +28,7 @@ from typing import Callable, Iterable, Optional
 UTC = dt.timezone.utc
 DEFAULT_TZ = "Asia/Kolkata"
 _IST = dt.timezone(dt.timedelta(hours=5, minutes=30), "IST")      # India has no DST → safe fallback
-RULE_TYPES = ("times", "interval", "monthly", "once")
+RULE_TYPES = ("times", "interval", "monthly", "once", "multi")
 MISSED_POLICIES = ("latest", "grace", "skip")
 OVERLAP_POLICIES = ("skip", "queue", "parallel")
 WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -99,7 +99,17 @@ def validate_rule(rule) -> list:
         return ["Choose how the schedule should repeat."]
     t = rule["type"]
     try:
-        if t == "times":
+        if t == "multi":
+            parts = rule.get("parts")
+            if not isinstance(parts, list) or not 1 <= len(parts) <= 6:
+                errs.append("Add between 1 and 6 timings.")
+            else:
+                for i, p in enumerate(parts, 1):
+                    if not isinstance(p, dict) or p.get("type") not in ("times", "interval"):
+                        errs.append(f"Timing {i}: choose 'repeat every' or 'at specific times'.")
+                        continue
+                    errs += [f"Timing {i}: {e}" for e in validate_rule(p)]
+        elif t == "times":
             times = rule.get("times") or []
             if not times:
                 errs.append("Add at least one time.")
@@ -117,6 +127,8 @@ def validate_rule(rule) -> list:
             s, e = parse_hhmm(rule.get("start")), parse_hhmm(rule.get("end"))
             if e <= s:
                 errs.append("The end time must be after the start time.")
+            for x in (rule.get("times") or []):                  # optional extra specific times on top of the repeat
+                parse_hhmm(x)
             _days_ok(rule.get("days"), errs)
         elif t == "monthly":
             d = rule.get("day")
@@ -161,6 +173,11 @@ def validate_schedule_timing(s: dict) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 def _times_for_day(rule: dict, d: dt.date) -> list:
     t = rule["type"]
+    if t == "multi":                      # union of the parts that apply on this weekday; a shared time runs once
+        out = set()
+        for p in _parts_for_day(rule, d):
+            out.update(_times_for_day(p, d))
+        return sorted(out)
     if t == "times":
         return sorted(parse_hhmm(x) for x in rule["times"])
     if t == "monthly":
@@ -169,16 +186,25 @@ def _times_for_day(rule: dict, d: dt.date) -> list:
         step = rule["every"] * (60 if rule["unit"] == "hours" else 1)
         s, e = parse_hhmm(rule["start"]), parse_hhmm(rule["end"])
         cur, end = s.hour * 60 + s.minute, e.hour * 60 + e.minute
-        out = []
+        out = set()
         while cur <= end:
-            out.append(dt.time(cur // 60, cur % 60))
+            out.add(dt.time(cur // 60, cur % 60))
             cur += step
-        return out
+        # A single schedule may ALSO run at specific times (e.g. every hour 09:00–23:00 + 12:00 AM): the two lists
+        # are merged, and a time that is in both runs only once.
+        out.update(parse_hhmm(x) for x in (rule.get("times") or []))
+        return sorted(out)
     return []
+
+
+def _parts_for_day(rule: dict, d: dt.date) -> list:
+    return [p for p in rule.get("parts") or [] if _day_matches(p, d)]
 
 
 def _day_matches(rule: dict, d: dt.date) -> bool:
     t = rule["type"]
+    if t == "multi":
+        return bool(_parts_for_day(rule, d))
     if t in ("times", "interval"):
         days = rule.get("days")
         return True if not days else d.weekday() in days
@@ -309,12 +335,19 @@ def describe(sched: dict) -> dict:
     r = sched.get("rule") or {}
     t = r.get("type")
     try:
+        if t == "multi":
+            ds = [describe({"rule": p}) for p in r["parts"]]
+            if len({x["days"] for x in ds}) == 1:
+                return {"trigger": " + ".join(x["trigger"] for x in ds), "days": ds[0]["days"]}
+            return {"trigger": " + ".join(x["trigger"] for x in ds),
+                    "days": " · ".join(f"{x['days']}" for x in ds)}
         if t == "times":
             return {"trigger": "At " + ", ".join(_t12(x) for x in sorted(r["times"])), "days": _days_text(r.get("days"))}
         if t == "interval":
             unit = "minute" if r["unit"] == "minutes" else "hour"
             every = f"Every {r['every']} {unit}{'s' if r['every'] != 1 else ''}"
-            return {"trigger": f"{every}, {_t12(r['start'])}–{_t12(r['end'])}", "days": _days_text(r.get("days"))}
+            extra = "".join(f" + {_t12(x)}" for x in sorted(r.get("times") or []))
+            return {"trigger": f"{every}, {_t12(r['start'])}–{_t12(r['end'])}{extra}", "days": _days_text(r.get("days"))}
         if t == "monthly":
             d = "last day" if r["day"] == "last" else f"day {r['day']}"
             return {"trigger": "At " + ", ".join(_t12(x) for x in sorted(r["times"])), "days": f"Monthly · {d}"}

@@ -23,6 +23,7 @@ def _run(params, ctx):
     inp, out = paths.proc_dir(FOLDER, "inputs"), paths.proc_dir(FOLDER, "outputs")
     bhav = mcx.latest_bhavcopy(inp, ctx)
     df = pd.read_csv(bhav) if bhav.suffix.lower() == ".csv" else pd.read_excel(bhav)
+    ctx.log(f"Bhavcopy {bhav.name}: {len(df):,} row(s).")
     df["XpryDt"] = pd.to_datetime(df["XpryDt"], errors="coerce")
     today = dt.date.today()
 
@@ -59,6 +60,7 @@ def _run(params, ctx):
     if not parts:
         raise RuntimeError("No MCX contracts selected — check the Bhavcopy.")
     res = pd.concat(parts, ignore_index=True)
+    ctx.log(f"{len(res):,} contract(s) selected after the ATM ± 10 strikes exclusion; building the CO / BO / MIS files…")
     res["E"] = res["XpryDt"].apply(lambda x: x.strftime("%d-%b-%Y").upper())
 
     body = ("<html><body style=\"font-family:Calibri;font-size:14px;\"><p>Hi Team,</p><p>Please find attached the "

@@ -20,18 +20,20 @@ def _norm(p, v: str) -> str:
 
 
 def get(pdef) -> Dict[str, str]:
-    """Saved process-level values (only the process-scope params that have a value)."""
+    """Saved process-level values.  A value that was SAVED EMPTY counts as saved: clearing a Cc box on purpose
+    (for example while testing) means "nobody", it must NOT fall back to the built-in default list.  Only a setting
+    that was never saved at all (no line in .env) uses the default."""
     out = {}
     for p in pdef.params:
         if p.scope == "process":
-            v = os.getenv(envstore.proc_key(pdef.key, p.name), "")
-            if v.strip():
+            v = os.environ.get(envstore.proc_key(pdef.key, p.name))
+            if v is not None:
                 out[p.name] = v.strip()
     return out
 
 
 def view(pdef) -> Dict[str, str]:
-    """Saved values with defaults filled in, for the editor."""
+    """Saved values with defaults filled in (only for settings never saved), for the editor."""
     vals = get(pdef)
     for p in pdef.params:
         if p.scope == "process" and p.name not in vals and p.default not in (None, ""):

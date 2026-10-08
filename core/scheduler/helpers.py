@@ -205,6 +205,25 @@ def find_risk_report(ctx=None) -> Path:
 
 
 # ───────────────────────── run log + folders ─────────────────────────
+def _log_start(folder: str, params, ctx):
+    """First lines of every run log: what is running, how it was started and with which (non-secret) settings —
+    like the banner the old scripts printed in the terminal."""
+    try:
+        t = str(getattr(ctx, "trigger", "") or "")
+        trig = "Run Now (manual)" if t == MANUAL else "scheduled" if t.upper() == "SCHEDULED" else (t or "scheduled")
+        ctx.log(f"=== {folder} — started ({trig}) on {dt.datetime.now():%d-%m-%Y %H:%M:%S} ===")
+        for k, v in sorted((params or {}).items()):
+            lk = k.lower()
+            if k.startswith("_") or lk == "signature" or any(s in lk for s in ("password", "secret", "token")):
+                continue
+            s = "(empty)" if v in (None, "") else str(v).replace("\n", ", ")
+            if "phone" in lk and s != "(empty)":               # numbers are masked in logs, e-mail addresses are shown
+                s = ", ".join(("*" * max(0, len(x.strip()) - 4)) + x.strip()[-4:] for x in s.split(",") if x.strip())
+            ctx.log(f"Setting  {k}: {s[:300]}")
+    except Exception:
+        pass
+
+
 def logged(folder: str):
     """Decorator for a process run(params, ctx): makes sure its folders exist and writes a log file to
     data/scheduler/<folder>/logs/ whatever happens (success or failure)."""
@@ -212,8 +231,11 @@ def logged(folder: str):
         def wrapper(params, ctx):
             paths.ensure_process_dirs(folder)
             err, skipped, result = None, False, None
+            t_start = time.time()
             try:
+                _log_start(folder, params, ctx)
                 result = fn(params, ctx)
+                ctx.log(f"Finished in {time.time() - t_start:.0f} s.")
                 return result
             except Skipped as e:
                 skipped = True
@@ -392,13 +414,21 @@ def send_email(subject: str, body: str, to: List[str], cc: List[str], attachment
         sub = "vnd.openxmlformats-officedocument.spreadsheetml.sheet" if a.suffix.lower() == ".xlsx" else "octet-stream"
         msg.add_attachment(a.read_bytes(), maintype="application", subtype=sub, filename=a.name)
     last = ""
+    ctx.log(f"E-mail: '{subject}'")
+    ctx.log(f"  From: {c['email']}")
+    ctx.log(f"  To ({len(to)}): {', '.join(to)}")
+    ctx.log(f"  Cc ({len(cc)}): {', '.join(cc) if cc else '—'}")
+    ctx.log("  Attachments: " + (", ".join(f"{Path(a).name} ({Path(a).stat().st_size / 1024:,.0f} KB)" for a in attachments) or "none")
+            + (f"; inline image(s): {', '.join(inline_images)}" if inline_images else ""))
     for i in range(1, attempts + 1):
         try:
+            ctx.log(f"  Connecting to {c['server']}:{c['port']} (attempt {i}/{attempts})…")
             with smtplib.SMTP(c["server"], int(c["port"]), timeout=30) as s:
                 s.ehlo()
                 s.starttls(context=ssl.create_default_context())
                 s.ehlo()
                 s.login(c["email"], c["password"])
+                ctx.log("  Logged in; sending…")
                 s.send_message(msg, from_addr=c["email"], to_addrs=list(to) + list(cc))
             ctx.log(f"E-mail sent: '{subject}' → To {len(to)} / Cc {len(cc)}")
             return

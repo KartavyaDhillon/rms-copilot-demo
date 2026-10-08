@@ -36,17 +36,23 @@ def fetch(subject_filter, cutoff, ctx):
     """[(received_ist, name, bytes)] earliest first — today's matching mails only."""
     c = connections.require("pop3b", "server", "port", "username", "password")
     target = datetime.now(IST).date()
+    ctx.log(f"Mailbox: connecting to {c['server']}:{c['port']} as {c['username']}…")
     pop = poplib.POP3_SSL(c["server"], int(c["port"]), context=partic_lib._relaxed_ssl_context(), timeout=30)
     out = []
+    scanned = other_subject = after_cutoff = no_attach = 0
     try:
         pop.user(c["username"])
         pop.pass_(c["password"])
         count, _ = pop.stat()
+        ctx.log(f"Mailbox: logged in — {count} message(s) in the mailbox.")
+        ctx.log(f"Looking for today's mails ({target:%d-%m-%Y}) with subject containing '{subject_filter}' received "
+                f"before {cutoff:%H:%M}, newest first…")
         for i in range(count, max(0, count - 3000), -1):          # newest → oldest, headers first
             try:
                 _, lines, _ = pop.top(i, 0)
             except Exception:
                 continue
+            scanned += 1
             msg = BytesParser(policy=policy.default).parsebytes(b"\r\n".join(lines))
             try:
                 rdt = email.utils.parsedate_to_datetime(msg["Date"])
@@ -54,24 +60,40 @@ def fetch(subject_filter, cutoff, ctx):
                 continue
             rdt = (rdt.replace(tzinfo=IST) if rdt.tzinfo is None else rdt).astimezone(IST)
             if rdt.date() < target:
+                ctx.log(f"Reached yesterday's mail (#{i}, {rdt:%d-%m %H:%M}) — stopped scanning.")
                 break
             if rdt.date() > target or subject_filter.lower() not in (msg["Subject"] or "").lower():
+                other_subject += 1
                 continue
             if rdt.time() >= cutoff:
+                after_cutoff += 1
+                ctx.log(f"  Skipped mail #{i} at {rdt:%H:%M:%S} — after the {cutoff:%H:%M} cut-off.")
                 continue
+            ctx.log(f"  Match: mail #{i} at {rdt:%H:%M:%S} — '{msg['Subject']}' from {msg['From']}; downloading…")
             _, full, _ = pop.retr(i)
             m = BytesParser(policy=policy.default).parsebytes(b"\r\n".join(full))
+            got = False
             for part in m.iter_attachments():
                 fn = part.get_filename() or ""
                 if fn.upper().startswith(PREFIX.upper()) and fn.lower().endswith(".xlsx"):
-                    out.append((rdt, fn, part.get_payload(decode=True)))
+                    data = part.get_payload(decode=True)
+                    out.append((rdt, fn, data))
+                    ctx.log(f"    Attachment: {fn} ({len(data) / 1024:,.0f} KB)")
+                    got = True
                     break
+            if not got:
+                no_attach += 1
+                ctx.log(f"    No '{PREFIX}…xlsx' attachment in this mail — ignored.")
+        ctx.log(f"Mailbox scan done: {scanned} header(s) checked, {len(out)} usable, {after_cutoff} after cut-off, "
+                f"{no_attach} without the attachment, {other_subject} other mail(s) today.")
     finally:
         try:
             pop.quit()
         except Exception:
             pass
     out.sort(key=lambda x: x[0])
+    for n, (rdt, fn, _d) in enumerate(out, 1):
+        ctx.log(f"  Snapshot {n}: {fn} received {rdt:%H:%M:%S}")
     return out
 
 
@@ -107,6 +129,7 @@ def _run(params, ctx):
         p = inp / f"{name.rsplit('.', 1)[0]}_{seq:02d}.xlsx"
         p.write_bytes(data)
         files.append((p, rdt))
+        ctx.log(f"File {seq}/{len(found)}: {p.name} saved ({len(data) / 1024:,.0f} KB, received {rdt:%H:%M}) — unlocking with the source password…")
         of = msoff.OfficeFile(io.BytesIO(data))
         of.load_key(password=src_pw)
         buf = io.BytesIO()
@@ -114,12 +137,15 @@ def _run(params, ctx):
         buf.seek(0)
         ws = openpyxl.load_workbook(buf, data_only=True)["Sheet1"]
         zr = defaultdict(list)
+        total_rows = 0
         for row in ws.iter_rows(min_row=2, values_only=True):
             if row[1] is None or row[2] is None:
                 continue
+            total_rows += 1
             z = _zone(row[1])
             zr[z].append({"cm": row[0], "raw": row[1], "mz": z, "client": row[2], "net": row[14] or 0, "src": p.name})
         per_file[p.name] = {z: sorted(zr.get(z, []), key=lambda r: r["net"], reverse=True)[:20] for z in ZONES}
+        ctx.log(f"  Read {total_rows} client row(s): " + ", ".join(f"{z} {len(zr.get(z, []))}" for z in ZONES))
 
     final = {}
     for z in ZONES:
@@ -129,6 +155,8 @@ def _run(params, ctx):
                 if r["client"] not in best or r["net"] > best[r["client"]]["net"]:
                     best[r["client"]] = r
         final[z] = sorted(best.values(), key=lambda r: r["net"], reverse=True)[:20]
+        ctx.log(f"Final top {len(final[z])} for {z}: highest net cash supported {round(final[z][0]['net']):,} ({final[z][0]['client']})"
+                if final[z] else f"Final top 20 for {z}: no clients.")
 
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -190,6 +218,7 @@ def _run(params, ctx):
     name = f"Top20_Client_Margin_Report_{day:%d-%m-%Y}_{day:%H%M}.xlsx"
     plain, prot = out / (name + ".tmp"), out / name
     wb.save(plain)
+    ctx.log(f"Excel built ({len(files) + 1} sheet(s)); protecting it with the output password…")
     with open(plain, "rb") as f:
         msoff.OfficeFile(f).encrypt(password=out_pw, outfile=open(prot, "wb"))
     plain.unlink(missing_ok=True)
