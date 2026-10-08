@@ -9,7 +9,7 @@
   let booted = false;
   const S = { tab: "schedules", filter: "all", q: "", schedules: [], summary: null, procs: [],
               hist: [], audit: [], histF: { date: "", process: "", schedule: "", status: "" },
-              today: null, tview: "timeline", tpipes: new Set(["ctcl", "sa", "ms15", "cli"]), err: "" };
+              today: null, tview: "timeline", tpipes: new Set(["ctcl", "sa", "ms15", "cli"]), err: "", loaded: {} };
   const PIPES = [["ctcl", "CTCL vs NMASS"], ["sa", "Short Allocation"], ["ms15", "Margin Shortage"], ["cli", "Client Prudential"]];
   const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const TZS = ["Asia/Kolkata", "UTC", "Asia/Dubai", "Asia/Singapore", "Europe/London", "America/New_York"];
@@ -64,11 +64,15 @@
     S.tab = t;
     S.pw = "";                                  // a verified console password never outlives the tab it was typed on
     $("#scTabs").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.t === t));
+    // Switch instantly: show what this tab last had (refreshed quietly below), or a placeholder on first visit.
+    if (S.loaded[t]) render();
+    else if ($("#scBody")) $("#scBody").innerHTML = '<div class="card"><div class="bm-empty">Loading…</div></div>';
     load();
   }
 
   /* ── data loading ─────────────────────────────────────────────────────── */
   async function load() {
+    const tab = S.tab;
     try {
       S.err = "";
       if (S.tab === "schedules") {
@@ -93,6 +97,8 @@
         S.today = await RMS.api("/ops/timeline");
       }
     } catch (e) { S.err = e.message || String(e); }
+    if (tab !== S.tab) return;                  // user already moved on to another tab — don't paint over it
+    if (!S.err) S.loaded[tab] = true;
     render();
   }
 
@@ -863,7 +869,14 @@
           if (!ED && document.getElementById("scBody")) load();
         }, 15000);
         booted = true;
-      } else load();
+      } else {
+        // Coming back to the Scheduler always starts on the Schedules tab, not the last one visited.
+        S.tab = "schedules"; S.pw = "";
+        const tabs = $("#scTabs");
+        if (tabs) tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.t === "schedules"));
+        if (S.loaded.schedules) render();
+        load();
+      }
     },
   };
 })();
