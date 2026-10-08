@@ -538,7 +538,7 @@
   /* ═══════════════════════ PROCESSES TAB ═══════════════════════════════ */
   function connReady(group) {
     const g = ((S.conns && S.conns.groups) || []).find((x) => x.group === group);
-    return !!g && g.fields.every((f) => (f.secret ? f.set : !!f.value));
+    return !!g && g.fields.every((f) => f.optional || (f.secret ? f.set : !!f.value));
   }
   const CONN_NAME = { whatsapp: "WhatsApp", smtp: "E-mail (SMTP)", pop3: "Mailbox (POP3)",
     smtpb: "E-mail 2 (SMTP)", pop3b: "Mailbox 2 (POP3)", nse: "NSE Extranet", mcx_sftp: "MCX portal",
@@ -639,7 +639,7 @@
   function connGroupHtml(g, canEdit) {
     return '<div class="card" style="margin-bottom:12px" data-g="' + g.group + '"><div class="sec-head"><h3>' + esc(g.label) + "</h3></div>" +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">' +
-      g.fields.map((f) => field(esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge warn">not set</span>') : ""),
+      g.fields.map((f) => field(esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge ' + (f.optional ? "dim\">optional" : "warn\">not set") + "</span>") : ""),
         '<input class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '" ' +
         (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') + (canEdit ? "" : " disabled") + ">")).join("") +
       "</div>" + (canEdit ? '<div style="margin-top:8px"><button class="btn primary" data-save="' + g.group + '">Save ' + esc(g.label) + "</button></div>" : "") + "</div>";

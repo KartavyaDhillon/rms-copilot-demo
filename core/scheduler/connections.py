@@ -144,6 +144,10 @@ def require(group: str, *keys: str) -> Dict[str, str]:
     return v
 
 
+# Alternatives / extras that may stay empty — the UI must not call the connection "not set" because of them.
+OPTIONAL = {("nse", "encrypted_password"), ("mcx_sftp", "password2"), ("mcx_eclear", "rsa_sdtid")}
+
+
 def view() -> List[dict]:
     """Masked, for the UI."""
     out = []
@@ -151,11 +155,13 @@ def view() -> List[dict]:
         fields = []
         for k, label, secret, dflt in spec["fields"]:
             raw = _raw(g, k)
+            opt = (g, k) in OPTIONAL
             if secret:
-                fields.append({"name": k, "label": label, "secret": True, "set": bool(raw),
+                fields.append({"name": k, "label": label, "secret": True, "set": bool(raw), "optional": opt,
                                "hint": ("…" + raw[-4:]) if len(raw) > 8 else ("set" if raw else "")})
             else:
-                fields.append({"name": k, "label": label, "secret": False, "value": raw or dflt, "default": dflt})
+                fields.append({"name": k, "label": label, "secret": False, "value": raw or dflt, "default": dflt,
+                               "optional": opt})
         out.append({"group": g, "label": spec["label"], "fields": fields})
     return out
 
