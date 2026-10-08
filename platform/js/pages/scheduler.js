@@ -561,6 +561,7 @@
       const state = !mine.length ? '<span class="badge dim">Not scheduled</span>' : live ? '<span class="badge ok">Scheduled</span>' : '<span class="badge dim">Paused</span>';
       const procParams = (p.params || []).filter((q) => q.scope === "process");
       const isPhone = procParams.some((q) => q.fmt === "phones");
+      const isMail = procParams.some((q) => q.fmt === "emails");
       const vals0 = (S.pset && S.pset[p.key]) || {};
       const missingReq = procParams.some((q) => q.required && !String(vals0[q.name] || "").trim());
       const rec = procParams.filter((q) => q.fmt).map((q) => {
@@ -579,7 +580,7 @@
       return '<div class="sch-box" data-pk="' + esc(p.key) + '"><div class="sch-head"><div class="sch-logo ' + (wa ? "wa" : "mail") + '">' + esc(logo) + "</div>" +
         '<div class="sch-tw"><div class="sch-title">' + esc(p.name) + '</div><div class="sch-sub">' + esc(p.description || "") + "</div></div>" + state + "</div>" +
         '<div class="sch-tools">' +
-        (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
+        (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone && isMail ? "📱✉️ WhatsApp numbers / Email To & CC" : isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
         ((p.uses || []).length ? '<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>' : "") +
         (p.upload_exts && p.upload_exts.length ? '<button class="sch-tool green" data-upload="' + esc(p.key) + '">⬆️ Upload files</button>' : "") +
         '<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>' +
@@ -613,16 +614,20 @@
       const d = await jget("/sched/process-settings/" + encodeURIComponent(key));
       const p = S.procs.find((x) => x.key === key) || { name: key };
       const phone = d.params.some((q) => q.fmt === "phones");
-      const pwd = await unlock(d.needs_password, (phone ? "WhatsApp numbers — " : "Email To / CC — ") + p.name);
+      const mail = d.params.some((q) => q.fmt === "emails");
+      const both = phone && mail;
+      const ttl = both ? "WhatsApp numbers / Email To & CC — " : phone ? "WhatsApp numbers — " : "Email To / CC — ";
+      const pwd = await unlock(d.needs_password, ttl + p.name);
       if (pwd === null) return;
+      const helpPhone = "WhatsApp: one number per line, only the 10-digit mobile number (+91 is added automatically). Add the person's name after # so the list is easy to read, e.g. <b>9812345678 #Ravi Sharma</b>. Add more numbers here for 'CC'.";
+      const helpMail = "E-mail: one address per line or separated by commas. Optional name after #, e.g. <b>ravi@mastertrust.co.in #Ravi</b>.";
       const body = '<div id="rcErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
-        '<div class="card-sub" style="margin-bottom:10px">' + (phone ? "One number per line, only the 10-digit mobile number (+91 is added automatically). Add the person's name after # so the list is easy to read, e.g. <b>9812345678 #Ravi Sharma</b>. Add more numbers here for 'CC'."
-               : "One address per line or separated by commas. Optional name after #, e.g. <b>ravi@mastertrust.co.in #Ravi</b>.") +
+        '<div class="card-sub" style="margin-bottom:10px">' + (both ? helpPhone + "<br>" + helpMail : phone ? helpPhone : helpMail) +
         " These apply to every schedule of <b>" + esc(p.name) + "</b>. Saved in the .env file under “# scheduler process: " + esc(p.name) + "”.</div>" +
         d.params.map((q) => field(esc(q.label) + (q.required ? " *" : ""),
           '<textarea class="f-input" data-rc="' + q.name + '" rows="4" style="width:100%" placeholder="' + (q.fmt === "phones" ? "9812345678 #Name" : "name@company.com #Name") + '">' + esc(d.values[q.name] || "").replace(/,/g, ",\n") + "</textarea>", esc(q.help || ""))).join("") +
         '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="rcCancel">Cancel</button><button class="btn primary" id="rcSave">Save</button></div>';
-      const close = RMS.modal((phone ? "WhatsApp numbers — " : "Email To / CC — ") + p.name, body, { width: 620, icon: phone ? "bell" : "mail" });
+      const close = RMS.modal(ttl + p.name, body, { width: 620, icon: phone ? "bell" : "mail" });
       const cancel = $("#rcCancel"); if (cancel) cancel.onclick = close;
       const save = $("#rcSave");
       if (save) save.onclick = async () => {

@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -113,13 +114,68 @@ def _use_pg() -> bool:
     return _CONN_FACTORY is None and os.getenv("USE_POSTGRES", "false").strip().lower() == "true"
 
 
+_POOL: list = []                       # idle PostgreSQL connections, re-used instead of opening ~25 per page
+_POOL_LOCK = threading.Lock()
+_POOL_MAX = 8
+
+
+class _Pooled:
+    """Looks like a connection; close() hands it back to the pool instead of closing it (opening a PostgreSQL
+    connection costs 100-300 ms, and one Scheduler page used to open about 25 of them)."""
+
+    def __init__(self, conn):
+        self._c = conn
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
+
+    def close(self):
+        c = self._c
+        try:
+            if getattr(c, "closed", 1):
+                return
+            c.rollback()                                   # leave it clean for the next user
+            with _POOL_LOCK:
+                if len(_POOL) < _POOL_MAX:
+                    _POOL.append(c)
+                    return
+            c.close()
+        except Exception:
+            try:
+                c.close()
+            except Exception:
+                pass
+
+
+def _pg_checkout():
+    while True:
+        with _POOL_LOCK:
+            c = _POOL.pop() if _POOL else None
+        if c is None:
+            break
+        try:
+            if c.closed:
+                continue
+            cur = c.cursor()
+            cur.execute("SELECT 1")                        # dropped by the server while idle? then discard it
+            cur.close()
+            c.rollback()
+            return _Pooled(c)
+        except Exception:
+            try:
+                c.close()
+            except Exception:
+                pass
+    from core.db_postgres import _conn as mk
+    return _Pooled(mk())
+
+
 def _connect():
     if _CONN_FACTORY is not None:
         return _CONN_FACTORY()
     if _use_pg():
-        from core.db_postgres import _conn as c
-    else:
-        from core.db import _conn as c
+        return _pg_checkout()
+    from core.db import _conn as c
     return c()
 
 
