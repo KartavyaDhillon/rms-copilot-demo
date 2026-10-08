@@ -143,12 +143,21 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
     if date:
         url += f"&date={date}"
     dest_dir.mkdir(parents=True, exist_ok=True)
+    import time
     with _LOCK:
         ctx.log(f"NSE: requesting {filename} from {folder} ({segment}).")
-        r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx)}"}, timeout=DOWNLOAD_TIMEOUT)
-        if _bad_token(r):
-            ctx.log("NSE: token rejected — logging in again.")
-            r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx, True)}"}, timeout=DOWNLOAD_TIMEOUT)
+        force = False
+        for n in range(1, MAX_TRIES + 1):
+            r = _send("GET", url, ctx, f"downloading {filename}",
+                      headers={"Authorization": f"Bearer {_token(ctx, force)}"}, timeout=DOWNLOAD_TIMEOUT)
+            if not _bad_token(r):
+                break
+            # 401/403/802/803: NSE did not accept the token (expired, or another login replaced it, or it had
+            # not settled yet right after login).  The old script did the same: fresh login, short pause, try again.
+            ctx.log(f"NSE: token rejected (HTTP {r.status_code}) — fresh login and retry {n}/{MAX_TRIES}.")
+            force = True
+            if n < MAX_TRIES:
+                time.sleep(5)
     if r.status_code == 404:
         ctx.log(f"NSE: {filename} not available yet (404).")
         return None
