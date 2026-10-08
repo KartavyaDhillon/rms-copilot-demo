@@ -32,7 +32,39 @@ def _encrypt(password: str, b64_key: str) -> str:
     return base64.standard_b64encode(enc.update(data) + enc.finalize()).decode()
 
 
-def _send(method: str, url: str, ctx, what: str, tries: int = 3, **kw):
+LOGIN_TIMEOUT = 15       # NSE answers within 15 s or not at all — final, never longer
+DOWNLOAD_TIMEOUT = 15    # per-read wait (not the whole download)
+
+
+def _token_file() -> Path:
+    from core.scheduler import paths
+    return paths.sched_root() / "_nse_token.json"
+
+
+def _load_saved_token():
+    """Same idea as the old extranetlib token.txt: a token issued < 55 min ago is reused, even after a restart."""
+    import json
+    try:
+        d = json.loads(_token_file().read_text(encoding="utf-8"))
+        at = dt.datetime.fromisoformat(d["time"])
+        if d.get("token") and dt.datetime.now() - at < dt.timedelta(minutes=55) and at <= dt.datetime.now():
+            _TOKEN.update(token=d["token"], at=at)
+    except Exception:
+        pass
+
+
+def _save_token():
+    import json
+    try:
+        _token_file().write_text(json.dumps({"token": _TOKEN["token"], "time": _TOKEN["at"].isoformat()}), encoding="utf-8")
+    except Exception:
+        pass
+
+
+MAX_TRIES = 15           # NSE sometimes just doesn't answer one request; the next one goes through (seen live)
+
+
+def _send(method: str, url: str, ctx, what: str, tries: int = MAX_TRIES, **kw):
     """requests call with a log line per attempt and a retry on timeout / connection failure (never on an HTTP answer)."""
     import time
     requests = H.need("requests")
@@ -47,7 +79,7 @@ def _send(method: str, url: str, ctx, what: str, tries: int = 3, **kw):
             if ctx:
                 ctx.log(f"NSE: no answer — {type(e).__name__}.")
             if n < tries:
-                time.sleep(10)
+                time.sleep(3)
     raise RuntimeError(f"Cannot reach NSE ({BASE.split('/')[2]}) from this server after {tries} tries ({type(last).__name__}). "
                        "This is a network problem, not a file problem: the NSE Extranet only answers from your registered "
                        "static IP / leased line, and a firewall or proxy can also block it. Check that this machine can "
@@ -61,14 +93,21 @@ def _login(ctx=None) -> str:
         connections.require("nse", "password", "aes_key")
         enc = _encrypt(c["password"], c["aes_key"])
     r = _send("POST", f"{BASE}/login/2.0", ctx, "logging in",
-              json={"memberCode": c["member_code"], "loginId": c["login_id"], "password": enc}, timeout=40)
+              json={"memberCode": c["member_code"], "loginId": c["login_id"], "password": enc}, timeout=LOGIN_TIMEOUT)
     try:
         j = r.json()
     except Exception:
         raise RuntimeError(f"NSE login: unreadable answer (HTTP {r.status_code}).")
     if j.get("status") != "success" or not j.get("token"):
-        raise RuntimeError(f"NSE login refused: {str(j)[:200]}")
+        codes = j.get("responseCode")
+        codes = ", ".join(map(str, codes)) if isinstance(codes, list) else str(codes or "")
+        _TOKEN.update(token=None, at=None)
+        msg = j.get("message") or j.get("responseMessage") or str(j)[:200]
+        # NSE answered, so this is a credentials problem — it is NOT retried (repeat wrong logins can lock the ID).
+        raise RuntimeError(f"NSE login refused (code {codes or 'n/a'}): {msg}. Check Connections → NSE Extranet "
+                           "(member code, login ID, password / encrypted password, AES key). Not retried.")
     _TOKEN.update(token=j["token"], at=dt.datetime.now())
+    _save_token()
     if ctx:
         ctx.log("NSE login OK.")
     return _TOKEN["token"]
@@ -76,6 +115,8 @@ def _login(ctx=None) -> str:
 
 def _token(ctx=None, force=False) -> str:
     with _LOCK:
+        if not force and not _TOKEN["token"]:
+            _load_saved_token()
         at = _TOKEN["at"]
         if force or not _TOKEN["token"] or not at or dt.datetime.now() > at + dt.timedelta(minutes=55):
             return _login(ctx)
@@ -104,10 +145,10 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
     dest_dir.mkdir(parents=True, exist_ok=True)
     with _LOCK:
         ctx.log(f"NSE: requesting {filename} from {folder} ({segment}).")
-        r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx)}"}, timeout=120)
+        r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx)}"}, timeout=DOWNLOAD_TIMEOUT)
         if _bad_token(r):
             ctx.log("NSE: token rejected — logging in again.")
-            r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx, True)}"}, timeout=120)
+            r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx, True)}"}, timeout=DOWNLOAD_TIMEOUT)
     if r.status_code == 404:
         ctx.log(f"NSE: {filename} not available yet (404).")
         return None
