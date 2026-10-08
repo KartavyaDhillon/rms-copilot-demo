@@ -56,6 +56,59 @@
     if (ok) setTimeout(() => { try { close(); } catch (e) { /* already closed */ } }, 4000);
   }
 
+  /* ── Get files tab: any date range of HOLDING / RISK_REPORT, from COMMON FILES (+ its dated backup) and the database ── */
+  function getFilesHtml() {
+    const iso = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    const t = new Date(), w = new Date(); w.setDate(w.getDate() - 7);
+    const inp = "background:var(--panel2,#0f141c);color:inherit;border:1px solid var(--line,#2a3342);border-radius:8px;padding:6px 8px;color-scheme:dark";
+    return '<div class="card-sub" style="margin-bottom:10px">Pick a date range and the files you want. Files come from <b>COMMON FILES</b> (including its dated backup folders); the table also shows whether each one is <b>backed up in the database</b>. If a file is no longer on disk, it is downloaded from the database.</div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-bottom:10px">' +
+      '<label class="card-sub">From<br><input type="date" id="pcgFrom" value="' + iso(w) + '" style="' + inp + '"></label>' +
+      '<label class="card-sub">To<br><input type="date" id="pcgTo" value="' + iso(t) + '" style="' + inp + '"></label>' +
+      '<label style="display:flex;gap:6px;align-items:center;font-weight:600"><input type="checkbox" id="pcgRisk" checked> RISK REPORT</label>' +
+      '<label style="display:flex;gap:6px;align-items:center;font-weight:600"><input type="checkbox" id="pcgHold" checked> HOLDING</label>' +
+      '<button class="btn sm primary" id="pcgFind" style="font-weight:700">🔍 Find files</button></div>' +
+      '<div id="pcgOut" class="card-sub" style="min-height:40px">Choose dates and click <b>Find files</b>.</div>';
+  }
+
+  function wireGetFiles() {
+    const kinds = () => [$("#pcgRisk").checked ? "RISK_REPORT" : "", $("#pcgHold").checked ? "HOLDING" : ""].filter(Boolean).join(",");
+    const fmtSize = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+    const dl = (url, name) => { const a = document.createElement("a"); a.href = url; a.download = name || ""; document.body.appendChild(a); a.click(); a.remove(); };
+    const badge = (on, yes, no) => on ? '<span class="badge ok">' + yes + "</span>" : '<span class="badge warn">' + no + "</span>";
+    $("#pcgFind").onclick = async () => {
+      const f = $("#pcgFrom").value, t = $("#pcgTo").value, k = kinds();
+      if (!f) { $("#pcgOut").textContent = "Pick a From date."; return; }
+      if (!k) { $("#pcgOut").textContent = "Tick RISK REPORT and/or HOLDING."; return; }
+      $("#pcgOut").textContent = "Searching…";
+      let d;
+      try {
+        d = await (await fetch("/common/range?frm=" + f + "&to=" + (t || f) + "&kinds=" + k, { credentials: "same-origin" })).json();
+      } catch (e) { $("#pcgOut").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; return; }
+      if (d.error) { $("#pcgOut").innerHTML = '<span style="color:var(--err)">' + esc(d.error) + "</span>"; return; }
+      if (d.detail) { $("#pcgOut").innerHTML = '<span style="color:var(--err)">' + esc(d.detail) + "</span>"; return; }
+      const rows = d.rows || [];
+      if (!rows.length) { $("#pcgOut").textContent = "No files found for those dates (neither on disk nor in the database)."; return; }
+      const nDb = rows.filter((r) => r.db).length, nDisk = rows.filter((r) => r.disk).length;
+      const body = rows.map((r) =>
+        "<tr><td>" + esc(r.date.split("-").reverse().join("-")) + "</td><td><b>" + esc(r.kind.replace("_", " ")) + "</b></td>" +
+        "<td>" + badge(r.disk, "On disk", "Not on disk") + "</td><td>" + badge(r.db, "In database", "Not in database") + "</td>" +
+        "<td style='text-align:right'>" + esc(fmtSize(r.size)) + "</td>" +
+        "<td style='text-align:right'><a href='/common/get?name=" + encodeURIComponent(r.name) + "' download='" + esc(r.name) + "' title='Download " + esc(r.name) + "' " +
+        "style='display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;border:1px solid var(--line,#2a3342);color:inherit;text-decoration:none'>" +
+        RMS.icon("download") + "</a></td></tr>").join("");
+      $("#pcgOut").innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap">' +
+        "<span><b>" + rows.length + "</b> file(s) · on disk <b>" + nDisk + "</b> · in database <b>" + nDb + "</b>" +
+        (nDb < rows.length ? ' · <span style="color:var(--warn,#fbbf24)">' + (rows.length - nDb) + " not backed up in the database</span>" : "") + "</span>" +
+        '<button class="btn sm primary" id="pcgZip" style="font-weight:700">⬇️ Download all (ZIP)</button></div>' +
+        '<div style="max-height:300px;overflow:auto"><table class="htable"><thead><tr><th>Date</th><th>File</th><th>Disk</th><th>Database</th><th style="text-align:right">Size</th><th></th></tr></thead><tbody>' +
+        body + "</tbody></table></div>" +
+        (d.db_error ? '<div style="color:var(--err);margin-top:6px">Database check failed: ' + esc(d.db_error) + "</div>" : "");
+      $("#pcgZip").onclick = () => dl("/common/zip?frm=" + f + "&to=" + (t || f) + "&kinds=" + k);
+    };
+  }
+
   async function openCommon() {
     let st;
     try { st = await (await fetch("/common/status", { credentials: "same-origin" })).json(); }
@@ -69,13 +122,31 @@
           'style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin-left:8px;border-radius:8px;border:1px solid var(--border,#2a3342);color:inherit;text-decoration:none;vertical-align:middle">' +
           RMS.icon("download") + "</a>"
         : '<span class="badge warn">Missing</span>') + "</td></tr>").join("");
+    const tabBtn = (id, label, on) =>
+      '<button class="btn sm ' + (on ? "primary" : "ghost") + '" data-pctab="' + id + '" style="font-weight:700">' + label + "</button>";
     const close = RMS.modal("Upload Common Files",
+      '<div style="display:flex;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line,#2a3342)">' +
+      tabBtn("up", "⬆️ Upload", true) + tabBtn("get", "📦 Get files", false) + "</div>" +
+      '<div id="pcTabUp">' +
       '<div class="card-sub" style="margin-bottom:10px">Only <b>today\'s</b> HOLDING and RISK_REPORT files are accepted, named exactly as below. Anything else is rejected. An existing file of the same name is replaced.</div>' +
       '<table class="htable"><tbody>' + rows + "</tbody></table>" +
       '<input type="file" id="pcCommonFile" accept=".csv" multiple style="display:none">' +
       '<button class="btn primary" id="pcCommonPick" style="width:100%;justify-content:center;height:44px;margin-top:12px">⬆️ Choose file(s) to upload</button>' +
-      '<div id="pcCommonMsg" class="card-sub" style="min-height:18px;margin-top:8px"></div>',
-      { width: 520, icon: "download" });
+      '<div id="pcCommonMsg" class="card-sub" style="min-height:18px;margin-top:8px"></div></div>' +
+      '<div id="pcTabGet" style="display:none">' + getFilesHtml() + "</div>",
+      { width: 640, icon: "download" });
+    document.querySelectorAll("[data-pctab]").forEach((b) => {
+      b.onclick = () => {
+        const get = b.getAttribute("data-pctab") === "get";
+        $("#pcTabUp").style.display = get ? "none" : "";
+        $("#pcTabGet").style.display = get ? "" : "none";
+        document.querySelectorAll("[data-pctab]").forEach((x) => {
+          x.className = "btn sm " + (x === b ? "primary" : "ghost");
+        });
+        if (get && !getBooted) { getBooted = true; wireGetFiles(); }
+      };
+    });
+    let getBooted = false;
     $("#pcCommonPick").onclick = () => $("#pcCommonFile").click();
     $("#pcCommonFile").onchange = async () => {
       const list = Array.from($("#pcCommonFile").files || []);

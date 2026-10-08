@@ -4450,6 +4450,154 @@ def common_status():
     return {"items": items}
 
 
+_COMMON_KINDS = {"HOLDING": "HOLDING", "RISK_REPORT": "RISK_REPORT"}
+_COMMON_NAME_RE = __import__("re").compile(r"^(HOLDING|RISK_REPORT)_(\d{2})(\d{2})(\d{4})\.csv$", __import__("re").I)
+
+
+def _common_db_index():
+    """{filename.lower(): newest run_files row} for every HOLDING_/RISK_REPORT_ file stored in the database.
+    Matched on the file NAME (the date inside it), not run_date — housekeeping stores the row on the day it moved it."""
+    import os as _o
+    try:
+        if _o.getenv("USE_POSTGRES", "false").strip().lower() == "true":
+            from core.db_postgres import list_run_files as _lf
+        else:
+            from core.db import list_run_files as _lf
+        rows = _lf(days=3650)
+    except Exception as e:
+        return {}, f"{type(e).__name__}: {e}"
+    idx = {}
+    for r in rows:                                   # rows come newest first
+        fn = str(r.get("filename") or "")
+        if _COMMON_NAME_RE.match(fn) and fn.lower() not in idx:
+            idx[fn.lower()] = r
+    return idx, ""
+
+
+def _common_disk_path(name):
+    """COMMON FILES\\<name> or COMMON FILES\\BACKUP FILES AUTOMATED\\<dd-mm-yyyy>\\<name>, else ''."""
+    m = _COMMON_NAME_RE.match(name)
+    if not m:
+        return ""
+    base = _sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
+    for p in (_sa_os.path.join(base, name),
+              _sa_os.path.join(base, "BACKUP FILES AUTOMATED", f"{m.group(2)}-{m.group(3)}-{m.group(4)}", name)):
+        if _sa_os.path.isfile(p):
+            return p
+    return ""
+
+
+@app.get("/common/range")
+def common_range(frm: str = "", to: str = "", kinds: str = "HOLDING,RISK_REPORT", only_found: int = 1):
+    """'Get files' tab: for every day in the range and each chosen file type, is it on disk (COMMON FILES / its dated
+    backup) and is it stored in the database?"""
+    import datetime as _d
+    try:
+        a = _d.date.fromisoformat(frm); b = _d.date.fromisoformat(to or frm)
+    except ValueError:
+        return {"error": "Pick a valid From and To date."}
+    if b < a:
+        a, b = b, a
+    if (b - a).days > 92:
+        return {"error": "Please pick a range of up to 92 days."}
+    want = [k for k in (kinds or "").split(",") if k.strip().upper() in _COMMON_KINDS]
+    if not want:
+        return {"error": "Tick HOLDING and/or RISK REPORT."}
+    idx, db_err = _common_db_index()
+    rows, d = [], a
+    while d <= b:
+        for k in want:
+            k = k.strip().upper()
+            name = f"{k}_{d.strftime('%d%m%Y')}.csv"
+            p = _common_disk_path(name)
+            r = idx.get(name.lower())
+            size = _sa_os.path.getsize(p) if p else (r.get("size_bytes") if r else 0)
+            if only_found and not p and not r:
+                continue
+            rows.append({"date": d.isoformat(), "kind": k, "name": name, "disk": bool(p),
+                         "db": bool(r), "db_id": (r or {}).get("id"), "size": int(size or 0),
+                         "weekend": d.weekday() >= 5})
+        d += _d.timedelta(days=1)
+    return {"rows": rows, "db_error": db_err, "from": a.isoformat(), "to": b.isoformat()}
+
+
+def _common_bytes(name):
+    """(bytes, source) for a HOLDING/RISK_REPORT file name — disk first, then the database. None if neither."""
+    p = _common_disk_path(name)
+    if p:
+        with open(p, "rb") as f:
+            return f.read(), "disk"
+    idx, _e = _common_db_index()
+    r = idx.get(name.lower())
+    if r:
+        import os as _o
+        if _o.getenv("USE_POSTGRES", "false").strip().lower() == "true":
+            from core.db_postgres import get_run_file as _gf
+        else:
+            from core.db import get_run_file as _gf
+        got = _gf(r["id"])
+        if got:
+            return got[1], "database"
+    return None
+
+
+@app.get("/common/get")
+def common_get(name: str, src: str = "auto"):
+    """Download ONE HOLDING/RISK_REPORT file of any date (disk first, else database) to the caller's computer."""
+    from fastapi import HTTPException as _HE
+    from fastapi.responses import Response as _Resp
+    name = _sa_os.path.basename(name or "")
+    if not _COMMON_NAME_RE.match(name):
+        raise _HE(status_code=400, detail="Only HOLDING_<DDMMYYYY>.csv and RISK_REPORT_<DDMMYYYY>.csv can be fetched.")
+    if src == "db":
+        idx, _e = _common_db_index()
+        r = idx.get(name.lower())
+        got = None
+        if r:
+            import os as _o
+            _gf = (__import__("core.db_postgres", fromlist=["get_run_file"]).get_run_file
+                   if _o.getenv("USE_POSTGRES", "false").strip().lower() == "true"
+                   else __import__("core.db", fromlist=["get_run_file"]).get_run_file)
+            g = _gf(r["id"])
+            got = (g[1], "database") if g else None
+    else:
+        got = _common_bytes(name)
+    if not got:
+        raise _HE(status_code=404, detail=f"{name} was not found.")
+    return _Resp(content=got[0], media_type="text/csv",
+                 headers={"Content-Disposition": f'attachment; filename="{name}"', **_NO_CACHE})
+
+
+@app.get("/common/zip")
+def common_zip(frm: str, to: str = "", kinds: str = "HOLDING,RISK_REPORT"):
+    """Every available file in the range as one ZIP (a single download for many days)."""
+    import io, zipfile, datetime as _d
+    from fastapi import HTTPException as _HE
+    from fastapi.responses import Response as _Resp
+    try:
+        a = _d.date.fromisoformat(frm); b = _d.date.fromisoformat(to or frm)
+    except ValueError:
+        raise _HE(status_code=400, detail="Invalid date.")
+    if b < a:
+        a, b = b, a
+    if (b - a).days > 92:
+        raise _HE(status_code=400, detail="Range is limited to 92 days.")
+    want = [k.strip().upper() for k in kinds.split(",") if k.strip().upper() in _COMMON_KINDS]
+    buf, n, d = io.BytesIO(), 0, a
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        while d <= b:
+            for k in want:
+                name = f"{k}_{d.strftime('%d%m%Y')}.csv"
+                got = _common_bytes(name)
+                if got:
+                    z.writestr(name, got[0]); n += 1
+            d += _d.timedelta(days=1)
+    if not n:
+        raise _HE(status_code=404, detail="No files found in that range.")
+    return _Resp(content=buf.getvalue(), media_type="application/zip",
+                 headers={"Content-Disposition": f'attachment; filename="COMMON_FILES_{a.strftime("%d%m%Y")}_{b.strftime("%d%m%Y")}.zip"', **_NO_CACHE})
+
+
 @app.get("/common/download")
 def common_download(name: str):
     """Download today's HOLDING / RISK_REPORT to the machine of whoever clicked (their browser's Downloads).
