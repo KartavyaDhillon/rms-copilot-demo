@@ -73,7 +73,10 @@ def _cell(d, x, y, w, h, text, font, align="r", fill=WHITE, ink=INK):
         d.text((x + w - pad, y + h // 2), text, fill=ink, font=font, anchor="rm")
 
 
-def _section(d, x0, y, title, header, rows, fb, fr, total=False):
+STRONG_INK = (0, 0, 0)          # used when strong=True: pure black, bold values
+
+
+def _section(d, x0, y, title, header, rows, fb, fr, total=False, strong=False):
     table_w = sum(COL_W)
     if title:
         d.rectangle([x0, y, x0 + table_w, y + TITLE_H], fill=GREEN_DK)
@@ -90,8 +93,8 @@ def _section(d, x0, y, title, header, rows, fb, fr, total=False):
         bg = TOTAL_BG if total else (ROWALT if ri % 2 else WHITE)
         for i, (val, w) in enumerate(zip(row, COL_W)):
             txt = str(val) if i == 0 else _inr(val)
-            _cell(d, x, y, w, ROW_H, txt, (fb if total else fr),
-                  align="l" if i == 0 else "r", fill=bg)
+            _cell(d, x, y, w, ROW_H, txt, (fb if (total or strong) else fr),
+                  align="l" if i == 0 else "r", fill=bg, ink=(STRONG_INK if strong else INK))
             x += w
         y += ROW_H
     return y
@@ -104,37 +107,38 @@ def _finish(img, out_path):
     return png
 
 
-def render_cm_image(report, out_path):
-    fb, fr = _font(14, bold=True), _font(13)
+def render_cm_image(report, out_path, strong=False):
+    fb, fr = _font(15 if strong else 14, bold=True), _font(13)
     cm, fo, t = report["cm_segment"], report["fo_segment"], report["combined_totals"]
     width = sum(COL_W) + PAD * 2
     height = PAD * 2 + (TITLE_H + ROW_H + ROW_H) + GAP + (TITLE_H + ROW_H + ROW_H) + GAP + ROW_H
     img = Image.new("RGB", (width, height), WHITE); d = ImageDraw.Draw(img)
     y = PAD
     y = _section(d, PAD, y, "CM Segment", True,
-                 [[cm.get("Code", "06436"), cm["Peak1"], cm["Peak2"], cm["Peak3"], cm["Peak4"]]], fb, fr)
+                 [[cm.get("Code", "06436"), cm["Peak1"], cm["Peak2"], cm["Peak3"], cm["Peak4"]]], fb, fr, strong=strong)
     y += GAP
     y = _section(d, PAD, y, "FO Segment", True,
-                 [[fo.get("Code", "PRO_06436"), fo["Peak1"], fo["Peak2"], fo["Peak3"], fo["Peak4"]]], fb, fr)
+                 [[fo.get("Code", "PRO_06436"), fo["Peak1"], fo["Peak2"], fo["Peak3"], fo["Peak4"]]], fb, fr, strong=strong)
     y += GAP
     _section(d, PAD, y, None, False,
-             [["TOTAL (CM + FO)", t["Peak1"], t["Peak2"], t["Peak3"], t["Peak4"]]], fb, fr, total=True)
+             [["TOTAL (CM + FO)", t["Peak1"], t["Peak2"], t["Peak3"], t["Peak4"]]], fb, fr, total=True, strong=strong)
     return _finish(img, out_path)
 
 
-def render_fo_image(report, out_path):
-    fb, fr = _font(14, bold=True), _font(13)
+def render_fo_image(report, out_path, strong=False):
+    fb, fr = _font(15 if strong else 14, bold=True), _font(13)
     rows = [[code, p["Peak1"], p["Peak2"], p["Peak3"], p["Peak4"]]
             for code, p in report["fo_clients"].items()]
     width = sum(COL_W) + PAD * 2
     height = PAD * 2 + TITLE_H + ROW_H + ROW_H * len(rows)
     img = Image.new("RGB", (width, height), WHITE); d = ImageDraw.Draw(img)
-    _section(d, PAD, PAD, "FO Segment", True, rows, fb, fr)
+    _section(d, PAD, PAD, "FO Segment", True, rows, fb, fr, strong=strong)
     return _finish(img, out_path)
 
 
-def build_report_images(report, folder):
+def build_report_images(report, folder, strong=False):
+    """strong=True → bold, pure-black values (used by the Scheduler's PEAK MARGIN REPORT); default keeps the console look."""
     os.makedirs(folder, exist_ok=True)
-    fo = render_fo_image(report, os.path.join(folder, "F_filtered.png"))
-    cm = render_cm_image(report, os.path.join(folder, "C_filtered.png"))
+    fo = render_fo_image(report, os.path.join(folder, "F_filtered.png"), strong)
+    cm = render_cm_image(report, os.path.join(folder, "C_filtered.png"), strong)
     return {"fo_image": fo, "cm_image": cm}

@@ -226,7 +226,7 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
-                            '<script src="/platform/js/process-probable-box.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-probable-box.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -3195,6 +3195,32 @@ def ctcl_readiness():
             "file": _kb if _kb_ok else ""})
     except Exception as _kb_e:
         print(f"[ctcl] readiness: KAMBALA check skipped: {type(_kb_e).__name__}: {_kb_e}", flush=True)
+
+    # T5 DEBIT report — compulsory on RUN 1 ONLY (pre_run_file_check() in ctcl_vs_nmass.py requires it just for run 1;
+    # by run 2+ it has been swept into the backup folder). It is uploaded by hand, never downloaded, so it is flagged
+    # "upload_only": the dashboard lists it as missing but it must not stop the "skip download" shortcut.
+    try:
+        import datetime as _t5dt
+        _cnt, _next = os.path.join(_dir, "run_counter.txt"), 1
+        try:
+            _d, _n = open(_cnt).read().strip().split("|")
+            if _d == _t5dt.date.today().strftime("%Y-%m-%d"):
+                _next = int(_n) + 1
+        except Exception:
+            _next = 1
+        if _next > 5:
+            _next = 1
+        res["next_run"] = _next
+        if _next == 1:
+            _t5name = f"T5DEBIT_{_t5dt.date.today().strftime('%d%m%Y')}.csv"
+            _t5ok = os.path.isfile(os.path.join(_dir, _t5name))
+            res["items"].append({
+                "key": "T5_DEBIT_REPORT", "ok": _t5ok, "example": f"T5 DEBIT report ({_t5name})",
+                "age_min": None, "upload_only": True,
+                "why": "" if _t5ok else "not present — compulsory for Run 1, upload it before running",
+                "file": _t5name if _t5ok else ""})
+    except Exception as _t5e:
+        print(f"[ctcl] readiness: T5 DEBIT check skipped: {type(_t5e).__name__}: {_t5e}", flush=True)
     return res
 
 

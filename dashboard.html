@@ -752,29 +752,6 @@ body {
         <div class="sa-status" id="pxStatus-reco"><div class="sa-status-empty">Run status appears here. Full output is saved to Logs.</div></div>
       </div>
 
-      <div class="sec">Peak Margin</div>
-      <div class="pm-grid">
-        <div class="card">
-          <div class="card-head"><h3>Run Snapshot</h3><span class="badge">live · streaming</span></div>
-          <div class="snaps">
-            <div class="snap" onclick="runSnap('i01')"><div class="t">i01</div><div class="w">10:30</div></div>
-            <div class="snap" onclick="runSnap('i02')"><div class="t">i02</div><div class="w">12:30</div></div>
-            <div class="snap" onclick="runSnap('i03')"><div class="t">i03</div><div class="w">13:45</div></div>
-            <div class="snap" onclick="runSnap('i04')"><div class="t">i04</div><div class="w">15:30</div></div>
-          </div>
-          <div class="pm-feed" id="pmFeed"><div class="ln"><span style="color:var(--muted)">Pick a snapshot — streams live here.</span></div></div>
-        </div>
-        <div class="card">
-          <div class="card-head"><h3>Report Images</h3><span class="badge" id="repmeta">no report yet</span></div>
-          <div class="imgscroll" id="imgwrap"><div class="empty">Run a snapshot — images appear here.</div></div>
-          <div class="approve-bar">
-            <span class="lbl" id="approveLbl">⚠ Sending gated — review then approve.</span>
-            <div class="chip-group"><span class="chip">WhatsApp</span><span class="chip">Email</span></div>
-            <button class="btn-approve" id="approveBtn" onclick="approve()" data-tip="Send the reviewed Peak Margin report images out via WhatsApp + Email now.">Approve &amp; send</button>
-          </div>
-        </div>
-      </div>
-
       <div class="sec">Processing &amp; Reports</div>
       <div class="tile-grid">
         <div class="tile" id="task-concentration" style="--tile-accent:var(--amber)">
@@ -1210,7 +1187,9 @@ document.addEventListener('keydown', (e) => {
 fetch(API+"/health").then(r=>r.json()).then(d => {
   const b = document.getElementById('bk'); b.className='bk up'; b.innerHTML='<i></i>backend: online';
   AUTO = !!d.auto_send;
-  if(AUTO) { document.getElementById('approveLbl').textContent='🤖 AUTO-SEND ON — sends automatically.'; document.getElementById('approveBtn').style.display='none'; }
+  // (the Peak Margin box was removed from this page — its elements may not exist any more)
+  const _al=document.getElementById('approveLbl'), _ab=document.getElementById('approveBtn');
+  if(AUTO) { if(_al) _al.textContent='🤖 AUTO-SEND ON — sends automatically.'; if(_ab) _ab.style.display='none'; }
 }).catch(() => { const b=document.getElementById('bk'); b.className='bk down'; b.innerHTML='<i></i>backend: offline'; });
 
 // ── View Switch ────────────────────────────────────────────────────────────
@@ -4231,7 +4210,7 @@ async function ctclRunFull(opts){
   if(!skipDownload&&!top20Only&&!payoutOnly){
     try{
       var rdy=await (await fetch(API+'/ctcl/readiness')).json();
-      if(rdy&&rdy.items&&rdy.items.every(function(it){return it.ok;})){
+      if(rdy&&rdy.items&&rdy.items.every(function(it){return it.ok||it.upload_only;})){   // upload_only (T5 DEBIT) is uploaded by hand — it must not block the download-skip
         skipDownload=true;
         _ctclAddEv(true,'All input files already present — skipping download','nmass');
       }
@@ -7289,7 +7268,7 @@ function reorderProcessSections(){
     if(items.length<2) return;
     const parent=items[0].box.parentNode;
     let anchor=null;
-    parent.querySelectorAll(':scope > .sec').forEach(el=>{ if(!anchor && el.textContent.trim().indexOf('Peak Margin')===0) anchor=el; });
+    parent.querySelectorAll(':scope > .sec').forEach(el=>{ if(!anchor && el.textContent.trim().indexOf('Processing')===0) anchor=el; });   // pinned section just below the pipeline boxes
     if(!anchor) return;  // safety: never move anything if we can't find a stable reference point
     items.forEach(it=>{ parent.insertBefore(it.sec,anchor); parent.insertBefore(it.box,anchor); });
   }catch(e){ /* never let a reorder bug break the dashboard */ }

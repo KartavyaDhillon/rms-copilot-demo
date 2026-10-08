@@ -897,7 +897,7 @@
     var anchor = null;
     var secLabels = parent.querySelectorAll(':scope > .sec');
     for (var si = 0; si < secLabels.length; si++) {
-      if (secLabels[si].textContent.trim().indexOf('Peak Margin') === 0) { anchor = secLabels[si]; break; }
+      if (secLabels[si].textContent.trim().indexOf('Processing') === 0) { anchor = secLabels[si]; break; }   // (Peak Margin box was removed; "Processing & Reports" is now the pinned landmark)
     }
     if (!anchor) return;   // no stable reference point — don't guess, don't move anything
 

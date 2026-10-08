@@ -202,6 +202,7 @@
         if (pw === null) return;
         await call("POST", "/sched/schedules/" + id + "/run-now", pw ? { _password: pw } : undefined);
         toast("ok", "Started", s.name);
+        S.fastUntil = Date.now() + 180000;               // watch closely for the next 3 minutes (see the poll below)
       } else {
         const pw = await unlock(needsPw(), { pause: "Pause", resume: "Resume", enable: "Enable", disable: "Disable" }[a] + " — " + s.name);
         if (pw === null) return;
@@ -871,9 +872,17 @@
         RMS.mountIcons(el);
         $("#scTabs").querySelectorAll("button").forEach((b) => { b.onclick = () => setTab(b.dataset.t); });
         $("#scRefresh").onclick = load;
+        // Auto-refresh: every 3 s while something is running (so Running → Success/Failed appears by itself),
+        // every 15 s otherwise.  Never while the editor is open or while typing in the search box.
+        let lastLoad = 0;
         RMS.poll(() => {
-          if (!ED && document.getElementById("scBody")) load();
-        }, 15000);
+          if (ED || !document.getElementById("scBody")) return;
+          const a = document.activeElement;
+          if (a && a.id === "scSearch") return;
+          const busy = (S.schedules || []).some((s) => s.display_status === "running") ||
+                       (S.hist || []).some((h) => h.status === "RUNNING") || Date.now() < (S.fastUntil || 0);
+          if (Date.now() - lastLoad >= (busy ? 3000 : 15000)) { lastLoad = Date.now(); load(); }
+        }, 1000);
         booted = true;
       } else {
         // Coming back to the Scheduler always starts on the Schedules tab, not the last one visited.

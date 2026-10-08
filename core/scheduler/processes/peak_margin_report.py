@@ -149,7 +149,7 @@ def _run(params, ctx):
 
     from PIL import Image
     from core.pipelines.report_image import build_report_images
-    imgs = build_report_images(rep, str(out))
+    imgs = build_report_images(rep, str(out), strong=True)       # bold black values so they read clearly in the mail
     jp = {}
     for k, name in (("fo_image", "F_filtered.jpg"), ("cm_image", "C_filtered.jpg")):
         Image.open(imgs[k]).convert("RGB").save(out / name, "JPEG", quality=95)
