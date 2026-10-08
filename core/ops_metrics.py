@@ -56,7 +56,7 @@ def _cached(key, ttl, fn):
 _PIPES = [
     {"key": "ctcl", "name": "CTCL vs NMASS",           "runs": 5, "win_env": "CTCL_RUN{i}_WINDOW", "logdir": "ctcl"},
     {"key": "sa",   "name": "Short Allocation",        "runs": 4, "win_env": "SA_RUN{i}_WINDOW",   "logdir": "short_allocation"},
-    {"key": "ms15", "name": "Margin Shortage (15-min)","runs": 11, "win_env": "MS15_RUN{i}_WINDOW", "logdir": "ms15"},
+    {"key": "ms15", "name": "Margin Shortage (15-min)","runs": 17, "win_env": "MS15_RUN{i}_WINDOW", "logdir": "ms15"},
     {"key": "cli",  "name": "Client Prudential Limit", "runs": 2, "win_env": "CLI_RUN{i}_WINDOW",  "logdir": "cli"},
 ]
 _PIPE_BY_LOGDIR = {p["logdir"]: p for p in _PIPES}

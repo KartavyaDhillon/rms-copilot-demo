@@ -271,7 +271,7 @@ PIPELINES = {
     # DB archival tag for this pipeline's own records is "margin_shortage" (separate
     # from the "ms15" routing key here) — see core/pipelines/margin_shortage_15min.py.
     "ms15": {"name": "Margin Shortage (15-min)", "module": "core.pipelines.margin_shortage_15min",
-             "func": "run_margin_shortage_15min", "logdir": "ms15", "runs": 11,
+             "func": "run_margin_shortage_15min", "logdir": "ms15", "runs": 17,
              "state_dir_env": "MARGIN_SHORTAGE_FOLDER", "state_default": r"D:\15 minutes",
              "state_file": "run_counter.txt",
              "email_keys": {"Main": ["MS15_MAIN_TO", "MS15_MAIN_CC"],
