@@ -51,13 +51,28 @@ def _locate(ctx) -> Path:
     if f:
         ctx.log(f"Using file from inputs (uploaded): {f.name}")
         return f
-    cli = Path(os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT"))
-    f = _newest(cli)
-    if f:
-        dest = inputs / f.name
-        shutil.copy2(f, dest)                          # copy only — the CLI run still owns its file
-        ctx.log(f"Picked up from CLI Prudential folder: {f.name} (copied; original left in place)")
-        return dest
+    bases, seen = [], set()
+    for b in (os.getenv("CLI_FOLDER", ""), str(paths.data_root() / "CLI_PRUDENTIAL_LIMIT"), r"D:\CLI_PRUDENTIAL_LIMIT"):
+        if b and b.lower() not in seen:
+            seen.add(b.lower())
+            bases.append(Path(b))
+    cli = bases[0]
+    searched = []
+    for base in bases:
+        # the CLI run moves its files into BACKUPFILES AUTOMATED\<dd-mm-yyyy>\<hh-mm-ss>\ when it finishes, so look there too
+        spots = [base]
+        day = base / "BACKUPFILES AUTOMATED" / H.today_dash()
+        if day.is_dir():
+            spots += [day] + sorted([d for d in day.rglob("*") if d.is_dir()])
+        searched.append(str(base))
+        for spot in spots:
+            f = _newest(spot)
+            if f:
+                dest = inputs / f.name
+                shutil.copy2(f, dest)                  # copy only — the CLI run still owns its file
+                ctx.log(f"Picked up from CLI Prudential folder: {f} (copied; original left in place)")
+                return dest
+    ctx.log("Searched (top folder + today's BACKUPFILES AUTOMATED subfolders): " + " | ".join(searched))
     if getattr(ctx, "trigger", "") == H.MANUAL:           # Run Now to send again: reuse today's already-processed file
         f = _newest(paths.proc_dir(FOLDER, "backup") / H.today_dash())
         if f:
@@ -66,7 +81,7 @@ def _locate(ctx) -> Path:
             ctx.log(f"Run Now: re-using today's file from backup: {f.name}")
             return dest
     raise FileNotFoundError("Today's MCX RSK file was not found — neither uploaded on this process's Files tab nor in the "
-                            f"CLI Prudential folder ({cli}). Run the CLI morning run, or upload the file and use Run Now.")
+                            f"CLI Prudential folder or its today's backup ({cli}). Run the CLI morning run, or upload the file and use Run Now.")
 
 
 def _autofit(path: Path):

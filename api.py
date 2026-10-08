@@ -4450,6 +4450,21 @@ def common_status():
     return {"items": items}
 
 
+@app.get("/common/download")
+def common_download(name: str):
+    """Download today's HOLDING / RISK_REPORT to the machine of whoever clicked (their browser's Downloads).
+    Only today's two exact names are served — nothing else in COMMON FILES can be fetched this way."""
+    from fastapi import HTTPException as _HE
+    allowed = {n.lower(): n for n in _common_names_today().values()}
+    real = allowed.get(_sa_os.path.basename(name or "").lower())
+    if not real:
+        raise _HE(status_code=400, detail="Only today's HOLDING and RISK_REPORT files can be downloaded.")
+    p = _sa_os.path.join(_sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES"), real)
+    if not _sa_os.path.isfile(p):
+        raise _HE(status_code=404, detail=f"{real} is not in COMMON FILES.")
+    return FileResponse(p, media_type="text/csv", filename=real, headers=_NO_CACHE)
+
+
 @app.post("/common/upload")
 async def common_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_File(...)):
     """Process Center 'Upload common files'. STRICT: only today's HOLDING_<DDMMYYYY>.csv and

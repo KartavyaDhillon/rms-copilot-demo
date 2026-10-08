@@ -63,7 +63,12 @@
     if (!st.items) { popup("Upload Common Files", "The server has not been updated with this feature yet. Copy the new api.py to the live folder and restart the console.", false); return; }
     const rows = (st.items || []).map((i) =>
       "<tr><td><b>" + esc(i.name) + "</b></td><td style='text-align:right'>" +
-      (i.present ? '<span class="badge ok">Present · ' + esc(i.modified) + "</span>" : '<span class="badge warn">Missing</span>') + "</td></tr>").join("");
+      (i.present
+        ? '<span class="badge ok">Present · ' + esc(i.modified) + "</span>" +
+          ' <a href="/common/download?name=' + encodeURIComponent(i.name) + '" download="' + esc(i.name) + '" title="Download ' + esc(i.name) + ' to this computer" ' +
+          'style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin-left:8px;border-radius:8px;border:1px solid var(--border,#2a3342);color:inherit;text-decoration:none;vertical-align:middle">' +
+          RMS.icon("download") + "</a>"
+        : '<span class="badge warn">Missing</span>') + "</td></tr>").join("");
     const close = RMS.modal("Upload Common Files",
       '<div class="card-sub" style="margin-bottom:10px">Only <b>today\'s</b> HOLDING and RISK_REPORT files are accepted, named exactly as below. Anything else is rejected. An existing file of the same name is replaced.</div>' +
       '<table class="htable"><tbody>' + rows + "</tbody></table>" +

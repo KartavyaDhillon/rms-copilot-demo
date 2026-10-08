@@ -9,6 +9,7 @@ import csv
 import email
 import os
 import poplib
+import re
 import ssl
 import time
 from datetime import datetime, timedelta, timezone, time as dtime
@@ -152,7 +153,8 @@ def download_partic_file(folder: Path, server: str, port: int, user: str, passwo
                 continue
             if (msg["Subject"] or "").strip().lower() != subject_exact.lower():
                 continue
-            if parseaddr(msg["From"] or "")[1].strip().lower() != sender.lower():
+            allowed = {s.strip().lower() for s in re.split(r"[,;\s]+", sender or "") if s.strip()}
+            if allowed and parseaddr(msg["From"] or "")[1].strip().lower() not in allowed:
                 continue
             try:
                 _r, full_lines, _o = pop.retr(i)

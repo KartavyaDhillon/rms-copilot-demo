@@ -99,7 +99,8 @@ register(
     params=[
         Param("to", "To", "text", required=True, fmt="emails", scope="process", help="E-mail addresses, comma or new-line separated."),
         Param("cc", "Cc", "text", fmt="emails", scope="process"),
-        Param("sender", "Mail from", "str", default="support@mastertrust.co.in", help="Only mail from this address is used."),
+        Param("sender", "Mail from", "str", default="support@mastertrust.co.in",
+              help="Only mail from this address is used. Several addresses can be given, separated by commas."),
         Param("subject", "Mail subject (exact)", "str", default="MASTER-PARTICID details"),
         Param("scan_start", "Look for today's mail from", "str", default="06:00", help="HH:MM, India time."),
         Param("signature", "E-mail signature", "text", default="Kartavya Dhillon\nMaster Capital Services Ltd\nTel: 011-66331000 | Ext. 84"),
