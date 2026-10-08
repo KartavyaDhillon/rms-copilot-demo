@@ -38,7 +38,13 @@ def _run(params, ctx):
     mem = connections.require("nse", "member_code")["member_code"]
     bday = H.prev_trading_day(dt.date.today())
     name = f"PNC_OPT_{mem}_{bday:%d%m%Y}.csv"
-    f = nse.download_wait("member", "FO", "Reports/../Surveillance/Dnld", name, inp, ctx, K.wait_of(params))
+    try:
+        f = nse.download_wait("member", "FO", "Reports/../Surveillance/Dnld", name, inp, ctx, K.wait_of(params))
+    except FileNotFoundError:
+        # NSE publishes this file only on days there is something to report, so "not there" is the normal answer.
+        # (Login problems, network problems, a bad file, e-mail errors still FAIL — only this case is a success.)
+        ctx.log(f"{name} is not on NSE — nothing to report for {bday:%d-%m-%Y}, so no e-mail is needed.")
+        return "no PNC file on NSE today — nothing to send"
     df = pd.read_csv(f)
     sent = 0
     for n, code, to, cc in groups:

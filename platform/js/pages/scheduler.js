@@ -100,6 +100,7 @@
     if (tab !== S.tab) return;                  // user already moved on to another tab — don't paint over it
     if (!S.err) S.loaded[tab] = true;
     render();
+    if (tab === "processes") S.focusProc = "";   // the jump-to-process request has now been honoured
   }
 
   function render() {
@@ -597,9 +598,9 @@
     b.querySelectorAll("[data-logs]").forEach((x) => { x.onclick = () => openLogs(x.dataset.logs); });
     if (S.focusProc) {                              // arrived by clicking a process name on the Schedules tab
       const box = b.querySelector('.sch-box[data-pk="' + S.focusProc + '"]');
-      S.focusProc = "";
+      // not cleared here: the quiet refresh that follows re-draws the page, so the jump is repeated once (see load())
       if (box) {
-        box.scrollIntoView({ block: "center", behavior: "smooth" });
+        box.scrollIntoView({ block: "center" });
         box.classList.add("sch-focus");
         setTimeout(() => box.classList.remove("sch-focus"), 2500);
       }
