@@ -32,15 +32,36 @@ def _encrypt(password: str, b64_key: str) -> str:
     return base64.standard_b64encode(enc.update(data) + enc.finalize()).decode()
 
 
-def _login(ctx=None) -> str:
+def _send(method: str, url: str, ctx, what: str, tries: int = 3, **kw):
+    """requests call with a log line per attempt and a retry on timeout / connection failure (never on an HTTP answer)."""
+    import time
     requests = H.need("requests")
+    last = None
+    for n in range(1, tries + 1):
+        try:
+            if ctx:
+                ctx.log(f"NSE: {what} (attempt {n}/{tries})…")
+            return requests.request(method, url, **kw)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last = e
+            if ctx:
+                ctx.log(f"NSE: no answer — {type(e).__name__}.")
+            if n < tries:
+                time.sleep(10)
+    raise RuntimeError(f"Cannot reach NSE ({BASE.split('/')[2]}) from this server after {tries} tries ({type(last).__name__}). "
+                       "This is a network problem, not a file problem: the NSE Extranet only answers from your registered "
+                       "static IP / leased line, and a firewall or proxy can also block it. Check that this machine can "
+                       "open the NSE Extranet (same machine the old extranet scripts ran on) and try again.")
+
+
+def _login(ctx=None) -> str:
     c = connections.require("nse", "member_code", "login_id")
     enc = c.get("encrypted_password")
     if not enc:
         connections.require("nse", "password", "aes_key")
         enc = _encrypt(c["password"], c["aes_key"])
-    r = requests.post(f"{BASE}/login/2.0", json={"memberCode": c["member_code"], "loginId": c["login_id"],
-                                                  "password": enc}, timeout=40)
+    r = _send("POST", f"{BASE}/login/2.0", ctx, "logging in",
+              json={"memberCode": c["member_code"], "loginId": c["login_id"], "password": enc}, timeout=40)
     try:
         j = r.json()
     except Exception:
@@ -82,9 +103,11 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
         url += f"&date={date}"
     dest_dir.mkdir(parents=True, exist_ok=True)
     with _LOCK:
-        r = requests.get(url, headers={"Authorization": f"Bearer {_token(ctx)}"}, timeout=120)
+        ctx.log(f"NSE: requesting {filename} from {folder} ({segment}).")
+        r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx)}"}, timeout=120)
         if _bad_token(r):
-            r = requests.get(url, headers={"Authorization": f"Bearer {_token(ctx, True)}"}, timeout=120)
+            ctx.log("NSE: token rejected — logging in again.")
+            r = _send("GET", url, ctx, f"downloading {filename}", headers={"Authorization": f"Bearer {_token(ctx, True)}"}, timeout=120)
     if r.status_code == 404:
         ctx.log(f"NSE: {filename} not available yet (404).")
         return None

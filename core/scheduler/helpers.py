@@ -120,8 +120,11 @@ def need(mod: str, pip: str = ""):
     """Import a third-party module or raise a plain message."""
     try:
         return __import__(mod, fromlist=["x"])
-    except ImportError:
-        raise RuntimeError(f"Python package '{pip or mod}' is not installed on the server — run: pip install {pip or mod}")
+    except ImportError as e:
+        import sys
+        raise RuntimeError(f"Python package '{pip or mod}' could not be loaded by the Python the console is running on "
+                           f"({sys.executable}). Real error: {e}. Fix: stop the console, run  "
+                           f"\"{sys.executable}\" -m pip install {pip or mod}  then start it again.")
 
 
 # ───────────────────────── trading days / waiting ─────────────────────────

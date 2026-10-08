@@ -57,7 +57,7 @@ def _in_window(now, first, last, sat_cut):
 
 # ───────────────────────── RSA soft token ─────────────────────────
 def _token(ctx):
-    sec = H.need("securid", "python-securid")
+    sec = H.need("securid")
     from securid.sdtid import SdtidFile
     c = connections.get("mcx_eclear")
     path = c.get("rsa_sdtid")
