@@ -147,7 +147,24 @@
       kpi("alert", "Failed Today", sm.failed_today ?? 0, "", (sm.failed_today ? "err" : "")) +
       kpi("check", "Successful Today", sm.success_today ?? 0, "", "ok") +
       kpi("calendar", "Next Scheduled Run", nx ? esc(nx.text) : "—", nx ? esc(nx.schedule) : "nothing scheduled");
-    const rows = S.schedules.filter(matches).map((s) => {
+    // Click a column title to sort: 1st click ascending, 2nd descending, 3rd back to the normal order.
+    const SORTS = { name: (s) => (s.name || "").toLowerCase(), process: (s) => (s.process_name || "").toLowerCase(),
+      next: (s) => s.next_run_utc || "", last: (s) => s.last_run_utc || "", result: (s) => (s.last_result && s.last_result !== "—" ? s.last_result : ""),
+      dur: (s) => (s.last_duration_sec == null ? "" : Number(s.last_duration_sec)), status: (s) => s.display_status || "" };
+    let list = S.schedules.filter(matches);
+    if (S.sort && SORTS[S.sort.k]) {
+      const g = SORTS[S.sort.k], dir = S.sort.d === "desc" ? -1 : 1;
+      list = list.slice().sort((a, b) => {
+        const x = g(a), y = g(b);
+        if (x === "" && y === "") return 0;
+        if (x === "") return 1;                        // empty values always at the bottom
+        if (y === "") return -1;
+        return (x < y ? -1 : x > y ? 1 : 0) * dir;
+      });
+    }
+    const th = (k, label) => "<th class='sc-sort' data-sk='" + k + "' style='cursor:pointer;user-select:none' title='Click to sort'>" + label +
+      (S.sort && S.sort.k === k ? (S.sort.d === "desc" ? " ▼" : " ▲") : " <span style='opacity:.3'>⇅</span>") + "</th>";
+    const rows = list.map((s) => {
       const paused = s.status === "paused", off = s.status === "disabled";
       return "<tr data-id='" + s.id + "'><td><b>" + esc(s.name) + "</b>" + (s.description ? "<div class='card-sub'>" + esc(s.description) + "</div>" : "") + "</td>" +
         "<td><a href='javascript:void(0)' class='sch-plink' data-pk='" + esc(s.process_key) + "' title='Open this process (logs, recipients, files)'>" + esc(s.process_name) + "</a>" +
@@ -172,13 +189,21 @@
       '<input class="f-input" id="scSearch" placeholder="Search schedule or process…" value="' + esc(S.q) + '">' +
       '<div class="spacer"></div><button class="btn primary" id="scCreate">+ Create Schedule</button></div></div>' +
       '<div class="card" style="padding:0;overflow:hidden"><div style="overflow:auto"><table class="htable"><thead><tr>' +
-      "<th>Schedule Name</th><th>Process</th><th>Trigger</th><th>Days</th><th>Next Run</th><th>Last Run</th><th>Last Result</th><th>Duration</th><th>Status</th><th>Actions</th>" +
+      th("name", "Schedule Name") + th("process", "Process") + "<th>Trigger</th><th>Days</th>" + th("next", "Next Run") + th("last", "Last Run") +
+      th("result", "Last Result") + th("dur", "Duration") + th("status", "Status") + "<th>Actions</th>" +
       "</tr></thead><tbody>" + (rows || "<tr><td colspan='10'><div class='bm-empty'>" +
         (S.schedules.length ? "No schedules match this filter." :
           (S.procs.length ? "No schedules yet — click “Create Schedule”." :
             "No schedulable processes are registered yet. Processes are added to <code>core/scheduler/processes/</code>; once one exists you can schedule it here.")) +
         "</div></td></tr>") + "</tbody></table></div></div>";
     $("#scBody").querySelectorAll(".chip").forEach((c) => { c.onclick = () => { S.filter = c.dataset.f; renderSchedules(); }; });
+    $("#scBody").querySelectorAll("th.sc-sort").forEach((h) => {
+      h.onclick = () => {
+        const k = h.dataset.sk;
+        S.sort = !S.sort || S.sort.k !== k ? { k, d: "asc" } : S.sort.d === "asc" ? { k, d: "desc" } : null;
+        renderSchedules();
+      };
+    });
     const se = $("#scSearch");
     se.oninput = () => { S.q = se.value; const pos = se.selectionStart; renderSchedules(); const n = $("#scSearch"); n.focus(); n.setSelectionRange(pos, pos); };
     $("#scCreate").onclick = () => openEditor(null);
