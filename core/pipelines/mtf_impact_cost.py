@@ -462,7 +462,7 @@ def _write_sheet(wb, title, df, status_col=None, ok_value=None):
     tbl.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=False, showColumnStripes=False)
     ws.add_table(tbl)
     for ci, h in enumerate(headers, start=1):
-        sample = df[h].astype(str).tolist()[:500]
+        sample = [str(v) for v in df[h].tolist()[:500]]          # NaN-safe (newer pandas keeps NaN as float)
         ws.column_dimensions[get_column_letter(ci)].width = min(max([len(str(h))] + [len(v) for v in sample]) + 3, 45)
 
 
@@ -797,7 +797,7 @@ def _run_all(date_str, send_wa):
     tb = read_table_auto(tb_path)
     pcol, symcol = get_col(tb, "Product"), get_col(tb, "Symbol")
     get_col(tb, "ClientID")
-    tb[pcol] = tb[pcol].astype(str).str.strip().str.upper()
+    tb[pcol] = tb[pcol].fillna("").astype(str).str.strip().str.upper()
     mtf = tb[tb[pcol] == "MTF"].copy().reset_index(drop=True)
     log(f"  TradeBook: {len(tb)} trades, {len(mtf)} MTF")
     if len(mtf) == 0:
@@ -806,7 +806,7 @@ def _run_all(date_str, send_wa):
     lookup, ambiguous = build_holding_lookup(hold_path)
     log(f"  HOLDING: {len(lookup)} symbols, {len(ambiguous)} map to more than one ISIN")
 
-    mtf[symcol] = mtf[symcol].astype(str).str.strip().str.upper()
+    mtf[symcol] = mtf[symcol].fillna("").astype(str).str.strip().str.upper()
     isins, cats, series, stat, reasons = [], [], [], [], []
     for sym in mtf[symcol]:
         isin = lookup.get(sym)
