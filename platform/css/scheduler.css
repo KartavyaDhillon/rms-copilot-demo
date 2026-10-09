@@ -57,3 +57,16 @@
 .sch-line .n { color: var(--text-3); white-space: nowrap; }
 .sch-link { background: none; border: 0; color: var(--info); font-size: 11.5px; font-weight: 700; cursor: pointer; padding: 0 2px; }
 .sch-none { font-size: 11.5px; color: var(--text-3); text-align: center; padding: 8px 0; }
+
+/* Schedules table: the row buttons were nearly invisible (grey text on dark). Each action now has its own colour. */
+.htable .btn[data-a] { font-weight: 700; border: 1px solid color-mix(in srgb, var(--bt, var(--text-2)) 55%, transparent);
+  color: var(--bt, var(--text-2)); background: color-mix(in srgb, var(--bt, var(--text-2)) 13%, transparent); }
+.htable .btn[data-a]:hover { background: color-mix(in srgb, var(--bt, var(--text-2)) 26%, transparent); color: var(--bt, var(--text-2)); }
+.htable .btn[data-a="run"]    { --bt: var(--ok); }
+.htable .btn[data-a="edit"]   { --bt: var(--accent); }
+.htable .btn[data-a="pause"]  { --bt: var(--warn); }
+.htable .btn[data-a="resume"], .htable .btn[data-a="enable"] { --bt: var(--ok); }
+.htable .btn[data-a="more"]   { --bt: var(--text-2); padding: 4px 11px; letter-spacing: 1px; }
+/* sort arrows in the column titles */
+.htable th.sc-sort:hover { color: var(--text); }
+.htable th.sc-sort span { opacity: .8 !important; color: var(--accent); }
