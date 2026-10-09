@@ -270,7 +270,7 @@ PIPELINES = {
               "cred": {"WhatsApp (Tata) bearer token": {"single_key": "MTFIC_WA_TOKEN",
                         "note": "sends the dashboard image. Leave blank to use the shared WA_AUTH_TOKEN."},
                        "WhatsApp numbers": {"single_key": "MTFIC_WA_NUMBERS",
-                        "note": "comma separated, with country code, e.g. +91XXXXXXXXXX,+91YYYYYYYYYY. Blank = nothing is sent."}},
+                        "note": "10-digit numbers only (+91 is added automatically), optionally with a name after #, comma separated. Example: 9876543210#Rahul, 9123456789#Priya. Blank = nothing is sent."}},
               "upload_dir_env": "MTF_IMPACT_FOLDER", "upload_default": os.path.join(REPO, "data", "SECURITY CAT IMPACT COST"),
               "backup_root_env": "MTF_IMPACT_FOLDER", "backup_subdir": "Backup",
               "file_types": [

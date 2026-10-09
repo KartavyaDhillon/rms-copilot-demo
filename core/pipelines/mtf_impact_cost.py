@@ -627,15 +627,34 @@ def _wa_token() -> str:
     return (os.getenv("MTFIC_WA_TOKEN") or os.getenv("WA_AUTH_TOKEN") or "").strip()
 
 
+def _wa_people() -> list:
+    """[(e164, name)] from env MTFIC_WA_NUMBERS = '9876543210#Name, 9123456789, …' — 10-digit Indian
+    numbers (+91 is added), optional '#Name'. Pasted quotes / +91 / 91 / 0 prefixes are tolerated."""
+    out = []
+    for item in re.split(r"[,;\n]+", os.getenv("MTFIC_WA_NUMBERS", "")):
+        item = item.strip().strip("'\"").strip()
+        if not item:
+            continue
+        num, _, name = item.partition("#")
+        digits = re.sub(r"\D", "", num)
+        if len(digits) > 10:
+            digits = digits[-10:]
+        if len(digits) != 10:
+            log(f"  WhatsApp: '{item}' is not a 10-digit number — skipped.")
+            continue
+        out.append(("+91" + digits, name.strip().strip("'\"") or "••••" + digits[-4:]))
+    return out
+
+
 def _wa_numbers() -> list:
-    raw = re.split(r"[,;\s]+", os.getenv("MTFIC_WA_NUMBERS", ""))
-    return [x for x in (n.strip().strip("'\"") for n in raw) if x]      # tolerate pasted quotes
+    return [p[0] for p in _wa_people()]
 
 
 def send_whatsapp(image: Path, report_date: str) -> dict:
     """Never raises; returns {'sent': n, 'failed': n, 'skipped': reason|''}."""
     import requests
-    nums, tok = _wa_numbers(), _wa_token()
+    people, tok = _wa_people(), _wa_token()
+    nums = [p[0] for p in people]
     if not nums:
         log("  WhatsApp skipped: no numbers set (Credentials → WhatsApp numbers).")
         return {"sent": 0, "failed": 0, "skipped": "no numbers set"}
@@ -658,7 +677,7 @@ def send_whatsapp(image: Path, report_date: str) -> dict:
         log("  WhatsApp upload gave no media id.")
         return {"sent": 0, "failed": len(nums), "skipped": ""}
     sent = failed = 0
-    for n in nums:
+    for n, who in people:
         body = {"to": n, "type": "template", "source": "external",
                 "template": {"name": _WA_TEMPLATE, "language": {"code": "en"}, "components": [
                     {"type": "header", "parameters": [{"type": "image", "image": {"id": media}}]},
@@ -669,13 +688,13 @@ def send_whatsapp(image: Path, report_date: str) -> dict:
                               json=body, timeout=30)
             if r.status_code == 200:
                 sent += 1
-                log(f"  WhatsApp sent to {'•' * max(0, len(n) - 4)}{n[-4:]}")
+                log(f"  WhatsApp sent to {who} (••••{n[-4:]})")
             else:
                 failed += 1
-                log(f"  WhatsApp send failed (HTTP {r.status_code}) for ••••{n[-4:]}")
+                log(f"  WhatsApp send failed (HTTP {r.status_code}) for {who} (••••{n[-4:]})")
         except requests.RequestException as e:
             failed += 1
-            log(f"  WhatsApp send failed (network error) for ••••{n[-4:]}: {e}")
+            log(f"  WhatsApp send failed (network error) for {who} (••••{n[-4:]}): {e}")
     return {"sent": sent, "failed": failed, "skipped": ""}
 
 
