@@ -3,7 +3,8 @@ core/pipelines/mtf_impact_cost.py — MTF <-> Security-Category Impact-Cost reco
 (one on-demand run from the dashboard; logic ported from reconcile_mtf_impact_cost.py and
 download_nse_cm_impact_cost.py in D:\\SECURITY CAT IMPACT COST).
 
-ONE base folder (env MTF_IMPACT_FOLDER, default D:\\SECURITY CAT IMPACT COST) holds everything:
+ONE base folder (env MTF_IMPACT_FOLDER, default <console>\\data\\SECURITY CAT IMPACT COST, next to
+COMMON FILES like RECONCILIATION) holds everything:
     TradeBook_<DDMMYYYY>.csv|xlsx|xls      uploaded by the operator
     C_CATG_<MON><YYYY>.T01                  downloaded from NSE (or uploaded if the download failed)
     Reconciliation_MTF_ImpactCost_<DDMMYYYY>.xlsx / Reconciliation_MTF_Dashboard_<DDMMYYYY>.png   (outputs)
@@ -52,7 +53,12 @@ def log(msg=""):
 # ───────────────────────────── folders / state ──────────────────────────────
 def base_dir() -> Path:
     v = os.getenv("MTF_IMPACT_FOLDER", "").strip()
-    return Path(v) if v else Path(r"D:\SECURITY CAT IMPACT COST")
+    if v:
+        return Path(v)
+    sc = os.getenv("SA_COMMON_DIR", "").strip()
+    if sc:      # next to COMMON FILES, e.g. D:\CONSOLE\data\COMMON FILES -> D:\CONSOLE\data\SECURITY CAT IMPACT COST
+        return Path(sc).parent / "SECURITY CAT IMPACT COST"
+    return REPO / "data" / "SECURITY CAT IMPACT COST"
 
 
 def common_dir() -> Path:
