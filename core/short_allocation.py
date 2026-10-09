@@ -1065,6 +1065,12 @@ def update_env(updates: dict):
         if k in allowed and k not in seen:
             out.append(f"{k}={v}\n")
     with open(ENV_FILE, "w", encoding="utf-8") as f: f.writelines(out)
+    # A site password changed here must change everywhere that site is used (see core/cred_links.py).
+    try:
+        from core import cred_links
+        cred_links.on_saved({k: str(v) for k, v in updates.items() if k in allowed})
+    except Exception as _e:
+        print(f"[cred_links] skipped: {_e}", flush=True)
     return True
 
 

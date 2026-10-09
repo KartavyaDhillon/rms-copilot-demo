@@ -1030,6 +1030,10 @@ threading.Thread(target=keep_session_alive, daemon=True).start()
 
 
     
+class NcdexCaptchaUnavailable(RuntimeError):
+    """NCDEX served no usable captcha image — safe to retry from the very start of the login."""
+
+
 def run_ncdex():
     import requests
     from bs4 import BeautifulSoup
@@ -1338,7 +1342,7 @@ def run_ncdex():
             raise RuntimeError("Captcha <img> not on page — see " + DEBUG_DIR)
         cap_url = ROOT + "/Login/" + urllib.parse.quote(img["src"], safe=":/?=&")
         cap_resp = None
-        for _cap_attempt in range(1, 6):
+        for _cap_attempt in range(1, 4):                      # captcha download: 3 tries
             cap_resp = session.get(cap_url, headers={
                 "Referer": login_url,
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
@@ -1348,12 +1352,14 @@ def run_ncdex():
             if cap_resp.status_code == 200 and len(_body) > 100 and not _looks_like_html:
                 break
             print(f"⚠️ Captcha download looked invalid (status {cap_resp.status_code}, "
-                  f"attempt {_cap_attempt}/5) — retrying in 2s...")
+                  f"attempt {_cap_attempt}/3) — retrying in 2s...")
             time.sleep(2)
         else:
-            raise RuntimeError("NCDEX captcha image never downloaded successfully after 5 "
-                                "attempts (kept getting a non-image response — the site was "
-                                "likely down/erroring).")
+            # A different exception type on purpose: the caller restarts the WHOLE
+            # login (fresh session + fresh login page) instead of giving up.
+            raise NcdexCaptchaUnavailable("NCDEX captcha image could not be downloaded in 3 "
+                                          "attempts (kept getting a non-image response — the site was "
+                                          "likely down/erroring).")
         dump("GET captcha image", cap_resp, body_chars=0)
         p = os.path.join(TEMP_FOLDER, "captcha.png")
         with open(p, "wb") as f:
@@ -1983,8 +1989,27 @@ if os.getenv("NMASS_RUN_MODE", "").strip().lower() == "alloc_upload":
 # ── Single-run mode: run once and exit (used as subprocess by dashboard) ──
 log_header("SINGLE RUN STARTED 🚀")
 
-# 🔹 NMASS DOWNLOADS (CM / FO / CO)
-run_downloads()
+def _is_net_err(e):
+    """Connection-level failure (reset / aborted / timeout / cut mid-download) — safe to start again from the beginning."""
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
+                      requests.exceptions.ChunkedEncodingError, ConnectionError, TimeoutError)):
+        return True
+    t = str(e).lower()
+    return not isinstance(e, RuntimeError) and any(x in t for x in (
+        "forcibly closed", "connection aborted", "connection reset", "10054", "10053", "timed out", "remote end closed"))
+
+
+# 🔹 NMASS DOWNLOADS (CM / FO / CO) — a broken connection restarts the whole login + download after 5 s (max 5 times)
+for _dl_try in range(1, 6):
+    try:
+        run_downloads()
+        break
+    except Exception as _dl_e:
+        if not _is_net_err(_dl_e) or _dl_try >= 5:
+            raise
+        print(f"⚠️ NMASS download: {type(_dl_e).__name__}: {str(_dl_e)[:140]} — starting the whole login again "
+              f"in 5s (restart {_dl_try}/4)...", flush=True)
+        time.sleep(5)
 
 # 🔹 NCFE DOWNLOAD (ClientNetEffectiveDeposits)
 # This used to swallow the exception and print "ALL DOWNLOADS COMPLETE"
@@ -1992,11 +2017,24 @@ run_downloads()
 # a real success: no error, exit code 0, dashboard says "downloaded
 # successfully". Now it actually reports the failure and exits non-zero.
 _ncdex_failed = False
-try:
-    run_ncdex()
-except Exception as e:
-    log_error(f"NCDEX error: {e}")
-    _ncdex_failed = True
+# If NCDEX gives no captcha image, do not just re-fetch the captcha: start the WHOLE login again
+# (new session, new login page, new captcha) — up to NCDEX_LOGIN_RESTARTS times. A wrong password or a
+# locked account is NOT retried (it raises a different error straight away).
+_NCDEX_RESTARTS = int(os.getenv("NCDEX_LOGIN_RESTARTS", "5"))
+for _restart in range(1, _NCDEX_RESTARTS + 1):
+    try:
+        run_ncdex()
+        _ncdex_failed = False
+        break
+    except Exception as e:
+        log_error(f"NCDEX error: {e}")
+        _ncdex_failed = True
+        if not (isinstance(e, NcdexCaptchaUnavailable) or _is_net_err(e)):
+            break                                   # wrong password / locked / anything else: never retried
+        if _restart < _NCDEX_RESTARTS:
+            print(f"🔁 Restarting the whole NCDEX login from the beginning "
+                  f"(restart {_restart}/{_NCDEX_RESTARTS - 1}) in 5s...", flush=True)
+            time.sleep(5)
 
 if _ncdex_failed:
     log_error("⚠️ ALL DOWNLOADS DID NOT COMPLETE — NCDEX/NCFE step failed (see above)")

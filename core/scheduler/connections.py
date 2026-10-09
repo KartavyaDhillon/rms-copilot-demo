@@ -187,6 +187,13 @@ def update(group: str, values: dict, user: str) -> List[str]:
         envstore.write(envstore.shared_file(), title, plain)
     if secrets:
         envstore.write(envstore.local_file(), title, secrets)
+    if plain or secrets:
+        # The same site login is also used by other screens — keep them in step (see core/cred_links.py).
+        try:
+            from core import cred_links
+            cred_links.on_saved({**plain, **secrets})
+        except Exception:
+            pass
     if changed:
         try:
             from core.scheduler import store

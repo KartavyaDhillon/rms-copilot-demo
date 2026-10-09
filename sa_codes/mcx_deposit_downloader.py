@@ -352,6 +352,16 @@ def mcx_lock_status(owner=None):
 # ── main download function ────────────────────────────────────────────────────
 
 def download_mcx_deposit(output_dir=None):
+    """Whole MCX login + download. A broken connection ("connection forcibly closed", reset, timeout) starts the
+    whole login again from the beginning after 5 s, up to 5 times. A refused password is NOT retried."""
+    import importlib.util as _iu          # load core/net_retry.py by path — works however this script is started
+    _spec = _iu.spec_from_file_location("net_retry_standalone", os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "net_retry.py"))
+    net_retry = _iu.module_from_spec(_spec); _spec.loader.exec_module(net_retry)
+    return net_retry.run(lambda: _download_mcx_deposit_once(output_dir), "MCX deposit", print)
+
+
+def _download_mcx_deposit_once(output_dir=None):
     """
     Download RSK383 (Cash Collateral Deposit Limit) from eclear.mcxccl.com.
 

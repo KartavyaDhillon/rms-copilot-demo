@@ -1,3 +1,37 @@
+# ── Restart supervisor ────────────────────────────────────────────────────────
+# If the connection breaks ("An existing connection was forcibly closed by the remote host", reset, aborted,
+# timeout) this whole script — login included — is started again from the very beginning after 5 s, up to 5 times.
+# A refused / wrong password is NOT retried. Everything the script prints is passed straight through.
+import os as _sv_os
+import subprocess as _sv_sp
+import sys as _sv_sys
+import time as _sv_time
+
+if _sv_os.getenv("MCX90_CHILD") != "1":
+    _SV_NET = ("forcibly closed", "connection aborted", "connection reset", "remotedisconnected", "remote end closed",
+               "10054", "10053", "connectionerror", "readtimeout", "connecttimeout", "chunkedencodingerror")
+    _SV_NO = ("wrong password", "auth_fail", "_locked]", "invalid_login", "user locked")
+    _env = dict(_sv_os.environ, MCX90_CHILD="1")
+    _rc = 1
+    for _try in range(1, 6):
+        _tail = []
+        _p = _sv_sp.Popen([_sv_sys.executable, "-u", _sv_os.path.abspath(__file__)], env=_env,
+                          stdout=_sv_sp.PIPE, stderr=_sv_sp.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
+        for _line in _p.stdout:
+            print(_line.rstrip("\n"), flush=True)
+            _tail.append(_line.lower())
+            del _tail[:-40]
+        _rc = _p.wait()
+        if _rc == 0:
+            break
+        _blob = " ".join(_tail)
+        if _try >= 5 or not any(x in _blob for x in _SV_NET) or any(x in _blob for x in _SV_NO):
+            break
+        print(f"⚠️ Connection problem — starting the whole MCX login again from the beginning in 5s "
+              f"(restart {_try}/4)...", flush=True)
+        _sv_time.sleep(5)
+    _sv_sys.exit(_rc)
+
 import requests
 import base64
 import re

@@ -87,8 +87,8 @@ class Session:
         return out
 
 
-def latest_bhavcopy(dest_dir: Path, ctx, tries: int = 3) -> Path:
-    """Newest MCX Bhavcopy of the last 3 trading days (login retried a few times)."""
+def latest_bhavcopy(dest_dir: Path, ctx, tries: int = 5) -> Path:
+    """Newest MCX Bhavcopy of the last 3 trading days (whole login restarted after a broken connection, 5 s apart)."""
     last = None
     for i in range(1, tries + 1):
         try:
@@ -109,5 +109,6 @@ def latest_bhavcopy(dest_dir: Path, ctx, tries: int = 3) -> Path:
             last = e
             ctx.log(f"MCX attempt {i}/{tries} failed: {type(e).__name__}: {e}")
             if i < tries:
-                time.sleep(30)
+                ctx.log("MCX: starting the whole login again from the beginning in 5 s…")
+                time.sleep(5)
     raise RuntimeError(f"MCX portal unreachable after {tries} tries — {last}")

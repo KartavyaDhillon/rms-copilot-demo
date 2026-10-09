@@ -1610,7 +1610,14 @@ def pb_update(pipe, password, updates):
     # an edited To/CC (or password) would not apply until the server restarted.
     for _k, _v in upd.items():
         os.environ[_k] = str(_v)
-    return {"ok": True, "saved": len(upd)}
+    # A site password changed here must change everywhere that site is used (see core/cred_links.py).
+    linked = []
+    try:
+        from core import cred_links
+        linked = cred_links.on_saved({k: str(v) for k, v in upd.items()})
+    except Exception as _e:
+        print(f"[cred_links] skipped: {_e}", flush=True)
+    return {"ok": True, "saved": len(upd), "also_updated": linked}
 
 
 # ── reusable upload (validated) + backup retrieval (per pipeline) ────────────

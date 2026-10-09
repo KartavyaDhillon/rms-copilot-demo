@@ -74,7 +74,8 @@ def _send(method: str, url: str, ctx, what: str, tries: int = MAX_TRIES, **kw):
             if ctx:
                 ctx.log(f"NSE: {what} (attempt {n}/{tries})…")
             return requests.request(method, url, **kw)
-        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError, requests.exceptions.ContentDecodingError) as e:    # incl. cut mid-download
             last = e
             if ctx:
                 ctx.log(f"NSE: no answer — {type(e).__name__}.")

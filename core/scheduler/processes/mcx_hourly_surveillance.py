@@ -453,8 +453,12 @@ def _run(params, ctx):
     out, tmp = paths.proc_dir(FOLDER, "outputs"), paths.proc_dir(FOLDER, "inputs")
     master = out / f"MAIN_MCX_HOURLY_SURVEILLANCE_{now:%B}_{now:%Y}.xlsx".upper().replace("XLSX", "xlsx")
 
-    s, rnd = login(ctx)
-    rows = fetch_rows(s, rnd, ctx)
+    # login + fetch together: if the connection breaks anywhere (e.g. "forcibly closed by the remote host"),
+    # the whole login starts again from the beginning after 5 s — up to 5 times. A refused password is not retried.
+    def _login_and_fetch():
+        _s, _rnd = login(ctx)
+        return fetch_rows(_s, _rnd, ctx)
+    rows = H.restart_on_network_error(ctx, "MCX eclear", _login_and_fetch)
     if not rows:
         raise RuntimeError("The Margin Utilization search returned no rows.")
     rec = next((r for r in rows if r.get("TM / CP Code", "").strip() == MEMBER_ROW), rows[0])

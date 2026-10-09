@@ -366,7 +366,29 @@ def _attr_or_raise(soup, *args, attr="value", **kwargs):
     return el[attr]
 
 
+class _NcdexCaptchaUnavailable(RuntimeError):
+    """NCDEX gave no usable captcha image — the whole login is started again from the beginning."""
+
+
 def download_ncdex_file(trade_date):
+    """Whole NCDEX login + download. A broken connection or a missing captcha image restarts it from the very
+    beginning (new session, new login page) after 5 s, up to 5 times. A wrong password is NOT retried."""
+    from core import net_retry
+    last = None
+    for n in range(1, 6):
+        try:
+            return _download_ncdex_file_once(trade_date)
+        except Exception as e:
+            if not (isinstance(e, _NcdexCaptchaUnavailable) or net_retry.is_network_error(e)) or n >= 5:
+                raise
+            last = e
+            print(f"⚠️ NCDEX: {type(e).__name__}: {str(e)[:140]} — starting the whole login again in 5s "
+                  f"(restart {n}/4)...", flush=True)
+            time.sleep(5)
+    raise last
+
+
+def _download_ncdex_file_once(trade_date):
     if is_ncdex_file_present(trade_date):
         print("⏭️ NCDEX file already exists — skipping"); return
     print("\n📦 STARTING NCDEX DOWNLOAD...\n")
@@ -396,7 +418,7 @@ def download_ncdex_file(trade_date):
     # silently returns None for a non-image file. Validate before accepting it,
     # retrying the download a few times instead of crashing the whole run.
     captcha_resp = None
-    for _cap_attempt in range(1, 6):
+    for _cap_attempt in range(1, 4):                          # captcha download: 3 tries
         captcha_resp = ncdex_session.get(captcha_url, headers=headers)
         # Sniff the body instead of trusting Content-Type — NCDEX doesn't always
         # send an "image/*" header for a real captcha, and requiring it rejected
@@ -406,11 +428,11 @@ def download_ncdex_file(trade_date):
         if captcha_resp.status_code == 200 and len(_body) > 100 and not _looks_like_html:
             break
         print(f"⚠️ Captcha download looked invalid (status {captcha_resp.status_code}, "
-              f"attempt {_cap_attempt}/5) — retrying in 2s...")
+              f"attempt {_cap_attempt}/3) — retrying in 2s...")
         time.sleep(2)
     else:
-        raise RuntimeError("NCDEX captcha image never downloaded successfully after 5 attempts "
-                            "(kept getting a non-image response — the site was likely down/erroring)")
+        raise _NcdexCaptchaUnavailable("NCDEX captcha image could not be downloaded in 3 attempts "
+                                       "(kept getting a non-image response — the site was likely down/erroring)")
     captcha_path = os.path.join(CAPTCHA_DIR, "captcha.png")
     with open(captcha_path, "wb") as f: f.write(captcha_resp.content)
     captcha_text = captcha_popup(captcha_path)
@@ -704,10 +726,21 @@ def _ncdex_login(sess):
             time.sleep(2)
             continue
 
-        cap_r = sess.get(
-            f"{NCDEX_WEB_BASE}/Captcha2.aspx?cpt={cap_val}&t={int(time.time()*1000)}",
-            headers=_NCDEX_HEADS, timeout=20,
-        )
+        cap_r = None
+        for _c in range(1, 4):                                # captcha download: 3 tries, then start the login again
+            cap_r = sess.get(
+                f"{NCDEX_WEB_BASE}/Captcha2.aspx?cpt={cap_val}&t={int(time.time()*1000)}",
+                headers=_NCDEX_HEADS, timeout=20,
+            )
+            _b = cap_r.content
+            if cap_r.status_code == 200 and len(_b) > 100 and not _b.lstrip()[:20].lower().startswith(b"<"):
+                break
+            print(f"⚠️ NCDEX captcha download looked invalid (status {cap_r.status_code}, attempt {_c}/3)")
+            time.sleep(2)
+        else:
+            print("🔁 No captcha image after 3 tries — starting the login again from the beginning in 5s")
+            time.sleep(5)
+            continue
         captcha = _ncdex_captcha(cap_r.content)
         if not captcha:
             print("❌ Captcha cancelled")

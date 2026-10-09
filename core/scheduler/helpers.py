@@ -127,6 +127,13 @@ def need(mod: str, pip: str = ""):
                            f"\"{sys.executable}\" -m pip install {pip or mod}  then start it again.")
 
 
+def restart_on_network_error(ctx, what: str, fn, tries: int = 5, wait: int = 5):
+    """Run fn(); when the connection breaks (reset / aborted / timeout, also half-way through a download) start it again
+    from the very beginning after `wait` seconds. Wrong passwords and every other kind of error are NOT retried."""
+    from core import net_retry
+    return net_retry.run(fn, what, ctx.log if ctx else print, tries, wait)
+
+
 # ───────────────────────── trading days / waiting ─────────────────────────
 def holidays() -> set:
     """Market holidays (date objects) from the console's holiday file; empty set when it can't be read."""

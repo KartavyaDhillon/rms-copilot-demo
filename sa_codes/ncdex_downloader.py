@@ -234,6 +234,16 @@ def _show_captcha(image_bytes: bytes) -> str:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def download_ncdex(output_dir: str = None, run_suffix: str = "01") -> str:
+    """Whole NCDEX login + download. A broken connection ("connection forcibly closed", reset, timeout) starts the
+    whole thing again from the beginning after 5 s, up to 5 times. A wrong password is NOT retried."""
+    import importlib.util as _iu          # load core/net_retry.py by path — works however this script is started
+    _spec = _iu.spec_from_file_location("net_retry_standalone", os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "net_retry.py"))
+    net_retry = _iu.module_from_spec(_spec); _spec.loader.exec_module(net_retry)
+    return net_retry.run(lambda: _download_ncdex_once(output_dir, run_suffix), "NCDEX", print)
+
+
+def _download_ncdex_once(output_dir: str = None, run_suffix: str = "01") -> str:
     """
     Full NCDEX download flow.
 
@@ -306,22 +316,32 @@ def download_ncdex(output_dir: str = None, run_suffix: str = "01") -> str:
 
         # ── [3] CAPTCHA ──────────────────────────────────────────────────────
         print("[3] Downloading CAPTCHA …")
-        cap_r = sess.get(
-            f"{BASE}/Captcha2.aspx?cpt={cap_val}&t={int(time.time()*1000)}",
-            headers=HEADS, timeout=10,
-        )
         # NOTE: we sniff the body instead of trusting Content-Type — some NCDEX
         # responses serve the real captcha image without an "image/*" header,
         # which made an earlier, stricter check reject good captchas and spin
         # here silently. We only want to catch genuine failures (a 404/error
         # page saved as "captcha.png"), which always starts with '<' (HTML/XML).
-        _body = cap_r.content
-        _looks_like_html = _body.lstrip()[:20].lower().startswith(b"<")
-        if cap_r.status_code == 200 and len(_body) > 100 and not _looks_like_html:
+        # Captcha download: 3 tries; if still no image, the WHOLE login is started again from
+        # the beginning (this loop) after 5 s.
+        _cap_ok = False
+        for _cap_try in range(1, 4):
+            cap_r = sess.get(
+                f"{BASE}/Captcha2.aspx?cpt={cap_val}&t={int(time.time()*1000)}",
+                headers=HEADS, timeout=10,
+            )
+            _body = cap_r.content
+            _looks_like_html = _body.lstrip()[:20].lower().startswith(b"<")
+            if cap_r.status_code == 200 and len(_body) > 100 and not _looks_like_html:
+                _cap_ok = True
+                break
+            print(f"  ⚠️ Captcha download looked invalid (status {cap_r.status_code}, "
+                  f"attempt {_cap_try}/3) — retrying in 2s...")
+            time.sleep(2)
+        if _cap_ok:
             break
-        print(f"  ⚠️ Captcha download looked invalid (status {cap_r.status_code}, "
-              f"attempt {_login_attempt}/5) — refreshing login page + token and retrying in 2s...")
-        time.sleep(2)
+        print(f"  🔁 No captcha image after 3 tries — starting the whole login again from the beginning in 5s "
+              f"(restart {_login_attempt}/5)...")
+        time.sleep(5)
     else:
         print("  [✗] NCDEX captcha image never downloaded successfully after 5 full attempts "
               "(re-opened the login page and got a fresh token each time).")

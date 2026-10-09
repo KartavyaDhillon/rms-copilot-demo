@@ -338,7 +338,13 @@ def run_cli_upload():
             _p(f"[MISSING_FILE] {label}")
 
     hard_error = None
-    if not files_to_upload:
+    if missing_names:
+        # Every file is needed downstream — never upload a partial set. Nothing is uploaded and nothing is
+        # moved to backup, so the files already downloaded stay in place for the re-run.
+        hard_error = ("Upload NOT done — required file(s) missing: " + ", ".join(missing_names)
+                      + ". Nothing was uploaded and nothing was moved to backup; run it again.")
+        _p(f"❌ {hard_error}")
+    elif not files_to_upload:
         _p("⚠️ No files found to upload")
     else:
         try:
@@ -407,6 +413,8 @@ def run_cli_upload():
     # ── STEP 2: backup + cleanup (still runs even if upload had trouble) ─────
     _p("🚀 STEP 2: Backup + cleanup")
     try:
+        if missing_names:
+            raise RuntimeError("skipped — files are kept in the folder because the upload was not completed")
         today_folder = datetime.datetime.now().strftime("%d-%m-%Y")
         # Slot label for the Postgres tag comes from the RUN's own decision (the
         # window gate in cli_allocation_new.py leaves a marker for afternoon/

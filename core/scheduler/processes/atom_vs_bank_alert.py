@@ -227,8 +227,9 @@ def _run(params, ctx):
     inp, out = paths.proc_dir(FOLDER, "inputs"), paths.proc_dir(FOLDER, "outputs")
     stamp = dt.datetime.now()
 
-    atom_f = fetch_atom(inp, ctx)
-    bank_f = fetch_bank(inp, ctx)
+    # a broken connection restarts that whole portal login + download from the beginning (5 s wait, up to 5 times)
+    atom_f = H.restart_on_network_error(ctx, "ATOM", lambda: fetch_atom(inp, ctx))
+    bank_f = H.restart_on_network_error(ctx, "Back-office", lambda: fetch_bank(inp, ctx))
     txn_full, bank_full = pd.read_excel(atom_f), pd.read_excel(bank_f)
 
     txn = txn_full.rename(columns={"Client Code": "CLIENT_CODE", "Atom Txn ID": "ALERT_ID", "Amount": "AMOUNT_ATOM_FILE",
