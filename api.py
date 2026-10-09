@@ -226,7 +226,8 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
-                            '<script src="/platform/js/process-probable-box.js?v=2"></script></body>', 1)
+                            '<script src="/platform/js/process-probable-box.js?v=2"></script>'
+                            '<script src="/platform/js/process-mtfic.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4763,6 +4764,90 @@ def reco_stop(request: Request):
             except OSError: pass
     except Exception:
         pass
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MTF IMPACT COST  (tile in "Processing & Reports" → detail modal)
+# Logic lives in core/pipelines/mtf_impact_cost.py — these endpoints are plumbing.
+# Own "mtfic" run slot: never blocks (or is blocked by) any other box.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _mtfic_sse(code, prefix, action=None):
+    import json as _mj
+    from core import pipeline_box as _pbx
+    def gen():
+        try:
+            it = (_pbx._stream_code_act(code, "mtfic", action, prefix) if action
+                  else _pbx._stream_code(code, "mtfic", prefix))
+            for ev in it:
+                yield f"data: {_mj.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_mj.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+def _mtfic_date(s):
+    import re as _mr
+    s = (s or "").strip()
+    return s if _mr.fullmatch(r"[0-9\-/]{0,10}", s) else ""
+
+
+@app.get("/mtfic/status")
+def mtfic_status(date: str = ""):
+    from core.pipelines import mtf_impact_cost as _m
+    return _m.status(_mtfic_date(date))
+
+
+@app.get("/mtfic/run-stream")
+def mtfic_run_stream(date: str = "", wa: int = 1):
+    d = _mtfic_date(date)
+    return _mtfic_sse(
+        f"from core.pipelines.mtf_impact_cost import run_all as _f; _f({d!r}, {'1' if wa else '0'!r})", "mtfic_run")
+
+
+@app.get("/mtfic/download-stream")
+def mtfic_download_stream(date: str = ""):
+    d = _mtfic_date(date)
+    return _mtfic_sse(
+        f"from core.pipelines.mtf_impact_cost import run_download as _f; _f({d!r})", "mtfic_download", "dl")
+
+
+@app.post("/mtfic/upload")
+async def mtfic_upload(files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+    """TradeBook_<DDMMYYYY> and C_CATG_<MON><YYYY>.T01 → the single MTF Impact Cost folder."""
+    import shutil as _sh
+    from core.pipelines import mtf_impact_cost as _m
+    saved = []
+    for f in files:
+        tmp = _sa_os.path.join(_sa_tmp.gettempdir(), _sa_os.path.basename(f.filename))
+        with open(tmp, "wb") as out:
+            _sh.copyfileobj(f.file, out)
+        saved.append(tmp)
+    return _m.route_uploads(saved)
+
+
+@app.get("/mtfic/file")
+def mtfic_file(kind: str = "xlsx"):
+    """Last run's Excel / image — served from its Backup folder (the originals are cleaned away)."""
+    from core.pipelines import mtf_impact_cost as _m
+    if kind not in ("xlsx", "png"):
+        return JSONResponse({"ok": False, "error": "unknown file"}, status_code=400)
+    p = _m.served_file(kind)
+    if not p:
+        return JSONResponse({"ok": False, "error": "No finished run to download yet."}, status_code=404)
+    return FileResponse(str(p), filename=p.name, headers=_NO_CACHE)
+
+
+@app.post("/mtfic/stop")
+def mtfic_stop(request: Request):
+    allowed, why = _can_stop("px_mtfic", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
+    from core.pipeline_box import stop_pipeline as _msp
+    _msp("mtfic")
     return {"ok": True}
 
 

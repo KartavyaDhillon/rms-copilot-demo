@@ -259,6 +259,26 @@ PIPELINES = {
                  ["PositionBook (with MCX)", "*position*.xlsx", "PositionBook.xlsx"],
                  ["Reconciliation outputs", "*.xlsx,*.csv,*.txt", "—"],
              ]},
+    # MTF Impact Cost — one on-demand run (tile in Processing & Reports). Everything lives in ONE
+    # folder; HOLDING is read from COMMON FILES and never touched. After a completed run the used
+    # + generated files are backed up to Backup\<date>\<time> and removed from the base folder.
+    # Bespoke endpoints (/mtfic/*, api.py) → core/pipelines/mtf_impact_cost.py.
+    "mtfic": {"name": "MTF Impact Cost", "logdir": "mtfic", "runs": 1,
+              "state_dir_env": "MTF_IMPACT_FOLDER", "state_default": r"D:\SECURITY CAT IMPACT COST",
+              "state_file": "run_counter.txt",
+              "email_keys": {},
+              "cred": {"WhatsApp (Tata) bearer token": {"single_key": "MTFIC_WA_TOKEN",
+                        "note": "sends the dashboard image. Leave blank to use the shared WA_AUTH_TOKEN."},
+                       "WhatsApp numbers": {"single_key": "MTFIC_WA_NUMBERS",
+                        "note": "comma separated, with country code, e.g. +91XXXXXXXXXX,+91YYYYYYYYYY. Blank = nothing is sent."}},
+              "upload_dir_env": "MTF_IMPACT_FOLDER", "upload_default": r"D:\SECURITY CAT IMPACT COST",
+              "backup_root_env": "MTF_IMPACT_FOLDER", "backup_subdir": "Backup",
+              "file_types": [
+                  ["TradeBook", "TradeBook_*.csv,TradeBook_*.xlsx,TradeBook_*.xls", "TradeBook_<DDMMYYYY>.csv"],
+                  ["NSE impact-cost file", "C_CATG_*.T01", "C_CATG_<MON><YYYY>.T01"],
+                  ["Reconciliation Excel", "Reconciliation_MTF_ImpactCost_*.xlsx", "Reconciliation_MTF_ImpactCost_<DDMMYYYY>.xlsx"],
+                  ["Dashboard image", "Reconciliation_MTF_Dashboard_*.png", "Reconciliation_MTF_Dashboard_<DDMMYYYY>.png"],
+              ]},
     # Margin Shortage (15-min) — runs 11x/day, ported from 15minutesfinal_whatsapp.PY.
     # (Was 9; 16:30 and 16:50 added when the desk's shift extended. The night
     # shift after 16:50 still runs the original batch script on another machine —

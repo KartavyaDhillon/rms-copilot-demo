@@ -778,6 +778,15 @@ body {
             <button class="tbtn" style="background:var(--violet);color:#0d0620" onclick="runTask('mtforder')" data-tip="Margin match → KAMB + O319 order files → zone emails → backup. Needs MTFPOSITION + RISK files.">Run</button>
           </div>
         </div>
+        <div class="tile" id="task-mtfic" style="--tile-accent:var(--teal);cursor:pointer" onclick="mtficOpen()">
+          <div class="tile-icon">🧾</div>
+          <div class="tile-name">MTF Impact Cost <span class="st" id="mtficChip">idle</span></div>
+          <div class="tile-desc">MTF trades vs NSE impact-cost category. One-time run: upload TradeBook, run, download the report.</div>
+          <div class="tile-desc" id="mtficMini" style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">Checking…</div>
+          <div class="tile-actions">
+            <button class="tbtn" style="background:var(--teal);color:#003311" onclick="event.stopPropagation();mtficOpen()" data-tip="Open the MTF Impact Cost window: upload files, run, see the result, download the Excel and image.">Open</button>
+          </div>
+        </div>
       </div>
     </div><!-- /view-dashboard -->
 
