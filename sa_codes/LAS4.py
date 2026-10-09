@@ -2600,6 +2600,13 @@ def _las_narration_tentative_email(df_main_raw):
     _nt_write_dashboard(png_path, narr_rows, stamp)
     protected_xlsx = _nt_password_protect(xlsx_path)
 
+    # The Tentative Obligation e-mail is switched OFF for now (no e-mail, no WhatsApp). The Excel + PNG above are
+    # still created and kept in the folder. To start sending again, set SA_SEND_TENTATIVE=true in .env.
+    if (_SAENV("SA_SEND_TENTATIVE", "false") or "").strip().lower() not in ("1", "true", "yes", "on"):
+        print(f"⏸️ Tentative Obligation e-mail is OFF (SA_SEND_TENTATIVE not true) — NOT sent. "
+              f"Files kept: {protected_xlsx} and {png_path}")
+        return False
+
     to_list = _SALIST("SA_MAIL_TENTATIVE_TO", ["kartavya.dhillon@mastertrust.co.in"])
     cc_list = _SALIST("SA_MAIL_TENTATIVE_CC", ["kartavya.dhillon@mastertrust.co.in"])
 
@@ -2638,9 +2645,10 @@ def _las_narration_tentative_email(df_main_raw):
             print(f"❌ Email error ({_SUBJECT_PREFIX}-{EMAIL_DATE}): {e}")
             print("🔁 Retrying in 3 seconds...")
             _nt_time.sleep(3)
+    return True
 
-_las_narration_tentative_email(df_main_raw)
-print("✅ NARRATION-style Tentative Obligation email sent (password-protected attachment)")
+if _las_narration_tentative_email(df_main_raw):
+    print("✅ NARRATION-style Tentative Obligation email sent (password-protected attachment)")
 
 print("🎉 ALL EMAILS SENT SUCCESSFULLY")
 
