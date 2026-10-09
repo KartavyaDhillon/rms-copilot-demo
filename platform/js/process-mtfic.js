@@ -51,7 +51,6 @@
     var sub = it.ok ? esc(it.file) : esc(it.need);
     var note = '';
     if (it.key === 'catg' && !it.ok) note = it.file ? esc(it.note || '') + ' — will be downloaded when you run' : 'not here yet — the run downloads it (or use Upload files)';
-    if (it.key === 'catg' && it.ok && it.note) note = esc(it.note);
     if (!it.ok && it.key !== 'catg') note = 'missing — ' + esc(it.where);
     return '<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line)">' + ic +
       '<span style="font-size:12.5px;min-width:96px">' + esc(it.label) + '</span>' +
@@ -96,6 +95,7 @@
     var d = S.data;
     if (!d || !modalOpen()) return;
     var running = !!d.running;
+    if (!d.done_today) S.rerun = false;
     var p = d.progress || {};
     var sig = JSON.stringify([d, S.msg, S.busy]);
     if (!force && sig === S.sig) return;
@@ -107,8 +107,18 @@
     var spin = '<span style="display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-3px;border:2px solid var(--line-2);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite"></span>';
     var line = (running || S.busy) ? spin + esc(running ? (p.msg || 'Starting…') : 'Starting…') : (p.ok === false && p.msg ? '<span style="color:var(--red)">' + esc(p.msg) + '</span>' : '');
     var msg = S.msg ? '<div style="font-size:11.5px;margin:8px 0;color:' + (S.msgKind === 'bad' ? 'var(--red)' : (S.msgKind === 'ok' ? 'var(--green)' : 'var(--amber)')) + ';white-space:pre-wrap">' + S.msg + '</div>' : '';
-    var html =
-      '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Checks today\'s MTF trades against NSE\'s security-category impact-cost file. One folder for everything: <span style="font-family:var(--mono);color:var(--dim)">' + esc(d.folder) + '</span></div>' +
+    var finished = !!d.done_today && !S.rerun && !running && !S.busy;
+    var l0 = d.last || {};
+    var doneBanner =
+      '<div style="display:flex;align-items:center;gap:12px;border:1px solid rgba(52,211,153,.35);background:rgba(52,211,153,.07);border-radius:10px;padding:10px 14px;margin-bottom:12px">' +
+      '<span style="font-size:22px;color:var(--green)">&#10003;</span>' +
+      '<div style="flex:1"><div style="font-weight:650;color:var(--green)">Completed today</div>' +
+      '<div style="font-size:11px;color:var(--dim)">This runs once a day · finished ' + esc(l0.finished) + (l0.by ? ' by ' + esc(l0.by) : '') + (l0.rerun ? ' (admin re-run)' : '') + '</div></div>' +
+      '<button class="sa-tool" onclick="mtficRerun()" data-tip="Only an admin can run it again today. Replaces today\'s result." style="border-color:rgba(251,191,36,.45);color:var(--amber)">&#128274; Re-run (admin)</button></div>' + msg;
+    var rerunNote = S.rerun
+      ? '<div style="font-size:11.5px;color:var(--amber);border:1px solid rgba(251,191,36,.35);border-radius:9px;padding:8px 12px;margin-bottom:10px">Admin re-run unlocked — upload today\'s TradeBook again, then Run now. This replaces today\'s result.</div>' : '';
+    var workPart =
+      rerunNote +
       '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px">' +
       '<span style="font-size:11.5px;color:var(--muted)">Today: <b style="color:var(--ink)">' + esc(d.date) + '</b></span>' +
       '<label style="font-size:11.5px;color:var(--muted);cursor:pointer"><input type="checkbox" ' + (S.wa ? 'checked' : '') + ' onchange="mtficWa(this.checked)"> Send WhatsApp image' +
@@ -119,8 +129,11 @@
       '<button class="sa-tool" onclick="mtficDownload()" style="border-color:rgba(96,165,250,.45);color:var(--blue)"' + (running ? ' disabled' : '') + '>&#128229; Download NSE file</button>' +
       '<span style="font-size:10.5px;color:var(--dim);align-self:center">Upload names: ' + esc(((d.items || [])[0] || {}).need || 'TradeBook_DDMMYYYY.csv') + ' (today\'s date: DD day, MM month, YYYY year) · C_CATG_OCT2026.T01 style for the NSE file. HOLDING comes from COMMON FILES.</span></div>' +
       '<div style="display:flex;gap:8px">' + runBtn + '</div>' +
-      stepsHtml(p, running) + '<div style="font-size:11px;color:var(--dim);min-height:15px">' + line + '</div>' + msg +
-      '<div style="font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:12px 0 6px">Result</div>' + resultHtml(d.last) +
+      stepsHtml(p, running) + '<div style="font-size:11px;color:var(--dim);min-height:15px">' + line + '</div>' + msg;
+    var html =
+      '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Checks today\'s MTF trades against NSE\'s security-category impact-cost file. One folder for everything: <span style="font-family:var(--mono);color:var(--dim)">' + esc(d.folder) + '</span></div>' +
+      (finished ? doneBanner : workPart) +
+      '<div style="font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:12px 0 6px">' + (finished ? "Today's result" : 'Last result') + '</div>' + resultHtml(d.last) +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">' +
       '<button class="sa-tool" onclick="pxCredentials(\'mtfic\')" data-tip="WhatsApp token and numbers">&#128273; Credentials</button>' +
       '<button class="sa-tool" onclick="pxBackup(\'mtfic\')" data-tip="Browse past runs: every file used and generated is kept here">&#128230; Backup files</button>' +
@@ -135,9 +148,23 @@
     load().then(function () { render(false); }).catch(function () {});
   }
 
-  window.mtficOpen = function () {
+  window.mtficRerun = function () {
+    var go = function (pw) {
+      fetch(API + '/mtfic/unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw || '' }) })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (j.ok) { S.rerun = true; window.mtficOpen(); }
+          else window.mtficOpen(esc(j.error || 'Not allowed'), 'bad');
+        }).catch(function () { window.mtficOpen('Could not reach the server.', 'bad'); });
+    };
+    if ((S.data || {}).admin) go('');
+    else if (typeof saAskPassword === 'function') saAskPassword('Admin re-run', function (pw) { go(pw); });
+    else setMsg('Only an admin can re-run this.', 'bad');
+  };
+
+  window.mtficOpen = function (msg, kind) {
     if (typeof saShowModal !== 'function') return;
-    S.msg = ''; S.msgKind = ''; S.sig = ''; S.iso = '';
+    S.msg = (typeof msg === 'string') ? msg : ''; S.msgKind = kind || ''; S.sig = ''; S.iso = '';
     saShowModal(TITLE, '<div style="color:var(--muted);font-size:12px">Checking files…</div>');
     load().then(function () { render(true); }).catch(function () {
       saShowModal(TITLE, '<div style="color:var(--red);font-size:13px">Could not reach the server.</div>');
@@ -230,7 +257,7 @@
     }
     stream(API + '/mtfic/run-stream?wa=' + (S.wa ? 1 : 0), 'Run started…').then(function () {
       var p = (S.data || {}).progress || {};
-      if (p.ok === true) setMsg('&#10003; Completed — results below.', 'ok');
+      if (p.ok === true) { S.rerun = false; setMsg('', ''); }
       else if (p.ok === false) setMsg(esc(p.msg || 'The run failed — see Logs.'), 'bad');
     });
   };

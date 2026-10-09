@@ -227,7 +227,7 @@ def serve_dashboard(embed: int = 0):
         html = html.replace("</body>",
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
-                            '<script src="/platform/js/process-mtfic.js?v=4"></script></body>', 1)
+                            '<script src="/platform/js/process-mtfic.js?v=6"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4795,17 +4795,57 @@ def _mtfic_date(s):
     return s if _mr.fullmatch(r"[0-9\-/]{0,10}", s) else ""
 
 
+_MTFIC_UNLOCK = {"until": 0.0}      # admin re-run permission (one run, 15 minutes)
+
+
 @app.get("/mtfic/status")
-def mtfic_status(date: str = ""):
+def mtfic_status(request: Request, date: str = ""):
     from core.pipelines import mtf_impact_cost as _m
-    return _m.status(_mtfic_date(date))
+    st = _m.status(_mtfic_date(date))
+    try:
+        st["admin"] = bool(_actor(request)[1])
+    except Exception:
+        st["admin"] = False
+    return st
+
+
+@app.post("/mtfic/unlock")
+async def mtfic_unlock(request: Request):
+    """Allow ONE more run today. Signed-in admins pass directly; anyone else needs the config password."""
+    import time as _mt
+    ok = False
+    try:
+        ok = bool(_actor(request)[1])
+    except Exception:
+        pass
+    if not ok:
+        try:
+            b = await request.json()
+        except Exception:
+            b = {}
+        from core.short_allocation import check_password as _mpw
+        ok = bool(_mpw((b or {}).get("password", "")))
+        if not ok:
+            return {"ok": False, "error": "Wrong password — only an admin can re-run this."}
+    _MTFIC_UNLOCK["until"] = _mt.time() + 900
+    return {"ok": True}
 
 
 @app.get("/mtfic/run-stream")
-def mtfic_run_stream(date: str = "", wa: int = 1):
+def mtfic_run_stream(request: Request, date: str = "", wa: int = 1):
+    import time as _mt
     d = _mtfic_date(date)
+    force = "0"
+    if _MTFIC_UNLOCK["until"] > _mt.time():
+        force = "1"
+        _MTFIC_UNLOCK["until"] = 0.0          # one run per unlock
+    try:
+        by = _actor(request)[0] or ""
+    except Exception:
+        by = ""
     return _mtfic_sse(
-        f"from core.pipelines.mtf_impact_cost import run_all as _f; _f({d!r}, {'1' if wa else '0'!r})", "mtfic_run")
+        f"from core.pipelines.mtf_impact_cost import run_all as _f; "
+        f"_f({d!r}, {'1' if wa else '0'!r}, {force!r}, {by!r})", "mtfic_run")
 
 
 @app.get("/mtfic/download-stream")

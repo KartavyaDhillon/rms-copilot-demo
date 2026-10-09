@@ -199,6 +199,7 @@ def status(date_str: str = "") -> dict:
         pass
     lr = last_run()
     return {"date": dmy(d), "iso": d.isoformat(), "folder": str(base_dir()), "common_folder": str(common_dir()),
+            "done_today": lr.get("date") == dmy(d),
             "items": items,
             "ready": bool(tb) and bool(hd),      # the NSE file is fetched by the run itself if missing
             "running": running, "progress": pr,
@@ -735,9 +736,12 @@ def _fail(msg):
     raise SystemExit(1)
 
 
-def run_all(date_str: str = "", wa: str = "1"):
+def run_all(date_str: str = "", wa: str = "1", force: str = "0", by: str = ""):
+    """One completed run per day. A second run for the same date is refused unless force is set
+    (the API only sets it after an admin unlock)."""
     try:
-        _run_all(date_str, str(wa) not in ("0", "false", "False", "no", ""))
+        _run_all(date_str, str(wa) not in ("0", "false", "False", "no", ""),
+                 str(force) in ("1", "true", "True"), by)
     except SystemExit:
         raise
     except Exception as e:
@@ -745,12 +749,16 @@ def run_all(date_str: str = "", wa: str = "1"):
         _fail(f"Run stopped: {e}")
 
 
-def _run_all(date_str, send_wa):
+def _run_all(date_str, send_wa, force=False, by=""):
     pd = _pd()
     ensure_dirs()
     _LINES.clear()
     d = parse_date(date_str) or datetime.date.today()
     log(f"MTF impact-cost reconciliation for {dmy(d)}")
+    if not force and last_run().get("date") == dmy(d):
+        _fail(f"Already completed for {dmy(d)} — this runs once a day. An admin can re-run it from the window.")
+    if force:
+        log("Admin re-run: replacing today's earlier result.")
 
     # 1 ─ inputs
     _prog(1, "Checking input files")
@@ -908,7 +916,8 @@ def _run_all(date_str, send_wa):
 
     top = [{"symbol": a, "isin": b, "reason": c, "trades": n} for a, b, c, n in details[:15]]
     result = {
-        "date": dmy(d), "finished": datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+        "date": dmy(d), "finished": datetime.datetime.now().strftime("%d-%m-%Y %H:%M:%S"), "by": by or "",
+        "rerun": bool(force),
         "mtf": int(len(mtf)), "ok": int(len(ok_rows)), "check": int(len(chk)),
         "no_holding": n_noh, "isin_missing": n_nof, "wrong_category": n_wrong,
         "unique_symbols": len(details), "top": top, "wa": wa_res,
