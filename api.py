@@ -227,7 +227,7 @@ def serve_dashboard(embed: int = 0):
         html = html.replace("</body>",
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
-                            '<script src="/platform/js/process-mtfic.js?v=2"></script></body>', 1)
+                            '<script src="/platform/js/process-mtfic.js?v=4"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:

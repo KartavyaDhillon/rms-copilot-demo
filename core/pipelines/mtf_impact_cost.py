@@ -415,9 +415,11 @@ def build_holding_lookup(path: Path):
                              chunksize=200_000, low_memory=False)
     lookup, seen = {}, {}
     for ch in chunks:
-        ch[sym_col] = ch[sym_col].astype(str).str.strip().str.upper()
-        ch[isin_col] = ch[isin_col].astype(str).str.strip().str.upper()
+        ch[sym_col] = ch[sym_col].fillna("").astype(str).str.strip().str.upper()
+        ch[isin_col] = ch[isin_col].fillna("").astype(str).str.strip().str.upper()
         for sym, isin in zip(ch[sym_col], ch[isin_col]):
+            if not isinstance(sym, str) or not isinstance(isin, str):
+                continue                                  # NaN / blank cell
             if not sym or sym.lower() == "nan" or not isin or isin == "NAN":
                 continue
             seen.setdefault(sym, set()).add(isin)

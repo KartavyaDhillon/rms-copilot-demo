@@ -95,16 +95,17 @@
   function render(force) {
     var d = S.data;
     if (!d || !modalOpen()) return;
-    var p = d.progress || {};
     var running = !!d.running;
+    var p = d.progress || {};
     var sig = JSON.stringify([d, S.msg, S.busy]);
     if (!force && sig === S.sig) return;
     S.sig = sig;
     var items = (d.items || []).map(inputRow).join('');
-    var runBtn = running
+    var runBtn = (running || S.busy)
       ? '<button class="sa-save" style="flex:1;background:var(--red);color:#1a0505" onclick="mtficStop()">&#9940; Stop</button>'
       : '<button class="sa-save" style="flex:1;' + (d.ready ? '' : 'opacity:.55;') + '" onclick="mtficRun()">&#9654; Run now</button>';
-    var line = running ? esc(p.msg || 'Starting…') : (p.ok === false && p.msg ? '<span style="color:var(--red)">' + esc(p.msg) + '</span>' : '');
+    var spin = '<span style="display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-3px;border:2px solid var(--line-2);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite"></span>';
+    var line = (running || S.busy) ? spin + esc(running ? (p.msg || 'Starting…') : 'Starting…') : (p.ok === false && p.msg ? '<span style="color:var(--red)">' + esc(p.msg) + '</span>' : '');
     var msg = S.msg ? '<div style="font-size:11.5px;margin:8px 0;color:' + (S.msgKind === 'bad' ? 'var(--red)' : (S.msgKind === 'ok' ? 'var(--green)' : 'var(--amber)')) + ';white-space:pre-wrap">' + S.msg + '</div>' : '';
     var html =
       '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Checks today\'s MTF trades against NSE\'s security-category impact-cost file. One folder for everything: <span style="font-family:var(--mono);color:var(--dim)">' + esc(d.folder) + '</span></div>' +
@@ -164,16 +165,32 @@
   function doUpload() {
     var files = [].slice.call(fileInput.files || []);
     if (!files.length) return;
-    setMsg('Uploading ' + files.length + ' file(s)…', '');
+    // same flow as the other upload buttons: "Uploading…" with a spinner → "Upload result" → Done
+    saShowModal('Uploading…',
+      '<div style="text-align:center;padding:14px 0"><div style="width:30px;height:30px;margin:0 auto 12px;border:3px solid var(--line-2);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite"></div>' +
+      '<div style="color:var(--muted);font-size:13px">Copying ' + files.length + ' file(s)…</div></div>');
     var fd = new FormData();
     files.forEach(function (f) { fd.append('files', f); });
-    fetch(API + '/mtfic/upload', { method: 'POST', body: fd }).then(function (r) {
+    var ctl = new AbortController(); window._saUploadCtl = ctl;
+    var to = setTimeout(function () { ctl.abort(); }, 180000);
+    var done = '<button class="sa-save" style="width:100%;margin-top:14px" onclick="mtficOpen()">Done</button>';
+    fetch(API + '/mtfic/upload', { method: 'POST', body: fd, signal: ctl.signal }).then(function (r) {
+      clearTimeout(to);
+      if (ctl.signal.aborted) return null;
       if (!r.ok) throw new Error('Server ' + r.status);
       return r.json();
     }).then(function (d) {
-      var t = (d.ok || []).map(function (m) { return '&#10003; ' + esc(m); }).concat((d.rejected || []).map(function (m) { return '&#10007; ' + esc(m); })).join('\n');
-      return load().then(function () { setMsg(t, (d.rejected || []).length ? 'warn' : 'ok'); });
-    }).catch(function (e) { setMsg('Upload failed: ' + esc(e.message || e), 'bad'); });
+      if (!d) return;
+      var html = '';
+      (d.ok || []).forEach(function (m) { html += '<div class="sa-ev ok"><span class="ic">✓</span><span>' + esc(m) + '</span><span class="what">uploaded</span></div>'; });
+      (d.rejected || []).forEach(function (m) { html += '<div class="sa-ev bad"><span class="ic">✕</span><span>' + esc(m) + '</span><span class="what">not accepted</span></div>'; });
+      (d.notes || []).forEach(function (m) { html += '<div style="font-size:11.5px;color:var(--amber);margin:6px 0">' + esc(m) + '</div>'; });
+      saShowModal('Upload result', html + done);
+    }).catch(function (e) {
+      clearTimeout(to);
+      if (ctl.signal.aborted) return;
+      saShowModal('Upload failed', '<div style="color:var(--red);font-size:13px">' + esc((e && e.message) ? e.message : String(e)) + '</div>' + done);
+    }).then(function () { window._saUploadCtl = null; });
   }
 
   // ───────────────────────── run / download / stop ─────────────────────────
