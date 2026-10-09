@@ -13,8 +13,7 @@
   function dmy(iso) { return iso ? iso.split('-').reverse().join('-') : ''; }
 
   function load() {
-    var q = S.iso ? ('?date=' + encodeURIComponent(dmy(S.iso))) : '';
-    return fetch(API + '/mtfic/status' + q, { cache: 'no-store' }).then(function (r) { return r.json(); })
+    return fetch(API + '/mtfic/status', { cache: 'no-store' }).then(function (r) { return r.json(); })
       .then(function (d) { S.data = d; if (!S.iso && d.iso) S.iso = d.iso; return d; });
   }
 
@@ -100,8 +99,6 @@
     var running = !!d.running;
     var sig = JSON.stringify([d, S.msg, S.busy]);
     if (!force && sig === S.sig) return;
-    var ae = document.activeElement;
-    if (ae && ae.id === 'mtficDate' && !force) return;     // don't re-render under the date picker
     S.sig = sig;
     var items = (d.items || []).map(inputRow).join('');
     var runBtn = running
@@ -112,14 +109,14 @@
     var html =
       '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Checks today\'s MTF trades against NSE\'s security-category impact-cost file. One folder for everything: <span style="font-family:var(--mono);color:var(--dim)">' + esc(d.folder) + '</span></div>' +
       '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px">' +
-      '<label style="font-size:11.5px;color:var(--muted)">Trade date <input type="date" id="mtficDate" value="' + esc(S.iso) + '" onchange="mtficDate(this.value)" style="margin-left:6px"></label>' +
+      '<span style="font-size:11.5px;color:var(--muted)">Today: <b style="color:var(--ink)">' + esc(d.date) + '</b></span>' +
       '<label style="font-size:11.5px;color:var(--muted);cursor:pointer"><input type="checkbox" ' + (S.wa ? 'checked' : '') + ' onchange="mtficWa(this.checked)"> Send WhatsApp image' +
       ' <span style="color:var(--dim)">(' + (d.wa_numbers ? d.wa_numbers + ' number' + (d.wa_numbers > 1 ? 's' : '') : 'no numbers set') + ')</span></label></div>' +
       '<div style="border:1px dashed var(--line-2);border-radius:10px;padding:4px 12px;margin-bottom:10px">' + items + '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
       '<button class="sa-tool" onclick="mtficPick()" style="border-color:rgba(52,211,153,.45);color:var(--green)">&#11014;&#65039; Upload files</button>' +
       '<button class="sa-tool" onclick="mtficDownload()" style="border-color:rgba(96,165,250,.45);color:var(--blue)"' + (running ? ' disabled' : '') + '>&#128229; Download NSE file</button>' +
-      '<span style="font-size:10.5px;color:var(--dim);align-self:center">TradeBook_DDMMYYYY.csv · C_CATG_MONYYYY.T01 &nbsp;(HOLDING comes from COMMON FILES)</span></div>' +
+      '<span style="font-size:10.5px;color:var(--dim);align-self:center">Upload names: ' + esc(((d.items || [])[0] || {}).need || 'TradeBook_DDMMYYYY.csv') + ' (today\'s date: DD day, MM month, YYYY year) · C_CATG_OCT2026.T01 style for the NSE file. HOLDING comes from COMMON FILES.</span></div>' +
       '<div style="display:flex;gap:8px">' + runBtn + '</div>' +
       stepsHtml(p, running) + '<div style="font-size:11px;color:var(--dim);min-height:15px">' + line + '</div>' + msg +
       '<div style="font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:12px 0 6px">Result</div>' + resultHtml(d.last) +
@@ -175,7 +172,6 @@
       return r.json();
     }).then(function (d) {
       var t = (d.ok || []).map(function (m) { return '&#10003; ' + esc(m); }).concat((d.rejected || []).map(function (m) { return '&#10007; ' + esc(m); })).join('\n');
-      S.iso = '';                       // let the server pick the date of the uploaded TradeBook
       return load().then(function () { setMsg(t, (d.rejected || []).length ? 'warn' : 'ok'); });
     }).catch(function (e) { setMsg('Upload failed: ' + esc(e.message || e), 'bad'); });
   }
@@ -215,7 +211,7 @@
       setMsg('Cannot run yet — missing: ' + esc(miss.join(', ')), 'bad');
       return;
     }
-    stream(API + '/mtfic/run-stream?date=' + encodeURIComponent(dmy(S.iso)) + '&wa=' + (S.wa ? 1 : 0), 'Run started…').then(function () {
+    stream(API + '/mtfic/run-stream?wa=' + (S.wa ? 1 : 0), 'Run started…').then(function () {
       var p = (S.data || {}).progress || {};
       if (p.ok === true) setMsg('&#10003; Completed — results below.', 'ok');
       else if (p.ok === false) setMsg(esc(p.msg || 'The run failed — see Logs.'), 'bad');
@@ -224,7 +220,7 @@
 
   window.mtficDownload = function () {
     if ((S.data || {}).running) return;
-    stream(API + '/mtfic/download-stream?date=' + encodeURIComponent(dmy(S.iso)), 'Downloading the NSE impact-cost file…').then(function () {
+    stream(API + '/mtfic/download-stream', 'Downloading the NSE impact-cost file…').then(function () {
       var it = ((S.data || {}).items || []).filter(function (i) { return i.key === 'catg'; })[0];
       if (it && it.ok) setMsg('&#10003; NSE file downloaded: ' + esc(it.file), 'ok');
       else setMsg('The download did not finish — see Logs. You can upload the file by hand instead.', 'bad');

@@ -170,7 +170,7 @@ def find_catg(d: datetime.date):
 def status(date_str: str = "") -> dict:
     """Everything the dashboard modal needs in one call."""
     ensure_dirs()
-    d = parse_date(date_str) or detect_date()
+    d = parse_date(date_str) or datetime.date.today()
     tb = find_dated(base_dir(), "TradeBook", d)
     hd = find_dated(common_dir(), "HOLDING", d)
     cg, cnote = find_catg(d)
@@ -333,7 +333,7 @@ def download_catg(d: datetime.date | None = None) -> Path:
 
 def run_download(date_str: str = ""):
     """Stand-alone 'Download NSE file' button."""
-    d = parse_date(date_str) or detect_date()
+    d = parse_date(date_str) or datetime.date.today()
     ensure_dirs()
     try:
         p = download_catg(d)
@@ -622,7 +622,8 @@ def _wa_token() -> str:
 
 
 def _wa_numbers() -> list:
-    return [n.strip() for n in re.split(r"[,;\s]+", os.getenv("MTFIC_WA_NUMBERS", "")) if n.strip()]
+    raw = re.split(r"[,;\s]+", os.getenv("MTFIC_WA_NUMBERS", ""))
+    return [x for x in (n.strip().strip("'\"") for n in raw) if x]      # tolerate pasted quotes
 
 
 def send_whatsapp(image: Path, report_date: str) -> dict:
@@ -721,7 +722,7 @@ def _run_all(date_str, send_wa):
     pd = _pd()
     ensure_dirs()
     _LINES.clear()
-    d = parse_date(date_str) or detect_date()
+    d = parse_date(date_str) or datetime.date.today()
     log(f"MTF impact-cost reconciliation for {dmy(d)}")
 
     # 1 ─ inputs
