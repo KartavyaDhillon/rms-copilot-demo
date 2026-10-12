@@ -183,12 +183,42 @@ def ctcl_run1_file(ctx=None) -> Optional[Path]:
     for c in cands:
         try:
             if c.is_file() and c.stat().st_mtime >= start:     # must be today's output, not yesterday's leftover
-                if ctx:
-                    ctx.log(f"CTCL vs NMASS run-1 file: {c}")
-                return c
+                ok, why = xlsx_ready(c)
+                if ok:
+                    if ctx:
+                        ctx.log(f"CTCL vs NMASS run-1 file: {c}")
+                    return c
+                if ctx:                                         # exists but the pipeline is still writing it
+                    ctx.log(f"{c.name} is still being written ({why}) — waiting for it to be complete…")
         except OSError:
             pass
     return None
+
+
+def xlsx_ready(p: Path, settle: float = 20.0):
+    """(ready, reason). A workbook another process is still creating is NOT ready: it shows up as a 0 KB file,
+    then as a half-written one that is not a valid .xlsx yet.  Ready = not empty, untouched for `settle` seconds,
+    and a complete, readable .xlsx (zip with every entry intact).  Judged on the file itself, so it works the same
+    for the live file and for a backup copy, and never depends on a backup being made."""
+    import zipfile
+    try:
+        st = p.stat()
+        if st.st_size == 0:
+            return False, "0 KB"
+        age = time.time() - st.st_mtime
+        if age < settle:
+            return False, f"changed {int(age)} s ago"
+        with zipfile.ZipFile(p) as z:
+            if "[Content_Types].xml" not in z.namelist():
+                return False, "not a complete Excel file"
+            bad = z.testzip()
+            if bad:
+                return False, f"damaged entry {bad}"
+        return True, ""
+    except zipfile.BadZipFile:
+        return False, "not a complete Excel file yet"
+    except (OSError, PermissionError) as e:
+        return False, f"locked ({e.__class__.__name__})"
 
 
 # ───────────────────────── risk report (read-only, COMMON FILES) ─────────────────────────

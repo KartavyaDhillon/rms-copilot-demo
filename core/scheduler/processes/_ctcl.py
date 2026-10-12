@@ -22,7 +22,11 @@ def get_run1(params, ctx) -> Path:
 def read_run1(path: Path, cols):
     """DataFrame of the run-1 workbook: finds the header row (within the first 10 rows) that holds all `cols`."""
     pd = H.need("pandas")
-    raw = pd.read_excel(path, header=None, dtype=str)
+    try:
+        raw = pd.read_excel(path, header=None, dtype=str)
+    except ValueError as e:                    # e.g. "Excel file format cannot be determined" = half-written file
+        raise RuntimeError(f"{path.name} is not a complete Excel workbook yet ({e}). "
+                           f"The CTCL vs NMASS run may still be writing it — run this again in a few minutes.")
     want = [c.upper() for c in cols]
     for i in range(min(10, len(raw))):
         row = [str(v).strip().upper() for v in raw.iloc[i].tolist()]
