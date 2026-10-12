@@ -154,7 +154,12 @@ PIPELINES = {
                       "note": "eclear.mcxccl.com \"Query Detailed Limit\" login — shared with the Short Allocation MCX Deposit button (NOT the same report as MCX 90%)"},
                      "FTP (Allocation files)": {"user_key": "FTP_USER",
                       "pass_key": "FTP_PASS",
-                      "note": "202.58.232.124 — same FTP server other downloaders use"}},
+                      "note": "202.58.232.124 — same FTP server other downloaders use"},
+                     "Kambala FTP (second upload)": {"user_key": "CLI_KAMB_FTP_USER",
+                      "pass_key": "CLI_KAMB_FTP_PASS",
+                      "note": "202.58.232.29, port 21 — the same files are also uploaded here. Blank user = ftpadmin."},
+                     "Kambala FTP folder": {"single_key": "CLI_KAMB_FTP_DIR",
+                      "note": "folder on the Kambala FTP where the files go (created if missing). Blank = the login folder (/)."}},
             "upload_dir_env": "CLI_FOLDER", "upload_default": r"D:\CLI_PRUDENTIAL_LIMIT",
             # secondary upload target — RISK_REPORT lives in the shared common
             # folder, same as CTCL vs NMASS's copy of it (same file, same source).

@@ -26,6 +26,8 @@ STEP 2 — backup + cleanup (move everything except .py/.bat into
          distinguishable on disk). See _cli_time_slot().
 
 FTP: FTP_HOST/FTP_USER/FTP_PASS (shared with the Download step and other downloaders).
+STEP 1B — the same files are also pushed to the Kambala FTP (CLI_KAMB_FTP_HOST/_PORT/_USER/_PASS/_DIR,
+         see _upload_to_kambala); our own FTP upload above is unchanged.
 
 Tags printed for core.pipeline_box._status():
   [MISSING_FILE] <name>       — an expected file wasn't uploaded
@@ -253,6 +255,75 @@ def backfill_all_to_db():
             "total_archived": total_archived, "total_skipped": total_skipped}
 
 
+def _upload_to_kambala(files, log):
+    """Second FTP push (Kambala), in addition to our own FTP above. Settings in .env, set from the box's
+    Credentials button: CLI_KAMB_FTP_HOST / _PORT / _USER / _PASS / _DIR (folder, created if missing).
+    Each file goes up as name.part, is renamed when complete (the receiver never sees a half file) and its size is
+    checked. A broken connection restarts the whole login after 5 s (up to 5 times); a wrong password is not retried.
+    Returns ([uploaded names], error text or '' , skipped reason or '')."""
+    from ftplib import FTP, error_perm
+    host = (os.getenv("CLI_KAMB_FTP_HOST") or "202.58.232.29").strip()
+    try:
+        port = int((os.getenv("CLI_KAMB_FTP_PORT") or "21").strip())
+    except ValueError:
+        port = 21
+    user = (os.getenv("CLI_KAMB_FTP_USER") or "ftpadmin").strip()
+    pw = os.getenv("CLI_KAMB_FTP_PASS") or ""
+    rdir = (os.getenv("CLI_KAMB_FTP_DIR") or "/").strip() or "/"
+    if not pw:
+        return [], "", "no password set — open Credentials → Kambala FTP and save it"
+    done = []
+
+    def once():
+        ftp = FTP()
+        ftp.connect(host, port, timeout=60)
+        try:
+            ftp.login(user, pw)
+            ftp.set_pasv(True)
+            ftp.cwd("/")
+            for d in [p for p in rdir.replace("\\", "/").split("/") if p]:
+                try:
+                    ftp.cwd(d)
+                except error_perm:
+                    ftp.mkd(d)
+                    ftp.cwd(d)
+            for fp in files:
+                name, size = os.path.basename(fp), os.path.getsize(fp)
+                tmp = name + ".part"
+                with open(fp, "rb") as f:
+                    ftp.storbinary(f"STOR {tmp}", f, blocksize=64 * 1024)
+                try:
+                    ftp.delete(name)                 # replace an older copy of the same name
+                except Exception:
+                    pass
+                ftp.rename(tmp, name)
+                ftp.voidcmd("TYPE I")
+                try:
+                    got = ftp.size(name)
+                except Exception:
+                    got = None                       # server has no SIZE — cannot verify, not an error
+                if got is not None and got != size:
+                    raise RuntimeError(f"size mismatch for {name}: local {size:,} bytes, server {got:,} bytes")
+                if name not in done:
+                    done.append(name)
+                log(f"⬆ Kambala FTP uploaded: {name}")
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+
+    try:
+        from core import net_retry
+        net_retry.run(once, "Kambala FTP upload", log)
+    except Exception as e:
+        return done, f"{type(e).__name__}: {e}", ""
+    return done, "", ""
+
+
 def run_cli_upload():
     _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     base_folder = os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT")
@@ -383,6 +454,31 @@ def run_cli_upload():
         except Exception as e:
             hard_error = f"FTP upload failed: {e}"
             _p(f"❌ {hard_error}")
+
+    # ── STEP 1B: the same files to the Kambala FTP (in addition to our own FTP above) ──
+    # Runs before the backup step moves the files away. Our own FTP's behaviour/result is unchanged; a Kambala
+    # problem is reported loudly but does not turn the run into "failed" (the files are in the backup folder and
+    # can be pushed by hand).
+    if files_to_upload and not missing_names:
+        _p("🚀 STEP 1B: Kambala FTP upload")
+        _k_done, _k_err, _k_skip = _upload_to_kambala(files_to_upload, _p)
+        if _k_skip:
+            _p(f"⚠️ Kambala FTP upload skipped — {_k_skip}")
+            _p(f"[FRIENDLY_MSG] Kambala FTP upload was skipped: {_k_skip}.")
+        elif _k_err:
+            _p(f"❌ Kambala FTP upload FAILED — {_k_err}")
+            _p(f"[FRIENDLY_MSG] Uploaded to our FTP, but the Kambala FTP upload failed ({_k_err}). "
+               f"The files are in the backup folder — upload them to Kambala by hand.")
+        else:
+            _p(f"✅ Kambala FTP: {len(_k_done)} file(s) uploaded and verified")
+        try:
+            with open(upload_log_file, "a") as ulog:
+                for _n in _k_done:
+                    ulog.write(f"[{now_str}] KAMBALA SUCCESS | {_n}\n")
+                if _k_err:
+                    ulog.write(f"[{now_str}] KAMBALA FAILED  | {_k_err}\n")
+        except Exception:
+            pass
 
     # ── STEP 1.5: prune the OLDER slot folder(s) on the FTP ──────────────────
     # Per explicit instruction: the three ALLOCATION / ALLOCATION(AFTERNOON) /
