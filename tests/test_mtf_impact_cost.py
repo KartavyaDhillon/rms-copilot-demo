@@ -69,15 +69,16 @@ class MtfImpactCostFiles(unittest.TestCase):
         self.assertEqual((bdir / tb.name).read_bytes(), b"trades")
         self.assertIn(self.base.resolve(), bdir.resolve().parents)
 
-    def test_impact_file_falls_back_to_this_months_backup_copy(self):
+    def test_impact_file_only_counts_when_saved_today(self):
         self.assertEqual(m.find_catg(self.d), (None, ""))
         src = self.base / "C_CATG_OCT2026.T01"
         src.write_bytes(b"20,A,EQ,INE1,1,0.1")
-        m.backup_and_clean([src], self.d)
-        path, note = m.find_catg(self.d)
-        self.assertIsNotNone(path)
-        self.assertIn("backup", note)
-        self.assertFalse((self.base / "C_CATG_OCT2026.T01").exists())
+        self.assertEqual(m.find_catg(self.d)[0], src)                 # saved now = today's
+        old = datetime.datetime.now().timestamp() - 3 * 86400
+        os.utime(src, (old, old))
+        self.assertEqual(m.find_catg(self.d), (None, ""))             # an older copy is ignored
+        m.backup_and_clean([src], self.d)                             # ...and so is one sitting in Backup
+        self.assertEqual(m.find_catg(self.d), (None, ""))
 
     def test_status_ready_needs_tradebook_and_common_holding(self):
         self.assertFalse(m.status("09-10-2026")["ready"])

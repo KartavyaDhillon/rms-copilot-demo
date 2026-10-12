@@ -52,10 +52,10 @@
     var note = '';
     if (it.key === 'catg') note = it.note ? esc(it.note) : (it.ok ? '' : 'not here yet — the run downloads it (or use Upload files)');
     if (!it.ok && it.key !== 'catg') note = 'missing — ' + esc(it.where);
-    return '<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line)">' + ic +
-      '<span style="font-size:12.5px;min-width:96px">' + esc(it.label) + '</span>' +
-      '<span style="font-family:var(--mono);font-size:11px;color:' + (it.ok ? 'var(--ink)' : 'var(--dim)') + ';flex:1;word-break:break-all">' + sub + '</span>' +
-      (note ? '<span style="font-size:10.5px;color:var(--amber)">' + note + '</span>' : '') + '</div>';
+    return '<div style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line)">' + ic +
+      '<span style="font-size:12.5px;min-width:110px">' + esc(it.label) + '</span>' +
+      '<span style="font-family:var(--mono);font-size:11px;color:' + (it.ok ? 'var(--ink)' : 'var(--dim)') + ';flex:1 1 200px;min-width:0;overflow-wrap:anywhere">' + sub + '</span>' +
+      (note ? '<span style="font-size:10.5px;color:' + (it.ok ? 'var(--green)' : 'var(--amber)') + ';flex-basis:100%;padding-left:26px">' + note + '</span>' : '') + '</div>';
   }
 
   function stepsHtml(p, running) {

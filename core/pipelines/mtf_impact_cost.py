@@ -157,19 +157,16 @@ def _month_tag(d: datetime.date) -> str:
 
 
 def find_catg(d: datetime.date):
-    """(path, note). Order: this month's file in the base folder → newest C_CATG in the base
-    folder (flagged) → this month's copy from a previous run's Backup (flagged). (None, '') if none."""
-    base = base_dir()
-    tag = _month_tag(d)
-    exact = base / f"C_CATG_{tag}.T01"
-    if exact.exists():
-        return exact, ""
-    others = sorted(base.glob("C_CATG_*.T01"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if others:
-        return others[0], f"{others[0].name} is not this month's file ({tag})"
-    cands = sorted(backup_root().glob(f"*/*/C_CATG_{tag}.T01"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if cands:
-        return cands[0], f"copy from backup {cands[0].parent.parent.name}"
+    """(path, ''). ONLY a C_CATG_*.T01 in the base folder that was saved TODAY (downloaded from NSE or uploaded
+    by hand). Older files — left over in the folder or sitting in Backup — are never used or shown."""
+    today = datetime.date.today()
+    cands = sorted(base_dir().glob("C_CATG_*.T01"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in cands:
+        try:
+            if datetime.date.fromtimestamp(p.stat().st_mtime) == today:
+                return p, ""
+        except OSError:
+            pass
     return None, ""
 
 
@@ -179,27 +176,15 @@ def status(date_str: str = "") -> dict:
     d = parse_date(date_str) or datetime.date.today()
     tb = find_dated(base_dir(), "TradeBook", d)
     hd = find_dated(common_dir(), "HOLDING", d)
-    cg, cnote = find_catg(d)
-    cmsg = ""
-    if cg:
-        try:
-            when = datetime.date.fromtimestamp(cg.stat().st_mtime)
-            if cg.resolve().parent == base_dir().resolve() and when == datetime.date.today():
-                cmsg = "downloaded today"
-            else:
-                cmsg = f"saved copy from {dmy(when)} — a fresh one is downloaded when you run"
-        except OSError:
-            pass
-        if cnote and "not this month's" in cnote:
-            cmsg = cnote
+    cg, _cn = find_catg(d)
     items = [
         {"key": "tradebook", "label": "TradeBook", "need": f"TradeBook_{d:%d%m%Y}.csv", "ok": bool(tb),
          "file": tb.name if tb else "", "where": "this folder (upload here)"},
         {"key": "holding", "label": "HOLDING", "need": f"HOLDING_{d:%d%m%Y}.csv", "ok": bool(hd),
          "file": hd.name if hd else "", "where": "COMMON FILES (read only, never deleted)"},
         {"key": "catg", "label": "Impact-cost file", "need": f"C_CATG_{_month_tag(d)}.T01",
-         "ok": bool(cg) and not cnote.endswith(f"({_month_tag(d)})"),
-         "file": cg.name if cg else "", "note": cmsg,
+         "ok": bool(cg),
+         "file": cg.name if cg else "", "note": "today's file" if cg else "",
          "where": "this folder (downloaded from NSE, or upload here)"},
     ]
     pr = progress()
@@ -790,25 +775,15 @@ def _run_all(date_str, send_wa, force=False, by=""):
 
     # 2 ─ impact-cost file
     _prog(2, "Getting the NSE impact-cost file")
-    catg, note = find_catg(d)
-    fresh_today = False
-    if catg is not None:
-        try:                  # a file in the folder that was saved TODAY (downloaded or uploaded by hand) is used as is
-            fresh_today = (catg.resolve().parent == base_dir().resolve() and not note
-                           and datetime.date.fromtimestamp(catg.stat().st_mtime) == datetime.date.today())
-        except OSError:
-            pass
-    if not fresh_today:
+    catg, _cn = find_catg(d)             # only a file saved TODAY counts (downloaded earlier today, or uploaded by hand)
+    if catg is None:
         log("Downloading today's impact-cost file from NSE…")
         try:
             catg = download_catg(d)
-            note = ""
         except Exception as e:
             log(f"⚠ NSE download failed: {e}")
-            if catg is None:
-                _fail("No impact-cost file: the NSE download failed and there is none in the folder or in Backup. "
-                      "Download it yourself and use Upload files.")
-            log(f"   Using the saved copy instead: {catg.name} ({note or 'copy saved earlier'}).")
+            _fail("Could not get today's impact-cost file from NSE. Download it yourself and use Upload files — "
+                  "an older copy is never used.")
     log(f"Impact-cost file: {catg.name}")
     in_base_catg = catg.resolve().parent == base_dir().resolve()
 
