@@ -255,21 +255,22 @@ def backfill_all_to_db():
             "total_archived": total_archived, "total_skipped": total_skipped}
 
 
-def _upload_to_kambala(files, log):
+def _upload_to_kambala(files, log, cfg=None):
     """Second FTP push (Kambala), in addition to our own FTP above. Settings in .env, set from the box's
     Credentials button: CLI_KAMB_FTP_HOST / _PORT / _USER / _PASS / _DIR (folder, created if missing).
     Each file goes up as name.part, is renamed when complete (the receiver never sees a half file) and its size is
     checked. A broken connection restarts the whole login after 5 s (up to 5 times); a wrong password is not retried.
     Returns ([uploaded names], error text or '' , skipped reason or '')."""
     from ftplib import FTP, error_perm
-    host = (os.getenv("CLI_KAMB_FTP_HOST") or "202.58.232.29").strip()
+    cfg = cfg or {}                                  # optional override (used by the scheduler processes)
+    host = (cfg.get("host") or os.getenv("CLI_KAMB_FTP_HOST") or "202.58.232.29").strip()
     try:
-        port = int((os.getenv("CLI_KAMB_FTP_PORT") or "21").strip())
+        port = int((cfg.get("port") or os.getenv("CLI_KAMB_FTP_PORT") or "21").strip())
     except ValueError:
         port = 21
-    user = (os.getenv("CLI_KAMB_FTP_USER") or "ftpadmin").strip()
-    pw = os.getenv("CLI_KAMB_FTP_PASS") or ""
-    rdir = (os.getenv("CLI_KAMB_FTP_DIR") or "/").strip() or "/"
+    user = (cfg.get("user") or os.getenv("CLI_KAMB_FTP_USER") or "ftpadmin").strip()
+    pw = cfg.get("password") or os.getenv("CLI_KAMB_FTP_PASS") or ""
+    rdir = (cfg.get("folder") or os.getenv("CLI_KAMB_FTP_DIR") or "/").strip() or "/"
     if not pw:
         return [], "", "no password set — open Credentials → Kambala FTP and save it"
     done = []

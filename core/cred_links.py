@@ -59,6 +59,10 @@ SITES: Dict[str, dict] = {
         "kind": "plain",
         "pairs": [("KORP_USERNAME", "KORP_PASSWORD"), ("SCHED_BACKOFFICE_USERNAME", "SCHED_BACKOFFICE_PASSWORD")],
     },
+    "Kambala FTP": {
+        "kind": "plain",
+        "pairs": [("CLI_KAMB_FTP_USER", "CLI_KAMB_FTP_PASS"), ("SCHED_KAMBALA_FTP_USER", "SCHED_KAMBALA_FTP_PASSWORD")],
+    },
     "E-mail sending (SMTP)": {
         "kind": "plain",
         "pairs": [("SENDER_EMAIL", "SENDER_PASSWORD"), ("SA_SMTP_EMAIL", "SA_SMTP_PASSWORD"),

@@ -98,6 +98,16 @@ GROUPS: Dict[str, dict] = {
             ("output_password", "Password to put on the Top-20 report", True, ""),
         ],
     },
+    "kambala_ftp": {
+        "label": "Kambala FTP (file upload)",
+        "fields": [
+            ("host", "FTP server", False, "202.58.232.29"),
+            ("port", "Port", False, "21"),
+            ("user", "User name", False, "ftpadmin"),
+            ("password", "Password", True, ""),
+            ("folder", "Folder on the server", False, "/"),
+        ],
+    },
     "atom": {
         "label": "ATOM merchant console",
         "fields": [

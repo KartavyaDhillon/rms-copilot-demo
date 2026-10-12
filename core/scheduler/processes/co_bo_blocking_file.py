@@ -95,5 +95,5 @@ register(
     run=_run,
     params=K.mail_params("rms_del@mastertrust.co.in",
                          "sandeep.kumar2@mastertrust.co.in,amit.pundir@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in"),
-    retry_safe=False, parallel_safe=False, category="Blocking files", folder=FOLDER, uses=("nse", "smtp"),
+    retry_safe=False, parallel_safe=False, category="Blocking files", folder=FOLDER, uses=("nse", "smtp", "kambala_ftp"),
 )

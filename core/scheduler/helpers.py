@@ -371,7 +371,8 @@ def backup_files(folder: str, files: Iterable[Path], ctx) -> Path:
 
 # ───────────────────────── Kambala FTP (same server / login as the Client Prudential Limit box) ─────────────────────────
 def kambala_upload(files: Iterable[Path], ctx) -> bool:
-    """Upload `files` to the Kambala FTP using the settings saved in the CLI box's Credentials (CLI_KAMB_FTP_*).
+    """Upload `files` to the Kambala FTP using the 'Kambala FTP' connection (Scheduler → Credentials). Its user /
+    password stay in step with the CLI box's Kambala FTP login (core/cred_links.py); empty fields fall back to CLI_KAMB_FTP_*.
     Never raises and never fails the run — a problem is logged loudly so the e-mail / backup steps are not affected."""
     files = [str(f) for f in files if Path(f).is_file()]
     if not files:
@@ -379,7 +380,8 @@ def kambala_upload(files: Iterable[Path], ctx) -> bool:
         return False
     try:
         from core.pipelines.cli_upload import _upload_to_kambala
-        done, err, skipped = _upload_to_kambala(files, ctx.log)
+        from core.scheduler import connections
+        done, err, skipped = _upload_to_kambala(files, ctx.log, connections.get("kambala_ftp"))
     except Exception as e:
         ctx.log(f"❌ Kambala FTP upload could not run: {type(e).__name__}: {e}")
         return False

@@ -97,5 +97,5 @@ register(
                 "e-mails each separately.",
     run=_run,
     params=K.mail_params("rms_del@mastertrust.co.in", "amit.pundir@mastertrust.co.in", with_wait=False),
-    retry_safe=False, parallel_safe=False, category="Blocking files", folder=FOLDER, uses=("mcx_sftp", "smtp"),
+    retry_safe=False, parallel_safe=False, category="Blocking files", folder=FOLDER, uses=("mcx_sftp", "smtp", "kambala_ftp"),
 )
