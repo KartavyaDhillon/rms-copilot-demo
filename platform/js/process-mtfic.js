@@ -50,7 +50,7 @@
       : (it.key === 'catg' ? '<span style="color:var(--amber)">&#9679;</span>' : '<span style="color:var(--red)">&#10007;</span>');
     var sub = it.ok ? esc(it.file) : esc(it.need);
     var note = '';
-    if (it.key === 'catg' && !it.ok) note = it.file ? esc(it.note || '') + ' — will be downloaded when you run' : 'not here yet — the run downloads it (or use Upload files)';
+    if (it.key === 'catg') note = it.note ? esc(it.note) : (it.ok ? '' : 'not here yet — the run downloads it (or use Upload files)');
     if (!it.ok && it.key !== 'catg') note = 'missing — ' + esc(it.where);
     return '<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--line)">' + ic +
       '<span style="font-size:12.5px;min-width:96px">' + esc(it.label) + '</span>' +

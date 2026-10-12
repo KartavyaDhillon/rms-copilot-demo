@@ -180,6 +180,18 @@ def status(date_str: str = "") -> dict:
     tb = find_dated(base_dir(), "TradeBook", d)
     hd = find_dated(common_dir(), "HOLDING", d)
     cg, cnote = find_catg(d)
+    cmsg = ""
+    if cg:
+        try:
+            when = datetime.date.fromtimestamp(cg.stat().st_mtime)
+            if cg.resolve().parent == base_dir().resolve() and when == datetime.date.today():
+                cmsg = "downloaded today"
+            else:
+                cmsg = f"saved copy from {dmy(when)} — a fresh one is downloaded when you run"
+        except OSError:
+            pass
+        if cnote and "not this month's" in cnote:
+            cmsg = cnote
     items = [
         {"key": "tradebook", "label": "TradeBook", "need": f"TradeBook_{d:%d%m%Y}.csv", "ok": bool(tb),
          "file": tb.name if tb else "", "where": "this folder (upload here)"},
@@ -187,7 +199,7 @@ def status(date_str: str = "") -> dict:
          "file": hd.name if hd else "", "where": "COMMON FILES (read only, never deleted)"},
         {"key": "catg", "label": "Impact-cost file", "need": f"C_CATG_{_month_tag(d)}.T01",
          "ok": bool(cg) and not cnote.endswith(f"({_month_tag(d)})"),
-         "file": cg.name if cg else "", "note": cnote,
+         "file": cg.name if cg else "", "note": cmsg,
          "where": "this folder (downloaded from NSE, or upload here)"},
     ]
     pr = progress()
@@ -779,8 +791,15 @@ def _run_all(date_str, send_wa, force=False, by=""):
     # 2 ─ impact-cost file
     _prog(2, "Getting the NSE impact-cost file")
     catg, note = find_catg(d)
-    if catg is None or (note and "not this month's" in note):
-        log("Impact-cost file for this month is not in the folder — downloading from NSE…")
+    fresh_today = False
+    if catg is not None:
+        try:                  # a file in the folder that was saved TODAY (downloaded or uploaded by hand) is used as is
+            fresh_today = (catg.resolve().parent == base_dir().resolve() and not note
+                           and datetime.date.fromtimestamp(catg.stat().st_mtime) == datetime.date.today())
+        except OSError:
+            pass
+    if not fresh_today:
+        log("Downloading today's impact-cost file from NSE…")
         try:
             catg = download_catg(d)
             note = ""
@@ -789,9 +808,7 @@ def _run_all(date_str, send_wa, force=False, by=""):
             if catg is None:
                 _fail("No impact-cost file: the NSE download failed and there is none in the folder or in Backup. "
                       "Download it yourself and use Upload files.")
-            log(f"   Using {catg.name} instead ({note}).")
-    elif note:
-        log(f"Using impact-cost file: {note}")
+            log(f"   Using the saved copy instead: {catg.name} ({note or 'copy saved earlier'}).")
     log(f"Impact-cost file: {catg.name}")
     in_base_catg = catg.resolve().parent == base_dir().resolve()
 
