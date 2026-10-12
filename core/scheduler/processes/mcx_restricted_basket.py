@@ -84,6 +84,8 @@ def _run(params, ctx):
             H.send_email(f"MCX Restricted Basket - {tag}", body, to, cc, [p], ctx, html=True)
             H.mark_sent(FOLDER, tag)
             sent += 1
+    ctx.log("Uploading the CO / BO / MIS files to the Kambala FTP…")
+    H.kambala_upload(made, ctx)
     H.backup_files(FOLDER, [bhav] + made, ctx)
     return f"{sent} mail(s) sent ({len(res)} contracts per file)"
 

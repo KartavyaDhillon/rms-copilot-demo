@@ -80,6 +80,8 @@ def _run(params, ctx):
     ctx.log("Step 4/4: e-mailing the CO and BO files…")
     H.send_email("NFO Restricted Basket – CO & BO Blocking Files", body, to, cc, files, ctx, html=True)
     H.mark_sent(FOLDER, "mail")
+    ctx.log("Uploading the CO and BO files to the Kambala FTP…")
+    H.kambala_upload(files, ctx)
     H.backup_files(FOLDER, [opt_csv, bhav_csv] + files, ctx)
     K.clean_inputs(inp.glob("*"))
     return f"CO & BO files e-mailed ({len(res)} contracts each)"

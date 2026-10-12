@@ -369,6 +369,30 @@ def backup_files(folder: str, files: Iterable[Path], ctx) -> Path:
     return dest
 
 
+# ───────────────────────── Kambala FTP (same server / login as the Client Prudential Limit box) ─────────────────────────
+def kambala_upload(files: Iterable[Path], ctx) -> bool:
+    """Upload `files` to the Kambala FTP using the settings saved in the CLI box's Credentials (CLI_KAMB_FTP_*).
+    Never raises and never fails the run — a problem is logged loudly so the e-mail / backup steps are not affected."""
+    files = [str(f) for f in files if Path(f).is_file()]
+    if not files:
+        ctx.log("⚠ Kambala FTP: no file to upload.")
+        return False
+    try:
+        from core.pipelines.cli_upload import _upload_to_kambala
+        done, err, skipped = _upload_to_kambala(files, ctx.log)
+    except Exception as e:
+        ctx.log(f"❌ Kambala FTP upload could not run: {type(e).__name__}: {e}")
+        return False
+    if skipped:
+        ctx.log(f"⚠ Kambala FTP upload skipped — {skipped}")
+        return False
+    if err:
+        ctx.log(f"❌ Kambala FTP upload FAILED ({len(done)}/{len(files)} file(s) went up): {err}")
+        return False
+    ctx.log(f"✅ Kambala FTP: {len(done)} file(s) uploaded ({', '.join(done)}).")
+    return True
+
+
 # ───────────────────────── WhatsApp (Tata Tele Omni) ─────────────────────────
 def whatsapp_send_image(image: Path, to: str, label: str, date_text: str, ctx,
                         attempts: int = 4, delay: float = 15.0, template_extra: Optional[list] = None):
