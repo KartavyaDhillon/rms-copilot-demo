@@ -122,7 +122,11 @@ def _actor(request: Request):
         pass
     try:
         from urllib.parse import unquote as _uq
-        return (_uq(request.cookies.get("rms_user", "")).strip() or None), False
+        _nm = _uq(request.cookies.get("rms_user", "")).strip()
+        if not _nm:
+            from core import lock_manager as _lm5
+            _nm = _lm5.ip_identity(request.client.host if request.client else "")
+        return (_nm or None), False
     except Exception:
         return None, False
 
@@ -564,6 +568,18 @@ async def _lock_identity_middleware(request, call_next):
     check all show and compare the same string."""
     try:
         path = request.url.path
+        _ip0 = request.client.host if request.client else ""
+        if not path.startswith("/platform/"):
+            # remember who is signed in on this PC, so a later request from it without a live session
+            # (expired cookie, other tab) is still attributed to that person instead of "unknown user"
+            try:
+                from core.auth import current_user as _cu3
+                from core import lock_manager as _lm3
+                _u3 = _cu3(request)
+                if _u3:
+                    _lm3.remember_ip(_ip0, f"{_u3.get('name') or _u3.get('sub')} ({_u3.get('sub')})")
+            except Exception:
+                pass
         if path.endswith("-stream") or path.endswith("/run-stream"):
             from core import lock_manager as _lm
             from urllib.parse import unquote
@@ -577,7 +593,9 @@ async def _lock_identity_middleware(request, call_next):
                 pass
             if not _who:
                 _who = unquote(request.cookies.get("rms_user", ""))
-            _lm.note_request(_who, request.client.host if request.client else "", path)
+            if not _who:
+                _who = _lm.ip_identity(_ip0)
+            _lm.note_request(_who, _ip0, path)
     except Exception:
         pass
     return await call_next(request)
@@ -1946,6 +1964,12 @@ def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time
     except Exception:
         _by = None
     _ip = request.client.host if request.client else ""
+    if not _by:
+        try:                                    # no live session: the person last signed in from this PC
+            from core import lock_manager as _lm4
+            _by = _lm4.ip_identity(_ip) or None
+        except Exception:
+            pass
     if pipe == "ctcl":
         _ctcl_clear_popup_state()  # drop any stale unanswered captcha/token from a previous stopped/crashed run
     if pipe == "probable":

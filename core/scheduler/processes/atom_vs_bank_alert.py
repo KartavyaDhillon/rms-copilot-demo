@@ -45,7 +45,19 @@ def fetch_atom(out_dir, ctx, wait_s=600):
                         "Origin": "https://titan.atomtech.in", "Referer": f"{ATOM}/SessionExpired"},
                allow_redirects=True, timeout=T)
     if r.status_code != 200 or "SessionExpired" in r.url or "userPswd" in r.text:
-        raise RuntimeError("ATOM login failed — check the user name / password in Connections.")
+        # say WHAT the portal answered (never the password) so a wrong password can be told apart from a
+        # locked account, a second live session, a blocked IP or a changed login page
+        ctx.log(f"ATOM login answered: HTTP {r.status_code}, final page {r.url}")
+        ctx.log(f"ATOM user name used: {c['username']} (password length {len(c['password'])})")
+        text = re.sub(r"\s+", " ", re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", r.text, flags=re.S | re.I))
+        text = re.sub(r"<[^>]+>", " ", text)
+        hints = [m.group(0).strip()[:200] for m in re.finditer(
+            r"[^.!?]{0,80}(invalid|incorrect|wrong|locked|blocked|disabled|already|expired|captcha|attempt|inactive)[^.!?]{0,80}",
+            text, flags=re.I)][:4]
+        for h in hints:
+            ctx.log(f"ATOM page says: {h}")
+        raise RuntimeError("ATOM login failed — check the user name / password in Connections "
+                           "(the lines above show what the ATOM site answered).")
     ctx.log("ATOM login OK.")
     s.get(f"{ATOM}/Dashboard", headers={"Accept": HTML}, timeout=T)
     s.get(f"{ATOM}/view-transaction-temp", headers={"Accept": HTML, "Referer": f"{ATOM}/Dashboard"}, timeout=T)

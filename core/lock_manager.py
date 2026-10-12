@@ -87,6 +87,50 @@ _ACTION_BUTTON = {
 }
 
 
+# Who last signed in from each PC (client IP). A run started from a browser that has no valid session at
+# that moment (expired 12 h session, another tab, cookie cleared) would otherwise be "unknown user" even though
+# the person signed in from that very PC earlier. This only FILLS A BLANK NAME; a real session always wins.
+_IP_ID = {}
+_IP_ID_TTL = 24 * 3600
+_IP_FILE = os.path.join(os.path.dirname(AUDIT_LOG), "ip_identity.json")
+
+
+def _ip_load():
+    if _IP_ID:
+        return
+    try:
+        with open(_IP_FILE, encoding="utf-8") as f:
+            for ip, v in (json.load(f) or {}).items():
+                if isinstance(v, list) and len(v) == 2:
+                    _IP_ID[ip] = (str(v[0]), float(v[1]))
+    except Exception:
+        pass
+
+
+def remember_ip(ip, who):
+    """Record that `who` (signed-in 'Name (ID)') is using the PC at `ip`."""
+    if not ip or not who:
+        return
+    _ip_load()
+    old = _IP_ID.get(ip)
+    _IP_ID[ip] = (who, time.time())
+    if old and old[0] == who and time.time() - old[1] < 600:
+        return                                      # unchanged — don't rewrite the file on every request
+    try:
+        os.makedirs(os.path.dirname(_IP_FILE), exist_ok=True)
+        with open(_IP_FILE, "w", encoding="utf-8") as f:
+            json.dump({k: [v[0], v[1]] for k, v in _IP_ID.items()}, f)
+    except Exception:
+        pass
+
+
+def ip_identity(ip):
+    """'Name (ID)' last signed in from this PC within 24 h, else ''."""
+    _ip_load()
+    v = _IP_ID.get(ip or "")
+    return v[0] if v and time.time() - v[1] < _IP_ID_TTL else ""
+
+
 def note_request(name, ip, path):
     with _L:
         _LAST_REQ.update({"name": (name or "").strip()[:60], "ip": ip or "",
