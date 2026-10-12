@@ -44,16 +44,23 @@ def _run(params, ctx):
     inp, out, state = (paths.proc_dir(FOLDER, x) for x in ("inputs", "outputs", "state"))
     s = requests.Session()
 
-    # ── NSE bhavcopy + security file: today, then back up to 2 more days
+    # ── NSE bhavcopy + security file: today (if it is a trading day), then the 3 previous TRADING days.
+    # Weekends and market holidays are skipped, so on a Monday 08:00 run (today's file is not out yet) it
+    # goes straight to Friday instead of wasting its tries on Sunday and Saturday.
+    today = dt.date.today()
+    cand_days = ([today] if H.is_trading_day(today) else []) + [H.prev_trading_day(today, n) for n in (1, 2, 3)]
+    ctx.log("NSE Bhavcopy — dates it will check: " + ", ".join(f"{x:%d-%m-%Y} ({x:%a})" for x in cand_days))
     nse_ymd = None
     bhav_csv = sec_csv = None
-    for i in range(3):
-        d = dt.date.today() - dt.timedelta(days=i)
+    for d in cand_days:
         ymd, dmy = d.strftime("%Y%m%d"), d.strftime("%d%m%Y")
         bf = f"BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv.zip"
         r = _get(s, f"https://nsearchives.nseindia.com/content/cm/{bf}", NSE_H)
         if not _ok(r):
+            ctx.log(f"  {d:%d-%m-%Y} ({d:%a}): {bf} — " +
+                    ("no response from NSE" if r is None else f"not available (HTTP {r.status_code})"))
             continue
+        ctx.log(f"  {d:%d-%m-%Y} ({d:%a}): {bf} — found")
         zp = inp / bf
         zp.write_bytes(r.content)
         bhav_csv = K.unzip_first(zp, inp)
@@ -68,7 +75,8 @@ def _run(params, ctx):
             gp.unlink()
         break
     if not nse_ymd:
-        raise FileNotFoundError("NSE Bhavcopy was not found for the last 3 days.")
+        raise FileNotFoundError("NSE Bhavcopy was not found for any of: " +
+                                ", ".join(f"{x:%d-%m-%Y}" for x in cand_days) + " (see the lines above for each result).")
     if not sec_csv:
         raise FileNotFoundError("NSE security file (NSE_CM_security) is not available for that date yet.")
 
@@ -78,6 +86,8 @@ def _run(params, ctx):
         name = f"BhavCopy_BSE_CM_0_0_0_{ds}_F_0000.CSV"
         for _ in range(3):
             r = _get(s, f"https://www.bseindia.com/download/BhavCopy/Equity/{name}", BSE_H)
+            if not _ok(r):
+                ctx.log(f"  BSE {name}: " + ("no response" if r is None else f"not available (HTTP {r.status_code})"))
             if _ok(r):
                 bse_csv = inp / name
                 bse_csv.write_bytes(r.content)
