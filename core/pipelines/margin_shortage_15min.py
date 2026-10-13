@@ -299,6 +299,209 @@ def _count_todays_backup_runs(base_dir, today_str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# UNCLEARED column (from the Kambala "Depo Adhoc All level" file)
+#
+# Today's file  Kambala_Omny_Depo_Adhoc_All_level.txt_<DDMMYYYY>.txt  lives on our (older, non-Kambala) FTP in
+# /Trading/CTCL_FILES/KORP_LIVE/KAMB/DEPO.  It is downloaded automatically by the run (run 1 of the day; if it is
+# not in the folder at a later run, that run tries once as well) into the box's base folder and STAYS there for the
+# whole day — it is neither backed up nor deleted by the run's own backup.  Every run reads it and adds the
+# UNCLEARED value (column Z; first line "RMS Limits MAND" is a header and is ignored) at the END of the shortage
+# output, matched on client code (column A).  The next day's first run moves yesterday's file into the backup of the
+# day it belongs to; only the current day's file is ever used.
+# ═══════════════════════════════════════════════════════════════════════════
+_UNC_PREFIX = "Kambala_Omny_Depo_Adhoc_All_level.txt"
+_UNC_REMOTE_DIR = "/Trading/CTCL_FILES/KORP_LIVE/KAMB/DEPO"
+_UNC_NAME_RE = re.compile(r"^" + re.escape(_UNC_PREFIX) + r"_(\d{8})\.txt$", re.I)
+_UNC_COL_CLIENT, _UNC_COL_UNCLEARED = 0, 25          # A and Z
+
+
+def _uncleared_local(base_dir, ddmmyyyy):
+    """Today's file in base_dir (newest if there are several), or None."""
+    hits = []
+    try:
+        for f in os.listdir(base_dir):
+            m = _UNC_NAME_RE.match(f)
+            if m and m.group(1) == ddmmyyyy:
+                hits.append(os.path.join(base_dir, f))
+    except OSError:
+        return None
+    return max(hits, key=os.path.getmtime) if hits else None
+
+
+def _uncleared_sweep_old(base_dir, today_ddmmyyyy):
+    """Yesterday's (or any older day's) file goes into the backup of the day it belongs to. Never raises."""
+    try:
+        names = os.listdir(base_dir)
+    except OSError:
+        return
+    for f in names:
+        m = _UNC_NAME_RE.match(f)
+        if not m or m.group(1) == today_ddmmyyyy:
+            continue
+        try:
+            d = datetime.strptime(m.group(1), "%d%m%Y")
+            src = os.path.join(base_dir, f)
+            date_root = os.path.join(base_dir, "BACKUPFILES AUTOMATED", d.strftime("%Y-%m-%d"))
+            runs = []
+            if os.path.isdir(date_root):
+                runs = [x for x in os.listdir(date_root)
+                        if x.isdigit() and os.path.isdir(os.path.join(date_root, x))]
+            dest_dir = os.path.join(date_root, max(runs, key=int)) if runs else date_root
+            os.makedirs(dest_dir, exist_ok=True)
+            dst = os.path.join(dest_dir, f)
+            shutil.copy2(src, dst)
+            if os.path.getsize(dst) != os.path.getsize(src):
+                print(f"⚠️ Could not verify the backup of {f} — left in place.")
+                continue
+            if runs:
+                try:
+                    _archive_to_db(f"{d.strftime('%Y-%m-%d')}/{max(runs, key=int)}", "input", dst)
+                except Exception:
+                    pass
+            os.remove(src)
+            print(f"🗂️ Older UNCLEARED file {f} moved to the backup of {d:%d-%m-%Y}: {dest_dir}")
+        except Exception as e:
+            print(f"⚠️ Could not back up the older file {f}: {type(e).__name__}: {e}")
+
+
+def _ftp_cd(ftp, path):
+    """cwd into an absolute path; each part is matched case-insensitively if it is not found as typed."""
+    from ftplib import error_perm
+    ftp.cwd("/")
+    for part in [p for p in path.replace("\\", "/").split("/") if p]:
+        try:
+            ftp.cwd(part)
+            continue
+        except error_perm:
+            pass
+        found = None
+        try:
+            for n in ftp.nlst():
+                if os.path.basename(n.rstrip("/")).lower() == part.lower():
+                    found = os.path.basename(n.rstrip("/"))
+                    break
+        except Exception:
+            found = None
+        if not found:
+            raise RuntimeError(f"Folder '{part}' not found on the FTP (path {path}).")
+        ftp.cwd(found)
+
+
+def _uncleared_download(base_dir, ddmmyyyy):
+    """Download today's file from the FTP into base_dir. Returns the local path, or None when the FTP has no file
+    for today (yet). Network trouble restarts the whole login (net_retry); a wrong password is not retried."""
+    from ftplib import FTP
+    host = os.getenv("FTP_HOST", "202.58.232.124")
+    user = os.getenv("FTP_USER", "TRADING")
+    pw = os.getenv("FTP_PASS", "")
+    if not pw:
+        raise RuntimeError("FTP_PASS is not set — the UNCLEARED file cannot be downloaded.")
+    result = {}
+
+    def once():
+        ftp = FTP()
+        ftp.connect(host, 21, timeout=60)
+        try:
+            ftp.login(user, pw)
+            ftp.set_pasv(True)
+            _ftp_cd(ftp, _UNC_REMOTE_DIR)
+            names = [os.path.basename(n.rstrip("/")) for n in ftp.nlst()]
+            today = sorted(n for n in names
+                           if n.lower().startswith(_UNC_PREFIX.lower()) and ddmmyyyy in n)
+            if not today:
+                result["path"] = None
+                return
+            name = today[-1]
+            dst = os.path.join(base_dir, name)
+            tmp = dst + ".part"
+            ftp.voidcmd("TYPE I")
+            with open(tmp, "wb") as fh:
+                ftp.retrbinary(f"RETR {name}", fh.write, blocksize=64 * 1024)
+            try:
+                want = ftp.size(name)
+            except Exception:
+                want = None
+            got = os.path.getsize(tmp)
+            if got == 0 or (want is not None and want != got):
+                os.remove(tmp)
+                raise RuntimeError(f"{name}: downloaded {got:,} bytes but the FTP says {want}")
+            os.replace(tmp, dst)
+            result["path"] = dst
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+
+    from core import net_retry
+    net_retry.run(once, "UNCLEARED file download", lambda m: print(m, flush=True))
+    return result.get("path")
+
+
+def _uncleared_read(path):
+    """{CLIENT CODE (upper): uncleared} from the file. First line is a header; column A = client, column Z = value.
+    A client that appears more than once keeps its FIRST value (reported in the log)."""
+    out, dup, bad = {}, 0, 0
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        lines = fh.read().splitlines()
+    for line in lines[1:]:
+        parts = line.split("|")
+        if len(parts) <= _UNC_COL_UNCLEARED:
+            continue
+        code = parts[_UNC_COL_CLIENT].strip().upper()
+        if not code:
+            continue
+        raw = parts[_UNC_COL_UNCLEARED].strip().replace(",", "")
+        try:
+            val = float(raw) if raw else 0.0
+        except ValueError:
+            bad += 1
+            continue
+        if code in out:
+            dup += 1
+            continue
+        out[code] = val
+    if dup:
+        print(f"ℹ️ UNCLEARED file: {dup} repeated client code(s) — the first value is used.")
+    if bad:
+        print(f"⚠️ UNCLEARED file: {bad} row(s) with a non-numeric column Z were ignored.")
+    return out
+
+
+def _uncleared_prepare(base_dir, today_ddmmyyyy, run_number):
+    """Everything for the UNCLEARED column. Returns {CLIENT: value} (empty when there is no file today).
+    Never raises — a problem must not stop the margin run; the column then stays blank."""
+    try:
+        _uncleared_sweep_old(base_dir, today_ddmmyyyy)
+        path = _uncleared_local(base_dir, today_ddmmyyyy)
+        if path:
+            print(f"📄 UNCLEARED file in the folder: {os.path.basename(path)}")
+        else:
+            why = "run 1 of the day" if run_number == 1 else f"not in the folder at run {run_number}"
+            print(f"[FRIENDLY_MSG] Downloading today's UNCLEARED file from the FTP ({why})…", flush=True)
+            path = _uncleared_download(base_dir, today_ddmmyyyy)
+            if path:
+                print(f"✅ UNCLEARED file downloaded: {os.path.basename(path)}", flush=True)
+            else:
+                print(f"⚠️ No {_UNC_PREFIX}_{today_ddmmyyyy}.txt on the FTP yet — the UNCLEARED column stays blank.", flush=True)
+                print("[FRIENDLY_MSG] Today's UNCLEARED file is not on the FTP yet — the UNCLEARED column is blank "
+                      "in this run's output.", flush=True)
+                return {}
+        data = _uncleared_read(path)
+        print(f"✅ UNCLEARED values read for {len(data):,} client codes", flush=True)
+        return data
+    except Exception as e:
+        print(f"⚠️ UNCLEARED file step failed ({type(e).__name__}: {e}) — the column stays blank; the rest of the run is unaffected.",
+              flush=True)
+        print(f"[FRIENDLY_MSG] The UNCLEARED file could not be downloaded or read ({e}). The column is blank in this "
+              "run's output.", flush=True)
+        return {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # SHORTFALL ALLOCATION — UPLOAD PROMPT
 #
 # Uploading sends real allocation instructions to the exchange, so it is never
@@ -762,6 +965,10 @@ def _run_margin_shortage_15min_impl():
         print("✅ PRE-RUN FILE CHECK PASSED")
         return None
 
+    # UNCLEARED file (see the block above _uncleared_prepare): downloaded automatically in run 1, kept in the
+    # folder all day, read by every run. Done first so a pre-run failure can simply be re-run.
+    _unc_map = _uncleared_prepare(BASE_DIR, today_ddmmyyyy, _count_todays_backup_runs(BASE_DIR, today_str))
+
     _stage("checking input files…")
     _prerun = pre_run_file_check()
     if _prerun is not None:
@@ -1091,7 +1298,10 @@ def _run_margin_shortage_15min_impl():
         "FINAL SHORT CM ADJ(H+J)",
         "DERIVATIVE MARGIN USED",
         "MARGIN WARNING %"
-    ]]
+    ]].copy()
+
+    # UNCLEARED (last column) — from the Kambala Depo Adhoc file, matched on client code; blank when not in the file.
+    final_df["UNCLEARED"] = final_df["ACCOUNTID"].astype(str).str.strip().str.upper().map(_unc_map)
 
     # =====================================================
     # WHATSAPP SUPPORT FUNCTIONS
