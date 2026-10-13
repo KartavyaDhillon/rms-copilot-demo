@@ -787,6 +787,15 @@ body {
             <button class="tbtn" style="background:var(--teal);color:#003311" onclick="event.stopPropagation();mtficOpen()" data-tip="Open the MTF Impact Cost window: upload files, run, see the result, download the Excel and image.">Open</button>
           </div>
         </div>
+        <div class="tile" id="task-alloc" style="--tile-accent:var(--blue);cursor:pointer" onclick="allocOpen()">
+          <div class="tile-icon">📊</div>
+          <div class="tile-name">Allocation Report <span class="st" id="allocChip">idle</span></div>
+          <div class="tile-desc">Allocation log report on demand: day so far, up to a time, or any date and time range. Optional client codes.</div>
+          <div class="tile-desc" id="allocMini" style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">Checking…</div>
+          <div class="tile-actions">
+            <button class="tbtn" style="background:var(--blue);color:#061020" onclick="event.stopPropagation();allocOpen()" data-tip="Open the Allocation Report window. The nightly close runs by itself from the Scheduler.">Open</button>
+          </div>
+        </div>
       </div>
     </div><!-- /view-dashboard -->
 

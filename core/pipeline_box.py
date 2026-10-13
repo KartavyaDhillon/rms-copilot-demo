@@ -284,6 +284,16 @@ PIPELINES = {
                   ["Reconciliation Excel", "Reconciliation_MTF_ImpactCost_*.xlsx", "Reconciliation_MTF_ImpactCost_<DDMMYYYY>.xlsx"],
                   ["Dashboard image", "Reconciliation_MTF_Dashboard_*.png", "Reconciliation_MTF_Dashboard_<DDMMYYYY>.png"],
               ]},
+    # Allocation report (manual runs from the Process Center tile; the nightly close runs in the Scheduler).
+    "alloc": {"name": "Allocation Report", "logdir": "alloc", "runs": 1,
+              "state_dir_env": "ALLOC_REPORT_FOLDER",
+              "state_default": os.path.join(REPO, "data", "scheduler", "ALLOCATION REPORT"),
+              "state_file": "run_counter.txt",
+              "email_keys": {}, "cred": {},
+              "upload_dir_env": "ALLOC_REPORT_FOLDER",
+              "upload_default": os.path.join(REPO, "data", "scheduler", "ALLOCATION REPORT"),
+              "backup_root_env": "ALLOC_REPORT_FOLDER", "backup_subdir": "BACKUPFILES AUTOMATED",
+              "file_types": []},
     # Margin Shortage (15-min) — runs 11x/day, ported from 15minutesfinal_whatsapp.PY.
     # (Was 9; 16:30 and 16:50 added when the desk's shift extended. The night
     # shift after 16:50 still runs the original batch script on another machine —

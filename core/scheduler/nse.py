@@ -140,11 +140,7 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
     requests = H.need("requests")
     if kind not in ("member", "common"):
         raise ValueError("kind must be 'member' or 'common'")
-    # A folder with '..' (e.g. "Reports/../Surveillance/Dnld") must go URL-encoded, exactly like the old script's
-    # requests(params=…) sent it; typed raw, NSE answers "715 FOLDER NOT FOUND". Plain folders stay as typed.
-    from urllib.parse import quote
-    fpath = quote(folder, safe="") if ".." in folder else folder
-    url = f"{BASE}/{kind}/file/download/2.0?segment={segment}&folderPath={fpath}&filename={filename}"
+    url = f"{BASE}/{kind}/file/download/2.0?segment={segment}&folderPath={folder}&filename={filename}"
     if date:
         url += f"&date={date}"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -165,6 +161,12 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
                 time.sleep(5)
     if r.status_code == 404:
         ctx.log(f"NSE: {filename} not available yet (404).")
+        return None
+    if r.status_code == 400 and "715" in r.text and "FOLDER NOT FOUND" in r.text.upper():
+        # NSE gives this (instead of 404) when the day's file / folder has not been published — seen live on
+        # 13-10-2026 for PNC_OPT, while the same request answered 404 the day before. Treated as "not there".
+        ctx.log(f"NSE: {filename} not available (HTTP 400, code 715 FOLDER NOT FOUND — NSE has nothing published "
+                f"under {folder} for it).")
         return None
     if r.status_code != 200:
         raise RuntimeError(f"NSE download of {filename} failed — HTTP {r.status_code}: {r.text[:160]}")

@@ -231,7 +231,8 @@ def serve_dashboard(embed: int = 0):
         html = html.replace("</body>",
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
-                            '<script src="/platform/js/process-mtfic.js?v=8"></script></body>', 1)
+                            '<script src="/platform/js/process-mtfic.js?v=8"></script>'
+                            '<script src="/platform/js/process-alloc.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4912,6 +4913,77 @@ def mtfic_stop(request: Request):
         return JSONResponse({"ok": False, "error": why}, status_code=403)
     from core.pipeline_box import stop_pipeline as _msp
     _msp("mtfic")
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ALLOCATION REPORT  (tile in "Processing & Reports" → modal). The nightly close runs in the Scheduler;
+# this is the manual side: day so far / up to a time / custom range, optional client codes, download or e-mail.
+# Logic: core/pipelines/allocation_report.py (a subprocess). Own "alloc" run slot.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _alloc_sse(code, prefix):
+    import json as _aj
+    from core import pipeline_box as _pbx
+    def gen():
+        try:
+            for ev in _pbx._stream_code(code, "alloc", prefix):
+                yield f"data: {_aj.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_aj.dumps({'type':'error','msg':str(e)})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/alloc/status")
+def alloc_status():
+    from core.pipelines import allocation_report as _ar
+    return _ar.status()
+
+
+@app.get("/alloc/run-stream")
+def alloc_run_stream(request: Request, mode: str = "sofar", until: str = "", frm: str = "", to: str = "",
+                     clients: str = "", deliver: str = "download", mailto: str = ""):
+    import json as _aj, re as _ar_re
+    if mode not in ("sofar", "until", "custom"):
+        return JSONResponse({"ok": False, "error": "unknown mode"}, status_code=400)
+    if mode == "until" and not _ar_re.fullmatch(r"\d{1,2}:\d{2}", until or ""):
+        return JSONResponse({"ok": False, "error": "time must look like 15:00"}, status_code=400)
+    if mode == "custom" and not (_ar_re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", frm or "")
+                                 and _ar_re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", to or "")):
+        return JSONResponse({"ok": False, "error": "from / to must look like 2026-10-12 10:00"}, status_code=400)
+    try:
+        by = _actor(request)[0] or ""
+    except Exception:
+        by = ""
+    opts = {"mode": mode, "until": until, "from": frm, "range_to": to, "clients": clients,
+            "deliver": "mail" if deliver == "mail" else "download", "mail_to": mailto, "by": by}
+    code = ("from core.pipelines.allocation_report import run_cli as _f; _f(" + repr(_aj.dumps(opts)) + ")")
+    return _alloc_sse(code, "alloc_run")
+
+
+@app.get("/alloc/file")
+def alloc_file(name: str = ""):
+    from core.pipelines import allocation_report as _ar
+    p = _ar.served_file(name)
+    if not p:
+        return JSONResponse({"ok": False, "error": "File not found — run the report again."}, status_code=404)
+    return FileResponse(str(p), filename=p.name, headers=_NO_CACHE)
+
+
+@app.post("/alloc/stop")
+def alloc_stop(request: Request):
+    allowed, why = _can_stop("px_alloc", request)
+    if not allowed:
+        return JSONResponse({"ok": False, "error": why}, status_code=403)
+    from core.pipeline_box import stop_pipeline as _asp
+    _asp("alloc")
+    try:
+        from core.pipelines import allocation_report as _ar
+        _ar._release()
+    except Exception:
+        pass
     return {"ok": True}
 
 
