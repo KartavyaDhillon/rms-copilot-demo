@@ -6,7 +6,7 @@ The date in the file name is the PREVIOUS TRADING DAY (weekends and the NSE holi
 14-10-2026 → Position_NCL_CO_0_CM_06436_20261013_F_0000.csv.gz.
 
 Some days NSE publishes no such file.  That is not an error: the run finishes as SUCCESS, the log says clearly that there
-was no file, and nothing is e-mailed or uploaded."""
+was no file, a short "NO FILE" e-mail goes to the same recipients, and nothing is uploaded."""
 import datetime as dt
 
 from core.scheduler import connections, helpers as H, nse, paths
@@ -34,9 +34,19 @@ def _run(params, ctx):
         gz = nse.download_wait("member", "CO", "Reports", name, inp, ctx, K.wait_of(params))
     except FileNotFoundError:
         # NSE did not publish it (it does not come every day) — a normal outcome, not a failure.
-        ctx.log(f"NO FILE: NSE has no {name} for {bday:%d-%m-%Y}. Nothing was e-mailed and nothing was uploaded.")
+        ctx.log(f"NO FILE: NSE has no {name} for {bday:%d-%m-%Y} on the member portal. Nothing was uploaded.")
+        subject = f"NCL CO Position File - {bday:%d-%m-%Y} - NO FILE"
+        body = ("<html><body><p>Hi Team,</p>"
+                f"<p><b>No NCL CO Position file is available on the NSE member portal for {bday:%d-%m-%Y}.</b></p>"
+                f"<p>File looked for: {name} (CO &rsaquo; Reports).<br>Nothing has been attached or uploaded to the Kambala FTP.</p>"
+                f"<p>{K.sig(params)}</p></body></html>")
+        try:
+            H.send_email(subject, body, to, cc, [], ctx, html=True)      # not marked "sent": a later run may still get the file
+            ctx.log(f"“No file” e-mail sent: “{subject}”.")
+        except Exception as e:
+            ctx.log(f"[!] Could not send the “no file” e-mail: {type(e).__name__}: {e}")
         ctx.log("This is normal on days when NSE does not publish the position file. The run is marked SUCCESS.")
-        return f"No file from NSE for {bday:%d-%m-%Y} — nothing sent"
+        return f"No file on the member portal for {bday:%d-%m-%Y} — “no file” e-mail sent, nothing uploaded"
 
     csv_path = K.gunzip(gz, out / name[:-3])                     # …/outputs/Position_NCL_CO_..._0000.csv
     ctx.log(f"Step 2/4: unzipped → {csv_path.name} ({csv_path.stat().st_size / 1024:,.0f} KB).")
