@@ -522,8 +522,15 @@ async def files_upload(pkey: str, request: Request, file: UploadFile = File(...)
         ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
         if ext not in d.upload_exts:
             raise ValueError(f"Only {', '.join(d.upload_exts)} files can be uploaded here.")
-        if d.upload_names and name not in d.upload_names:
-            raise ValueError(f"Only a file named exactly “{d.upload_names[0]}” can be uploaded here (this one is “{name}”).")
+        if d.upload_names:
+            import re as _re
+
+            def _key(n):                                     # same name apart from case / space-like characters
+                return _re.sub(r"[\s  -​ 　_]+", "", n).lower()
+            hit = [n for n in d.upload_names if _key(n) == _key(name)]
+            if not hit:
+                raise ValueError(f"Only the file “{d.upload_names[0]}” can be uploaded here (this one is “{name}”).")
+            name = hit[0]                                    # always saved under the exact standard name
         data = await file.read()
         if not data:
             raise ValueError("The file is empty.")
