@@ -5,8 +5,10 @@ The work is done by core/pipelines/allocation_report.py in a separate Python pro
 touches the console).  Manual / up-to-now / custom-range / client-code reports are the Process Center tile
 "Allocation Report" — they never move the marker.
 
-Setup once: copy ALLOCATION_REPORT.py to core/pipelines/allocation_report_src.py, and copy window_state.json,
-processed_uidls.json and open_window_uidls.json from the old machine into the folder shown in the log line "folder:".
+The script itself ships in the repo (core/pipelines/allocation_report_src.py). Setup once: copy window_state.json,
+processed_uidls.json and open_window_uidls.json from the old machine into the folder shown in the log line "folder:",
+and save the mailbox logins with the 🔑 Credentials button of the Allocation Report tile. The nightly recipients are the
+To / Cc of this process (Recipients button).
 """
 import json
 import os

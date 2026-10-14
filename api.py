@@ -232,7 +232,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=8"></script>'
-                            '<script src="/platform/js/process-alloc.js?v=4"></script></body>', 1)
+                            '<script src="/platform/js/process-alloc.js?v=6"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4963,22 +4963,20 @@ def alloc_run_stream(request: Request, mode: str = "sofar", until: str = "", frm
     return _alloc_sse(code, "alloc_run")
 
 
-@app.get("/alloc/log")
-def alloc_log(lines: int = 300):
-    """Tail of the report's run_log.txt (mailbox scan, parsing, e-mail, backup — every run appends)."""
+@app.get("/alloc/logs")
+def alloc_logs():
+    """One log per run (manual and nightly), newest first."""
     from core.pipelines import allocation_report as _ar
-    p = _ar.base_dir() / "run_log.txt"
-    if not p.exists():
-        return {"ok": True, "text": "", "when": ""}
-    import datetime as _adt
-    n = max(20, min(int(lines or 300), 2000))
-    try:
-        with open(p, "r", encoding="utf-8", errors="replace") as f:
-            tail = f.readlines()[-n:]
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-    return {"ok": True, "text": "".join(tail),
-            "when": _adt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%d-%m-%Y %H:%M:%S")}
+    return {"ok": True, "runs": _ar.list_logs(100)}
+
+
+@app.get("/alloc/log")
+def alloc_log(name: str = ""):
+    from core.pipelines import allocation_report as _ar
+    txt = _ar.read_log_file(name)
+    if txt is None:
+        return JSONResponse({"ok": False, "error": "Log not found."}, status_code=404)
+    return {"ok": True, "name": name, "text": txt}
 
 
 @app.get("/alloc/file")

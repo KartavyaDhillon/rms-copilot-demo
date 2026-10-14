@@ -3271,6 +3271,9 @@ function saHandle(d){
 function saShowModal(t,html){ document.getElementById('saModalTitle').textContent=t; document.getElementById('saModalBody').innerHTML=html; document.getElementById('saModal').classList.add('show'); }
 function saCloseModal(){
   document.getElementById('saModal').classList.remove('show');
+  // A window opened from another window (e.g. Allocation Report -> Credentials) goes back to that one on close.
+  var _ret=window._saReturn; window._saReturn=null;
+  if(typeof _ret==='function'){ setTimeout(_ret,0); }
   // Abort any in-flight upload so it doesn't ghost-reopen the modal
   if(window._saUploadCtl){ try{ window._saUploadCtl.abort(); }catch(e){} window._saUploadCtl=null; }
 }

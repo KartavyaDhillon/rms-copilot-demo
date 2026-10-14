@@ -289,7 +289,7 @@ PIPELINES = {
               "state_dir_env": "ALLOC_REPORT_FOLDER",
               "state_default": os.path.join(REPO, "data", "scheduler", "ALLOCATION REPORT"),
               "state_file": "run_counter.txt",
-              "email_keys": {"Nightly report": ["ALLOC_MAIL_TO", "ALLOC_MAIL_CC"]},
+              "email_keys": {"Report e-mail (used when 'E-mail to' is left blank)": ["ALLOC_MAIL_TO", "ALLOC_MAIL_CC"]},
               "email_default": "",
               "cred": {"Mailbox the logs arrive in (POP3)": {"user_key": "ALLOC_POP_USER", "pass_key": "ALLOC_POP_PASS",
                         "note": "the inbox that receives the Allocation_Logs e-mails"},

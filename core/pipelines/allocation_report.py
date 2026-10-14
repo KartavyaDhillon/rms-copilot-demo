@@ -39,6 +39,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SRC_DEFAULT = Path(__file__).with_name("allocation_report_src.py")
 LOCK_MAX_AGE = 4 * 3600
+CUSTOM_MAILBOX_DAYS = 5            # custom ranges starting within this many days try the mailbox first
 STEPS = 5
 _MOD = None
 
@@ -249,6 +250,152 @@ def _filter_xlsx(path: str, keep: set) -> int:
     return len(kept)
 
 
+_EMAIL_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_(\d{2})\.(\d{2})_(alloc_logs|down_up_logs|mcx_alloc_logs)(?:_\d+)?$")
+_CAT_TYPE = {"ALLOCATION LOGS": "MASTER", "DOWNWARDS_UPWARDS LOGS": "MASTERTRUST", "MCX ALLOCATION LOGS": "MASTERTRUST"}
+
+
+def _backup_matches(m, backup_root: Path, start: dt.datetime, end: dt.datetime) -> list:
+    """Rebuild 'mailbox matches' from the raw log files kept in BACKUPFILES AUTOMATED.
+
+    Layout written by every earlier run:  <date>/<HH.MM>/<ALLOCATION LOGS | DOWNWARDS_UPWARDS LOGS |
+    MCX ALLOCATION LOGS>/<email-date_HH.MM_xxx_logs>/<raw files>.  The same e-mail is backed up again by every
+    run that re-fetched it, so identical files are used once (by content)."""
+    import hashlib
+    from email.message import EmailMessage
+    from email.utils import format_datetime
+    groups = {}
+    if not backup_root.is_dir():
+        return []
+    lo, hi = start.date(), end.date()
+    for day in sorted(backup_root.iterdir()):
+        try:
+            d = dt.datetime.strptime(day.name, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if not day.is_dir() or d < lo:           # a run backs up on/after the e-mail's own day
+            continue
+        for runf in day.iterdir():
+            if not runf.is_dir():
+                continue
+            for cat, ftype in _CAT_TYPE.items():
+                cdir = runf / cat
+                if not cdir.is_dir():
+                    continue
+                for ef in cdir.iterdir():
+                    mt = _EMAIL_DIR_RE.match(ef.name)
+                    if not mt or not ef.is_dir():
+                        continue
+                    when = dt.datetime.strptime(f"{mt.group(1)} {mt.group(2)}:{mt.group(3)}", "%Y-%m-%d %H:%M")
+                    if when < start or when > end + dt.timedelta(seconds=59) or when.date() > hi:
+                        continue
+                    g = groups.setdefault((ftype, when), {})
+                    for f in ef.iterdir():
+                        if f.is_file():
+                            try:
+                                h = hashlib.sha1(f.read_bytes()).hexdigest()
+                            except OSError:
+                                continue
+                            g.setdefault(h, f)
+    out = []
+    for (ftype, when), files in sorted(groups.items(), key=lambda kv: kv[0][1]):
+        msg = EmailMessage()
+        msg["Subject"] = m.SUBJECT_MASTER if ftype == "MASTER" else m.SUBJECT_MASTERTRUST
+        msg["From"] = m.SENDER_FILTER
+        msg.set_content("restored from backup")
+        for f in files.values():
+            msg.add_attachment(f.read_bytes(), maintype="application", subtype="octet-stream", filename=f.name)
+        out.append({"uid": f"backup-{ftype}-{when:%Y%m%d%H%M}", "msg": msg, "date_header": format_datetime(when),
+                    "email_dt": when, "subject": msg["Subject"], "from": m.SENDER_FILTER, "file_type": ftype})
+    log(f"  backup scan: {len(out)} e-mail(s) of logs found between {start:%d-%b %H:%M} and {end:%d-%b %H:%M}")
+    return out
+
+
+# ───────────────────────────── per-run log files ─────────────────────────────
+class _Tee:
+    def __init__(self, orig, fh):
+        self._o, self._f = orig, fh
+
+    def write(self, s):
+        try:
+            self._o.write(s)
+        except Exception:
+            pass
+        try:
+            self._f.write(s)
+        except Exception:
+            pass
+        return len(s)
+
+    def flush(self):
+        for x in (self._o, self._f):
+            try:
+                x.flush()
+            except Exception:
+                pass
+
+    def __getattr__(self, k):
+        return getattr(self._o, k)
+
+
+def logs_dir() -> Path:
+    return base_dir() / "Logs"
+
+
+def _start_tee(mode: str, by: str):
+    """Every run writes its whole output to Logs/<date>_<time>_<mode>.log (newest 300 are kept)."""
+    try:
+        d = logs_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        fh = open(d / f"{dt.datetime.now():%Y-%m-%d_%H%M%S}_{mode}.log", "w", encoding="utf-8", errors="replace")
+        old = (sys.stdout, sys.stderr)
+        sys.stdout, sys.stderr = _Tee(old[0], fh), _Tee(old[1], fh)
+        files = sorted(d.glob("*.log"))
+        for p in files[:-300]:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        return fh, old
+    except Exception:
+        return None
+
+
+def _stop_tee(t):
+    if not t:
+        return
+    fh, old = t
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:
+        pass
+    sys.stdout, sys.stderr = old
+    try:
+        fh.close()
+    except Exception:
+        pass
+
+
+def list_logs(limit: int = 100) -> list:
+    d = logs_dir()
+    out = []
+    if d.is_dir():
+        for p in sorted(d.glob("*.log"), reverse=True)[:limit]:
+            mt = re.match(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(\d{2})_(\w+)\.log$", p.name)
+            out.append({"name": p.name, "size": p.stat().st_size,
+                        "when": f"{mt.group(3)}-{mt.group(2)}-{mt.group(1)} {mt.group(4)}:{mt.group(5)}:{mt.group(6)}" if mt else "",
+                        "mode": mt.group(7) if mt else ""})
+    return out
+
+
+def read_log_file(name: str, max_bytes: int = 400_000):
+    p = logs_dir() / os.path.basename(name or "")
+    if not p.is_file() or p.suffix != ".log":
+        return None
+    data = p.read_bytes()
+    return data[-max_bytes:].decode("utf-8", errors="replace")
+
+
 def _opening_date(mode: str, start: dt.datetime, end: dt.datetime) -> dt.date:
     if mode == "close":
         return (end if end.hour >= 6 else end - dt.timedelta(days=1)).date()
@@ -271,8 +418,9 @@ def run(opts: dict) -> int:
         return 1
     m = None
     work = None
+    tee = _start_tee(mode, by)
     try:
-        progress(1, "Reading the mailbox")
+        progress(1, "Reading the backup" if mode == "custom" else "Reading the mailbox")
         m = _load()
         _configure(m, base)
         work = m.WORK_FOLDER
@@ -315,16 +463,41 @@ def run(opts: dict) -> int:
         m.clean_folder(m.WORK_FOLDER)
 
         # ---- STEP 1: fetch the mails and build the three log files ---------------
-        session = m._Pop3Session()
-        try:
-            matches = m.fetch_window_messages(session, start, end)
-        finally:
-            session.close()
-        bucket = m.bucket_live(matches, start, end)
+        from_backup = False
+        matches, bucket = [], []
+        # A custom range that starts within the last 5 days is tried on the mailbox first (it keeps ~2 days);
+        # anything older — or nothing found there — is rebuilt from the backed-up raw log files.
+        use_mailbox = mode != "custom" or start >= now - dt.timedelta(days=CUSTOM_MAILBOX_DAYS)
+        if use_mailbox:
+            try:
+                session = m._Pop3Session()
+                try:
+                    matches = m.fetch_window_messages(session, start, end)
+                finally:
+                    session.close()
+                bucket = m.bucket_live(matches, start, end)
+            except Exception as e:
+                if mode != "custom":
+                    raise
+                log(f"  [!] mailbox could not be read ({type(e).__name__}: {e}) — using the backup instead.")
+        if mode == "custom" and not bucket:
+            if use_mailbox:
+                log("  nothing found in the mailbox for this range — trying the backup of the log files.")
+            from_backup = True
+            log(f"  source : backup of the raw log files in {base / 'BACKUPFILES AUTOMATED'}")
+            tmp = os.path.join(m.WORK_FOLDER, "_tmp")
+            os.makedirs(tmp, exist_ok=True)
+            m.BACKUP_DIR = os.path.join(tmp, "backup")        # nothing is re-backed-up or recorded
+            m.EMAIL_MAPPING_XLSX = os.path.join(tmp, "Email_Mapping_Log.xlsx")
+            m.OPEN_WINDOW_FILE = os.path.join(tmp, "open_window_uidls.json")
+            m.STATE_FILE = os.path.join(tmp, "processed_uidls.json")
+            matches = _backup_matches(m, base / "BACKUPFILES AUTOMATED", start, end)
+            bucket = m.bucket_live(matches, start, end)
         label = "EOD" if mode == "close" else f"Intraday {end:%H:%M}"
         log(f"\n  emails in window: {len(bucket)}")
         if not bucket:
-            msg = "No allocation e-mails in this window."
+            msg = ("No backed-up allocation logs in this range — only logs that an earlier run already fetched "
+                   "can be rebuilt." if from_backup else "No allocation e-mails in this window.")
             log(f"[FRIENDLY_MSG] {msg}")
             _finish(base, mode, {"ok": True, "empty": True, "msg": msg}, start, end, clients, by, [], None)
             progress(STEPS, msg, ok=True)
@@ -505,6 +678,7 @@ def run(opts: dict) -> int:
         if work:
             shutil.rmtree(work, ignore_errors=True)
         _release()
+        _stop_tee(tee)
 
 
 def _clean_mails(v) -> list:

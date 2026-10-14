@@ -103,14 +103,15 @@
       '<div style="font-size:11.5px;color:var(--dim);margin-bottom:12px">Nightly close: window starts <b style="color:var(--ink)">' + esc(pretty(d.marker) || '—') +
       '</b>. Reports run here never move it.</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
-      '<button class="sa-tool" onclick="pxConfig(\'alloc\')">&#9993; Email To / CC</button>' +
-      '<button class="sa-tool" onclick="pxCredentials(\'alloc\')">&#128273; Credentials</button>' +
-      '<button class="sa-tool" onclick="allocLog()">&#128220; Log</button></div>' +
+      '<button class="sa-tool" onclick="allocSub(\'cfg\')">&#9993; Email To / CC</button>' +
+      '<button class="sa-tool" onclick="allocSub(\'cred\')">&#128273; Credentials</button>' +
+      '<button class="sa-tool" onclick="allocSub(\'logs\')">&#128220; Logs</button></div>' +
       lbl('Time range') + seg('allocSeg', [['sofar', 'Day so far'], ['until', 'Up to a time'], ['custom', 'Custom range']], S.mode, 'allocMode') +
       '<div id="allocUntil" style="display:none;margin-top:10px">' + lbl('Up to (today)') + '<input type="time" id="allocUntilIn" value="' + esc(S.until) + '" ' + INP + ' oninput="allocSet(\'until\',this.value)"></div>' +
       '<div id="allocCustom" style="display:none;margin-top:10px"><div style="display:flex;gap:14px;flex-wrap:wrap">' +
       '<div>' + lbl('From') + '<input type="date" value="' + esc(S.fd) + '" ' + INP + ' oninput="allocSet(\'fd\',this.value)"> <input type="time" value="' + esc(S.ft) + '" ' + INP + ' oninput="allocSet(\'ft\',this.value)"></div>' +
-      '<div>' + lbl('To') + '<input type="date" value="' + esc(S.td) + '" ' + INP + ' oninput="allocSet(\'td\',this.value)"> <input type="time" value="' + esc(S.tt) + '" ' + INP + ' oninput="allocSet(\'tt\',this.value)"></div></div></div>' +
+      '<div>' + lbl('To') + '<input type="date" value="' + esc(S.td) + '" ' + INP + ' oninput="allocSet(\'td\',this.value)"> <input type="time" value="' + esc(S.tt) + '" ' + INP + ' oninput="allocSet(\'tt\',this.value)"></div></div>' +
+      '<div style="font-size:10.5px;color:var(--dim);margin-top:8px">Ranges from the last 5 days are read from the mailbox first; if nothing is found there (or the range is older) they are rebuilt from the log files backed up by earlier runs.</div></div>' +
       '<div id="allocWin" style="font-size:12px;color:var(--muted);margin:10px 0 14px;font-family:var(--mono)"></div>' +
       '<div style="border-top:1px solid var(--line);padding-top:12px">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline">' + lbl('Client codes', ' <span style="text-transform:none;letter-spacing:0;color:var(--dim)">(optional — blank means everyone)</span>') +
@@ -120,7 +121,7 @@
       '<div style="font-size:10.5px;color:var(--dim);margin-top:6px">Applies to every sheet of the report. Codes with no record in the window are listed after the run.</div></div>' +
       '<div style="border-top:1px solid var(--line);padding-top:12px;margin-top:14px">' + lbl('Delivery') +
       seg('allocSeg2', [['download', 'Download only'], ['mail', 'E-mail to']], S.deliver, 'allocDeliver') +
-      '<div id="allocMail" style="display:none;margin-top:10px"><input type="text" id="allocMailIn" value="' + esc(S.mailto) + '" placeholder="name@mastertrust.co.in, second@mastertrust.co.in" ' + INPW + ' oninput="allocSet(\'mailto\',this.value)"></div></div>' +
+      '<div id="allocMail" style="display:none;margin-top:10px"><input type="text" id="allocMailIn" value="' + esc(S.mailto) + '" placeholder="Leave blank to send to the saved Email To / CC, or type other addresses" ' + INPW + ' oninput="allocSet(\'mailto\',this.value)"></div></div>' +
       '<div id="allocBtnRow" style="display:flex;gap:8px;margin-top:16px"></div>' +
       '<div id="allocLive" style="font-size:11.5px;min-height:18px;margin-top:10px"></div>' +
       '<div id="allocResult"></div>';
@@ -194,19 +195,41 @@
     if (S.timer) clearInterval(S.timer);
     S.timer = setInterval(poll, 2500);
   };
-  window.allocLog = function () {
-    saShowModal(TITLE + ' — log', '<div style="color:var(--muted);font-size:12px">Loading…</div>');
-    fetch(API + '/alloc/log?lines=400', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
-      var body = d.ok === false ? '<div style="color:var(--red)">' + esc(d.error || 'Could not read the log.') + '</div>'
-        : (d.text ? '<div style="font-size:11px;color:var(--dim);margin-bottom:6px">Last written ' + esc(d.when) + ' — newest at the bottom</div>' +
-            '<pre id="allocLogPre" style="max-height:52vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:0">' + esc(d.text) + '</pre>'
-          : '<div style="color:var(--muted);font-size:12.5px">No log yet — nothing has run on this machine.</div>');
-      saShowModal(TITLE + ' — log', body + '<div style="display:flex;gap:8px;margin-top:12px">' +
-        '<button class="sa-tool" onclick="allocLog()">&#8635; Refresh</button>' +
-        '<button class="sa-tool" onclick="allocOpen()">&#8592; Back</button></div>');
+  // Email To/CC, Credentials and Logs open on top of this window; closing them comes back here (one step).
+  window.allocSub = function (what) {
+    window._saReturn = window.allocOpen;
+    if (what === 'cfg') window.pxConfig('alloc');
+    else if (what === 'cred') window.pxCredentials('alloc');
+    else window.allocLogs();
+  };
+  window.allocLogs = function () {
+    window._saReturn = window.allocOpen;
+    saShowModal(TITLE + ' — logs', '<div style="color:var(--muted);font-size:12px">Loading…</div>');
+    fetch(API + '/alloc/logs', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      var runs = d.runs || [];
+      var modeName = { close: 'Nightly close', sofar: 'Day so far', until: 'Up to a time', custom: 'Custom range' };
+      var body = runs.length
+        ? '<div style="font-size:11px;color:var(--dim);margin-bottom:8px">One log per run, newest first (the last 300 are kept).</div>' +
+          '<div style="max-height:56vh;overflow:auto;display:flex;flex-direction:column;gap:6px">' +
+          runs.map(function (x) {
+            return '<button class="sa-tool" style="display:flex;justify-content:space-between;gap:12px;text-align:left;width:100%" onclick="allocLogView(\'' + esc(x.name) + '\')">' +
+              '<span>' + esc(x.when) + '</span><span style="color:var(--dim)">' + esc(modeName[x.mode] || x.mode) + ' · ' + Math.max(1, Math.round(x.size / 1024)) + ' KB</span></button>';
+          }).join('') + '</div>'
+        : '<div style="color:var(--muted);font-size:12.5px">No runs logged yet — a log is saved from the next run onwards.</div>';
+      saShowModal(TITLE + ' — logs', body);
+    }).catch(function () {
+      saShowModal(TITLE + ' — logs', '<div style="color:var(--red);font-size:13px">Could not reach the server.</div>');
+    });
+  };
+  window.allocLogView = function (name) {
+    window._saReturn = window.allocLogs;               // × goes back to the list of runs
+    saShowModal(TITLE + ' — ' + name.replace(/\.log$/, ''), '<div style="color:var(--muted);font-size:12px">Loading…</div>');
+    fetch(API + '/alloc/log?name=' + encodeURIComponent(name), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      saShowModal(TITLE + ' — ' + name.replace(/\.log$/, ''),
+        '<pre id="allocLogPre" style="max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:0">' + esc(d.text || d.error || '') + '</pre>');
       var pre = $('allocLogPre'); if (pre) pre.scrollTop = pre.scrollHeight;
     }).catch(function () {
-      saShowModal(TITLE + ' — log', '<div style="color:var(--red);font-size:13px">Could not reach the server.</div>');
+      saShowModal(TITLE, '<div style="color:var(--red);font-size:13px">Could not reach the server.</div>');
     });
   };
   window.allocMode = function (v) { S.mode = v; S.msg = ''; paintMode(); };
@@ -241,7 +264,7 @@
       q += '&frm=' + encodeURIComponent(a) + '&to=' + encodeURIComponent(b);
     }
     if (S.deliver === 'mail') {
-      if (!/@/.test(S.mailto || '')) { setMsg('Enter at least one e-mail address.', 'bad'); return; }
+      // blank is fine: the report then goes to the saved Email To / CC (the server says so if none is saved)
       q += '&mailto=' + encodeURIComponent(S.mailto);
     }
     S.busy = true; setMsg('', '');
