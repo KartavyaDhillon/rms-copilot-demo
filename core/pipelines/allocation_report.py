@@ -397,7 +397,23 @@ def run(opts: dict) -> int:
         log(f"  SUCCESS rows kept: {len(rows)}   excluded: {len(excluded)}")
         if not rows:
             raise RuntimeError("No SUCCESS rows found — nothing to report.")
-        report = m.build_report(m.WORK_FOLDER, rows, excluded, log_date)
+        if keep:
+            # the opening-balance files hold EVERY client — cut them down too, so no other client
+            # reaches any sheet of the report (timeline, latest values, summary).
+            _real_opening = m.read_opening_balances
+
+            def _only_these(folder):
+                totals, times = _real_opening(folder)
+                return ({seg: {c: v for c, v in d.items() if str(c).strip().upper() in keep}
+                         for seg, d in totals.items()}, times)
+
+            m.read_opening_balances = _only_these
+            try:
+                report = m.build_report(m.WORK_FOLDER, rows, excluded, log_date)
+            finally:
+                m.read_opening_balances = _real_opening
+        else:
+            report = m.build_report(m.WORK_FOLDER, rows, excluded, log_date)
         attachments = [p for p in (downwards, upwards, report) if p and os.path.exists(p)]
 
         # ---- STEP 4: deliver ------------------------------------------------------------
