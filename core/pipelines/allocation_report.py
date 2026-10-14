@@ -412,9 +412,13 @@ def run(opts: dict) -> int:
             log(f"✅ Email sent successfully to {delivered}")
         elif opts.get("deliver") == "mail":
             to = _clean_mails(opts.get("mail_to"))
+            cc_list = []
+            if not to:                                   # box left empty -> use the saved nightly To / CC
+                to = _clean_mails(os.environ.get("ALLOC_MAIL_TO"))
+                cc_list = _clean_mails(os.environ.get("ALLOC_MAIL_CC"))
             if not to:
                 raise RuntimeError("E-mail delivery was chosen but no valid address was given.")
-            m.EMAIL_TO, m.EMAIL_CC = to, []
+            m.EMAIL_TO, m.EMAIL_CC = to, cc_list
             subj = m.build_email_subject(label, end) + (f" [{', '.join(clients)}]" if clients else "")
             m.send_email_with_attachments(subj, m.build_email_body(label, start, end, {}), attachments)
             delivered = ", ".join(to)

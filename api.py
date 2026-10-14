@@ -232,7 +232,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=8"></script>'
-                            '<script src="/platform/js/process-alloc.js?v=3"></script></body>', 1)
+                            '<script src="/platform/js/process-alloc.js?v=4"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4961,6 +4961,24 @@ def alloc_run_stream(request: Request, mode: str = "sofar", until: str = "", frm
             "deliver": "mail" if deliver == "mail" else "download", "mail_to": mailto, "by": by}
     code = ("from core.pipelines.allocation_report import run_cli as _f; _f(" + repr(_aj.dumps(opts)) + ")")
     return _alloc_sse(code, "alloc_run")
+
+
+@app.get("/alloc/log")
+def alloc_log(lines: int = 300):
+    """Tail of the report's run_log.txt (mailbox scan, parsing, e-mail, backup — every run appends)."""
+    from core.pipelines import allocation_report as _ar
+    p = _ar.base_dir() / "run_log.txt"
+    if not p.exists():
+        return {"ok": True, "text": "", "when": ""}
+    import datetime as _adt
+    n = max(20, min(int(lines or 300), 2000))
+    try:
+        with open(p, "r", encoding="utf-8", errors="replace") as f:
+            tail = f.readlines()[-n:]
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "text": "".join(tail),
+            "when": _adt.datetime.fromtimestamp(p.stat().st_mtime).strftime("%d-%m-%Y %H:%M:%S")}
 
 
 @app.get("/alloc/file")

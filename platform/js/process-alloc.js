@@ -104,7 +104,8 @@
       '</b>. Reports run here never move it.</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
       '<button class="sa-tool" onclick="pxConfig(\'alloc\')">&#9993; Email To / CC</button>' +
-      '<button class="sa-tool" onclick="pxCredentials(\'alloc\')">&#128273; Credentials</button></div>' +
+      '<button class="sa-tool" onclick="pxCredentials(\'alloc\')">&#128273; Credentials</button>' +
+      '<button class="sa-tool" onclick="allocLog()">&#128220; Log</button></div>' +
       lbl('Time range') + seg('allocSeg', [['sofar', 'Day so far'], ['until', 'Up to a time'], ['custom', 'Custom range']], S.mode, 'allocMode') +
       '<div id="allocUntil" style="display:none;margin-top:10px">' + lbl('Up to (today)') + '<input type="time" id="allocUntilIn" value="' + esc(S.until) + '" ' + INP + ' oninput="allocSet(\'until\',this.value)"></div>' +
       '<div id="allocCustom" style="display:none;margin-top:10px"><div style="display:flex;gap:14px;flex-wrap:wrap">' +
@@ -192,6 +193,21 @@
     });
     if (S.timer) clearInterval(S.timer);
     S.timer = setInterval(poll, 2500);
+  };
+  window.allocLog = function () {
+    saShowModal(TITLE + ' — log', '<div style="color:var(--muted);font-size:12px">Loading…</div>');
+    fetch(API + '/alloc/log?lines=400', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      var body = d.ok === false ? '<div style="color:var(--red)">' + esc(d.error || 'Could not read the log.') + '</div>'
+        : (d.text ? '<div style="font-size:11px;color:var(--dim);margin-bottom:6px">Last written ' + esc(d.when) + ' — newest at the bottom</div>' +
+            '<pre id="allocLogPre" style="max-height:52vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:0">' + esc(d.text) + '</pre>'
+          : '<div style="color:var(--muted);font-size:12.5px">No log yet — nothing has run on this machine.</div>');
+      saShowModal(TITLE + ' — log', body + '<div style="display:flex;gap:8px;margin-top:12px">' +
+        '<button class="sa-tool" onclick="allocLog()">&#8635; Refresh</button>' +
+        '<button class="sa-tool" onclick="allocOpen()">&#8592; Back</button></div>');
+      var pre = $('allocLogPre'); if (pre) pre.scrollTop = pre.scrollHeight;
+    }).catch(function () {
+      saShowModal(TITLE + ' — log', '<div style="color:var(--red);font-size:13px">Could not reach the server.</div>');
+    });
   };
   window.allocMode = function (v) { S.mode = v; S.msg = ''; paintMode(); };
   window.allocDeliver = function (v) { S.deliver = v; paintDeliver(); };
