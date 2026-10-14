@@ -301,6 +301,169 @@ async def connections_put(group: str, request: Request):
     return e or {"ok": True, "changed": out}
 
 
+# ── RMS LIMITS MAND KAMBALA: "Add client codes" (appends codes, e-mails, uploads to Kambala) ──
+@router.post("/rms-limits/add")
+async def rms_limits_add(request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core.scheduler.processes import rms_limits_mand_kambala as rl
+
+    def go():
+        pdef = catalog.get("rms_limits_mand_kambala")
+        try:
+            out = rl.start_add(body.get("rows"), catalog.effective_params(pdef, {}), bool(body.get("upload")))
+        except ValueError as ex:
+            raise service.ValidationFailed([m.strip() for m in str(ex).split(";") if m.strip()])
+        store.audit(who, "rms_limits.add", {"id": None, "name": rl.FOLDER}, after={"rows": body.get("rows")})
+        return out
+    out, e = _safe(go)
+    return e or {"ok": True, **out}
+
+
+@router.get("/rms-limits/state")
+def rms_limits_state(request: Request, id: str = ""):
+    who, err = _guard(request, False)
+    if err:
+        return err
+    from core.scheduler.processes import rms_limits_mand_kambala as rl
+    st = rl.add_state(id)
+    return st or JSONResponse({"ok": False, "error": "Unknown run."}, status_code=404)
+
+
+# ── Portal Downloads: file jobs defined on screen (core/scheduler/portal_jobs.py) ──
+def _portal_view(j: dict, schedules: list) -> dict:
+    from core.scheduler import portal_jobs as pj
+    key = pj.KEY_PREFIX + j["id"]
+    mine = [s for s in schedules if s.get("process_key") == key]
+    try:
+        r = pj.resolve(j)
+    except Exception as e:
+        r = {"filename": j.get("filename", ""), "date_text": "", "error": str(e)}
+    return {**j, "key": key, "resolved": r,
+            "schedules": [{"id": s["id"], "name": s.get("name"), "status": s.get("status")} for s in mine]}
+
+
+@router.get("/portal")
+def portal_list(request: Request):
+    who, err = _guard(request, False)
+    if err:
+        return err
+    from core.scheduler import portal_jobs as pj
+
+    def go():
+        schedules = store.list_schedules()
+        return {"jobs": [_portal_view(j, schedules) for j in sorted(pj.load_jobs(), key=lambda x: x["name"].lower())],
+                "tokens": [{"token": t, "example": e} for t, e in pj.TOKEN_HELP],
+                "defaults": {"signature": pj.DEFAULT_SIGNATURE, "body": pj.DEFAULT_BODY},
+                "needs_password": not _who(request)[1]}
+    out, e = _safe(go)
+    return e or out
+
+
+@router.post("/portal/preview")
+async def portal_preview(request: Request):
+    """Live 'what would this fetch today?' for the form (same code the run uses)."""
+    who, err = _guard(request, False)
+    if err:
+        return err
+    from core.scheduler import portal_jobs as pj
+    body = await _json(request)
+    errs, job = pj.clean_job(body, existing_id=str(body.get("id") or "") or "preview")
+    try:
+        r = pj.resolve(job) if job["filename"] else {}
+    except Exception as e:
+        r = {"error": str(e)}
+    return {"ok": True, "errors": errs, "resolved": r}
+
+
+@router.post("/portal")
+async def portal_create(request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core.scheduler import portal_jobs as pj
+
+    def go():
+        try:
+            job = pj.save_job(body)
+        except ValueError as ex:
+            raise service.ValidationFailed([m.strip() for m in str(ex).split(";") if m.strip()])
+        store.audit(who, "portal.create", {"id": None, "name": job["name"]}, after=job)
+        return job
+    out, e = _safe(go)
+    return e or {"ok": True, "job": out}
+
+
+@router.put("/portal/{jid}")
+async def portal_update(jid: str, request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core.scheduler import portal_jobs as pj
+
+    def go():
+        before = pj.get_job(jid)
+        try:
+            job = pj.save_job(body, job_id=jid)
+        except ValueError as ex:
+            raise service.ValidationFailed([m.strip() for m in str(ex).split(";") if m.strip()])
+        store.audit(who, "portal.update", {"id": None, "name": job["name"]}, before=before, after=job)
+        return job
+    out, e = _safe(go)
+    return e or {"ok": True, "job": out}
+
+
+@router.delete("/portal/{jid}")
+async def portal_delete(jid: str, request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core.scheduler import portal_jobs as pj
+
+    def go():
+        j = pj.get_job(jid)
+        if not j:
+            raise KeyError("Unknown job.")
+        used = [s for s in store.list_schedules() if s.get("process_key") == pj.KEY_PREFIX + jid]
+        if used:
+            raise service.ValidationFailed([f"This job still has {len(used)} schedule(s) — delete them on the Schedules tab first."])
+        pj.delete_job(jid)
+        store.audit(who, "portal.delete", {"id": None, "name": j["name"]}, before=j)
+        return True
+    out, e = _safe(go)
+    return e or {"ok": True}
+
+
+@router.post("/portal/test")
+async def portal_test_start(request: Request):
+    who, err = _guard(request, False)
+    if err:
+        return err
+    from core.scheduler import portal_jobs as pj
+    body = await _json(request)
+    try:
+        return {"ok": True, **pj.start_test(body)}
+    except ValueError as ex:
+        return JSONResponse({"ok": False, "error": str(ex)}, status_code=422)
+    except Exception as ex:
+        return JSONResponse({"ok": False, "error": f"{type(ex).__name__}: {ex}"}, status_code=500)
+
+
+@router.get("/portal/test/{tid}")
+def portal_test_state(tid: str, request: Request):
+    who, err = _guard(request, False)
+    if err:
+        return err
+    from core.scheduler import portal_jobs as pj
+    st = pj.test_state(tid)
+    return {"ok": True, **st} if st else _deny("Test not found (it may have expired).", 404)
+
+
 # ── per-process files: data/scheduler/<PROCESS NAME>/{inputs,outputs,logs,backup} ──
 _MAX_UPLOAD = 100 * 1024 * 1024
 

@@ -53,6 +53,7 @@
   function shell() {
     return '<div class="card" style="margin-bottom:12px"><div class="filters">' +
       '<div class="seg" id="scTabs"><button data-t="schedules" class="on">Schedules</button><button data-t="processes">Processes</button>' +
+      '<button data-t="portal">Portal Downloads</button>' +
       '<button data-t="history">History</button><button data-t="audit">Audit</button>' +
       '<button data-t="today">Today</button></div>' +
       '<div class="spacer"></div><span class="card-sub" id="scMeta"></span>' +
@@ -84,6 +85,10 @@
         const f = S.histF, qs = new URLSearchParams();
         Object.keys(f).forEach((k) => f[k] && qs.set(k, f[k]));
         S.hist = (await jget("/sched/executions?" + qs.toString())).items || [];
+      } else if (S.tab === "portal") {
+        if (S.pedit && $("#pdEditor")) return;      // never wipe a form that is being filled in
+        const [pd, procs, conns] = await Promise.all([jget("/sched/portal"), jget("/sched/processes"), jget("/sched/connections")]);
+        S.portal = pd; S.procs = procs.processes || []; S.conns = conns;
       } else if (S.tab === "audit") {
         S.audit = (await jget("/sched/audit")).items || [];
       } else if (S.tab === "processes") {
@@ -110,7 +115,7 @@
       $("#scBody").innerHTML = '<div class="card"><div class="bm-empty" style="color:var(--err)">' + esc(S.err) + "</div></div>";
       return;
     }
-    ({ schedules: renderSchedules, history: renderHistory, audit: renderAudit, processes: renderProcesses, today: renderToday })[S.tab]();
+    ({ schedules: renderSchedules, history: renderHistory, audit: renderAudit, processes: renderProcesses, portal: renderPortal, today: renderToday })[S.tab]();
   }
 
   /* ═══════════════════════ SCHEDULES TAB ═══════════════════════════════ */
@@ -630,7 +635,7 @@
     return !!g && g.fields.every((f) => f.optional || (f.secret ? f.set : !!f.value));
   }
   const CONN_NAME = { whatsapp: "WhatsApp", smtp: "E-mail (SMTP)", pop3: "Mailbox (POP3)",
-    smtpb: "E-mail 2 (SMTP)", pop3b: "Mailbox 2 (POP3)", nse: "NSE Extranet", mcx_sftp: "MCX portal",
+    smtpb: "E-mail 2 (SMTP)", pop3b: "Mailbox 2 (POP3)", nse: "NSE Extranet", kambala_ftp: "Kambala FTP", mcx_sftp: "MCX portal",
     mcx_eclear: "MCX eclear", atom: "ATOM", backoffice: "Back-office API", client_margin: "Excel passwords" };
   const LOGO = { mcx_web_morning_email: "MX", partic_id_email: "PI", sn327_whatsapp: "327", sn359_whatsapp: "359",
     co_bo_blocking_file: "CB", otm_3_9_blocking_files: "3-9", contract_delta: "CD", persistent_noise_creators: "PN",
@@ -671,6 +676,7 @@
         (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone && isMail ? "📱✉️ WhatsApp numbers / Email To & CC" : isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
         ((p.uses || []).length ? '<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>' : "") +
         (p.upload_exts && p.upload_exts.length ? '<button class="sch-tool green" data-upload="' + esc(p.key) + '">⬆️ Upload files</button>' : "") +
+        (p.key === "rms_limits_mand_kambala" ? '<button class="sch-tool green" data-addcodes="1">➕ Add client codes</button>' : "") +
         '<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>' +
         '<button class="sch-tool blue ' + (p.upload_exts && p.upload_exts.length ? "wide" : "full") + '" data-add="' + esc(p.key) + '">⏰ Add schedule</button></div>' +
         '<div class="sch-foot">' + (sched || '<div class="sch-none">No schedule yet</div>') + "</div></div>";
@@ -685,6 +691,7 @@
     b.querySelectorAll("[data-recip]").forEach((x) => { x.onclick = () => openRecipients(x.dataset.recip); });
     b.querySelectorAll("[data-cred]").forEach((x) => { x.onclick = () => openCredentials(x.dataset.cred); });
     b.querySelectorAll("[data-logs]").forEach((x) => { x.onclick = () => openLogs(x.dataset.logs); });
+    b.querySelectorAll("[data-addcodes]").forEach((x) => { x.onclick = () => openAddCodes(); });
     if (S.focusProc) {                              // arrived by clicking a process name on the Schedules tab
       const box = b.querySelector('.sch-box[data-pk="' + S.focusProc + '"]');
       // not cleared here: the quiet refresh that follows re-draws the page, so the jump is repeated once (see load())
@@ -766,6 +773,49 @@
         '<div class="card-sub" style="margin-bottom:10px">Shared with every process that uses the same connection. Saved in the .env files under “# scheduler connection”; passwords and tokens go to .env.local. Secrets are never shown again — leave blank to keep the current one.</div>' +
         groups.map((g) => connGroupHtml(g, true)).join(""), { width: 760, icon: "settings" });
       bindConnSave(document, () => { S.pw = ""; close(); load(); });
+    } catch (e) { toast("err", "Could not open", e.message); }
+  }
+
+  /* ── RMS LIMITS MAND KAMBALA: add client codes (account id, limit, category) → file → e-mail → Kambala ── */
+  async function openAddCodes() {
+    try {
+      const c = await jget("/sched/connections");
+      const pwd = await unlock(c.needs_password, "Add client codes — RMS LIMITS MAND KAMBALA");
+      if (pwd === null) return;
+      const rowHtml = () => '<tr><td><input class="f-input ac-a" placeholder="e.g. 09110022" style="width:100%;text-transform:uppercase"></td>' +
+        '<td><input class="f-input ac-l" inputmode="numeric" placeholder="e.g. 280000" style="width:100%"></td>' +
+        '<td><input class="f-input ac-c" placeholder="blank = from risk report" style="width:100%;text-transform:uppercase"></td></tr>';
+      const close = RMS.modal("Add client codes — RMS LIMITS MAND KAMBALA",
+        '<div class="card-sub" style="margin-bottom:10px">New codes are added at the <b>end</b> of the file, then the file is e-mailed and uploaded to the Kambala FTP. ' +
+        "Leave CATEGORY blank to take it from today's risk report. Type the code exactly as it must appear in the file (e.g. with its leading zero).</div>" +
+        '<div id="acErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
+        '<table class="htable" style="width:100%"><thead><tr><th>ACCOUNT ID</th><th>LIMIT</th><th>CATEGORY</th></tr></thead><tbody id="acRows">' + rowHtml() + rowHtml() + rowHtml() + "</tbody></table>" +
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px"><input type="checkbox" id="acUp"> Also upload to the Kambala FTP (leave OFF until the master file is confirmed)</label>' +
+        '<div style="display:flex;justify-content:space-between;gap:8px;margin-top:10px"><button class="btn ghost" id="acMore">+ Row</button>' +
+        '<div style="display:flex;gap:8px"><button class="btn ghost" id="acCancel">Cancel</button><button class="btn primary" id="acGo">Add, e-mail &amp; upload</button></div></div>' +
+        '<pre class="logview" id="acLog" style="display:none;margin-top:12px;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:11.5px"></pre>',
+        { width: 760, icon: "upload" });
+      $("#acMore").onclick = () => $("#acRows").insertAdjacentHTML("beforeend", rowHtml());
+      $("#acCancel").onclick = close;
+      $("#acGo").onclick = async () => {
+        const rows = [...document.querySelectorAll("#acRows tr")].map((tr) => ({
+          account: tr.querySelector(".ac-a").value.trim(), limit: tr.querySelector(".ac-l").value.trim(), category: tr.querySelector(".ac-c").value.trim(),
+        })).filter((r) => r.account || r.limit || r.category);
+        const go = $("#acGo"); go.disabled = true; $("#acErr").textContent = "";
+        try {
+          const body = { rows, upload: $("#acUp").checked }; if (pwd) body._password = pwd;
+          const r = await call("POST", "/sched/rms-limits/add", body);
+          const log = $("#acLog"); log.style.display = "block"; log.textContent = "Started…";
+          const tick = async () => {
+            const s = await jget("/sched/rms-limits/state?id=" + encodeURIComponent(r.id));
+            log.textContent = s.log || "Started…"; log.scrollTop = log.scrollHeight;
+            if (!s.done) return setTimeout(tick, 1500);
+            if (s.ok) { $("#acErr").style.color = "var(--ok)"; $("#acErr").textContent = "✔ " + s.result; }
+            else { $("#acErr").style.color = "var(--err)"; $("#acErr").textContent = s.result; go.disabled = false; }
+          };
+          tick();
+        } catch (e) { $("#acErr").textContent = e.message; go.disabled = false; }
+      };
     } catch (e) { toast("err", "Could not open", e.message); }
   }
 
@@ -886,6 +936,291 @@
   async function unlock(needsPassword, title) {
     if (!needsPassword) return "";
     return askPassword(title);
+  }
+
+  /* ═══════════════════════ PORTAL DOWNLOADS TAB ═════════════════════════
+     File jobs defined on screen (core/scheduler/portal_jobs.py).  List of job cards  →  full-page editor with a live
+     preview of the file name, the flow and a Test download that logs live.  Every saved job is a normal Scheduler
+     process (⏰ Schedule opens the usual schedule editor for it). */
+  const PD_SEGMENTS = ["CM", "FO", "CO", "CD", "SLB", "COM"];
+
+  function pdBlank() {
+    const d = (S.portal && S.portal.defaults) || {};
+    return { id: "", name: "", description: "", source: "member", segment: "", folder: "Reports", filename: "", days_back: 1,
+      trading_day_only: true, wait_minutes: 0, unzip: true,
+      email: { enabled: false, to: "", cc: "", subject: "{NAME} - {DD-MM-YYYY}", body: d.body || "Hi Team,\n\nPlease find attached {FILE}.",
+        signature: d.signature || "", notify_no_file: true },
+      kambala: { enabled: false, name: "" } };
+  }
+  const pdNeedsPw = () => !!(S.portal && S.portal.needs_password);
+
+  function flowChips(j) {
+    const st = (on, ic, tx) => '<span class="pd-step ' + (on ? "on" : "off") + '">' + ic + " " + tx + "</span>";
+    return st(true, "⬇", "Download") + '<span class="pd-arrow">›</span>' + st(!!j.unzip, "🗜", "Unzip") + '<span class="pd-arrow">›</span>' +
+      st(!!(j.email && j.email.enabled), "✉", "E-mail") + '<span class="pd-arrow">›</span>' + st(!!(j.kambala && j.kambala.enabled), "⬆", "Kambala");
+  }
+
+  function renderPortal() {
+    if (S.pedit && $("#pdEditor")) return;
+    if (S.pedit) { renderPortalEditor(); return; }
+    const P = S.portal || { jobs: [] };
+    const jobs = P.jobs || [];
+    const hero = '<div class="pd-hero"><div class="pd-hero-tx"><h2>Portal Downloads</h2>' +
+      "<p>Tell the console which file to fetch from the NSE portal once. It downloads it on the day you choose, unzips it, e-mails it and uploads it to the Kambala FTP — and says so clearly when NSE has no file.</p></div>" +
+      '<button class="btn primary pd-new" id="pdNew">＋ New download</button></div>';
+    if (!jobs.length) {
+      $("#scBody").innerHTML = hero + '<div class="pd-empty"><div style="font-size:40px">📥</div><h3>No downloads yet</h3>' +
+        "<p>Create your first one in about a minute. No code, no deployment.</p>" +
+        '<div class="pd-how"><div><b><em>1</em>Describe the file</b>Segment, folder and the file name with date placeholders, e.g. <code>{YYYYMMDD}</code>.</div>' +
+        '<div><b><em>2</em>Choose what happens</b>Unzip, e-mail it, upload to Kambala. Test it with one click.</div>' +
+        '<div><b><em>3</em>Schedule it</b>It then runs by itself and follows the holiday calendar.</div></div>' +
+        '<button class="btn primary pd-new" id="pdNew2">＋ New download</button></div>';
+    } else {
+      const card = (j) => {
+        const r = j.resolved || {};
+        const live = (j.schedules || []).some((s) => s.status === "enabled");
+        const st = !(j.schedules || []).length ? '<span class="badge dim">Not scheduled</span>' : live ? '<span class="badge ok">Scheduled</span>' : '<span class="badge dim">Paused</span>';
+        const dayTxt = j.days_back <= 0 ? "today" : j.days_back === 1 ? "previous trading day" : j.days_back + " trading days back";
+        return '<div class="pd-card" data-id="' + esc(j.id) + '"><div class="pd-top"><div class="pd-seg">' + esc(j.segment) + "</div>" +
+          '<div class="pd-ttl"><b title="' + esc(j.name) + '">' + esc(j.name) + "</b><span>" + (j.source === "common" ? "Common" : "Member") + " portal · " + esc(j.segment) + " › " + esc(j.folder) + "</span></div>" + st + "</div>" +
+          '<div class="pd-file"><div class="lbl"><span>File for ' + esc(dayTxt) + "</span><span>" + esc(r.date_text || "") + "</span></div><code>" + esc(r.filename || j.filename) + "</code></div>" +
+          '<div class="pd-flow">' + flowChips(j) + "</div>" +
+          ((j.schedules || []).length ? '<div class="pd-sched">⏰ <i>' + esc(j.schedules[0].name) + "</i>" + (j.schedules.length > 1 ? " +" + (j.schedules.length - 1) + " more" : "") + "</div>" : "") +
+          '<div class="pd-actions"><button class="sch-tool" data-a="test">▶ Test</button><button class="sch-tool" data-a="edit">✎ Edit</button>' +
+          '<button class="sch-tool blue" data-a="sched">⏰ Schedule</button><button class="sch-tool" data-a="logs">📜 Logs</button></div></div>';
+      };
+      $("#scBody").innerHTML = hero + '<div class="pd-grid">' + jobs.map(card).join("") + "</div>";
+    }
+    const b = $("#scBody");
+    ["pdNew", "pdNew2"].forEach((id) => { const e = b.querySelector("#" + id); if (e) e.onclick = () => pdOpen(null); });
+    b.querySelectorAll(".pd-card [data-a]").forEach((x) => {
+      x.onclick = () => {
+        const j = (S.portal.jobs || []).find((q) => q.id === x.closest(".pd-card").dataset.id);
+        if (!j) return;
+        if (x.dataset.a === "edit") pdOpen(j);
+        else if (x.dataset.a === "test") pdTestModal(j);
+        else if (x.dataset.a === "logs") openLogs(j.key);
+        else openEditor(null, j.key);
+      };
+    });
+  }
+
+  function pdOpen(job) {
+    S.pedit = { id: job ? job.id : "", draft: job ? JSON.parse(JSON.stringify(job)) : pdBlank(), test: null, last: null };
+    ["resolved", "key", "schedules", "updated"].forEach((k) => delete S.pedit.draft[k]);
+    renderPortalEditor();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function pdClose() { S.pedit = null; render(); load(); }
+
+  function pdGet(path) { return path.split(".").reduce((o, k) => (o == null ? o : o[k]), S.pedit.draft); }
+  function pdSet(path, v) {
+    const ks = path.split("."); let o = S.pedit.draft;
+    while (ks.length > 1) o = o[ks.shift()];
+    o[ks[0]] = v;
+  }
+
+  const pdIn = (path, label, opts) => {
+    opts = opts || {};
+    const tag = opts.area ? "textarea" : "input";
+    return "<div" + (opts.style ? ' style="' + opts.style + '"' : "") + '><label class="pd-fl">' + label + (opts.opt ? " <em>(optional)</em>" : "") + "</label>" +
+      "<" + tag + ' class="pd-in' + (opts.mono ? " mono" : "") + '" data-p="' + path + '" ' + (opts.area ? 'rows="' + (opts.rows || 3) + '"' : 'type="' + (opts.type || "text") + '"') +
+      ' placeholder="' + esc(opts.ph || "") + '" autocomplete="off" spellcheck="false"' + (opts.list ? ' list="' + opts.list + '"' : "") + (opts.id ? ' id="' + opts.id + '"' : "") +
+      (opts.area ? ">" + esc(pdGet(path) || "") + "</textarea>" : ' value="' + esc(pdGet(path) == null ? "" : pdGet(path)) + '">') +
+      (opts.hint ? '<div class="pd-hint">' + opts.hint + "</div>" : "") + "</div>";
+  };
+  const pdSwitch = (path, title, sub) =>
+    '<div class="pd-tog" data-sw="' + path + '"><div class="tx"><b>' + title + "</b><span class='s'>" + sub + '</span></div><div class="switch' + (pdGet(path) ? " on" : "") + '"></div></div>';
+
+  function renderPortalEditor() {
+    const E = S.pedit, d = E.draft, P = S.portal || {};
+    const tokens = (P.tokens || []).map((t) => '<span class="pd-chip" data-tok="' + esc(t.token) + '" title="' + esc(t.example) + '">' + esc(t.token) + "</span>").join("");
+    const dayMode = d.days_back <= 0 ? "0" : d.days_back === 1 ? "1" : "n";
+    $("#scBody").innerHTML =
+      '<div id="pdEditor"><div class="pd-bar"><button class="btn ghost" id="pdBack">← All downloads</button><h2>' + (E.id ? "Edit download" : "New download") + "</h2>" +
+      '<button class="btn ghost" id="pdCancel">Cancel</button><button class="btn primary" id="pdSave">Save download</button></div>' +
+      '<div class="pd-edit"><div>' +
+
+      /* 1 — what */
+      '<div class="pd-sec"><div class="pd-sh"><span class="pd-n">1</span><h3>What to download</h3><small>from the NSE portal</small></div>' +
+      '<div class="pd-row c21">' + pdIn("name", "Name", { ph: "e.g. NCL CO Position File", hint: "Also the name of the process in the Scheduler." }) +
+      '<div><label class="pd-fl">Portal</label><div class="pd-seg2" data-seg="source"><button data-v="member" class="' + (d.source === "member" ? "on" : "") + '">Member</button><button data-v="common" class="' + (d.source === "common" ? "on" : "") + '">Common</button></div></div></div>' +
+      '<div class="pd-row c2">' + pdIn("segment", "Segment", { ph: "CO", list: "pdSegs", mono: true }) + pdIn("folder", "Folder", { ph: "Reports", mono: true, hint: "As in the portal tree, e.g. <b>Reports</b>, <b>Letters/Dnld</b>, <b>/Bhavcopy</b>." }) +
+      '<datalist id="pdSegs">' + PD_SEGMENTS.map((s) => '<option value="' + s + '">').join("") + "</datalist></div>" +
+      '<div class="pd-row" style="grid-template-columns:1fr">' + pdIn("filename", "File name", { ph: "Position_NCL_CO_0_CM_{member}_{YYYYMMDD}_F_0000.csv.gz", mono: true, id: "pdFile",
+        hint: "Type the name once and replace the changing parts with placeholders. Click one below to insert it where the cursor is." }) +
+      '<div style="margin-top:-6px"><div class="pd-chips">' + tokens + "</div></div></div>" +
+      '<div class="pd-row" style="grid-template-columns:1fr">' + pdIn("description", "Note", { opt: true, ph: "What is this file for?" }) + "</div></div>" +
+
+      /* 2 — when */
+      '<div class="pd-sec"><div class="pd-sh"><span class="pd-n">2</span><h3>Which day’s file</h3><small>the date that goes into the file name</small></div>' +
+      '<div class="pd-row"><div class="pd-seg2" id="pdDay"><button data-v="0" class="' + (dayMode === "0" ? "on" : "") + '">Today</button><button data-v="1" class="' + (dayMode === "1" ? "on" : "") +
+      '">Previous trading day</button><button data-v="n" class="' + (dayMode === "n" ? "on" : "") + '">Earlier day…</button></div>' +
+      '<div id="pdDayN" style="' + (dayMode === "n" ? "" : "display:none;") + 'display:' + (dayMode === "n" ? "flex" : "none") + ';align-items:center;gap:10px;font-size:12.5px;color:var(--text-2)">' +
+      '<input class="pd-in pd-step-in" type="number" min="2" max="10" data-p="days_back" value="' + (d.days_back >= 2 ? d.days_back : 2) + '"> trading days back (weekends and NSE holidays are skipped)</div></div>' +
+      pdSwitch("trading_day_only", "Run only on trading days", "On a weekend or NSE holiday the run is skipped instead of looking for a file.") +
+      '<div class="pd-row c2">' + pdIn("wait_minutes", "Wait for the file", { type: "number", hint: "0 = try once. Otherwise keep checking every minute for up to this many minutes." }) + "<div></div></div></div>" +
+
+      /* 3 — after */
+      '<div class="pd-sec"><div class="pd-sh"><span class="pd-n">3</span><h3>After the download</h3><small>everything is backed up automatically</small></div>' +
+      pdSwitch("unzip", "Unzip the file", "For .gz and .zip files — the extracted file is what gets e-mailed / uploaded.") +
+      pdSwitch("email.enabled", "E-mail the file", "Sent first, before the Kambala upload.") +
+      '<div class="pd-sub" id="pdMail"><div class="pd-row c2">' + pdIn("email.to", "To", { ph: "name@mastertrust.co.in, …" }) + pdIn("email.cc", "Cc", { opt: true, ph: "optional" }) + "</div>" +
+      '<div class="pd-row" style="grid-template-columns:1fr">' + pdIn("email.subject", "Subject", { mono: true, hint: "Placeholders work here too, plus <b>{NAME}</b> and <b>{FILE}</b>." }) +
+      pdIn("email.body", "Message", { area: true, rows: 4, hint: "Keep it simple. <b>{FILE}</b> becomes the file name." }) +
+      pdIn("email.signature", "Signature", { area: true, rows: 4 }) + "</div>" +
+      pdSwitch("email.notify_no_file", "E-mail me when there is no file", "Sends the same subject + “ - NO FILE” saying the portal has no file for that date. The run still ends as success.") + "</div>" +
+      pdSwitch("kambala.enabled", "Upload to the Kambala FTP", "Same server and folder as the other Kambala uploads.") +
+      '<div class="pd-sub" id="pdKamb"><div class="pd-row" style="grid-template-columns:1fr">' + pdIn("kambala.name", "Name on the FTP", { opt: true, mono: true, ph: "leave empty to keep the file name", hint: "Placeholders work here too." }) + "</div></div>" +
+      "</div></div>" +
+
+      /* live preview */
+      '<div class="pd-side"><div class="pd-pv"><h4>Live preview</h4>' +
+      '<div class="kv"><span>File date</span><b id="pvDate">—</b></div>' +
+      '<div style="margin:10px 0 4px;font-size:11px;font-weight:700;color:var(--text-3);letter-spacing:.5px;text-transform:uppercase">File name</div><div class="big" id="pvFile">—</div>' +
+      '<div class="kv" id="pvSubjRow"><span>E-mail subject</span><b id="pvSubj">—</b></div>' +
+      '<div style="margin:12px 0 8px" class="pd-flow" id="pvFlow"></div><div class="pd-conn" id="pvConn"></div><div class="pd-errs" id="pvErrs"></div></div>' +
+      '<div class="pd-pv"><h4>Test it</h4><div style="font-size:12px;color:var(--text-2);line-height:1.5;margin-bottom:12px">Tries ONE real download from NSE with today’s settings. Nothing is e-mailed, uploaded or kept.</div>' +
+      '<button class="btn primary" id="pdTest" style="width:100%;justify-content:center;height:38px">▶ Test download</button><div class="pd-verdict" id="pdVerdict"></div><div class="pd-log" id="pdLog"></div></div>' +
+      "</div></div></div>";
+
+    const root = $("#pdEditor");
+    $("#pdBack").onclick = $("#pdCancel").onclick = async () => {
+      if (pdDirty() && !(await confirmBox("Discard changes?", "You have unsaved changes to this download.", "Discard", true))) return;
+      pdClose();
+    };
+    $("#pdSave").onclick = pdSave;
+    $("#pdTest").onclick = () => pdRunTest($("#pdTest"), $("#pdVerdict"), $("#pdLog"), S.pedit.draft);
+
+    root.querySelectorAll("[data-p]").forEach((el) => {
+      el.addEventListener("focus", () => { if (el.tagName !== "SELECT" && el.type !== "number") S.pLast = el; });
+      el.addEventListener("input", () => {
+        let v = el.value;
+        if (el.type === "number") v = v === "" ? 0 : parseInt(v, 10) || 0;
+        pdSet(el.dataset.p, v);
+        pdSync(false);
+      });
+    });
+    root.querySelectorAll("[data-sw]").forEach((el) => {
+      el.onclick = () => { const p = el.dataset.sw, v = !pdGet(p); pdSet(p, v); el.querySelector(".switch").classList.toggle("on", v); pdSync(true); };
+    });
+    root.querySelectorAll("[data-seg]").forEach((g) => g.querySelectorAll("button").forEach((b) => {
+      b.onclick = () => { pdSet(g.dataset.seg, b.dataset.v); g.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); pdSync(true); };
+    }));
+    $("#pdDay").querySelectorAll("button").forEach((b) => {
+      b.onclick = () => {
+        $("#pdDay").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+        const n = b.dataset.v === "n" ? Math.max(2, parseInt(root.querySelector('[data-p="days_back"]').value, 10) || 2) : parseInt(b.dataset.v, 10);
+        pdSet("days_back", n);
+        $("#pdDayN").style.display = b.dataset.v === "n" ? "flex" : "none";
+        if (b.dataset.v === "n") root.querySelector('[data-p="days_back"]').value = n;
+        pdSync(true);
+      };
+    });
+    root.querySelectorAll("[data-tok]").forEach((c) => {
+      c.onmousedown = (e) => e.preventDefault();         // keep the cursor where it was
+      c.onclick = () => {
+        const el = S.pLast && root.contains(S.pLast) ? S.pLast : $("#pdFile");
+        const s = el.selectionStart == null ? el.value.length : el.selectionStart, e2 = el.selectionEnd == null ? s : el.selectionEnd;
+        el.value = el.value.slice(0, s) + c.dataset.tok + el.value.slice(e2);
+        el.focus(); el.setSelectionRange(s + c.dataset.tok.length, s + c.dataset.tok.length);
+        pdSet(el.dataset.p, el.value); pdSync(false);
+      };
+    });
+    S.pedit.snap = JSON.stringify(S.pedit.draft);
+    pdSync(true);
+  }
+
+  const pdDirty = () => !!(S.pedit && S.pedit.snap && S.pedit.snap !== JSON.stringify(S.pedit.draft));
+
+  let pdTimer = null;
+  function pdSync(now) {
+    const d = S.pedit.draft;
+    $("#pdMail").style.display = d.email.enabled ? "" : "none";
+    $("#pdKamb").style.display = d.kambala.enabled ? "" : "none";
+    $("#pvFlow").innerHTML = flowChips(d);
+    $("#pvSubjRow").style.display = d.email.enabled ? "" : "none";
+    const ok = (g) => { const x = ((S.conns && S.conns.groups) || []).find((q) => q.group === g); return !!x && x.fields.every((f) => f.optional || (f.secret ? f.set : !!f.value)); };
+    const need = ["nse"].concat(d.email.enabled ? ["smtp"] : [], d.kambala.enabled ? ["kambala_ftp"] : []);
+    $("#pvConn").innerHTML = need.map((g) => '<span class="badge ' + (ok(g) ? "ok" : "warn") + '">' + esc(CONN_NAME[g] || g) + (ok(g) ? " ✓" : " — not set") + "</span>").join("");
+    clearTimeout(pdTimer);
+    pdTimer = setTimeout(pdPreview, now ? 0 : 350);
+  }
+
+  async function pdPreview() {
+    if (!S.pedit || !$("#pvFile")) return;
+    const seq = (S.pedit.pvSeq = (S.pedit.pvSeq || 0) + 1);
+    try {
+      const r = await call("POST", "/sched/portal/preview", Object.assign({}, S.pedit.draft, { id: S.pedit.id }));
+      if (!S.pedit || seq !== S.pedit.pvSeq || !$("#pvFile")) return;
+      const x = r.resolved || {};
+      $("#pvDate").textContent = x.date_text ? x.date_text + " — " + new Date(x.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long" }) : "—";
+      $("#pvFile").textContent = x.filename || "—";
+      $("#pvSubj").textContent = x.subject || "—";
+      // while the form is still being filled in only placeholder typos are shown; everything after a Save attempt
+      const errs = (r.errors || []).filter((e) => S.pedit.tried || /placeholder/i.test(e));
+      $("#pvErrs").innerHTML = errs.map((e) => "• " + esc(e)).join("<br>");
+    } catch (e) { /* preview is a nicety — never block the form */ }
+  }
+
+  async function pdPoll(tid, verdict, log, btn) {
+    for (let i = 0; i < 400; i++) {
+      await new Promise((r) => setTimeout(r, 900));
+      let s;
+      try { s = await jget("/sched/portal/test/" + tid); } catch (e) { verdict.className = "pd-verdict err"; verdict.textContent = e.message; break; }
+      log.textContent = s.log || ""; log.scrollTop = log.scrollHeight;
+      if (s.done) {
+        verdict.className = "pd-verdict " + (s.ok === false ? "err" : s.found ? "ok" : "warn");
+        verdict.textContent = (s.ok === false ? "✕ " : s.found ? "✓ " : "ⓘ ") + s.result;
+        break;
+      }
+    }
+    btn.disabled = false; btn.innerHTML = "▶ Test download";
+  }
+
+  async function pdRunTest(btn, verdict, log, job) {
+    btn.disabled = true; btn.innerHTML = '<span class="pd-spin"></span>Testing…';
+    verdict.className = "pd-verdict"; verdict.textContent = ""; log.textContent = "";
+    try {
+      const r = await call("POST", "/sched/portal/test", job);
+      await pdPoll(r.id, verdict, log, btn);
+    } catch (e) {
+      verdict.className = "pd-verdict err"; verdict.textContent = "✕ " + e.message;
+      btn.disabled = false; btn.innerHTML = "▶ Test download";
+    }
+  }
+
+  function pdTestModal(j) {
+    const draft = JSON.parse(JSON.stringify(j));
+    const close = RMS.modal("Test download — " + j.name,
+      '<div class="card-sub" style="margin-bottom:10px">File: <code>' + esc((j.resolved || {}).filename || j.filename) + "</code><br>One real download attempt from NSE. Nothing is e-mailed, uploaded or kept.</div>" +
+      '<button class="btn primary" id="tmGo" style="width:100%;justify-content:center;height:38px">▶ Test download</button><div class="pd-verdict" id="tmV"></div><div class="pd-log" id="tmL"></div>',
+      { width: 640, icon: "download" });
+    $("#tmGo").onclick = () => pdRunTest($("#tmGo"), $("#tmV"), $("#tmL"), draft);
+  }
+
+  async function pdSave() {
+    const E = S.pedit, btn = $("#pdSave");
+    E.tried = true;
+    const pw = await unlock(pdNeedsPw(), E.id ? "Save download — " + E.draft.name : "Create download");
+    if (pw === null) return;
+    const body = JSON.parse(JSON.stringify(E.draft));
+    if (pw) body._password = pw;
+    btn.disabled = true;
+    try {
+      const r = await call(E.id ? "PUT" : "POST", E.id ? "/sched/portal/" + encodeURIComponent(E.id) : "/sched/portal", body);
+      const created = !E.id, job = r.job;
+      S.pedit = null; S.loaded.portal = false;
+      await load();
+      const next = created ? " Next: press ⏰ Schedule on its card to set the time." : "";
+      notice("Saved", "“" + job.name + "” is saved." + next);
+    } catch (e) {
+      btn.disabled = false;
+      const errs = (e.errors && e.errors.length) ? e.errors : [e.message];
+      $("#pvErrs").innerHTML = errs.map((x) => "• " + esc(x)).join("<br>");
+      $("#pvErrs").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
   }
 
   /* ═══════════════════════ TODAY TAB (unchanged timeline) ═══════════════ */
