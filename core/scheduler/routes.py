@@ -313,7 +313,7 @@ async def rms_limits_add(request: Request):
     def go():
         pdef = catalog.get("rms_limits_mand_kambala")
         try:
-            out = rl.start_add(body.get("rows"), catalog.effective_params(pdef, {}), bool(body.get("upload")))
+            out = rl.start_add(body.get("rows"), catalog.effective_params(pdef, {}))
         except ValueError as ex:
             raise service.ValidationFailed([m.strip() for m in str(ex).split(";") if m.strip()])
         store.audit(who, "rms_limits.add", {"id": None, "name": rl.FOLDER}, after={"rows": body.get("rows")})

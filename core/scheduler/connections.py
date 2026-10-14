@@ -106,6 +106,7 @@ GROUPS: Dict[str, dict] = {
             ("user", "User name", False, "ftpadmin"),
             ("password", "Password", True, ""),
             ("folder", "Folder on the server", False, "/"),
+            ("upload_enabled", "Upload RMS LIMITS MAND file to Kambala", False, "no"),
         ],
     },
     "atom": {

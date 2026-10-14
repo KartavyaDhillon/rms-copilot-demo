@@ -80,8 +80,9 @@ class Run(Base):
         with mock.patch("core.scheduler.helpers.find_risk_report", return_value=rep), \
              mock.patch("core.scheduler.processes._kit.require_trading_day"), \
              mock.patch("core.scheduler.helpers.send_email", side_effect=lambda *a, **k: order.append("mail")), \
+             mock.patch("core.scheduler.processes.rms_limits_mand_kambala.upload_is_on", return_value=True), \
              mock.patch("core.scheduler.helpers.kambala_upload", side_effect=lambda f, c: order.append("ftp") or True):
-            res = rl.run_core({"to": "a@mastertrust.co.in", "upload_kambala": True}, Ctx())
+            res = rl.run_core({"to": "a@mastertrust.co.in"}, Ctx())
         self.assertEqual(order, ["mail", "ftp"])
         data = m.read_bytes().decode("latin-1")
         self.assertTrue(data.startswith(HEADER + "\r\n"))
@@ -99,6 +100,7 @@ class Run(Base):
         with mock.patch("core.scheduler.helpers.find_risk_report", return_value=rep), \
              mock.patch("core.scheduler.processes._kit.require_trading_day"), \
              mock.patch("core.scheduler.helpers.send_email", side_effect=lambda *a, **k: order.append("mail")), \
+             mock.patch("core.scheduler.processes.rms_limits_mand_kambala.upload_is_on", return_value=False), \
              mock.patch("core.scheduler.helpers.kambala_upload", side_effect=lambda f, c: order.append("ftp") or True):
             ctx = Ctx()
             ctx.trigger = H.MANUAL

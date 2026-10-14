@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.scheduler import helpers as H, paths
-from core.scheduler.catalog import Param, register
+from core.scheduler.catalog import register
 from core.scheduler.processes import _kit as K
 
 FOLDER = "RMS LIMITS MAND KAMBALA"
@@ -41,6 +41,12 @@ def norm(code) -> str:
     """Key used only to MATCH codes: trimmed, upper case, no leading zeros (09110005 == 9110005)."""
     s = str(code or "").strip().upper().lstrip("0")
     return s
+
+
+def upload_is_on() -> bool:
+    """The Kambala FTP credentials has a yes/no switch for this file (default no)."""
+    from core.scheduler import connections
+    return str(connections.get("kambala_ftp").get("upload_enabled", "")).strip().lower() in ("yes", "y", "on", "true", "1")
 
 
 def master_path() -> Path:
@@ -221,14 +227,13 @@ def run_core(params, ctx, add: Optional[List[dict]] = None, manual_add: bool = F
     H.send_email(subject, body, to, cc, [out], ctx, html=True)
     H.mark_sent(FOLDER, "mail")          # today's file is out — a later SCHEDULED run skips; Run Now still works
     ctx.log(f"E-mail sent: “{subject}”.")
-    up = params.get("upload_kambala")
-    up = up if isinstance(up, bool) else str(up).strip().lower() in ("1", "true", "yes", "on")
+    up = upload_is_on()
     ok = None
     if up:
         ctx.log("Step 5/5: uploading to the Kambala FTP…")
         ok = H.kambala_upload([out], ctx)
     else:
-        ctx.log("Step 5/5: Kambala upload is switched OFF (e-mail + file only) — nothing was uploaded.")
+        ctx.log("Step 5/5: Kambala upload is switched OFF (Credentials › Kambala FTP) — e-mail + file only, nothing uploaded.")
     shutil.copy2(out, bdir / MASTER) if not (bdir / MASTER).exists() else shutil.copy2(out, bdir / f"{dt.datetime.now():%H%M%S}_{MASTER}")
     ctx.log("Done: file updated, e-mailed" + (", uploaded" if ok else " (Kambala upload did NOT go through — see above)" if ok is False else " (not uploaded — upload is off)") + " and backed up.")
     return (f"{len(changed)} category change(s), {len(added)} code(s) added — e-mailed"
@@ -261,9 +266,9 @@ class _Ctx:
 _JOBS: Dict[str, dict] = {}
 
 
-def start_add(rows, params: dict, upload: bool = False) -> dict:
-    """Validates the typed codes and runs the process once in the background (adds them, e-mails, uploads if asked)."""
-    params = dict(params or {}, upload_kambala=bool(upload))
+def start_add(rows, params: dict) -> dict:
+    """Validates the typed codes and runs the process once in the background (adds them, e-mails, uploads if the
+    Kambala switch is ON)."""
     errs, clean = clean_rows(rows)
     if errs:
         raise ValueError("; ".join(errs))
@@ -296,8 +301,6 @@ def add_state(jid: str) -> Optional[dict]:
 
 def _params():
     ps = K.mail_params("kartavya.dhillon@mastertrust.co.in", "", with_wait=False)
-    ps.append(Param("upload_kambala", "Upload to Kambala FTP", "bool", default=False,
-                    help="OFF = only create the file and e-mail it. Switch ON once the master file has been checked."))
     for p in ps:
         if p.name == "signature":
             p.default = SIGNATURE

@@ -741,7 +741,9 @@
     return '<div class="card" style="margin-bottom:12px" data-g="' + g.group + '"><div class="sec-head"><h3>' + esc(g.label) + "</h3></div>" +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">' +
       g.fields.map((f) => field(esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge ' + (f.optional ? "dim\">optional" : "warn\">not set") + "</span>") : ""),
-        '<input class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '" ' +
+        (f.name === "upload_enabled"
+          ? '<select class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="upload_enabled"' + (canEdit ? "" : " disabled") + '><option value="no"' + (String(f.value).toLowerCase() === "yes" ? "" : " selected") + '>OFF — only e-mail the file</option><option value="yes"' + (String(f.value).toLowerCase() === "yes" ? " selected" : "") + ">ON — e-mail and upload to Kambala</option></select>"
+          : '<input class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '" ' +
         (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') + (canEdit ? "" : " disabled") + ">")).join("") +
       "</div>" + (canEdit ? '<div style="margin-top:8px"><button class="btn primary" data-save="' + g.group + '">Save ' + esc(g.label) + "</button></div>" : "") + "</div>";
   }
@@ -790,7 +792,7 @@
         "Leave CATEGORY blank to take it from today's risk report. Type the code exactly as it must appear in the file (e.g. with its leading zero).</div>" +
         '<div id="acErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
         '<table class="htable" style="width:100%"><thead><tr><th>ACCOUNT ID</th><th>LIMIT</th><th>CATEGORY</th></tr></thead><tbody id="acRows">' + rowHtml() + rowHtml() + rowHtml() + "</tbody></table>" +
-        '<label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px"><input type="checkbox" id="acUp"> Also upload to the Kambala FTP (leave OFF until the master file is confirmed)</label>' +
+        '<div class="card-sub" style="margin-top:8px">Kambala upload follows the ON/OFF switch in 🔑 Credentials › Kambala FTP.</div>' +
         '<div style="display:flex;justify-content:space-between;gap:8px;margin-top:10px"><button class="btn ghost" id="acMore">+ Row</button>' +
         '<div style="display:flex;gap:8px"><button class="btn ghost" id="acCancel">Cancel</button><button class="btn primary" id="acGo">Add, e-mail &amp; upload</button></div></div>' +
         '<pre class="logview" id="acLog" style="display:none;margin-top:12px;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:11.5px"></pre>',
@@ -803,7 +805,7 @@
         })).filter((r) => r.account || r.limit || r.category);
         const go = $("#acGo"); go.disabled = true; $("#acErr").textContent = "";
         try {
-          const body = { rows, upload: $("#acUp").checked }; if (pwd) body._password = pwd;
+          const body = { rows }; if (pwd) body._password = pwd;
           const r = await call("POST", "/sched/rms-limits/add", body);
           const log = $("#acLog"); log.style.display = "block"; log.textContent = "Started…";
           const tick = async () => {
