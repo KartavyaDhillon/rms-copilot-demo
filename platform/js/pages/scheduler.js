@@ -755,7 +755,10 @@
   }
 
   /* ── Credentials: the connection groups this process uses ── */
-  function connGroupHtml(g, canEdit) {
+  // the Kambala ON/OFF switches belong to ONE process each — a process's Credentials shows only its own
+  const UPLOAD_SWITCH_OWNER = { upload_enabled: "rms_limits_mand_kambala", upload_above4cr: "above_4cr_holding_blocking_file" };
+  function connGroupHtml(g, canEdit, pkey) {
+    g = { ...g, fields: g.fields.filter((f) => !UPLOAD_SWITCH_OWNER[f.name] || UPLOAD_SWITCH_OWNER[f.name] === pkey) };
     return '<div class="card" style="margin-bottom:12px" data-g="' + g.group + '"><div class="sec-head"><h3>' + esc(g.label) + "</h3></div>" +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">' +
       g.fields.map((f) => field(esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge ' + (f.optional ? "dim\">optional" : "warn\">not set") + "</span>") : ""),
@@ -791,7 +794,7 @@
       S.pw = pwd;
       const close = RMS.modal("Credentials — " + p.name,
         '<div class="card-sub" style="margin-bottom:10px">Shared with every process that uses the same connection. Saved in the .env files under “# scheduler connection”; passwords and tokens go to .env.local. Secrets are never shown again — leave blank to keep the current one.</div>' +
-        groups.map((g) => connGroupHtml(g, true)).join(""), { width: 760, icon: "settings" });
+        groups.map((g) => connGroupHtml(g, true, key)).join(""), { width: 760, icon: "settings" });
       bindConnSave(document, () => { S.pw = ""; close(); load(); });
     } catch (e) { toast("err", "Could not open", e.message); }
   }
