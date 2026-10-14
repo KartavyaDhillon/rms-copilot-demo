@@ -522,6 +522,8 @@ async def files_upload(pkey: str, request: Request, file: UploadFile = File(...)
         ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
         if ext not in d.upload_exts:
             raise ValueError(f"Only {', '.join(d.upload_exts)} files can be uploaded here.")
+        if d.upload_names and name not in d.upload_names:
+            raise ValueError(f"Only a file named exactly “{d.upload_names[0]}” can be uploaded here (this one is “{name}”).")
         data = await file.read()
         if not data:
             raise ValueError("The file is empty.")

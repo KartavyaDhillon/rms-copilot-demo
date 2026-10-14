@@ -50,6 +50,7 @@ def upload_is_on() -> bool:
 
 
 def master_path() -> Path:
+    """Only the file named exactly `RMS Limits MAND_KAMBALA.txt` in the inputs folder is used."""
     return paths.proc_dir(FOLDER, "inputs") / MASTER
 
 
@@ -185,8 +186,10 @@ def run_core(params, ctx, add: Optional[List[dict]] = None, manual_add: bool = F
         raise H.Skipped(H.skip_message(FOLDER, ["mail"], "e-mailed"))
     m = master_path()
     if not m.is_file():
-        raise FileNotFoundError(f"The master file {MASTER} is not in the {FOLDER} inputs folder — upload it with the "
-                                f"“Upload files” button of this process first.")
+        found = sorted(p.name for p in m.parent.iterdir() if p.is_file())
+        raise FileNotFoundError(f"The master file “{MASTER}” is not in the {FOLDER} inputs folder (found: "
+                                f"{', '.join(repr(n) for n in found) or 'nothing'}). Remove the wrong file and upload it again "
+                                f"with the “Upload files” button of this process — the name must match exactly.")
     pending = load_pending()
     add = (add or []) + [r for r in pending if norm(r["account"]) not in {norm(x["account"]) for x in (add or [])}]
     ctx.log(f"Step 1/5: master file {MASTER} found; {len(add)} new code(s) to add.")
@@ -317,6 +320,6 @@ register(
     run=_run,
     params=_params(),
     retry_safe=False, parallel_safe=False, category="Reports", folder=FOLDER, uses=("smtp", "kambala_ftp"),
-    upload_exts=(".txt",),
+    upload_exts=(".txt",), upload_names=(MASTER,),
     upload_help=f"Upload the master file; it must be named exactly {MASTER}.",
 )

@@ -74,6 +74,7 @@ class ProcessDef:
     upload_exts: tuple = ()                # e.g. (".xlsx",) → the Files tab shows an Upload button
     upload_help: str = ""
     uses: tuple = ()                       # Connections groups this process needs: "whatsapp" | "smtp" | "pop3"
+    upload_names: tuple = ()               # when set, ONLY files with exactly these names can be uploaded
 
     def to_dict(self):
         return {"key": self.key, "name": self.name, "description": self.description, "category": self.category,
@@ -92,7 +93,7 @@ _LOAD_LOCK = threading.RLock()
 
 def register(key, name, run, description="", params=None, retry_safe=False, parallel_safe=False,
              lock_pipe=None, category="General", folder="", upload_exts=(), upload_help="",
-             uses=()) -> ProcessDef:
+             uses=(), upload_names=()) -> ProcessDef:
     if not key or not callable(run):
         raise ValueError("register(): key and a callable run are required")
     for p in params or []:
@@ -102,7 +103,7 @@ def register(key, name, run, description="", params=None, retry_safe=False, para
     d = ProcessDef(key=key, name=name, run=run, description=description, params=list(params or []),
                    retry_safe=retry_safe, parallel_safe=parallel_safe, lock_pipe=lock_pipe, category=category,
                    folder=folder, upload_exts=tuple(e.lower() for e in upload_exts), upload_help=upload_help,
-                   uses=tuple(uses))
+                   uses=tuple(uses), upload_names=tuple(upload_names))
     with _LOCK:
         _REG[key] = d
     return d
