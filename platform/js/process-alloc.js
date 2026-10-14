@@ -103,8 +103,8 @@
       '<div style="font-size:11.5px;color:var(--dim);margin-bottom:12px">Nightly close: window starts <b style="color:var(--ink)">' + esc(pretty(d.marker) || '—') +
       '</b>. Reports run here never move it.</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
-      '<button class="sa-tool" onclick="pxConfig(\'alloc\')" data-tip="Nightly report To / CC">&#9993; Email To / CC</button>' +
-      '<button class="sa-tool" onclick="pxCredentials(\'alloc\')" data-tip="Mailbox the logs arrive in, and the mail account the report is sent from">&#128273; Credentials</button></div>' +
+      '<button class="sa-tool" onclick="pxConfig(\'alloc\')">&#9993; Email To / CC</button>' +
+      '<button class="sa-tool" onclick="pxCredentials(\'alloc\')">&#128273; Credentials</button></div>' +
       lbl('Time range') + seg('allocSeg', [['sofar', 'Day so far'], ['until', 'Up to a time'], ['custom', 'Custom range']], S.mode, 'allocMode') +
       '<div id="allocUntil" style="display:none;margin-top:10px">' + lbl('Up to (today)') + '<input type="time" id="allocUntilIn" value="' + esc(S.until) + '" ' + INP + ' oninput="allocSet(\'until\',this.value)"></div>' +
       '<div id="allocCustom" style="display:none;margin-top:10px"><div style="display:flex;gap:14px;flex-wrap:wrap">' +
