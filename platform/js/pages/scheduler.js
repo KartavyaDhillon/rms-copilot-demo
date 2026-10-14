@@ -635,7 +635,7 @@
     return !!g && g.fields.every((f) => f.optional || (f.secret ? f.set : !!f.value));
   }
   const CONN_NAME = { whatsapp: "WhatsApp", smtp: "E-mail (SMTP)", pop3: "Mailbox (POP3)",
-    smtpb: "E-mail 2 (SMTP)", pop3b: "Mailbox 2 (POP3)", nse: "NSE Extranet", kambala_ftp: "Kambala FTP", mcx_sftp: "MCX portal",
+    smtpb: "E-mail 2 (SMTP)", pop3b: "Mailbox 2 (POP3)", nse: "NSE Extranet", kambala_ftp: "Kambala FTP", alloc_pop3: "Mailbox (POP3)", alloc_smtp: "E-mail (SMTP)", mcx_sftp: "MCX portal",
     mcx_eclear: "MCX eclear", atom: "ATOM", backoffice: "Back-office API", client_margin: "Excel passwords" };
   const LOGO = { mcx_web_morning_email: "MX", partic_id_email: "PI", sn327_whatsapp: "327", sn359_whatsapp: "359",
     co_bo_blocking_file: "CB", otm_3_9_blocking_files: "3-9", contract_delta: "CD", persistent_noise_creators: "PN",
@@ -682,10 +682,27 @@
         (p.key === "rms_limits_mand_kambala" ? "" : '<button class="sch-tool blue ' + (p.upload_exts && p.upload_exts.length ? "wide" : "full") + '" data-add="' + esc(p.key) + '">⏰ Add schedule</button>') + "</div>" +
         '<div class="sch-foot">' + (sched || '<div class="sch-none">No schedule yet</div>') + "</div></div>";
     };
+    const hadFocus = document.activeElement && document.activeElement.id === "pcSearch";
     $("#scBody").innerHTML = '<div class="card-sub" style="margin-bottom:10px">Every process the scheduler can run, with who it sends to, its connections and its folder. ' +
       "To run one right now use <b>Run Now</b> on the Schedules tab.</div>" +
-      '<div class="sch-grid">' + S.procs.map(card).join("") + "</div>";
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px"><input class="f-input" id="pcSearch" type="search" placeholder="🔍 Search processes (name or description)…" value="' + esc(S.procQ || "") + '" style="flex:1;max-width:460px;height:40px;box-sizing:border-box"><span class="card-sub" id="pcCount"></span></div>' +
+      '<div class="sch-grid">' + S.procs.map(card).join("") + "</div>" +
+      '<div class="sch-none" id="pcNone" style="display:none;padding:24px;text-align:center">No process matches your search.</div>';
     const b = $("#scBody");
+    const applyProcFilter = () => {
+      const q = String(S.procQ || "").trim().toLowerCase();
+      let shown = 0;
+      b.querySelectorAll(".sch-box").forEach((box) => {
+        const hit = !q || box.textContent.toLowerCase().includes(q);
+        box.style.display = hit ? "" : "none";
+        if (hit) shown++;
+      });
+      $("#pcCount").textContent = q ? shown + " of " + S.procs.length : S.procs.length + " processes";
+      $("#pcNone").style.display = shown ? "none" : "block";
+    };
+    $("#pcSearch").oninput = (ev) => { S.procQ = ev.target.value; applyProcFilter(); };
+    applyProcFilter();
+    if (hadFocus) { const si = $("#pcSearch"); si.focus(); si.setSelectionRange(si.value.length, si.value.length); }
     b.querySelectorAll("[data-edit]").forEach((x) => { x.onclick = () => openEditor(S.schedules.find((s) => s.id === x.dataset.edit)); });
     b.querySelectorAll("[data-add]").forEach((x) => { x.onclick = () => openEditor(null, x.dataset.add); });
     b.querySelectorAll("[data-upload]").forEach((x) => { x.onclick = () => openUpload(x.dataset.upload); });
@@ -742,8 +759,8 @@
     return '<div class="card" style="margin-bottom:12px" data-g="' + g.group + '"><div class="sec-head"><h3>' + esc(g.label) + "</h3></div>" +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">' +
       g.fields.map((f) => field(esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge ' + (f.optional ? "dim\">optional" : "warn\">not set") + "</span>") : ""),
-        (f.name === "upload_enabled"
-          ? '<select class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="upload_enabled"' + (canEdit ? "" : " disabled") + '><option value="no"' + (String(f.value).toLowerCase() === "yes" ? "" : " selected") + '>OFF — only e-mail the file</option><option value="yes"' + (String(f.value).toLowerCase() === "yes" ? " selected" : "") + ">ON — e-mail and upload to Kambala</option></select>"
+        (/^upload_/.test(f.name)
+          ? '<select class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '"' + (canEdit ? "" : " disabled") + '><option value="no"' + (String(f.value).toLowerCase() === "yes" ? "" : " selected") + '>OFF — only e-mail the file</option><option value="yes"' + (String(f.value).toLowerCase() === "yes" ? " selected" : "") + ">ON — e-mail and upload to Kambala</option></select>"
           : '<input class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '" ' +
         (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') + (canEdit ? "" : " disabled") + ">"))).join("") +
       "</div>" + (canEdit ? '<div style="margin-top:8px"><button class="btn primary" data-save="' + g.group + '">Save ' + esc(g.label) + "</button></div>" : "") + "</div>";

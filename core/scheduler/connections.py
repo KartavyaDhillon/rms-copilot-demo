@@ -63,6 +63,27 @@ GROUPS: Dict[str, dict] = {
             ("password", "Password", True, ""),
         ],
     },
+    # Allocation Report mailboxes: stored under the SAME ALLOC_* settings the Process Center's Allocation Report uses
+    "alloc_pop3": {
+        "label": "Allocation Report — mailbox the logs arrive in (POP3)",
+        "env": {"server": "ALLOC_POP_SERVER", "port": "ALLOC_POP_PORT", "username": "ALLOC_POP_USER", "password": "ALLOC_POP_PASS"},
+        "fields": [
+            ("server", "POP3 server", False, "pop9.netcore.co.in"),
+            ("port", "Port", False, "995"),
+            ("username", "Mailbox user name", False, ""),
+            ("password", "Password", True, ""),
+        ],
+    },
+    "alloc_smtp": {
+        "label": "Allocation Report — report sender (SMTP)",
+        "env": {"server": "ALLOC_SMTP_SERVER", "port": "ALLOC_SMTP_PORT", "email": "ALLOC_SMTP_USER", "password": "ALLOC_SMTP_PASS"},
+        "fields": [
+            ("server", "SMTP server", False, "smtp3.netcore.co.in"),
+            ("port", "Port", False, "587"),
+            ("email", "Sender e-mail (login)", False, ""),
+            ("password", "Password", True, ""),
+        ],
+    },
     "nse": {
         "label": "NSE Extranet (connect2nse.com)",
         "fields": [
@@ -107,6 +128,7 @@ GROUPS: Dict[str, dict] = {
             ("password", "Password", True, ""),
             ("folder", "Folder on the server", False, "/"),
             ("upload_enabled", "Upload RMS LIMITS MAND file to Kambala", False, "no"),
+            ("upload_above4cr", "Upload ABOVE 4 CR HOLDING BLOCKING file to Kambala", False, "no"),
         ],
     },
     "atom": {
@@ -135,8 +157,13 @@ def _spec(group: str) -> dict:
     return GROUPS[group]
 
 
+def _key(group: str, field: str) -> str:
+    """Setting name in the .env files: SCHED_<GROUP>_<FIELD>, unless the group maps the field to an existing setting."""
+    return (GROUPS[group].get("env") or {}).get(field) or envstore.conn_key(group, field)
+
+
 def _raw(group: str, field: str) -> str:
-    return (os.getenv(envstore.conn_key(group, field)) or "").strip()
+    return (os.getenv(_key(group, field)) or "").strip()
 
 
 def get(group: str) -> Dict[str, str]:
@@ -191,7 +218,7 @@ def update(group: str, values: dict, user: str) -> List[str]:
         if "\n" in v or "\r" in v:
             raise ValueError(f"'{k}' must be a single line.")
         if _raw(group, k) != v and (v or not secret[k]):
-            (secrets if secret[k] else plain)[envstore.conn_key(group, k)] = v
+            (secrets if secret[k] else plain)[_key(group, k)] = v
             changed.append(k)
     title = f"connection: {spec['label']}"
     if plain:

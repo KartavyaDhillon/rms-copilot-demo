@@ -78,5 +78,5 @@ register(
                 "with client codes) are in the Process Center.",
     run=_run,
     params=K.mail_params("rms_del@mastertrust.co.in", "", with_wait=False),
-    retry_safe=False, parallel_safe=False, category="Reports", folder=FOLDER, uses=(),
+    retry_safe=False, parallel_safe=False, category="Reports", folder=FOLDER, uses=("alloc_pop3", "alloc_smtp"),
 )
