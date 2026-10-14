@@ -45,7 +45,7 @@ def norm(code) -> str:
 
 def upload_is_on() -> bool:
     """The Kambala FTP credentials has a yes/no switch for this file (default no)."""
-    from core.scheduler import connections
+    from core.scheduler import connections  # noqa: E402
     return str(connections.get("kambala_ftp").get("upload_enabled", "")).strip().lower() in ("yes", "y", "on", "true", "1")
 
 
@@ -178,57 +178,62 @@ def apply(lines: List[str], risk: Dict[str, str], add: List[dict], ctx) -> Tuple
 
 
 # ───────────────────────────── the run ─────────────────────────────
-def run_core(params, ctx, add: Optional[List[dict]] = None, manual_add: bool = False):
-    if not manual_add:
-        K.require_trading_day(ctx)
-    to, cc = K.recipients(params)
-    if not manual_add and H.already_sent(FOLDER, "mail", ctx):
-        raise H.Skipped(H.skip_message(FOLDER, ["mail"], "e-mailed"))
+def _need_master() -> Path:
     m = master_path()
     if not m.is_file():
         found = sorted(p.name for p in m.parent.iterdir() if p.is_file())
         raise FileNotFoundError(f"The master file “{MASTER}” is not in the {FOLDER} inputs folder (found: "
-                                f"{', '.join(repr(n) for n in found) or 'nothing'}). Remove the wrong file and upload it again "
-                                f"with the “Upload files” button of this process — the name must match exactly.")
-    pending = load_pending()
-    add = (add or []) + [r for r in pending if norm(r["account"]) not in {norm(x["account"]) for x in (add or [])}]
-    ctx.log(f"Step 1/5: master file {MASTER} found; {len(add)} new code(s) to add.")
+                                f"{', '.join(repr(n) for n in found) or 'nothing'}). Upload it with the “Upload files” "
+                                f"button of this process first — the name must match exactly.")
+    return m
+
+
+def _write_master(m: Path, header: str, nl: str, lines: List[str]) -> bytes:
+    """Backs up the current master, then replaces it (never leaves a half-written file)."""
+    bdir = paths.proc_dir(FOLDER, "backup") / H.today_dash()
+    bdir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(m, bdir / f"before_{dt.datetime.now():%H%M%S}_{MASTER}")
+    data = (nl.join([header] + lines) + nl).encode("latin-1")
+    tmp = m.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(m)
+    return data
+
+
+def run_core(params, ctx):
+    """The scheduled / Run Now run: refresh categories from today's risk report, e-mail, upload if switched on."""
+    K.require_trading_day(ctx)
+    to, cc = K.recipients(params)
+    if H.already_sent(FOLDER, "mail", ctx):
+        raise H.Skipped(H.skip_message(FOLDER, ["mail"], "e-mailed"))
+    m = _need_master()
+    ctx.log(f"Step 1/5: master file {MASTER} found.")
 
     risk_file = H.find_risk_report(ctx)
     risk = risk_categories(risk_file)
     ctx.log(f"Step 2/5: risk report read — {len(risk):,} accounts with a CATEGORY.")
 
     header, nl, lines = read_master(m)
-    new_lines, changed, added, notes = apply(lines, risk, add, ctx)
-    ctx.log(f"Step 3/5: {len(lines)} clients in the file · {len(changed)} category change(s) · {len(added)} code(s) added.")
+    new_lines, changed, added, notes = apply(lines, risk, [], ctx)
+    ctx.log(f"Step 3/5: {len(lines)} clients in the file · {len(changed)} category change(s).")
     for c in changed:
         ctx.log(f"   CATEGORY changed  {c}")
-    for a in added:
-        ctx.log(f"   ADDED             {a}")
     for n in notes:
         ctx.log(f"   Note: {n}")
 
-    # keep a copy of the master as it was, then write the new master and the file that goes out
+    data = _write_master(m, header, nl, new_lines)
     bdir = paths.proc_dir(FOLDER, "backup") / H.today_dash()
-    bdir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(m, bdir / f"before_{dt.datetime.now():%H%M%S}_{MASTER}")
-    data = (nl.join([header] + new_lines) + nl).encode("latin-1")
-    tmp = m.with_suffix(".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(m)
-    _save_pending([])
     out = paths.proc_dir(FOLDER, "outputs") / MASTER
     out.write_bytes(data)
 
     subject = f"RMS Limits MAND - {dt.date.today():%d-%m-%Y}"
-    li = "".join(f"<li>{x}</li>" for x in added) or "<li>None</li>"
     ci = "".join(f"<li>{x}</li>" for x in changed[:60]) or "<li>None</li>"
     body = ("<html><body><p>Hi Team,</p><p>Please find attached the RMS Limits MAND file for "
-            f"{dt.date.today():%d-%m-%Y}.</p><p><b>New codes added ({len(added)}):</b></p><ul>{li}</ul>"
-            f"<p><b>Category changes ({len(changed)}):</b></p><ul>{ci}</ul><p>{K.sig(params)}</p></body></html>")
+            f"{dt.date.today():%d-%m-%Y}.</p><p><b>Category changes ({len(changed)}):</b></p><ul>{ci}</ul>"
+            f"<p>{K.sig(params)}</p></body></html>")
     ctx.log(f"Step 4/5: e-mailing {MASTER} to {', '.join(to)}…")
     H.send_email(subject, body, to, cc, [out], ctx, html=True)
-    H.mark_sent(FOLDER, "mail")          # today's file is out — a later SCHEDULED run skips; Run Now still works
+    H.mark_sent(FOLDER, "mail")          # a second SCHEDULED attempt today skips; Run Now still works
     ctx.log(f"E-mail sent: “{subject}”.")
     up = upload_is_on()
     ok = None
@@ -239,7 +244,7 @@ def run_core(params, ctx, add: Optional[List[dict]] = None, manual_add: bool = F
         ctx.log("Step 5/5: Kambala upload is switched OFF (Credentials › Kambala FTP) — e-mail + file only, nothing uploaded.")
     shutil.copy2(out, bdir / MASTER) if not (bdir / MASTER).exists() else shutil.copy2(out, bdir / f"{dt.datetime.now():%H%M%S}_{MASTER}")
     ctx.log("Done: file updated, e-mailed" + (", uploaded" if ok else " (Kambala upload did NOT go through — see above)" if ok is False else " (not uploaded — upload is off)") + " and backed up.")
-    return (f"{len(changed)} category change(s), {len(added)} code(s) added — e-mailed"
+    return (f"{len(changed)} category change(s) — e-mailed"
             + (" and uploaded to Kambala" if ok else "; Kambala upload FAILED" if ok is False else "; NOT uploaded (upload is off)"))
 
 
@@ -266,40 +271,45 @@ class _Ctx:
             return "\n".join(self.lines)
 
 
-_JOBS: Dict[str, dict] = {}
+_ADD_LOCK = threading.Lock()
 
 
-def start_add(rows, params: dict) -> dict:
-    """Validates the typed codes and runs the process once in the background (adds them, e-mails, uploads if the
-    Kambala switch is ON)."""
+def add_codes(rows, who: str = "") -> dict:
+    """Appends the typed codes to the END of the master file — nothing is e-mailed or uploaded and the schedule is not
+    touched; the next scheduled run simply picks up the already corrected file.  Every change is written to a run log
+    (Logs button) with the name of the person who made it.  -> {"result", "log"}; raises ValueError on bad input."""
     errs, clean = clean_rows(rows)
     if errs:
         raise ValueError("; ".join(errs))
-    jid = uuid.uuid4().hex[:10]
     ctx = _Ctx()
-    rec = {"id": jid, "ctx": ctx, "done": False, "ok": None, "result": "", "started": dt.datetime.now()}
-    for k in [k for k, v in _JOBS.items() if (dt.datetime.now() - v["started"]).total_seconds() > 3600]:
-        _JOBS.pop(k, None)
-    _JOBS[jid] = rec
 
-    def work():
+    def work(_p, c):
+        who_txt = who or "unknown user"
+        c.log(f"ADD CLIENT CODES requested by {who_txt}: " + ", ".join(f"{r['account']} (limit {r['limit']})" for r in clean))
+        m = _need_master()
+        header, nl, lines = read_master(m)
+        risk: Dict[str, str] = {}
+        if any(not r["category"] for r in clean):
+            risk = risk_categories(H.find_risk_report(c))          # only needed when a CATEGORY was left blank
+            c.log(f"Risk report read — {len(risk):,} accounts with a CATEGORY.")
+        new_lines, _changed, added, notes = apply(lines, risk, clean, c)
+        for a in added:
+            c.log(f"   ADDED at the end of the file: {a}")
+        for n in notes:
+            c.log(f"   Note: {n}")
+        if not added:
+            raise ValueError("; ".join(notes) or "Nothing was added.")
+        _write_master(m, header, nl, new_lines)
+        c.log(f"Master file updated by {who_txt}: {len(added)} code(s) added, now {len(new_lines)} clients. "
+              f"The previous version is kept in the backup folder. Nothing was e-mailed or uploaded.")
+        return f"{len(added)} code(s) added to the master file — they will go out with the next scheduled run"
+
+    with _ADD_LOCK:                                            # two people adding at once never overwrite each other
         try:
-            rec["result"] = H.logged(FOLDER)(lambda p, c: run_core(p, c, clean, manual_add=True))(params, ctx)
-            rec["ok"] = True
+            res = H.logged(FOLDER)(work)({}, ctx)
         except Exception as e:
-            ctx.log(f"FAILED: {type(e).__name__}: {e}")
-            rec.update(ok=False, result=f"{type(e).__name__}: {e}")
-        finally:
-            rec["done"] = True
-    threading.Thread(target=work, daemon=True, name=f"rms-limits-add-{jid}").start()
-    return {"id": jid}
-
-
-def add_state(jid: str) -> Optional[dict]:
-    rec = _JOBS.get(jid)
-    if not rec:
-        return None
-    return {"id": jid, "done": rec["done"], "ok": rec["ok"], "result": rec["result"], "log": rec["ctx"].text()}
+            raise ValueError(str(e)) from e
+    return {"result": res, "log": ctx.text()}
 
 
 def _params():

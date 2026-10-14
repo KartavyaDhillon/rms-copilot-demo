@@ -673,12 +673,13 @@
       return '<div class="sch-box" data-pk="' + esc(p.key) + '"><div class="sch-head"><div class="sch-logo ' + (wa ? "wa" : "mail") + '">' + esc(logo) + "</div>" +
         '<div class="sch-tw"><div class="sch-title">' + esc(p.name) + '</div><div class="sch-sub">' + esc(p.description || "") + "</div></div>" + state + "</div>" +
         '<div class="sch-tools">' +
+        (p.key === "rms_limits_mand_kambala" ? '<button class="sch-tool blue full" data-add="' + esc(p.key) + '">⏰ Add schedule</button>' : "") +
         (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone && isMail ? "📱✉️ WhatsApp numbers / Email To & CC" : isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
         ((p.uses || []).length ? '<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>' : "") +
         (p.upload_exts && p.upload_exts.length ? '<button class="sch-tool green" data-upload="' + esc(p.key) + '">⬆️ Upload files</button>' : "") +
         (p.key === "rms_limits_mand_kambala" ? '<button class="sch-tool green" data-addcodes="1">➕ Add client codes</button>' : "") +
         '<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>' +
-        '<button class="sch-tool blue ' + (p.upload_exts && p.upload_exts.length ? "wide" : "full") + '" data-add="' + esc(p.key) + '">⏰ Add schedule</button></div>' +
+        (p.key === "rms_limits_mand_kambala" ? "" : '<button class="sch-tool blue ' + (p.upload_exts && p.upload_exts.length ? "wide" : "full") + '" data-add="' + esc(p.key) + '">⏰ Add schedule</button>') + "</div>" +
         '<div class="sch-foot">' + (sched || '<div class="sch-none">No schedule yet</div>') + "</div></div>";
     };
     $("#scBody").innerHTML = '<div class="card-sub" style="margin-bottom:10px">Every process the scheduler can run, with who it sends to, its connections and its folder. ' +
@@ -788,13 +789,13 @@
         '<td><input class="f-input ac-l" inputmode="numeric" placeholder="e.g. 280000" style="width:100%"></td>' +
         '<td><input class="f-input ac-c" placeholder="blank = from risk report" style="width:100%;text-transform:uppercase"></td></tr>';
       const close = RMS.modal("Add client codes — RMS LIMITS MAND KAMBALA",
-        '<div class="card-sub" style="margin-bottom:10px">New codes are added at the <b>end</b> of the file, then the file is e-mailed and uploaded to the Kambala FTP. ' +
-        "Leave CATEGORY blank to take it from today's risk report. Type the code exactly as it must appear in the file (e.g. with its leading zero).</div>" +
+        '<div class="card-sub" style="margin-bottom:10px">New codes are added at the <b>end</b> of the master file only — nothing is e-mailed or uploaded now. ' +
+        "The next scheduled run picks up the corrected file. Leave CATEGORY blank to take it from the risk report. Type the code exactly as it must appear in the file (e.g. with its leading zero). " +
+        "Who added what is recorded in this process's Logs.</div>" +
         '<div id="acErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
         '<table class="htable" style="width:100%"><thead><tr><th>ACCOUNT ID</th><th>LIMIT</th><th>CATEGORY</th></tr></thead><tbody id="acRows">' + rowHtml() + rowHtml() + rowHtml() + "</tbody></table>" +
-        '<div class="card-sub" style="margin-top:8px">Kambala upload follows the ON/OFF switch in 🔑 Credentials › Kambala FTP.</div>' +
         '<div style="display:flex;justify-content:space-between;gap:8px;margin-top:10px"><button class="btn ghost" id="acMore">+ Row</button>' +
-        '<div style="display:flex;gap:8px"><button class="btn ghost" id="acCancel">Cancel</button><button class="btn primary" id="acGo">Add, e-mail &amp; upload</button></div></div>' +
+        '<div style="display:flex;gap:8px"><button class="btn ghost" id="acCancel">Cancel</button><button class="btn primary" id="acGo">Add to file</button></div></div>' +
         '<pre class="logview" id="acLog" style="display:none;margin-top:12px;max-height:260px;overflow:auto;white-space:pre-wrap;font-size:11.5px"></pre>',
         { width: 760, icon: "upload" });
       $("#acMore").onclick = () => $("#acRows").insertAdjacentHTML("beforeend", rowHtml());
@@ -807,15 +808,9 @@
         try {
           const body = { rows }; if (pwd) body._password = pwd;
           const r = await call("POST", "/sched/rms-limits/add", body);
-          const log = $("#acLog"); log.style.display = "block"; log.textContent = "Started…";
-          const tick = async () => {
-            const s = await jget("/sched/rms-limits/state?id=" + encodeURIComponent(r.id));
-            log.textContent = s.log || "Started…"; log.scrollTop = log.scrollHeight;
-            if (!s.done) return setTimeout(tick, 1500);
-            if (s.ok) { $("#acErr").style.color = "var(--ok)"; $("#acErr").textContent = "✔ " + s.result; }
-            else { $("#acErr").style.color = "var(--err)"; $("#acErr").textContent = s.result; go.disabled = false; }
-          };
-          tick();
+          const log = $("#acLog"); log.style.display = "block"; log.textContent = r.log || "";
+          $("#acErr").style.color = "var(--ok)"; $("#acErr").textContent = "✔ " + r.result;
+          $("#acGo").style.display = "none"; $("#acCancel").textContent = "Close";
         } catch (e) { $("#acErr").textContent = e.message; go.disabled = false; }
       };
     } catch (e) { toast("err", "Could not open", e.message); }

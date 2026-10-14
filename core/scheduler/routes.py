@@ -311,25 +311,14 @@ async def rms_limits_add(request: Request):
     from core.scheduler.processes import rms_limits_mand_kambala as rl
 
     def go():
-        pdef = catalog.get("rms_limits_mand_kambala")
         try:
-            out = rl.start_add(body.get("rows"), catalog.effective_params(pdef, {}))
+            out = rl.add_codes(body.get("rows"), who)
         except ValueError as ex:
             raise service.ValidationFailed([m.strip() for m in str(ex).split(";") if m.strip()])
         store.audit(who, "rms_limits.add", {"id": None, "name": rl.FOLDER}, after={"rows": body.get("rows")})
         return out
     out, e = _safe(go)
     return e or {"ok": True, **out}
-
-
-@router.get("/rms-limits/state")
-def rms_limits_state(request: Request, id: str = ""):
-    who, err = _guard(request, False)
-    if err:
-        return err
-    from core.scheduler.processes import rms_limits_mand_kambala as rl
-    st = rl.add_state(id)
-    return st or JSONResponse({"ok": False, "error": "Unknown run."}, status_code=404)
 
 
 # ── Portal Downloads: file jobs defined on screen (core/scheduler/portal_jobs.py) ──

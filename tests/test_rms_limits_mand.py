@@ -102,18 +102,18 @@ class Run(Base):
              mock.patch("core.scheduler.helpers.send_email", side_effect=lambda *a, **k: order.append("mail")), \
              mock.patch("core.scheduler.processes.rms_limits_mand_kambala.upload_is_on", return_value=False), \
              mock.patch("core.scheduler.helpers.kambala_upload", side_effect=lambda f, c: order.append("ftp") or True):
-            ctx = Ctx()
-            ctx.trigger = H.MANUAL
-            rl.run_core({"to": "a@mastertrust.co.in"}, ctx,
-                        [{"account": "09110099", "limit": "5000", "category": ""}], manual_add=True)
-            self.assertEqual(order, ["mail"])                                # upload is off by default
+            # adding codes only edits the master file: nothing is e-mailed/uploaded and the schedule is not affected
+            out = rl.add_codes([{"account": "09110099", "limit": "5000", "category": ""}], "Ravi")
+            self.assertEqual(order, [])
+            self.assertIn("Ravi", out["log"])                                # who made the change is logged
             self.assertIn("09110099" + "|" * 16 + "MTM_MTF|no", m.read_text("latin-1"))   # category from risk report
             sched = Ctx()
             sched.trigger = "SCHEDULED"
-            with self.assertRaises(H.Skipped):
-                rl.run_core({"to": "a@mastertrust.co.in"}, sched)           # scheduled run is skipped today
-            rl.run_core({"to": "a@mastertrust.co.in"}, ctx)                 # Run Now still works
-        self.assertEqual(order, ["mail", "mail"])
+            rl.run_core({"to": "a@mastertrust.co.in"}, sched)               # the scheduled run still runs, with the new code
+            self.assertEqual(order, ["mail"])
+            self.assertIn("09110099", m.read_text("latin-1"))
+            with self.assertRaises(ValueError):                              # no category anywhere → refused, file untouched
+                rl.add_codes([{"account": "NEWX", "limit": "1", "category": ""}], "Ravi")
 
 
 if __name__ == "__main__":
