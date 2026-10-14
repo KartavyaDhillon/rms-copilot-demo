@@ -744,7 +744,7 @@
         (f.name === "upload_enabled"
           ? '<select class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="upload_enabled"' + (canEdit ? "" : " disabled") + '><option value="no"' + (String(f.value).toLowerCase() === "yes" ? "" : " selected") + '>OFF — only e-mail the file</option><option value="yes"' + (String(f.value).toLowerCase() === "yes" ? " selected" : "") + ">ON — e-mail and upload to Kambala</option></select>"
           : '<input class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '" ' +
-        (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') + (canEdit ? "" : " disabled") + ">")).join("") +
+        (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') + (canEdit ? "" : " disabled") + ">"))).join("") +
       "</div>" + (canEdit ? '<div style="margin-top:8px"><button class="btn primary" data-save="' + g.group + '">Save ' + esc(g.label) + "</button></div>" : "") + "</div>";
   }
 
