@@ -3,7 +3,7 @@ core/pipelines/margin_shortage_15min.py — Margin Shortage (15-minute) pipeline
 ================================================================================
 Ported from the uploaded 15minutesfinal_whatsapp.PY, wrapped as a function so
 the platform can call it (same treatment core/pipelines/ctcl_vs_nmass.py got).
-Runs 9x/day (see MS15_RUN1_WINDOW..MS15_RUN9_WINDOW in .env) alongside CTCL vs
+Runs 17x/day (see MS15_RUN1_WINDOW..MS15_RUN17_WINDOW in .env) alongside CTCL vs
 NMASS, sharing the same NSCCL/NCFE/MCX90 download credentials and reusing the
 same download scripts (core/pipelines/nmass_download.py, mcx90_download.py —
 called with pipe="margin_shortage" from the dashboard's own Download buttons,

@@ -944,7 +944,8 @@ SA_KEYS_CRED = ["SA_NSE_LOGINID", "SA_NSE_PASSWORD", "SA_NSE_MEMBER",
                 "SA_MCX_USER", "SA_MCX_PASSWORDS", "SA_NCDEX_USER", "SA_NCDEX_PASSWORD",
                 "SA_MCX_DEPOSIT_USER", "SA_MCX_DEPOSIT_PASSWORD",
                 "SA_SMTP_EMAIL", "SA_SMTP_PASSWORD",
-                "SA2_SMTP_USER", "SA2_SMTP_PASS"]
+                "SA2_SMTP_USER", "SA2_SMTP_PASS",
+                "LAS_POP_EMAIL", "LAS_POP_PASSWORD"]
 # MCX/NCDEX user IDs are fixed exchange member codes — the dashboard should never
 # offer to edit them, only the password. NSE's user ID can change.
 SA_FIXED_USER = {"MCX", "NCDEX"}
@@ -993,6 +994,9 @@ def get_credentials():
         "Email sender — LAS Funding": {"user": g("SA_SMTP_EMAIL", ""), "pass": mask_number(g("SA_SMTP_PASSWORD", "")),
                   "user_key": "SA_SMTP_EMAIL", "pass_key": "SA_SMTP_PASSWORD", "user_editable": True,
                   "note": "the mailbox the LAS Funding step sends FROM. Update the password here whenever it changes."},
+        "Mailbox reading — LAS Funding (POP3)": {"user": g("LAS_POP_EMAIL", "kartavya.dhillon@mastertrust.co.in"), "pass": mask_number(g("LAS_POP_PASSWORD", "")),
+                  "user_key": "LAS_POP_EMAIL", "pass_key": "LAS_POP_PASSWORD", "user_editable": True,
+                  "note": "the mailbox the LAS Funding step READS the “LAS Debit Balances” e-mail from (pop9.netcore.co.in). Update the e-mail and password here whenever the mailbox changes."},
         # shortallocation_final_new_with_co.py had its OWN separate hardcoded SMTP
         # account (kartavya.dhillon@mastertrust.co.in) with no .env wiring at all —
         # this is that one, now editable the same way.

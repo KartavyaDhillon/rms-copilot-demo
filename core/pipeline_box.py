@@ -299,8 +299,9 @@ PIPELINES = {
               "upload_default": os.path.join(REPO, "data", "scheduler", "ALLOCATION REPORT"),
               "backup_root_env": "ALLOC_REPORT_FOLDER", "backup_subdir": "BACKUPFILES AUTOMATED",
               "file_types": []},
-    # Margin Shortage (15-min) — runs 11x/day, ported from 15minutesfinal_whatsapp.PY.
-    # (Was 9; 16:30 and 16:50 added when the desk's shift extended. The night
+    # Margin Shortage (15-min) — runs 17x/day, ported from 15minutesfinal_whatsapp.PY.
+    # (Was 9, then 11 — 16:30 and 16:50 added when the desk's shift extended; now 17 with the
+    # evening runs 18:20 … 22:50 (MS15_RUN12..17_WINDOW in .env). The night
     # shift after 16:50 still runs the original batch script on another machine —
     # see MS15_TRACKER_JSON in .env for how the dedup state is handed over.)
     # Reuses the SAME NSCCL/NCFE/MCX90 download credentials as CTCL vs NMASS (shared
