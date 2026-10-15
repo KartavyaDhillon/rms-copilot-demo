@@ -54,6 +54,13 @@ class Filter(Base):
             self._run(self.DATA, {"match": "all", "conditions": [{"column": "Nope", "op": "in", "values": "1"}]})
         self.assertIn("Symbol", str(cm.exception))
 
+    def test_option_defaults(self):
+        from core.scheduler import portal_jobs as P
+        base = {"name": "x", "segment": "FO", "folder": "Reports", "filename": "a.csv"}
+        f = P.clean_job({**base, "filter": {"enabled": True, "conditions": [{"column": "A", "op": "eq", "values": "1"}]}})[1]["filter"]
+        self.assertTrue(f["keep_name"])
+        self.assertFalse(f["mail_note"])
+
     def test_validation(self):
         from core.scheduler import portal_jobs as P
         errs, job = P.clean_job({"name": "x", "segment": "FO", "folder": "Reports", "filename": "a_{YYYYMMDD}.csv.gz",

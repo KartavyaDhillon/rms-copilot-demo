@@ -968,7 +968,7 @@
       email: { enabled: false, to: "", cc: "", subject: "{NAME} - {DD-MM-YYYY}", body: d.body || "Hi Team,\n\nPlease find attached {FILE}.",
         signature: d.signature || "", notify_no_file: true },
       kambala: { enabled: false, name: "" },
-      filter: { enabled: false, match: "all", conditions: [{ column: "", op: "in", values: "" }] } };
+      filter: { enabled: false, keep_name: true, mail_note: false, match: "all", conditions: [{ column: "", op: "in", values: "" }] } };
   }
   const PD_OPS = [["eq", "is exactly (same case)"], ["neq", "is not exactly"], ["in", "is one of"], ["not_in", "is not one of"], ["contains", "contains"], ["not_contains", "does not contain"],
     ["starts", "starts with"], ["gt", "is greater than"], ["gte", "is at least"], ["lt", "is less than"], ["lte", "is at most"]];
@@ -1030,6 +1030,8 @@
     S.pedit = { id: job ? job.id : "", draft: job ? JSON.parse(JSON.stringify(job)) : pdBlank(), test: null, last: null };
     ["resolved", "key", "schedules", "updated"].forEach((k) => delete S.pedit.draft[k]);
     if (!S.pedit.draft.filter) S.pedit.draft.filter = pdBlank().filter;
+    if (S.pedit.draft.filter.keep_name == null) S.pedit.draft.filter.keep_name = true;
+    if (S.pedit.draft.filter.mail_note == null) S.pedit.draft.filter.mail_note = false;
     if (!S.pedit.draft.filter.conditions.length) S.pedit.draft.filter.conditions.push({ column: "", op: "in", values: "" });
     renderPortalEditor();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1098,7 +1100,9 @@
         pdIn("filter.conditions." + i + ".values", i ? "" : "Value(s)", { mono: true, ph: "e.g. NIFTY, BANKNIFTY" }) +
         '<button class="sch-tool" data-rmc="' + i + '" title="Remove this condition">✕</button></div>').join("") +
       '<div class="pd-hint" style="margin:2px 0 8px">Column names are the header names in the file (case does not matter). Several values: separate with commas. If a name is wrong the run stops and lists the real columns.</div>' +
-      '<button class="sch-tool" id="pdAddCond">＋ Add condition</button></div>' +
+      '<button class="sch-tool" id="pdAddCond">＋ Add condition</button>' +
+      pdSwitch("filter.keep_name", "Keep the original file name", "On = the filtered file has the same name as the portal file (the full file is kept in the backup as …_FULL). Off = name ends with _filtered.") +
+      pdSwitch("filter.mail_note", "Add “Filtered file: X of Y rows kept” to the e-mail", "Off = the e-mail text is exactly your message.") + "</div>" +
       pdSwitch("email.enabled", "E-mail the file", "Sent first, before the Kambala upload.") +
       '<div class="pd-sub" id="pdMail"><div class="pd-row c2">' + pdIn("email.to", "To", { ph: "name@mastertrust.co.in, …" }) + pdIn("email.cc", "Cc", { opt: true, ph: "optional" }) + "</div>" +
       '<div class="pd-row" style="grid-template-columns:1fr">' + pdIn("email.subject", "Subject", { mono: true, hint: "Placeholders work here too, plus <b>{NAME}</b> and <b>{FILE}</b>." }) +

@@ -271,7 +271,8 @@ def clean_job(raw: dict, existing_id: str = "") -> Tuple[List[str], dict]:
         elif op in ("gt", "gte", "lt", "lte") and _num(vals) is None:
             errs.append(f"Filter on “{col}”: “{vals}” is not a number.")
         conds.append({"column": col, "op": op, "values": vals})
-    flt = {"enabled": _bool(f_in.get("enabled")), "match": "any" if str(f_in.get("match")).lower() == "any" else "all",
+    flt = {"enabled": _bool(f_in.get("enabled")), "keep_name": _bool(f_in.get("keep_name"), True),
+           "mail_note": _bool(f_in.get("mail_note"), False), "match": "any" if str(f_in.get("match")).lower() == "any" else "all",
            "conditions": conds}
     if flt["enabled"]:
         if not conds:
@@ -421,14 +422,21 @@ def run_job(job: dict, ctx) -> str:
     flt = job.get("filter") or {}
     extra = ""
     if flt.get("enabled"):
-        fout = out / f"{full.stem}_filtered{full.suffix}"
-        kept, total = filter_csv(full, fout, flt, ctx)
+        if flt.get("keep_name", True):               # same name as the original; the untouched full file is kept as <name>_FULL
+            keep = full.with_name(f"{full.stem}_FULL{full.suffix}")
+            full.replace(keep)
+            fout = out / full.name
+            kept, total = filter_csv(keep, fout, flt, ctx)
+            full = keep
+        else:
+            fout = out / f"{full.stem}_filtered{full.suffix}"
+            kept, total = filter_csv(full, fout, flt, ctx)
         final = fout
         done.append(f"filtered ({kept:,} of {total:,} rows)")
-        extra = f"\n\nFiltered file: {kept:,} of {total:,} rows kept."
         if kept == 0:
             ctx.log("[!] No row matched the filter — the file has the header only.")
-            extra += " No row matched the filter."
+        if flt.get("mail_note"):
+            extra = f"\n\nFiltered file: {kept:,} of {total:,} rows kept." + (" No row matched the filter." if kept == 0 else "")
     if em["enabled"]:
         subj = fill(em["subject"], toks)
         body = _html_body(fill(em["body"], toks) + extra, em["signature"])
