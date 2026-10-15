@@ -4023,13 +4023,27 @@ def probable_captcha_answer(a: _CTCLCaptchaAnswer):
         return {"ok": False, "error": str(e)}
 
 
+def _note_who(request: Request):
+    """Tell lock_manager exactly who is behind THIS request, so the action that starts a moment later records the
+    right person (it otherwise guesses from 'the most recent -stream request in the last 15 s', which goes wrong when
+    two downloads are started back to back — and then the captcha / RSA-token popup is hidden from the person who
+    clicked)."""
+    try:
+        from core import lock_manager as _lmn
+        _by, _adm = _actor(request)
+        _lmn.note_request(_by or "", request.client.host if request.client else "", request.url.path)
+    except Exception:
+        pass
+
+
 @app.get("/probable/download/nmass-stream")
-def probable_nmass_download_stream():
+def probable_nmass_download_stream(request: Request):
     """SSE: run NMASS_NCFE_API_MIX.PY (pipe=probable → saves into PROBABLE_FOLDER).
     Same shared cross-process dl_lock as ctcl/ms15 — see core/dl_lock.py."""
     import json as _pn_json
     from core.pipelines.nmass_download import stream_nmass_download
     _probable_clear_popup_state()
+    _note_who(request)
     def gen():
         try:
             for ev in stream_nmass_download(pipe="probable"):
@@ -4042,7 +4056,7 @@ def probable_nmass_download_stream():
 
 
 @app.get("/probable/download/tcs-bancs-stream")
-def probable_tcs_bancs_download_stream():
+def probable_tcs_bancs_download_stream(request: Request):
     """SSE: RSK383 (Cash Collateral Deposit Limit) + RSK335 (Margin Utilization
     View / Clientwise MCX Margin) from eclear.mcxccl.com. Run as a genuine
     subprocess via pipeline_box._stream_code() (same reason CLI's MCX Web
@@ -4058,6 +4072,7 @@ def probable_tcs_bancs_download_stream():
     # _stream_code_act's docstring in core/pipeline_box.py.
     from core.pipeline_box import _stream_code_act
     _probable_clear_popup_state()
+    _note_who(request)
     code = ("import os; from core.pipelines.probable_tcs_bancs import download_both as _f; "
             "_r = _f(os.getenv('PROBABLE_FOLDER', r'D:\\\\PROBABLE')); "
             "import sys; sys.exit(0 if (_r.get('rsk383') and _r.get('rsk335')) else 1)")
