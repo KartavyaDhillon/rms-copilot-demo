@@ -162,11 +162,13 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
     if r.status_code == 404:
         ctx.log(f"NSE: {filename} not available yet (404).")
         return None
-    if r.status_code == 400 and "715" in r.text and "FOLDER NOT FOUND" in r.text.upper():
-        # NSE gives this (instead of 404) when the day's file / folder has not been published — seen live on
-        # 13-10-2026 for PNC_OPT, while the same request answered 404 the day before. Treated as "not there".
-        ctx.log(f"NSE: {filename} not available (HTTP 400, code 715 FOLDER NOT FOUND — NSE has nothing published "
-                f"under {folder} for it).")
+    _up = r.text.upper() if r.status_code == 400 else ""
+    if r.status_code == 400 and (("715" in r.text and "FOLDER NOT FOUND" in _up) or ("714" in r.text and "FILE NOT FOUND" in _up)):
+        # NSE answers "not published yet" in more than one way: 404, or HTTP 400 with code 715 FOLDER NOT FOUND
+        # (seen 13-10-2026, PNC_OPT) or code 714 FILE NOT FOUND (seen 15-10-2026, C_SA01 peak-margin file, which
+        # had answered 404 a minute earlier in the same wait loop).  All mean "not there (yet)" — never a failure.
+        ctx.log(f"NSE: {filename} not available yet (HTTP 400, {'714 FILE' if 'FILE NOT FOUND' in _up else '715 FOLDER'} "
+                f"NOT FOUND — NSE has not published it under {folder}).")
         return None
     if r.status_code != 200:
         raise RuntimeError(f"NSE download of {filename} failed — HTTP {r.status_code}: {r.text[:160]}")
