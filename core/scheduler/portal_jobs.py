@@ -437,6 +437,7 @@ def run_job(job: dict, ctx) -> str:
             ctx.log("[!] No row matched the filter — the file has the header only.")
         if flt.get("mail_note"):
             extra = f"\n\nFiltered file: {kept:,} of {total:,} rows kept." + (" No row matched the filter." if kept == 0 else "")
+    toks["FILE"] = final.name            # {FILE} = the file that is really attached / uploaded (.csv, filtered name), not the .gz
     if em["enabled"]:
         subj = fill(em["subject"], toks)
         body = _html_body(fill(em["body"], toks) + extra, em["signature"])
