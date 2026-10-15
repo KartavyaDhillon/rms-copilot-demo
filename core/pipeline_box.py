@@ -1187,6 +1187,10 @@ def _stream_code_act(code, pipe, action, logname_prefix):
         slot["running"] = True
         slot["cancel"] = False
         slot["started_at"] = datetime.datetime.now().isoformat()
+    try:                                   # who clicked it — so only that person gets this run's captcha/token popup
+        slot["by"] = _log_identity()[0]
+    except Exception:
+        slot["by"] = None
     _touch(slot)
 
     logdir = os.path.join(LOG_BASE, pipe)

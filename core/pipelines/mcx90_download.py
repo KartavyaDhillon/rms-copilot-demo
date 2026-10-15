@@ -330,6 +330,11 @@ def stream_mcx90_download(pipe="ctcl"):
     _pb, _ = act_slot(pipe, "mcx90")
     _pb["cancel"] = False
     _pb["started_at"] = datetime.datetime.now().isoformat()
+    try:                                   # who clicked it — so only that person gets this run's token popup
+        from core.pipeline_box import _log_identity
+        _pb["by"] = _log_identity()[0]
+    except Exception:
+        _pb["by"] = None
     _pb["proc"] = proc; _pb["running"] = True
 
     def _reader():

@@ -324,6 +324,11 @@ def stream_nmass_download(pipe="ctcl", force=False):
             return
         _pb["running"] = True
         _pb["started_at"] = datetime.datetime.now().isoformat()
+    try:                                   # who clicked it — so only that person gets this run's captcha popup
+        from core.pipeline_box import _log_identity
+        _pb["by"] = _log_identity()[0]
+    except Exception:
+        _pb["by"] = None
     _pb["cancel"] = False
     _auth_fail = None  # set to {"server":.., "reason":..} if a login_failed tag is seen
     _log_buffer = []   # last lines the script printed - used by the AI fallback below

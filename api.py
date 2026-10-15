@@ -178,6 +178,93 @@ def _can_stop(lock_key, request: Request):
     return False, f"Only {owner} (who started this run) or an admin can stop it."
 
 
+# ── CAPTCHA / TOKEN POPUPS: show only to the person who started the run, never a stale one ──────────────
+# Every browser polls the *-pending endpoints, and they all read the same state file — so one person's captcha
+# used to pop up on everybody's screen (and an old PENDING file left by a dead run kept popping up for ever).
+_POPUP_STALE_S = 3 * 60           # a captcha/token request older than 3 minutes is never shown (and is cleared)
+_POPUP_IDLE_S = 120               # PENDING but no run/download of that pipe is active for this long → leftover
+
+
+def _popup_state_age(sf):
+    import os as _o, time as _t
+    try:
+        return _t.time() - _o.path.getmtime(sf)
+    except Exception:
+        return None
+
+
+def _popup_mark_stale(sf):
+    """Neutralise a leftover PENDING file so it cannot come back (JSON state or the SA plain-text state)."""
+    import json as _j
+    try:
+        with open(sf, encoding="utf-8") as f:
+            txt = f.read().strip()
+        with open(sf, "w", encoding="utf-8") as f:
+            if txt.startswith("{"):
+                _j.dump({"state": "STALE"}, f)
+            else:
+                f.write("STALE")
+    except Exception:
+        pass
+
+
+def _popup_pipe_active(pipe):
+    """True if a run / standalone download / NMASS login of this pipe is alive right now (fail-open on any doubt)."""
+    try:
+        if pipe == "sa":
+            from core.short_allocation import _SA
+            return bool(_SA.get("running"))
+        from core.pipeline_box import _PB, running_actions
+        if (_PB.get(pipe) or {}).get("running"):
+            return True
+        if any(p == pipe for p, _a, _s in running_actions()):
+            return True
+        from core import dl_lock
+        return bool(dl_lock.status().get("busy"))
+    except Exception:
+        return True
+
+
+def _popup_visible(request: Request, sf, pipes):
+    """True when THIS browser should show the popup whose state file is `sf`, raised by one of `pipes`.
+    • stale (old, or no run of that pipe alive) → hidden and cleared;
+    • the run / download was started by somebody (recorded by the lock manager or the action slot) → only that
+      person sees it;
+    • nobody recorded (e.g. started by the Scheduler) → admins only."""
+    age = _popup_state_age(sf)
+    if age is not None:
+        if age > _POPUP_STALE_S or (age > _POPUP_IDLE_S and not any(_popup_pipe_active(p) for p in pipes)):
+            _popup_mark_stale(sf)
+            return False
+    try:
+        from core.lock_manager import _META
+        owners = []
+        for p in pipes:
+            by = (_META.get("sa" if p == "sa" else f"px_{p}") or {}).get("by")
+            if by and by != "unknown user":
+                owners.append(by)
+        try:                                         # standalone download buttons record who clicked them
+            from core.pipeline_box import _ACT
+            for _k, _slot in list(_ACT.items()):
+                if _k.partition(":")[0] in pipes and _slot.get("running") and _slot.get("by") \
+                        and _slot["by"] != "unknown user":
+                    owners.append(_slot["by"])
+        except Exception:
+            pass
+        me, _admin = _actor(request)
+        if not owners:
+            # nobody recorded (e.g. a Scheduler run) → admins only; if the console runs without sign-in at all
+            # there is no admin, so show it rather than leave the run unanswerable
+            from core.auth import current_user as _cu2
+            return bool(_admin) or (os.getenv("RMS_AUTH_REQUIRED", "false").strip().lower() != "true" and not _cu2(request))
+        if not me:
+            return False
+        me_id = _actor_id(me)
+        return any(o == me or (me_id and _actor_id(o) == me_id) for o in owners)
+    except Exception:
+        return True
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "auto_send": AUTO_SEND}
@@ -2774,7 +2861,7 @@ def sa_las_wa_resend(r: _SAWaResend):
 
 
 @app.get("/sa/captcha/pending")
-def sa_captcha_pending():
+def sa_captcha_pending(request: Request):
     """Check if NCDEX CAPTCHA is awaiting browser input.
     Returns {pending: bool, image_b64: str|null}.
     ncdex_downloader writes .captcha_state='PENDING' + .captcha_ncdex.png to
@@ -2786,6 +2873,8 @@ def sa_captcha_pending():
     try:
         st = open(state_file, encoding="utf-8").read().strip()
         if st != "PENDING":
+            return {"pending": False}
+        if not _popup_visible(request, state_file, ["sa"]):
             return {"pending": False}
         if not _sa_os.path.isfile(img_file):
             return {"pending": True, "image_b64": None}
@@ -2842,7 +2931,7 @@ def _ctcl_captcha_dir(pending_only=False):
 
 
 @app.get("/ctcl/captcha/pending")
-def ctcl_captcha_pending():
+def ctcl_captcha_pending(request: Request):
     """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input.
     Returns {pending, image_b64, detected, reason, source}.
     If the Python script doesn't write a reason (old version), we infer one from
@@ -2862,6 +2951,9 @@ def ctcl_captcha_pending():
     try:
         _st = _cj.load(open(_sf, encoding="utf-8"))
         if _st.get("state") != "PENDING":
+            return {"pending": False}
+        _pipe = "cli" if _dir == _co.getenv("CLI_FOLDER", "\0") else "ms15" if _dir == _co.getenv("MARGIN_SHORTAGE_FOLDER", "\0") else "ctcl"
+        if not _popup_visible(request, _sf, [_pipe]):
             return {"pending": False}
         img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
         reason = _st.get("reason", "")
@@ -3113,14 +3205,14 @@ def _ctcl_clear_popup_state():
 # ── RSA SecurID token endpoints (MCX 90% CTCL side) ─────────────────────────
 
 @app.get("/ctcl/token/pending")
-def ctcl_token_pending():
+def ctcl_token_pending(request: Request):
     """Poll: is MCX 90% waiting for an RSA token? Reads .token_state in CTCL_NMASS_FOLDER."""
     import json as _tj, os as _tos, time as _tt
     _dir = _tos.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
     _sf  = _tos.path.join(_dir, ".token_state")
     try:
         st = _tj.load(open(_sf, encoding="utf-8"))
-        if st.get("state") == "PENDING":
+        if st.get("state") == "PENDING" and _popup_visible(request, _sf, ["ctcl"]):
             return {"pending": True, "label": st.get("label","MCX 90%"),
                     "attempt": st.get("attempt",1), "max_attempts": st.get("max_attempts",3),
                     "error_msg": st.get("error_msg")}
@@ -3151,7 +3243,7 @@ async def ctcl_token_answer(req: Request):
 # ── RSA SecurID token endpoints (MCX Deposit SA side) ───────────────────────
 
 @app.get("/sa/token/pending")
-def sa_token_pending():
+def sa_token_pending(request: Request):
     """Poll: is MCX Deposit waiting for an RSA token? Reads .token_state in SA_OUTPUT_DIR.
 
     This file is shared with Client Prudential Limit's own MCX Web Allocation
@@ -3164,7 +3256,7 @@ def sa_token_pending():
     _sf  = _sos.path.join(_dir, ".token_state")
     try:
         st = _stj.load(open(_sf, encoding="utf-8"))
-        if st.get("state") == "PENDING":
+        if st.get("state") == "PENDING" and _popup_visible(request, _sf, [st.get("caller", "sa") or "sa"]):
             return {"pending": True, "label": st.get("label","MCX Deposit"),
                     "attempt": st.get("attempt",1), "max_attempts": st.get("max_attempts",3),
                     "error_msg": st.get("error_msg"), "caller": st.get("caller","sa")}
@@ -3383,7 +3475,7 @@ def _ms15_clear_popup_state():
 _ms15_last_answered_at: dict = {}
 
 @app.get("/ms15/captcha/pending")
-def ms15_captcha_pending():
+def ms15_captcha_pending(request: Request):
     """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
     for the Margin Shortage box's own NMASS download. Same logic as
     /ctcl/captcha/pending, scoped to MARGIN_SHORTAGE_FOLDER."""
@@ -3395,6 +3487,8 @@ def ms15_captcha_pending():
     try:
         _st = _cj.load(open(_sf, encoding="utf-8"))
         if _st.get("state") != "PENDING":
+            return {"pending": False}
+        if not _popup_visible(request, _sf, ["ms15"]):
             return {"pending": False}
         img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
         reason = _st.get("reason", "")
@@ -3430,14 +3524,14 @@ def ms15_captcha_answer(a: _CTCLCaptchaAnswer):
 
 
 @app.get("/ms15/token/pending")
-def ms15_token_pending():
+def ms15_token_pending(request: Request):
     """Poll: is MCX 90% (Margin Shortage box) waiting for an RSA token?"""
     import json as _tj, os as _tos
     _dir = _tos.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
     _sf  = _tos.path.join(_dir, ".token_state")
     try:
         st = _tj.load(open(_sf, encoding="utf-8"))
-        if st.get("state") == "PENDING":
+        if st.get("state") == "PENDING" and _popup_visible(request, _sf, ["ms15"]):
             return {"pending": True, "label": st.get("label","MCX 90%"),
                     "attempt": st.get("attempt",1), "max_attempts": st.get("max_attempts",3),
                     "error_msg": st.get("error_msg")}
@@ -3468,7 +3562,7 @@ async def ms15_token_answer(req: Request):
 _r1r2_last_answered_at: dict = {}
 
 @app.get("/r1r2/captcha/pending")
-def r1r2_captcha_pending():
+def r1r2_captcha_pending(request: Request):
     """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
     for the R1-R2 Comparison Report's Live Snapshot download.
     Same logic as /ms15/captcha/pending, scoped to R1R2_FOLDER.
@@ -3492,6 +3586,8 @@ def r1r2_captcha_pending():
     try:
         _st = _cj.load(open(_sf, encoding="utf-8"))
         if _st.get("state") != "PENDING":
+            return {"pending": False}
+        if not _popup_visible(request, _sf, ["r1r2"]):
             return {"pending": False}
         img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
         reason = _st.get("reason", "")
@@ -3875,7 +3971,7 @@ def _probable_clear_popup_state():
 _probable_last_answered_at: dict = {}
 
 @app.get("/probable/captcha/pending")
-def probable_captcha_pending():
+def probable_captcha_pending(request: Request):
     """Check if the NMASS or NCDEX (NCFE) captcha is awaiting dashboard input,
     for the Probable Defaulter box's own NMASS download. Same logic as
     /ctcl/captcha/pending and /ms15/captcha/pending, scoped to PROBABLE_FOLDER.
@@ -3890,6 +3986,8 @@ def probable_captcha_pending():
     try:
         _st = _cj.load(open(_sf, encoding="utf-8"))
         if _st.get("state") != "PENDING":
+            return {"pending": False}
+        if not _popup_visible(request, _sf, ["probable"]):
             return {"pending": False}
         img_b64 = _b64.b64encode(open(_img, "rb").read()).decode() if _co.path.isfile(_img) else None
         reason = _st.get("reason", "")
