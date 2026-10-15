@@ -379,9 +379,9 @@ PIPELINES = {
                                 "Chandigarh": ["PROBABLE_CHND_TO", "PROBABLE_CHND_CC"],
                                 "Ludhiana": ["PROBABLE_LUDH_TO", "PROBABLE_LUDH_CC"],
                                 "Mumbai": ["PROBABLE_MUMB_TO", "PROBABLE_MUMB_CC"],
-                                "Final Summary": ["PROBABLE_FINAL_TO", "PROBABLE_FINAL_CC"],
-                                "Branch/Region mail-list override":
-                                    ["PROBABLE_MAILLIST_OVERRIDE_TO", "PROBABLE_MAILLIST_OVERRIDE_CC"]},
+                                "Final Summary": ["PROBABLE_FINAL_TO", "PROBABLE_FINAL_CC"]},
+                 # Branch / region e-mails always go to the addresses in MASTER\MAIL LIST.xlsx (and CONTACT_AP Details)
+                 # — there is no on-screen override for them any more (see probable_alerts._step_10_dynamic_mail).
                  "cred": {"NSE Delivery Margin login": {"user_key": "SA_NSE_LOGINID",
                            "pass_key": "SA_NSE_PASSWORD",
                            "note": "connect2nse.com login — shared with Short Allocation's NSE download"},

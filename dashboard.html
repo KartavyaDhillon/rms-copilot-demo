@@ -6075,13 +6075,13 @@ function pxRenderRuns(pipe,s){
 function pxConfig(pipe){ saAskPassword('Email recipients', function(pw){ pxOpenConfig(pipe,pw); }); }
 async function pxOpenConfig(pipe,pw){
   let c; try{ c=await (await fetch(API+'/px/config?pipe='+pipe)).json(); }catch(e){ alert('Could not load config'); return; }
-  let rows='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Edit email recipients (comma-separated). Blank = keep current.</div>';
+  let rows='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Edit email recipients (comma-separated). '+(pipe==='probable'?'What you see here is what is used — a blank box is saved as empty (no recipient).':'Blank = keep current.')+'</div>';
   // CTCL: inject section headers to group zone emails / Top20 / Payout
   const ctclHeaders=(pipe==='ctcl')?{'Main':'CTCL Zone Emails','Top20 CDR+MT':'Margin Top 20','Payout Check':'Payout Check'}:{};
   for(const z in (c.emails||{})){
     if(ctclHeaders[z]) rows+=`<div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin:18px 0 8px;padding-bottom:5px;border-bottom:1px solid var(--line)">${ctclHeaders[z]}</div>`;
     const x=c.emails[z];
-    rows+=`<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px"><div style="font-weight:650;margin-bottom:8px">${z}</div><div class="sa-field"><label>To</label><input data-key="${x.to_key}" value="${(x.to||'').replace(/"/g,'&quot;')}"></div><div class="sa-field" style="margin-bottom:0"><label>CC</label><input data-key="${x.cc_key}" value="${(x.cc||'').replace(/"/g,'&quot;')}"></div></div>`;
+    rows+=`<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px"><div style="font-weight:650;margin-bottom:8px">${z}</div><div class="sa-field"><label>To</label><input data-email="1" data-key="${x.to_key}" value="${(x.to||'').replace(/"/g,'&quot;')}"></div><div class="sa-field" style="margin-bottom:0"><label>CC</label><input data-email="1" data-key="${x.cc_key}" value="${(x.cc||'').replace(/"/g,'&quot;')}"></div></div>`;
   }
   rows+=`<button class="sa-save" style="width:100%" onclick="pxSave('${pipe}',this.dataset.pw)" data-pw="${(pw||'').replace(/"/g,'')}">Save</button><div class="sa-msg" id="pxCfgMsg"></div>`;
   saShowModal('✉️ '+pipe.toUpperCase()+' email recipients', rows);
@@ -6101,7 +6101,9 @@ async function pxOpenCreds(pipe,pw){
   saShowModal('🔑 '+pipe.toUpperCase()+' credentials', rows);
 }
 async function pxSave(pipe,pw){
-  const updates={}; document.querySelectorAll('#saModalBody input[data-key]').forEach(i=>{ const v=i.value.trim(); if(v!=='') updates[i.dataset.key]=v; });
+  // PROBABLE e-mail boxes are saved exactly as shown (a blank clears that recipient); every other box / field keeps the old
+  // "blank = leave as it is" behaviour.
+  const updates={}; document.querySelectorAll('#saModalBody input[data-key]').forEach(i=>{ const v=i.value.trim(); if(v!==''||(pipe==='probable'&&i.dataset.email==='1')) updates[i.dataset.key]=v; });
   const msg=document.getElementById('pxCfgMsg');
   if(!Object.keys(updates).length){ if(msg)msg.innerHTML='<span style="color:var(--muted)">No changes entered.</span>'; return; }
   let d; try{ d=await (await fetch(API+'/px/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pipe,password:pw,updates})})).json(); }catch(e){ if(msg)msg.innerHTML='<span style="color:var(--red)">'+e+'</span>'; return; }

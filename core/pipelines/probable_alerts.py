@@ -913,8 +913,9 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
     # whose recipients come from a spreadsheet rather than .env, so leaving it
     # to config would be the single hole through which a test could reach a
     # real branch.
-    override_to, override_cc = _emails("PROBABLE_MAILLIST_OVERRIDE_TO",
-                                       "PROBABLE_MAILLIST_OVERRIDE_CC", safe_test)
+    # A real run ALWAYS reads each branch/region's TO/CC from MAIL LIST.xlsx — the old PROBABLE_MAILLIST_OVERRIDE_*
+    # settings are ignored even if a leftover value is still sitting in .env.  Only a safe test redirects.
+    override_to, override_cc = (list(safe_test_targets()[0]), []) if safe_test else ([], [])
 
     log_data = []
 
