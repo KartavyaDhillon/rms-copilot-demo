@@ -483,9 +483,18 @@ def send_email(subject: str, body: str, to: List[str], cc: List[str], attachment
     ctx.log(f"  Cc ({len(cc)}): {', '.join(cc) if cc else '—'}")
     ctx.log("  Attachments: " + (", ".join(f"{Path(a).name} ({Path(a).stat().st_size / 1024:,.0f} KB)" for a in attachments) or "none")
             + (f"; inline image(s): {', '.join(inline_images)}" if inline_images else ""))
-    for i in range(1, attempts + 1):
+    # attempts=0 → never give up on a server-side / network problem (waits 10 s, growing to 60 s, between tries; the
+    # run's Stop button still works).  Wrong password and "recipient refused" (a permanent 5xx answer, e.g. a mistyped
+    # address) are never retried — repeating them cannot succeed and a wrong login can lock the mailbox.
+    forever = attempts <= 0
+    i = 0
+    while forever or i < attempts:
+        i += 1
+        if forever and getattr(ctx, "cancelled", False):
+            raise RuntimeError(f"E-mail stopped by the user after {i - 1} failed tries — {last}")
+        total = "∞" if forever else attempts
         try:
-            ctx.log(f"  Connecting to {c['server']}:{c['port']} (attempt {i}/{attempts})…")
+            ctx.log(f"  Connecting to {c['server']}:{c['port']} (attempt {i}/{total})…")
             with smtplib.SMTP(c["server"], int(c["port"]), timeout=30) as s:
                 s.ehlo()
                 s.starttls(context=ssl.create_default_context())
@@ -497,9 +506,16 @@ def send_email(subject: str, body: str, to: List[str], cc: List[str], attachment
             return
         except smtplib.SMTPAuthenticationError as e:
             raise RuntimeError(f"E-mail login refused — check the SMTP password in Scheduler → Connections ({e.smtp_code}).")
+        except (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as e:
+            raise RuntimeError(f"E-mail refused by the server — check the addresses ({type(e).__name__}: {e}).")
         except Exception as e:
             last = f"{type(e).__name__}: {e}"
-            ctx.log(f"E-mail attempt {i}/{attempts} failed ({last})")
-            if i < attempts:
+            ctx.log(f"E-mail attempt {i}/{total} failed ({last})")
+            if forever:
+                for _ in range(int(min(60, delay * min(i, 6)))):         # sleeps in 1 s steps so Stop is noticed
+                    if getattr(ctx, "cancelled", False):
+                        break
+                    time.sleep(1)
+            elif i < attempts:
                 time.sleep(delay)
     raise RuntimeError(f"E-mail could not be sent after {attempts} tries — {last}")

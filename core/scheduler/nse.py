@@ -124,6 +124,16 @@ def _token(ctx=None, force=False) -> str:
         return _TOKEN["token"]
 
 
+def _cut_short(r) -> bool:
+    """200 answer whose body is shorter than the Content-Length it announced (connection dropped mid-file)."""
+    try:
+        cl = r.headers.get("Content-Length")
+        return (r.status_code == 200 and not r.headers.get("Content-Encoding") and cl is not None
+                and str(cl).isdigit() and int(cl) != len(r.content))
+    except Exception:
+        return False
+
+
 def _bad_token(r) -> bool:
     if r.status_code in (401, 403):
         return True
@@ -151,6 +161,14 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
         for n in range(1, MAX_TRIES + 1):
             r = _send("GET", url, ctx, f"downloading {filename}",
                       headers={"Authorization": f"Bearer {_token(ctx, force)}"}, timeout=DOWNLOAD_TIMEOUT)
+            if r.status_code in (429, 500, 502, 503, 504) or _cut_short(r):
+                # NSE server trouble / gateway timeout / download cut off half-way: wait and ask again (old script: 504 → retry)
+                ctx.log(f"NSE: server problem (HTTP {r.status_code}{', file cut short' if r.status_code == 200 else ''}) — "
+                        f"trying again in {min(30, 3 * n)} s ({n}/{MAX_TRIES}).")
+                if n < MAX_TRIES and not getattr(ctx, "cancelled", False):
+                    time.sleep(min(30, 3 * n))
+                    continue
+                break
             if not _bad_token(r):
                 break
             # 401/403/802/803: NSE did not accept the token (expired, or another login replaced it, or it had

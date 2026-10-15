@@ -967,13 +967,17 @@
       trading_day_only: true, wait_minutes: 0, unzip: true,
       email: { enabled: false, to: "", cc: "", subject: "{NAME} - {DD-MM-YYYY}", body: d.body || "Hi Team,\n\nPlease find attached {FILE}.",
         signature: d.signature || "", notify_no_file: true },
-      kambala: { enabled: false, name: "" } };
+      kambala: { enabled: false, name: "" },
+      filter: { enabled: false, match: "all", conditions: [{ column: "", op: "in", values: "" }] } };
   }
+  const PD_OPS = [["eq", "is exactly (same case)"], ["neq", "is not exactly"], ["in", "is one of"], ["not_in", "is not one of"], ["contains", "contains"], ["not_contains", "does not contain"],
+    ["starts", "starts with"], ["gt", "is greater than"], ["gte", "is at least"], ["lt", "is less than"], ["lte", "is at most"]];
   const pdNeedsPw = () => !!(S.portal && S.portal.needs_password);
 
   function flowChips(j) {
     const st = (on, ic, tx) => '<span class="pd-step ' + (on ? "on" : "off") + '">' + ic + " " + tx + "</span>";
     return st(true, "⬇", "Download") + '<span class="pd-arrow">›</span>' + st(!!j.unzip, "🗜", "Unzip") + '<span class="pd-arrow">›</span>' +
+      st(!!(j.filter && j.filter.enabled), "⛁", "Filter") + '<span class="pd-arrow">›</span>' +
       st(!!(j.email && j.email.enabled), "✉", "E-mail") + '<span class="pd-arrow">›</span>' + st(!!(j.kambala && j.kambala.enabled), "⬆", "Kambala");
   }
 
@@ -1025,6 +1029,8 @@
   function pdOpen(job) {
     S.pedit = { id: job ? job.id : "", draft: job ? JSON.parse(JSON.stringify(job)) : pdBlank(), test: null, last: null };
     ["resolved", "key", "schedules", "updated"].forEach((k) => delete S.pedit.draft[k]);
+    if (!S.pedit.draft.filter) S.pedit.draft.filter = pdBlank().filter;
+    if (!S.pedit.draft.filter.conditions.length) S.pedit.draft.filter.conditions.push({ column: "", op: "in", values: "" });
     renderPortalEditor();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -1082,6 +1088,17 @@
       /* 3 — after */
       '<div class="pd-sec"><div class="pd-sh"><span class="pd-n">3</span><h3>After the download</h3><small>everything is backed up automatically</small></div>' +
       pdSwitch("unzip", "Unzip the file", "For .gz and .zip files — the extracted file is what gets e-mailed / uploaded.") +
+      pdSwitch("filter.enabled", "Keep only some rows (filter)", "Off = the full file. On = only the rows that match are saved, e-mailed and uploaded (the full file stays in the backup).") +
+      '<div class="pd-sub" id="pdFilt"><div class="pd-row" style="grid-template-columns:1fr"><div><label class="pd-fl">Keep a row when</label>' +
+      '<div class="pd-seg2" data-seg="filter.match"><button data-v="all" class="' + (d.filter.match !== "any" ? "on" : "") + '">ALL conditions match</button><button data-v="any" class="' + (d.filter.match === "any" ? "on" : "") + '">ANY condition matches</button></div></div></div>' +
+      d.filter.conditions.map((c, i) => '<div class="pd-row" style="grid-template-columns:1.2fr 1fr 1.6fr auto;align-items:end">' +
+        pdIn("filter.conditions." + i + ".column", i ? "" : "Column name", { mono: true, ph: "e.g. Symbol" }) +
+        '<div><label class="pd-fl">' + (i ? "" : "Condition") + '</label><select class="pd-in" data-p="filter.conditions.' + i + '.op">' +
+        PD_OPS.map((o) => '<option value="' + o[0] + '"' + (c.op === o[0] ? " selected" : "") + ">" + o[1] + "</option>").join("") + "</select></div>" +
+        pdIn("filter.conditions." + i + ".values", i ? "" : "Value(s)", { mono: true, ph: "e.g. NIFTY, BANKNIFTY" }) +
+        '<button class="sch-tool" data-rmc="' + i + '" title="Remove this condition">✕</button></div>').join("") +
+      '<div class="pd-hint" style="margin:2px 0 8px">Column names are the header names in the file (case does not matter). Several values: separate with commas. If a name is wrong the run stops and lists the real columns.</div>' +
+      '<button class="sch-tool" id="pdAddCond">＋ Add condition</button></div>' +
       pdSwitch("email.enabled", "E-mail the file", "Sent first, before the Kambala upload.") +
       '<div class="pd-sub" id="pdMail"><div class="pd-row c2">' + pdIn("email.to", "To", { ph: "name@mastertrust.co.in, …" }) + pdIn("email.cc", "Cc", { opt: true, ph: "optional" }) + "</div>" +
       '<div class="pd-row" style="grid-template-columns:1fr">' + pdIn("email.subject", "Subject", { mono: true, hint: "Placeholders work here too, plus <b>{NAME}</b> and <b>{FILE}</b>." }) +
@@ -1145,6 +1162,15 @@
         pdSet(el.dataset.p, el.value); pdSync(false);
       };
     });
+    const rerender = () => { const snap = E.snap; renderPortalEditor(); E.snap = snap; };
+    $("#pdAddCond").onclick = () => { d.filter.conditions.push({ column: "", op: "in", values: "" }); rerender(); };
+    root.querySelectorAll("[data-rmc]").forEach((b) => {
+      b.onclick = () => {
+        d.filter.conditions.splice(parseInt(b.dataset.rmc, 10), 1);
+        if (!d.filter.conditions.length) d.filter.conditions.push({ column: "", op: "in", values: "" });
+        rerender();
+      };
+    });
     S.pedit.snap = JSON.stringify(S.pedit.draft);
     pdSync(true);
   }
@@ -1154,6 +1180,7 @@
   let pdTimer = null;
   function pdSync(now) {
     const d = S.pedit.draft;
+    $("#pdFilt").style.display = d.filter && d.filter.enabled ? "" : "none";
     $("#pdMail").style.display = d.email.enabled ? "" : "none";
     $("#pdKamb").style.display = d.kambala.enabled ? "" : "none";
     $("#pvFlow").innerHTML = flowChips(d);

@@ -16,6 +16,9 @@ import json
 import re
 import shutil
 import threading
+import time
+import zipfile
+import zlib
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -93,6 +96,87 @@ def slug(text: str) -> str:
     return s[:40] or "job"
 
 
+# ───────────────────────────── column filter ─────────────────────────────
+FILTER_OPS = ("eq", "neq", "in", "not_in", "contains", "not_contains", "starts", "gt", "gte", "lt", "lte")
+
+
+def _num(s):
+    try:
+        return float(str(s).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _vals(text: str) -> List[str]:
+    return [v.strip() for v in re.split(r"[,\n;]", text or "") if v.strip()]
+
+
+def _match_one(cell: str, op: str, values: List[str]) -> bool:
+    c = (cell or "").strip()
+    cl = c.lower()
+    if op in ("eq", "neq"):                    # exact: whole value, same upper/lower case, no number tolerance
+        return (c == values[0]) if op == "eq" else (c != values[0])
+    if op in ("in", "not_in"):
+        cn = _num(c)
+        hit = any(cl == v.lower() or (cn is not None and _num(v) is not None and cn == _num(v)) for v in values)
+        return hit if op == "in" else not hit
+    if op == "contains":
+        return any(v.lower() in cl for v in values)
+    if op == "not_contains":
+        return not any(v.lower() in cl for v in values)
+    if op == "starts":
+        return any(cl.startswith(v.lower()) for v in values)
+    cn, vn = _num(c), _num(values[0]) if values else None
+    if cn is None or vn is None:
+        return False
+    return {"gt": cn > vn, "gte": cn >= vn, "lt": cn < vn, "lte": cn <= vn}[op]
+
+
+def filter_csv(src: Path, dst: Path, flt: dict, ctx) -> Tuple[int, int]:
+    """Writes the header + only the rows that pass `flt` to dst.  -> (rows kept, rows read).
+    Column names are matched ignoring case and spaces; a missing column stops the run with the list of real columns."""
+    import csv
+    raw = src.read_bytes()
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    first = text.split("\n", 1)[0]
+    delim = max((",", "|", ";", "\t"), key=first.count)
+    rd = csv.reader(text.splitlines(), delimiter=delim)
+    try:
+        head = next(rd)
+    except StopIteration:
+        raise RuntimeError(f"{src.name} is empty — nothing to filter.")
+    norm = lambda s: re.sub(r"\s+", "", str(s)).lower()
+    pos = {norm(h): i for i, h in enumerate(head)}
+    rules = []
+    for c in flt["conditions"]:
+        i = pos.get(norm(c["column"]))
+        if i is None:
+            raise RuntimeError(f"Filter column “{c['column']}” is not in {src.name}. Columns in the file: "
+                               + ", ".join(h.strip() for h in head if h.strip()) + ". Fix the column name in the job (Edit).")
+        rules.append((i, c["op"], [c["values"].strip()] if c["op"] in ("eq", "neq") else _vals(c["values"])))
+    any_mode = flt.get("match") == "any"
+    kept = total = 0
+    with open(dst, "w", newline="", encoding="utf-8") as fo:
+        w = csv.writer(fo, delimiter=delim, lineterminator="\r\n")
+        w.writerow(head)
+        for row in rd:
+            if not row or not any(x.strip() for x in row):
+                continue
+            total += 1
+            res = [_match_one(row[i] if i < len(row) else "", op, v) for i, op, v in rules]
+            if any(res) if any_mode else all(res):
+                w.writerow(row)
+                kept += 1
+    ctx.log(f"Filter: kept {kept:,} of {total:,} row(s) in {src.name} (" + (" OR " if any_mode else " AND ").join(
+        f"{c['column']} {c['op']} {c['values']}" for c in flt["conditions"]) + f") → {dst.name}.")
+    return kept, total
+
+
 # ───────────────────────────── validation ─────────────────────────────
 def _bool(v, default=False):
     if v is None:
@@ -168,13 +252,40 @@ def clean_job(raw: dict, existing_id: str = "") -> Tuple[List[str], dict]:
         if bad:
             errs.append("Unknown placeholder in the Kambala file name: " + ", ".join("{" + b + "}" for b in bad))
 
+    f_in = r.get("filter") if isinstance(r.get("filter"), dict) else {}
+    conds = []
+    for c in (f_in.get("conditions") or []):
+        if not isinstance(c, dict):
+            continue
+        col, op = str(c.get("column") or "").strip(), str(c.get("op") or "in").strip().lower()
+        vals = str(c.get("values") or "").strip()
+        if not col and not vals:
+            continue                                   # an untouched blank row
+        if op not in FILTER_OPS:
+            errs.append(f"Filter on “{col}”: unknown condition “{op}”.")
+            op = "in"
+        if not col:
+            errs.append("Filter: a row has values but no column name.")
+        elif not vals:
+            errs.append(f"Filter on “{col}”: enter the value(s) to keep.")
+        elif op in ("gt", "gte", "lt", "lte") and _num(vals) is None:
+            errs.append(f"Filter on “{col}”: “{vals}” is not a number.")
+        conds.append({"column": col, "op": op, "values": vals})
+    flt = {"enabled": _bool(f_in.get("enabled")), "match": "any" if str(f_in.get("match")).lower() == "any" else "all",
+           "conditions": conds}
+    if flt["enabled"]:
+        if not conds:
+            errs.append("Filter is switched on: add at least one column and value.")
+        if not re.sub(r"\.(gz|zip)$", "", filename.lower()).endswith((".csv", ".txt", ".dat")):
+            errs.append("Filtering works on .csv / .txt files only (the file name must end in .csv, .csv.gz, .txt …).")
+
     job = {
         "id": existing_id or str(r.get("id") or "").strip() or slug(name),
         "name": name, "description": str(r.get("description") or "").strip()[:300],
         "source": source, "segment": segment, "folder": folder, "filename": filename,
         "days_back": days_back, "trading_day_only": _bool(r.get("trading_day_only"), True),
         "wait_minutes": wait, "unzip": _bool(r.get("unzip"), filename.lower().endswith((".gz", ".zip"))),
-        "email": email, "kambala": kambala,
+        "email": email, "kambala": kambala, "filter": flt,
     }
     if not re.fullmatch(r"[a-z0-9_]{1,40}", job["id"]):
         errs.append("Bad job id.")
@@ -277,27 +388,52 @@ def run_job(job: dict, ctx) -> str:
             + ("today" if job["days_back"] <= 0 else f"{job['days_back']} trading day(s) back") + f") → looking for {name} "
             f"on the NSE {job['source']} portal ({job['segment']} › {job['folder']}).")
     try:
-        gz = nse.download_wait(job["source"], job["segment"], job["folder"], name, inp, ctx, int(job.get("wait_minutes") or 0))
+        # A download that arrives damaged (cut short, not a real gzip/zip) is thrown away and fetched again, 4 times.
+        for bad_n in range(1, 5):
+            gz = nse.download_wait(job["source"], job["segment"], job["folder"], name, inp, ctx, int(job.get("wait_minutes") or 0))
+            try:
+                final = _final_file(job, gz, out, ctx)
+                break
+            except (OSError, EOFError, zlib.error, zipfile.BadZipFile) as ex:
+                ctx.log(f"[!] {gz.name} is damaged or incomplete ({type(ex).__name__}: {ex}) — deleting it and downloading again ({bad_n}/4).")
+                try:
+                    gz.unlink()
+                except OSError:
+                    pass
+                if bad_n == 4:
+                    raise RuntimeError(f"{name} kept arriving damaged from NSE (4 downloads). Try Run Now again in a few minutes.")
+                time.sleep(5)
     except FileNotFoundError:
         ctx.log(f"NO FILE: the NSE {job['source']} portal has no {name} for {d:%d-%m-%Y}. Nothing was uploaded.")
         if em["enabled"] and em["notify_no_file"]:
             subj = fill(em["subject"], toks) + " - NO FILE"
             body = _html_body(fill(DEFAULT_NOFILE_BODY, toks), em["signature"])
             try:
-                H.send_email(subj, body, to, cc, [], ctx, html=True)     # not marked "sent": a later run may still get the file
+                H.send_email(subj, body, to, cc, [], ctx, html=True, attempts=0)     # not marked "sent": a later run may still get the file
                 ctx.log(f"“No file” e-mail sent: “{subj}”.")
             except Exception as ex:
                 ctx.log(f"[!] Could not send the “no file” e-mail: {type(ex).__name__}: {ex}")
         ctx.log("This is normal on days when NSE does not publish the file. The run is marked SUCCESS.")
         return f"No file on the portal for {d:%d-%m-%Y}" + (" — “no file” e-mail sent" if em["enabled"] and em["notify_no_file"] else "")
 
-    final = _final_file(job, gz, out, ctx)
+    full = final
     done = [f"downloaded {final.name}"]
+    flt = job.get("filter") or {}
+    extra = ""
+    if flt.get("enabled"):
+        fout = out / f"{full.stem}_filtered{full.suffix}"
+        kept, total = filter_csv(full, fout, flt, ctx)
+        final = fout
+        done.append(f"filtered ({kept:,} of {total:,} rows)")
+        extra = f"\n\nFiltered file: {kept:,} of {total:,} rows kept."
+        if kept == 0:
+            ctx.log("[!] No row matched the filter — the file has the header only.")
+            extra += " No row matched the filter."
     if em["enabled"]:
         subj = fill(em["subject"], toks)
-        body = _html_body(fill(em["body"], toks), em["signature"])
+        body = _html_body(fill(em["body"], toks) + extra, em["signature"])
         ctx.log(f"Step 2: e-mailing {final.name} to {', '.join(to)}" + (f" (cc {', '.join(cc)})" if cc else "") + "…")
-        H.send_email(subj, body, to, cc, [final], ctx, html=True)
+        H.send_email(subj, body, to, cc, [final], ctx, html=True, attempts=0)       # 0 = keep retrying on server errors
         H.mark_sent(folder, "mail")
         ctx.log(f"E-mail sent: “{subj}”.")
         done.append("e-mailed")
@@ -313,7 +449,7 @@ def run_job(job: dict, ctx) -> str:
         done.append("uploaded to Kambala" if up_ok else "Kambala upload FAILED — see the log")
         if send != final:
             H.backup_files(folder, [send], ctx)
-    H.backup_files(folder, [gz, final], ctx)
+    H.backup_files(folder, [gz, full, final] if final != full else [gz, full], ctx)
     ctx.log("Done: " + ", ".join(done) + ".")
     return f"{final.name} — " + ", ".join(done[1:] or ["downloaded"]) + f" ({d:%d-%m-%Y})"
 
@@ -396,8 +532,23 @@ def _make_run(job_id: str):
         job = get_job(job_id)
         if not job:
             raise RuntimeError("This portal download job has been deleted.")
-        return H.logged(job["name"])(lambda p, c: run_job(job, c))(params, ctx)
+        try:
+            return H.logged(job["name"])(lambda p, c: run_job(job, c))(params, ctx)
+        finally:
+            _backup_log(job["name"])
     return _run
+
+
+def _backup_log(folder: str):
+    """The run log is written to <process>/logs/ by H.logged; keep a copy next to the backed-up files too."""
+    try:
+        logs = sorted(paths.proc_dir(folder, "logs").glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if logs:
+            dest = paths.proc_dir(folder, "backup") / H.today_dash()
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(logs[0], dest / logs[0].name)
+    except Exception:
+        pass
 
 
 def sync():
