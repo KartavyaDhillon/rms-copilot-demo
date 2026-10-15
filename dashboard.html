@@ -2326,7 +2326,7 @@ let _tokenCaller='sa';
 // the modal so it's never ambiguous WHICH box/screen a pending captcha or RSA
 // token belongs to when several pipes/people are active at once.
 function _pipeBoxLabel(src){
-  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit', r1r2:'R1-R2 Comparison Report', reco:'RECONCILIATION'}[src] || src;
+  return {ctcl:'CTCL vs NMASS', ms15:'Margin Shortage (15-min)', sa:'Short Allocation', cli:'Client Prudential Limit', r1r2:'R1-R2 Comparison Report', reco:'RECONCILIATION', probable:'PROBABLE'}[src] || src;
 }
 function captchaStartPoller(){
   if(_captchaPoller) return;
@@ -2398,6 +2398,19 @@ function captchaStartPoller(){
         _captchaPortal=(d.source||_captchaPortal); _captchaChecking=false;
         captchaUpdateModal(d.image_b64, d.detected||'', d.reason||'');
       } else if(!d.pending && _captchaVisible && _captchaSource==='r1r2' && _captchaChecking){
+        captchaHideModal(); _captchaChecking=false;
+      }
+    }catch(e){} }
+    // ── PROBABLE NMASS/NCDEX captcha (same popup as CTCL / MS15; its RSA token reuses /sa/token/pending above) ──
+    if(!_tokenVisible){ try{
+      const d=await (await fetch(API+'/probable/captcha/pending')).json();
+      if(d.pending && !_captchaVisible && !_tokenVisible){
+        _captchaSource='probable'; _captchaPortal=(d.source||'nmass'); _captchaChecking=false;
+        captchaShowModal(d.image_b64, d.detected||'', d.reason||'');
+      } else if(d.pending && _captchaVisible && _captchaSource==='probable' && _captchaChecking){
+        _captchaPortal=(d.source||_captchaPortal); _captchaChecking=false;
+        captchaUpdateModal(d.image_b64, d.detected||'', d.reason||'');
+      } else if(!d.pending && _captchaVisible && _captchaSource==='probable' && _captchaChecking){
         captchaHideModal(); _captchaChecking=false;
       }
     }catch(e){} }
@@ -2479,6 +2492,7 @@ async function captchaCancel(){
     if(_captchaSource==='ctcl'){ await fetch(API+'/ctcl/stop',{method:'POST'}); }
     else if(_captchaSource==='ms15'){ await fetch(API+'/ms15/stop',{method:'POST'}); }
     else if(_captchaSource==='r1r2'){ await fetch(API+'/r1r2/stop',{method:'POST'}); }
+    else if(_captchaSource==='probable'){ await fetch(API+'/px/stop?pipe=probable',{method:'POST'}); }
     else { await fetch(API+'/sa/stop',{method:'POST'}); }
   }catch(e){}
 }
@@ -2494,11 +2508,11 @@ async function captchaSubmit(){
   if(inp) inp.disabled=true;
   if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
   try{
-    const _ep=_captchaSource==='ctcl'?'/ctcl/captcha/answer':(_captchaSource==='ms15'?'/ms15/captcha/answer':(_captchaSource==='r1r2'?'/r1r2/captcha/answer':'/sa/captcha/answer'));
+    const _ep=_captchaSource==='ctcl'?'/ctcl/captcha/answer':(_captchaSource==='ms15'?'/ms15/captcha/answer':(_captchaSource==='r1r2'?'/r1r2/captcha/answer':(_captchaSource==='probable'?'/probable/captcha/answer':'/sa/captcha/answer')));
     const r=await fetch(API+_ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
     const d=await r.json();
     if(d.ok){
-      if(_captchaSource==='ctcl'||_captchaSource==='ms15'||_captchaSource==='r1r2'){
+      if(_captchaSource==='ctcl'||_captchaSource==='ms15'||_captchaSource==='r1r2'||_captchaSource==='probable'){
         // Don't hide — let the poller detect the result:
         //   • new PENDING with reason → captchaUpdateModal (shows retry reason)
         //   • no PENDING            → captchaHideModal   (answer accepted)

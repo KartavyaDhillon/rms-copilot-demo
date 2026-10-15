@@ -83,10 +83,13 @@ def _download_delivery_margin(base_folder, today_str_prev_trading_day):
     file_gz_path = os.path.join(base_folder, filename)
     file_csv_path = file_gz_path.replace(".csv.gz", ".csv")
 
-    def get_token(max_tries=6):
-        for attempt in range(max_tries):
+    def get_token():
+        # Same as the manual script: keeps trying until NSE answers with a token.
+        attempt = 0
+        while True:
+            attempt += 1
             try:
-                resp = requests.post(login_url, json=credentials, timeout=15)
+                resp = requests.post(login_url, json=credentials, timeout=10)
                 resp.raise_for_status()
                 token = resp.json().get("token")
                 if not token:
@@ -94,9 +97,15 @@ def _download_delivery_margin(base_folder, today_str_prev_trading_day):
                 print("✅ NSE login successful.")
                 return token
             except Exception as e:
-                print(f"⚠️ NSE login failed: {e} — retrying in 5s ({attempt+1}/{max_tries})")
+                print(f"⚠️ NSE login failed: {e} — retrying in 5s (attempt {attempt})")
                 time.sleep(5)
-        raise RuntimeError("NSE login failed after repeated attempts")
+
+    def _not_given(r):
+        """NSE says 'file not there' as 404, or as HTTP 400 with code 714 FILE / 715 FOLDER NOT FOUND."""
+        if r.status_code == 404:
+            return True
+        up = r.text.upper() if r.status_code == 400 else ""
+        return r.status_code == 400 and (("714" in up and "FILE NOT FOUND" in up) or ("715" in up and "FOLDER NOT FOUND" in up))
 
     if not credentials["password"]:
         print("⚠️ SA_NSE_PASSWORD not set — skipping Delivery Margin download (DELIVERY MARGIN will be 0)")
@@ -105,16 +114,41 @@ def _download_delivery_margin(base_folder, today_str_prev_trading_day):
         print(f"⏭ {os.path.basename(file_csv_path)} already present — skipping download")
         return
 
-    token = get_token()
-    headers = {"Authorization": f"Bearer {token}"}
+    state = {"token": get_token()}
+
+    def nse_get(prm, timeout=15):
+        """GET that behaves like the manual script: a server error (5xx / 429) or a network problem is retried
+        for ever (3 s apart), an expired token (401) logs in again.  404 / 400-714 'not given' is returned as is.
+        Any other 4xx (a real refusal, would never fix itself) is tried 10 times, then handed back."""
+        other_4xx = 0
+        while True:
+            try:
+                r = requests.get(download_url, headers={"Authorization": f"Bearer {state['token']}"},
+                                 params=prm, timeout=timeout)
+            except requests.exceptions.RequestException as e:
+                print(f"🌐 Network error: {e} — retrying in 3 s")
+                time.sleep(3)
+                continue
+            if r.status_code == 401:
+                print("🔄 Token expired. Re-logging...")
+                state["token"] = get_token()
+                continue
+            if r.status_code == 200 or _not_given(r):
+                return r
+            if r.status_code >= 500 or r.status_code == 429:
+                print(f"⚠️ Server error {r.status_code}. Retrying in 3 sec...")
+                time.sleep(3)
+                continue
+            other_4xx += 1
+            print(f"⚠️ NSE answered HTTP {r.status_code} ({r.text[:120]}) — try {other_4xx}/10")
+            if other_4xx >= 10:
+                return r
+            time.sleep(3)
+
     params = {"segment": segment, "folderPath": "Reports", "filename": filename}
     try:
-        response = requests.get(download_url, headers=headers, params=params, timeout=30)
-        if response.status_code == 401:
-            token = get_token()
-            headers = {"Authorization": f"Bearer {token}"}
-            response = requests.get(download_url, headers=headers, params=params, timeout=60)
-        if response.status_code == 404:
+        response = nse_get(params, timeout=30)
+        if _not_given(response):
             print("❌ Delivery Margin file not given by exchange for this date — skipping.")
             return
         response.raise_for_status()
@@ -131,20 +165,8 @@ def _download_delivery_margin(base_folder, today_str_prev_trading_day):
             file_date = check_date.strftime("%d%m%Y")
             test_params = {"segment": segment, "folderPath": "Reports",
                             "filename": f"F_DLMG02_06436_{file_date}.csv.gz"}
-            test_response = None
-            for _ in range(20):
-                try:
-                    test_response = requests.get(download_url, headers=headers, params=test_params, timeout=15)
-                    if test_response.status_code == 401:
-                        token = get_token(); headers = {"Authorization": f"Bearer {token}"}
-                        continue
-                    break
-                except requests.exceptions.RequestException as e:
-                    print(f"🌐 Network error checking {file_date}: {e} — retrying")
-                    time.sleep(3)
-            if test_response is None:
-                break
-            if test_response.status_code == 404:
+            test_response = nse_get(test_params)
+            if _not_given(test_response):
                 break
             if test_response.status_code == 200:
                 consecutive_count += 1
@@ -346,7 +368,7 @@ def _read_delivery_file(base_folder):
     return df
 
 
-def _send_email_with_retry(base_folder, today_ddmmyyyy, today_str_prev, attachments, max_tries=5,
+def _send_email_with_retry(base_folder, today_ddmmyyyy, today_str_prev, attachments, max_tries=10,
                             safe_test=False):
     smtp_server = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
     smtp_port   = int(os.getenv("SMTP_PORT", "587"))

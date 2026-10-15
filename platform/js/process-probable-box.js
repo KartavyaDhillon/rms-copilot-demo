@@ -1996,7 +1996,7 @@
     // Placeholder only — the first 'note' event from the Python side replaces
     // this within a second, and each stage replaces it again after that.
     if (strip) { strip.style.display = 'block'; strip.innerHTML = '<div style="color:var(--muted)">⏳ Starting TCS BANCS download…</div>'; }
-    if (typeof window.captchaStartPoller === 'function') window.captchaStartPoller();
+    _probablePoll('tcs', true);
     // Registering the stream (not just the local _es) is what process-locks.js's
     // localBusy() checks to recognize "this tab started this" — without it, the
     // tab that clicked the button gets shown its OWN action back as "running on
@@ -2020,7 +2020,7 @@
       if (d.type === 'end') {
         ev.close(); _es = null; _pxES_clear(PIPE + ':action'); _busyAct.tcs = false;
         _probableSetDlButtonsDisabled(false, 'probableTcsBtn');
-        if (typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
+        _probablePoll('tcs', false);
         if (strip) strip.innerHTML = '<div style="font-weight:700;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓ TCS BANCS downloaded — RSK383 (Cash Collateral Deposit Limit) + RSK335 (Margin Utilization View / 90% file) saved.' : '✗ TCS BANCS download failed — see 🗂️ Logs for details') + '</div>';
         if (ok) _probableStripAutoHide('probableTcsStrip', 10);
         probableLoadReady();
@@ -2029,56 +2029,25 @@
     ev.onerror = function () {
       ev.close(); _es = null; _pxES_clear(PIPE + ':action'); _busyAct.tcs = false;
       _probableSetDlButtonsDisabled(false, 'probableTcsBtn');
-      if (typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
+      _probablePoll('tcs', false);
     };
   };
 
   // ── tiny self-contained captcha modal for the NMASS/NCFE step —
   // dashboard.html's own captcha poller only checks ctcl/ms15/sa sources, so
   // this pipe needs its own small one rather than editing that file. ───────
-  var _capTimer = null, _capVisible = false;
-  function probableCaptchaStartPoller() {
-    if (_capTimer) return;
-    _capTimer = setInterval(function () {
-      if (_capVisible) return;
-      fetch(API + '/probable/captcha/pending').then(function (r) { return r.json(); }).then(function (d) {
-        if (d.pending) probableCaptchaShow(d.image_b64, d.reason || '');
-      }).catch(function () {});
-    }, 2000);
+  // PROBABLE now uses the SAME captcha and RSA-token popups as CTCL vs NMASS / MS15 (dashboard.html's captchaModal /
+  // tokenModal, driven by its captchaStartPoller()).  That poller is shared, so the NMASS/NCDEX and TCS BANCS
+  // downloads each register themselves here and the poller is only stopped when NEITHER is still running —
+  // before, one download finishing could switch the poller off while the other was still waiting for its token.
+  var _pollOn = { nmass: false, tcs: false };
+  function _probablePoll(kind, on) {
+    _pollOn[kind] = on;
+    if (on) { if (typeof window.captchaStartPoller === 'function') window.captchaStartPoller(); return; }
+    if (!_pollOn.nmass && !_pollOn.tcs && typeof window.captchaStopPoller === 'function') window.captchaStopPoller();
   }
-  function probableCaptchaStopPoller() {
-    if (_capTimer) { clearInterval(_capTimer); _capTimer = null; }
-    _capVisible = false;
-    var m = document.getElementById('probableCaptchaModal'); if (m) m.remove();
-  }
-  function probableCaptchaShow(imgB64, reason) {
-    _capVisible = true;
-    var old = document.getElementById('probableCaptchaModal'); if (old) old.remove();
-    var wrap = document.createElement('div');
-    wrap.id = 'probableCaptchaModal';
-    wrap.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center';
-    wrap.innerHTML =
-      '<div style="background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px;width:360px;box-shadow:var(--sh-3)">' +
-        '<div style="font-weight:800;font-size:15px;margin-bottom:10px;color:var(--ink)">🔒 NMASS/NCDEX Captcha — PROBABLE</div>' +
-        (reason ? '<div style="color:var(--amber);font-size:12px;margin-bottom:10px">' + String(reason).replace(/[<>]/g, '') + '</div>' : '') +
-        (imgB64 ? '<img src="data:image/png;base64,' + imgB64 + '" style="width:100%;border-radius:8px;margin-bottom:12px;border:1px solid var(--line)"/>' : '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">Loading image…</div>') +
-        '<input id="probableCaptchaInput" autofocus style="width:100%;box-sizing:border-box;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--ink);margin-bottom:12px" placeholder="Type the captcha text">' +
-        '<div style="display:flex;justify-content:flex-end;gap:10px">' +
-          '<button id="probableCaptchaSubmit" style="padding:9px 18px;border-radius:9px;border:none;background:var(--blue);color:#04101f;font-weight:700;cursor:pointer">Submit</button>' +
-        '</div>' +
-      '</div>';
-    document.body.appendChild(wrap);
-    var input = document.getElementById('probableCaptchaInput');
-    var submit = function () {
-      var text = (input.value || '').trim();
-      if (!text) return;
-      fetch(API + '/probable/captcha/answer', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text })
-      }).then(function () { _capVisible = false; wrap.remove(); }).catch(function () { _capVisible = false; wrap.remove(); });
-    };
-    document.getElementById('probableCaptchaSubmit').onclick = submit;
-    input.addEventListener('keydown', function (e) { if (e.key === 'Enter') submit(); });
-  }
+  function probableCaptchaStartPoller() { _probablePoll('nmass', true); }
+  function probableCaptchaStopPoller() { _pollOn.tcs = false; _probablePoll('nmass', false); }
 
   // ── monkey-patch: intercept the generic run-tile's onclick="pxRun('probable')"
   // to collect market-time FIRST; every other pipe's behaviour is untouched. ──

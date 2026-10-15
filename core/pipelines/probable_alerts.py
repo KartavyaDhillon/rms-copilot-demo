@@ -278,7 +278,7 @@ def _steps_5_to_6(base_folder, updated_main_file):
 # STEP 7 — zone emails (raj.kumari sender account, per-zone recipients).
 # =====================================================
 def _send_with_retry(smtp_server, smtp_port, smtp_email, smtp_pass,
-                      subject, body, to_list, cc_list, file_paths, max_tries=6,
+                      subject, body, to_list, cc_list, file_paths, max_tries=10,
                       is_html=False):
     valid_files = [f for f in file_paths if f and os.path.exists(f)]
     if not valid_files:
@@ -989,7 +989,7 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
             print(f"⏭ SKIPPED (no email): {_code}")
             return
         _last_err = "unknown error"
-        for attempt in range(1, 6):
+        for attempt in range(1, 11):
             try:
                 msg = MIMEMultipart()
                 msg["From"] = smtp_email
@@ -1020,11 +1020,11 @@ def _step_10_dynamic_mail(base_folder, delhi_path, ludh_path, zochnd_path, zomum
             except Exception as e:
                 _last_err = e
                 print(f"❌ FAILED: {_code} → {e}")
-                if attempt < 5:
+                if attempt < 10:
                     time.sleep(15)
         _log(branch, _log_region, _zone, path, to_emails, cc_emails, source, "NOT SENT - FAILED",
              f"Email address was found, but the mail server refused the message "
-             f"after 5 attempts: {_last_err}")
+             f"after 10 attempts: {_last_err}")
 
     for _, row in df_mail.iterrows():
         if override_to:
