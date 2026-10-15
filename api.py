@@ -1299,7 +1299,7 @@ def report_image(name: str):
 import json as _sa_json, datetime as _sa_dt, os as _sa_os, tempfile as _sa_tmp
 from typing import List as _SA_List
 from pydantic import BaseModel as _SA_BaseModel
-from fastapi import UploadFile as _SA_UploadFile, File as _SA_File
+from fastapi import UploadFile as _SA_UploadFile, File as _SA_File, Form as _SA_Form
 from fastapi.responses import StreamingResponse as _SA_Stream
 from core.short_allocation import (
     stream_short_allocation as _sa_stream, cfg as _sa_cfg, read_run_state as _sa_rrs,
@@ -1465,7 +1465,11 @@ _SA_WRITE_TIMEOUT_S = 30  # timeout for the DISK-WRITE phase only (not body read
 
 @app.post("/sa/upload")
 async def sa_upload(target: str = "short_allocation", password: str = "",
-                    files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+                    files: _SA_List[_SA_UploadFile] = _SA_File(...),
+                    password_form: str = _SA_Form("", alias="password")):
+    # The dashboard sends the password inside the multipart BODY (a plain `password: str` parameter is read from the
+    # URL, so it always arrived blank and the "Replace protected file" prompt just came back again and again).
+    password = password or password_form
     orig_names = [_sa_os.path.basename(f.filename) for f in files]
 
     # ── Phase 1: read HTTP body into memory ─────────────────────────────────
@@ -2385,7 +2389,10 @@ from core.pipeline_box import (pb_upload as _pbup, pb_backup_types as _pbbt,
 
 @app.post("/px/upload")
 async def px_upload(pipe: str = "", target: str = "main", password: str = "",
-                    files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+                    files: _SA_List[_SA_UploadFile] = _SA_File(...),
+                    password_form: str = _SA_Form("", alias="password")):
+    # Password arrives in the multipart body from the dashboard (see sa_upload) — accept it from there or the URL.
+    password = password or password_form
     import shutil as _sh
     saved = []
     for f in files:
