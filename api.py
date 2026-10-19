@@ -183,6 +183,11 @@ def _can_stop(lock_key, request: Request):
 # used to pop up on everybody's screen (and an old PENDING file left by a dead run kept popping up for ever).
 _POPUP_STALE_S = 3 * 60           # a captcha/token request older than 3 minutes is never shown (and is cleared)
 _POPUP_IDLE_S = 120               # PENDING but no run/download of that pipe is active for this long → leftover
+# Standalone download buttons that are NOT a pipeline run (so no lock / action slot records who clicked them) register
+# their requester here for the duration of the download: {popup pipe name: "name (employee id)"}.
+# Without this, the popup of such a button has no recorded owner and is shown to admins only — a colleague who
+# clicks the button never gets the RSA token popup and the download times out waiting for a token nobody can enter.
+_POPUP_OWNERS: dict = {}
 
 
 def _popup_state_age(sf):
@@ -211,6 +216,8 @@ def _popup_mark_stale(sf):
 def _popup_pipe_active(pipe):
     """True if a run / standalone download / NMASS login of this pipe is alive right now (fail-open on any doubt)."""
     try:
+        if _POPUP_OWNERS.get(pipe):          # a standalone button of this pipe (e.g. MCX Deposit) is downloading
+            return True
         if pipe == "sa":
             from core.short_allocation import _SA
             return bool(_SA.get("running"))
@@ -251,6 +258,10 @@ def _popup_visible(request: Request, sf, pipes):
                     owners.append(_slot["by"])
         except Exception:
             pass
+        for _p in pipes:                             # standalone buttons that register their own requester
+            _o = _POPUP_OWNERS.get(_p)
+            if _o and _o != "unknown user":
+                owners.append(_o)
         me, _admin = _actor(request)
         if not owners:
             # nobody recorded (e.g. a Scheduler run) → admins only; if the console runs without sign-in at all
@@ -3120,7 +3131,7 @@ def sa_post_email_stream():
 
 
 @app.get("/sa/mcx-deposit-stream")
-def sa_mcx_deposit_stream():
+def sa_mcx_deposit_stream(request: Request):
     """SSE: run mcx_deposit_downloader.py standalone and stream output to dashboard.
     Downloads RSK383 (Cash Collateral Deposit Limit) from eclear.mcxccl.com.
     RSA SecurID token popup appears on desktop — user enters manually.
@@ -3130,12 +3141,21 @@ def sa_mcx_deposit_stream():
     import json as _dep_json
     from core.pipelines.mcx_deposit_download import stream_mcx_deposit_download
     _sa_clear_popup_state()  # drop any stale unanswered captcha/token from a previous stopped/crashed run
+    # Record WHO clicked, so the RSA token popup is shown to that person (not only to admins). This button is a
+    # standalone download — no lock / action slot stores its requester — so it registers itself in _POPUP_OWNERS.
+    _who, _adm = _actor(request)
+    _note_who(request)
+    if _who:
+        _POPUP_OWNERS["sa"] = _who
     def gen():
         try:
             for ev in stream_mcx_deposit_download():
                 yield f"data: {_dep_json.dumps(ev)}\n\n"
         except Exception as e:
             yield f"data: {_dep_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        finally:
+            if _who and _POPUP_OWNERS.get("sa") == _who:    # download over (or stream closed): stop pointing at this user
+                _POPUP_OWNERS.pop("sa", None)
         yield 'data: {"type":"end"}\n\n'
     return _SA_Stream(gen(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
