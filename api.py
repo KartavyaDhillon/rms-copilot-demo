@@ -2922,6 +2922,33 @@ def sa_captcha_answer(a: _SACaptchaAnswer):
         return {"ok": False, "error": str(e)}
 
 
+# ── Captcha auto-fill switch (2Captcha) ─────────────────────────────────────
+# core/captcha_solver.py answers the NMASS / NCDEX captchas automatically (45 s per try, 5 tries per login, then the
+# normal popup). This switch lives in a small JSON file that every pipeline process reads, so a change applies to
+# the very next captcha without restarting anything. The API key itself is only ever read from .env.
+@app.get("/captcha/auto")
+def captcha_auto_get():
+    """Current state of the auto-fill switch plus today's accepted/rejected counts."""
+    from core import captcha_solver as _cs
+    _st = _cs.switch_state()
+    return {"enabled": _st["enabled"], "by": _st["by"], "at": _st["at"], "key_configured": bool(_cs.api_key()),
+            "max_tries": _cs.MAX_TRIES, "timeout_s": _cs.TIMEOUT_S, "today": _cs.stats_today()}
+
+
+class _CaptchaAutoBody(_SA_BaseModel):
+    enabled: bool
+
+
+@app.post("/captcha/auto")
+def captcha_auto_set(body: _CaptchaAutoBody, request: Request):
+    """Turn captcha auto-fill on or off for everybody (the change is attributed to whoever clicked)."""
+    from core import captcha_solver as _cs
+    _who, _adm = _actor(request)
+    try:
+        _st = _cs.set_enabled(body.enabled, _who or "")
+    except OSError as _e:
+        return {"ok": False, "error": f"Could not save the switch: {_e}"}
+    return {"ok": True, "enabled": _st["enabled"], "key_configured": bool(_cs.api_key())}
 
 
 _ctcl_last_answered_at: dict = {}   # {source: timestamp} — per-source, NOT shared across

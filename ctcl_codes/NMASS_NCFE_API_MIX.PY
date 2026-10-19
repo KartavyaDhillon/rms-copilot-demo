@@ -39,6 +39,59 @@ try:
 except Exception:
     pass
 
+# ── Automatic captcha solving (2Captcha) ─────────────────────────────────────
+# core/captcha_solver.py answers the NMASS and NCDEX captchas itself: 45 s per try, at most 5 tries per login,
+# then the normal dashboard popup takes over. The dashboard switch "Captcha auto-fill" turns it on/off.
+# This script runs as its own process, so the repo root is put on sys.path to import `core`.
+import sys as _sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in _sys.path:
+    _sys.path.insert(0, _REPO_ROOT)
+try:
+    from core import captcha_solver as _cs
+except Exception as _cs_err:      # auto-fill is optional: the manual popup must keep working without it
+    _cs = None
+    print(f"⚠️ Captcha auto-fill unavailable ({_cs_err}) — manual popup only", flush=True)
+
+_AUTO_SESSIONS = {}
+
+
+def _auto(portal):
+    """One AutoSession per portal for the life of this process; None when the solver module could not load."""
+    if _cs is None:
+        return None
+    if portal not in _AUTO_SESSIONS:
+        _AUTO_SESSIONS[portal] = _cs.AutoSession(portal)
+    return _AUTO_SESSIONS[portal]
+
+
+def _auto_answer(portal, image_path):
+    """Try to solve the captcha picture automatically; returns the text, or None to show the manual popup."""
+    session_ = _auto(portal)
+    if session_ is None:
+        return None
+    try:
+        with open(image_path, "rb") as _fh:
+            return session_.solve(_fh.read())
+    except Exception as _e:       # never let auto-fill break a login: fall back to the person
+        print(f"⚠️ Captcha auto-fill error ({type(_e).__name__}: {_e}) — manual popup", flush=True)
+        return None
+
+
+def _auto_note(portal):
+    """Sentence shown in the manual popup explaining why auto-fill stopped (empty when it did not run)."""
+    session_ = _auto(portal)
+    return session_.manual_note() if session_ is not None else ""
+
+
+def _auto_feedback(portal, accepted):
+    """Tell the solver whether the portal accepted the last automatic answer (resets / spends the try budget)."""
+    session_ = _auto(portal)
+    if session_ is None:
+        return False
+    return session_.accepted() if accepted else session_.rejected()
+
+
 BASE = "https://www.connect2nsccl.com"
 
 # Read from .env (Credentials button on the dashboard writes these) — the
@@ -368,6 +421,14 @@ def captcha_popup(image_path, reason=None):
     import shutil as _shutil
     import json as _cjson
 
+    # Automatic answer first (2Captcha). None means: switch off, no key, or the 5 tries are used up.
+    _auto_text = _auto_answer("nmass", image_path)
+    if _auto_text:
+        return _auto_text
+    _note = _auto_note("nmass")
+    if _note:
+        reason = f"{reason} | {_note}" if reason else _note
+
     detected = detect_captcha_text(image_path)
 
     _state_dir  = os.getenv("NMASS_SAVE_DIR", os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS"))
@@ -625,7 +686,9 @@ def login(_is_restart=False):
     while True:
 
         _captcha_attempt += 1
-        if _captcha_attempt > MAX_CAPTCHA_ATTEMPTS:
+        # The automatic tries (max 5, see core/captcha_solver.py) come on top of the manual attempts, so the person
+        # still gets the full MAX_CAPTCHA_ATTEMPTS after auto-fill has given up.
+        if _captcha_attempt > MAX_CAPTCHA_ATTEMPTS + (_auto("nmass").tries_used if _auto("nmass") else 0):
             # Give up rather than asking a tenth time. Whatever is wrong is not
             # going to be fixed by another captcha, and the operator deserves to
             # be told that instead of being kept in the loop.
@@ -686,6 +749,7 @@ def login(_is_restart=False):
         try:
             resp = r.json()
         except:
+            _auto_feedback("nmass", False)
             _nmass_retry_reason = "SERVER ERROR — try again"
             continue
 
@@ -694,6 +758,9 @@ def login(_is_restart=False):
             _msg = ""
             try: _msg = (resp.get("messages", {}) or {}).get("message", "").lower()
             except Exception: pass
+            # "Already logged in" means the captcha itself was fine; every other failure counts against the
+            # automatic try budget (and is reported to 2Captcha as a wrong answer).
+            _auto_feedback("nmass", "already" in _msg and "login" in _msg)
             if "already" in _msg and "login" in _msg:
                 _nmass_retry_reason = "USER ALREADY LOGGED IN — try again"
             elif "captcha" in _msg or "invalid" in _msg:
@@ -707,6 +774,7 @@ def login(_is_restart=False):
             print(f"Login failed: {_nmass_retry_reason}")
             continue
 
+        _auto_feedback("nmass", True)          # captcha accepted: reports it to 2Captcha, resets the try budget
         salt = resp["data"]["map"]["salt"]
         break
 
@@ -1112,6 +1180,13 @@ def run_ncdex():
                 e.g. "❌ Captcha incorrect — try again" or "⚠️ Already logged in"
         """
         import shutil as _nsh, json as _ncj, time as _nt
+        # Automatic answer first (2Captcha); None = switch off / no key / 5 tries used up -> manual popup below.
+        _auto_text = _auto_answer("ncdex", image_path)
+        if _auto_text:
+            return _auto_text
+        _note = _auto_note("ncdex")
+        if _note:
+            reason = f"{reason} | {_note}" if reason else _note
         detected = detect_captcha_text(image_path)
 
         _state_dir  = os.getenv("NMASS_SAVE_DIR", os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS"))
@@ -1427,8 +1502,11 @@ def run_ncdex():
     # -------------------------------------------------------------------
     login_resp = None
     _retry_reason = None
-    for attempt in range(1, MAX_LOGIN_TRIES + 1):
-        print("\n===== LOGIN ATTEMPT %d/%d =====" % (attempt, MAX_LOGIN_TRIES))
+    # The automatic tries (max 5) come on top of the manual attempts, so the person still gets MAX_LOGIN_TRIES
+    # after auto-fill has given up. With auto-fill switched off the limit is exactly what it always was.
+    _login_cap = MAX_LOGIN_TRIES + (_cs.MAX_TRIES if (_cs is not None and _cs.is_enabled()) else 0)
+    for attempt in range(1, _login_cap + 1):
+        print("\n===== LOGIN ATTEMPT %d/%d =====" % (attempt, _login_cap))
         captcha_text = fetch_captcha(page, reason=_retry_reason)
         data = build_login_payload(page, captcha_text)
 
@@ -1441,9 +1519,17 @@ def run_ncdex():
 
         if login_resp.status_code in (301, 302):
             print("✅ login POST accepted → %s" % login_resp.headers.get("Location"))
+            _auto_feedback("ncdex", True)
             break
 
         msg = page_msg(login_resp).lower()
+        # Only a "captcha" (or empty/unknown) message means the automatic answer was wrong; "already logged in"
+        # proves the captcha itself was accepted. Locked / wrong-password stops below and is not the captcha's fault.
+        if "locked" in msg or ("invalid" in msg and ("username" in msg or "password" in msg)) \
+                or ("already" in msg and "login" in msg):
+            _auto_feedback("ncdex", True)
+        else:
+            _auto_feedback("ncdex", False)
 
         if "locked" in msg:
             # Account is already locked out — retrying with a new captcha
@@ -1478,8 +1564,8 @@ def run_ncdex():
         # the 200 body IS a fresh login page (new VIEWSTATE + new captcha) — reuse it
         page = login_resp
     else:
-        log_error("NCFE login failed after %d attempts — see %s" % (MAX_LOGIN_TRIES, DEBUG_DIR))
-        raise RuntimeError(f"NCDEX (NCFE) login failed after {MAX_LOGIN_TRIES} attempts — "
+        log_error("NCFE login failed after %d attempts — see %s" % (_login_cap, DEBUG_DIR))
+        raise RuntimeError(f"NCDEX (NCFE) login failed after {_login_cap} attempts — "
                             f"see {DEBUG_DIR}")
 
     # -------------------------------------------------------------------

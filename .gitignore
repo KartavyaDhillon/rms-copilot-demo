@@ -61,3 +61,7 @@ certs/
 
 # Test-machine launcher with auto-reload — never pushed, so the live START_SERVER.bat stays untouched.
 START_DEV.bat
+
+# Captcha auto-fill (2Captcha): switch file and outcome log are per-machine
+.captcha_auto.json
+captcha_auto_log.csv

@@ -52,6 +52,23 @@ NCDEX_PASS    = os.getenv("SA_NCDEX_PASSWORD",        "aSKUS%2222")
 NCDEX_SEC_ANS = os.getenv("SA_NCDEX_SECURITY_ANSWER", "a")
 DEFAULT_DIR   = os.getenv("SA_OUTPUT_DIR",             r"C:\SHORT ALLOCATION")
 
+# ── Automatic captcha solving (2Captcha) ─────────────────────────────────────
+# core/captcha_solver.py answers the NCDEX captcha itself (45 s per try, at most 5 tries per login) and only then
+# hands over to the dashboard popup below. Loaded by path so this works however the script is started.
+try:
+    import importlib.util as _iu
+    _cs_spec = _iu.spec_from_file_location("captcha_solver_standalone", os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "captcha_solver.py"))
+    _cs = _iu.module_from_spec(_cs_spec)
+    sys.modules["captcha_solver_standalone"] = _cs          # dataclasses need the module registered
+    _cs_spec.loader.exec_module(_cs)
+except Exception as _cs_err:                                 # auto-fill is optional: manual popup must keep working
+    _cs = None
+    print(f"⚠️ Captcha auto-fill unavailable ({_cs_err}) — manual popup only", flush=True)
+
+_AUTO = _cs.AutoSession("ncdex") if _cs is not None else None
+_LAST_WRONG_AUTO = False        # True when the last login failed because an AUTOMATIC captcha answer was wrong
+
 BASE      = "https://webextranet.ncdex.com"
 LOGIN_URL = f"{BASE}/Login.aspx"
 DL_URL    = f"{BASE}/LoginSuccessDnld.aspx"
@@ -140,7 +157,20 @@ def _show_captcha(image_bytes: bytes) -> str:
     show the CAPTCHA to the operator.  The dashboard polls GET /sa/captcha/pending,
     displays the image inline, and POSTs the answer to POST /sa/captcha/answer.
     Falls back to terminal input on timeout (120 s) or any file-I/O error.
+    An automatic answer (2Captcha) is tried first; the dashboard popup only appears when that is off or gave up.
     """
+    if _AUTO is not None:
+        try:
+            _auto_text = _AUTO.solve(image_bytes)
+        except Exception as _e:                              # never let auto-fill break a login
+            print(f"  ⚠️ Captcha auto-fill error ({type(_e).__name__}: {_e}) — manual popup", flush=True)
+            _auto_text = None
+        if _auto_text:
+            return _auto_text
+        _note = _AUTO.manual_note()
+        if _note:
+            print(f"  [CAPTCHA] {_note}", flush=True)
+
     state_dir  = Path(DEFAULT_DIR)
     img_file   = state_dir / ".captcha_ncdex.png"
     state_file = state_dir / ".captcha_state"
@@ -240,7 +270,17 @@ def download_ncdex(output_dir: str = None, run_suffix: str = "01") -> str:
     _spec = _iu.spec_from_file_location("net_retry_standalone", os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "net_retry.py"))
     net_retry = _iu.module_from_spec(_spec); _spec.loader.exec_module(net_retry)
-    return net_retry.run(lambda: _download_ncdex_once(output_dir, run_suffix), "NCDEX", print)
+    # A wrong AUTOMATIC captcha answer starts the login again with a fresh captcha (new session) until the 5 automatic
+    # tries are used up; the attempt after that shows the manual popup. A wrong answer typed by a person is not
+    # retried silently (that is what locked the account before) - it ends the run exactly as it always did.
+    max_rounds = (_cs.MAX_TRIES + 1) if _AUTO is not None else 1
+    result = None
+    for _round in range(1, max_rounds + 1):
+        result = net_retry.run(lambda: _download_ncdex_once(output_dir, run_suffix), "NCDEX", print)
+        if result or not _LAST_WRONG_AUTO:
+            return result
+        print(f"  🔁 Automatic captcha answer was wrong — logging in again ({_round}/{max_rounds - 1} tries used)", flush=True)
+    return result
 
 
 def _download_ncdex_once(output_dir: str = None, run_suffix: str = "01") -> str:
@@ -368,6 +408,8 @@ def _download_ncdex_once(output_dir: str = None, run_suffix: str = "01") -> str:
     )
     redir = lr.headers.get("Location", "")
     print(f"  HTTP {lr.status_code}  →  {redir or '(no redirect)'}")
+    global _LAST_WRONG_AUTO
+    _LAST_WRONG_AUTO = False
     if "AuthenticateQs.aspx" not in redir:
         # Print server message if present (usually shows "Invalid CAPTCHA" etc.)
         _soup_err = BeautifulSoup(lr.text, "html.parser")
@@ -380,10 +422,19 @@ def _download_ncdex_once(output_dir: str = None, run_suffix: str = "01") -> str:
         # lblMsgBox — not as a plain "wrong password" string, so match on
         # "authentication code" + "failed" rather than guessing exact wording.
         _low = _msg_text.lower()
+        _credentials_problem = ("authentication code" in _low and "failed" in _low) or "lock" in _low
         if "authentication code" in _low and "failed" in _low:
             print(f"[NCDEX_AUTH_FAIL] {_msg_text}")
+        # Wrong password / locked account is not the captcha's fault; anything else counts as a wrong captcha.
+        if _AUTO is not None:
+            if _credentials_problem:
+                _AUTO.accepted()
+            else:
+                _LAST_WRONG_AUTO = _AUTO.rejected()          # True -> download_ncdex() starts the login again
         print("  [✗] Login failed — wrong CAPTCHA or credentials.")
         return None
+    if _AUTO is not None:
+        _AUTO.accepted()                                     # captcha accepted: feedback to 2Captcha, budget reset
     print("  [✓] Login OK")
 
     # ── [5] Security question ──────────────────────────────────────────────

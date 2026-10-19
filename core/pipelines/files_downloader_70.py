@@ -692,8 +692,29 @@ def _ncdex_looks_like_csv(content):
     return True
 
 
-def _ncdex_captcha(image_bytes):
-    """Reuse the existing captcha_popup() by writing the image to disk first."""
+def _new_auto_session():
+    """A fresh automatic-captcha session (2Captcha) for one NCDEX login; None if the solver cannot be loaded."""
+    try:
+        from core import captcha_solver
+        return captcha_solver.AutoSession("ncdex")
+    except Exception as exc:          # auto-fill is optional: the manual popup must keep working without it
+        print(f"⚠️ Captcha auto-fill unavailable ({exc}) — manual popup only", flush=True)
+        return None
+
+
+def _ncdex_captcha(image_bytes, auto=None):
+    """Answer the NCDEX captcha: 2Captcha first (45 s per try, 5 tries), then the existing popup."""
+    if auto is not None:
+        try:
+            text = auto.solve(image_bytes)
+        except Exception as exc:      # never let auto-fill break a login
+            print(f"⚠️ Captcha auto-fill error ({type(exc).__name__}: {exc}) — manual popup", flush=True)
+            text = None
+        if text:
+            return text
+        note = auto.manual_note()
+        if note:
+            print(f"⚠️ {note}", flush=True)
     os.makedirs(CAPTCHA_DIR, exist_ok=True)
     path = os.path.join(CAPTCHA_DIR, "captcha_ncdex_web.png")
     with open(path, "wb") as f:
@@ -703,7 +724,11 @@ def _ncdex_captcha(image_bytes):
 
 def _ncdex_login(sess):
     """Login -> security question -> download landing page."""
-    for attempt in range(1, NCDEX_MAX_LOGIN_TRIES + 1):
+    auto = _new_auto_session()
+    # The automatic tries (max 5) come on top of the manual attempts, so the person still gets the full
+    # NCDEX_MAX_LOGIN_TRIES once auto-fill has given up (unchanged limit when auto-fill is off).
+    login_cap = NCDEX_MAX_LOGIN_TRIES + (auto.max_tries if (auto is not None and auto.enabled_fn()) else 0)
+    for attempt in range(1, login_cap + 1):
         print(f"🔐 NCDEX web login attempt {attempt}")
 
         r = sess.get(NCDEX_WEB_LOGIN, headers=_NCDEX_HEADS, timeout=30)
@@ -741,7 +766,7 @@ def _ncdex_login(sess):
             print("🔁 No captcha image after 3 tries — starting the login again from the beginning in 5s")
             time.sleep(5)
             continue
-        captcha = _ncdex_captcha(cap_r.content)
+        captcha = _ncdex_captcha(cap_r.content, auto)
         if not captcha:
             print("❌ Captcha cancelled")
             return False
@@ -765,10 +790,15 @@ def _ncdex_login(sess):
             msg = err.find(id="lblMsgBox") or err.find(id="lblMessage")
             note = msg.get_text(strip=True) if msg else "(no message)"
             print(f"⚠️ NCDEX login rejected: {note}")
+            if auto is not None:
+                # A locked account is not the captcha's fault; every other rejection counts as a wrong captcha.
+                (auto.accepted if "lock" in note.lower() else auto.rejected)()
             if "lock" in note.lower():
                 print("🔴 ACCOUNT LOCKED — stopping NCDEX peak download")
                 return False
             continue
+        if auto is not None:
+            auto.accepted()                      # captcha accepted: feedback to 2Captcha
 
         # ---- security question ----
         ar = sess.get(NCDEX_WEB_BASE + "/AuthenticateQs.aspx",
