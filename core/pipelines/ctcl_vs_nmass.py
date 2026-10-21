@@ -447,8 +447,18 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     def find_mcx_margin_file(base_dir):
         """Newest TODAY file in `base_dir` whose header matches the selected MCX source, else None."""
         today_tag = datetime.now().strftime("%Y%m%d")
+        today_date = datetime.now().date()
+
+        def _is_todays(f):
+            name = os.path.basename(f)
+            if today_tag in name:                                      # raw TCS BANCS export: <random>-YYYYMMDDHHMMSS.xlsx
+                return True
+            # the console's own MCX Deposit download is MCX_DEPOSIT_HH.MM.xlsx (no date in the name) - today's by mtime
+            return (MCX_SOURCE == "deposit" and name.upper().startswith("MCX_DEPOSIT_")
+                    and datetime.fromtimestamp(os.path.getmtime(f)).date() == today_date)
+
         cands = [f for f in glob.glob(os.path.join(base_dir, "*.xlsx"))
-                 if today_tag in os.path.basename(f)
+                 if _is_todays(f)
                  and not any(x.lower() in os.path.basename(f).lower() for x in MCX_EXCLUDE)]
         for f in sorted(cands, key=os.path.getmtime, reverse=True):
             if _xlsx_has_columns(f, _mcxsrc.REQUIRED_COLUMNS[MCX_SOURCE]):

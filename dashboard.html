@@ -373,6 +373,18 @@ body {
 .sa-title{font-family:var(--display);font-size:18px;font-weight:750;letter-spacing:-.3px}
 .sa-sub{font-size:12px;color:var(--muted);margin-top:2px}
 .sa-tools{display:flex;gap:8px;flex-wrap:wrap}
+/* CTCL box has 10 buttons: keep them on ONE tidy row (compact; scrolls sideways only on a very narrow window) */
+#pxBox-ctcl .sa-tools{flex-wrap:nowrap;overflow-x:auto;gap:6px;padding-bottom:2px}
+#pxBox-ctcl .sa-tool{padding:8px 9px;font-size:11px;white-space:nowrap;flex:0 0 auto}
+/* MCX file choice cards (popups of the CTCL box) */
+.mcx-opt{display:block;width:100%;box-sizing:border-box;text-align:left;cursor:pointer;background:var(--panel-2);border:2px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:10px;color:var(--ink);font-family:var(--sans);transition:var(--ease)}
+.mcx-opt:hover{border-color:var(--blue)}
+.mcx-opt.sel{border-color:var(--green);background:rgba(52,211,153,.08)}
+.mcx-opt .t{font-size:14px;font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.mcx-opt .d{font-size:12.5px;line-height:1.5;color:var(--muted);font-weight:400}
+.mcx-opt .tick{width:18px;height:18px;border-radius:50%;border:2px solid var(--line-2);display:inline-flex;align-items:center;justify-content:center;font-size:11px;flex:0 0 auto}
+.mcx-opt.sel .tick{border-color:var(--green);background:var(--green);color:#04101f}
+.mcx-note{font-size:12px;color:var(--muted);line-height:1.5;margin:4px 0 14px}
 .sa-tool{font-family:var(--sans);font-size:11.5px;font-weight:500;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);border-radius:9px;padding:8px 12px;cursor:pointer;transition:var(--ease)}
 .sa-tool:hover{border-color:var(--line-2);color:var(--ink);background:var(--panel-3)}
 .sa-banner{display:none;align-items:center;gap:10px;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.35);color:var(--green);border-radius:10px;padding:10px 14px;font-size:12.5px;font-weight:500;margin-bottom:16px}
@@ -640,8 +652,8 @@ body {
             <button class="sa-tool" onclick="pxBackup('ctcl')" data-tip="Browse/restore past days' files, or look up one client's numbers across runs.">📦 Backup files</button>
             <button class="sa-tool" onclick="pxStop('ctcl')" data-tip="Stops whatever's currently running for CTCL vs NMASS." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="pxLogs('ctcl')" data-tip="View the full saved output of past runs.">🗂️ Logs</button>
-            <button class="sa-tool" id="ctclMcx90Btn" onclick="ctclMcx90Download()" data-tip="Logs in to TCS BANCS and downloads just the MCX 90% margin file — separate from the main Run." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX 90%</button>
-            <button class="sa-tool" id="ctclMcxSourceBtn" onclick="ctclMcxSourceToggle()" data-tip="Which MCX file supplies 'Margin Limit' in the run: the MCX 90% file (Client Code + Client Margin Limit) or the MCX Deposit file (UCC Code + Margin Limit). Click to switch; it applies to the next run." style="border-color:rgba(167,139,250,.45);color:#a78bfa">🔀 MCX file: <b id="ctclMcxSourceState">…</b></button>
+            <button class="sa-tool" id="ctclMcx90Btn" onclick="ctclMcxDownloadPopup()" data-tip="Opens a window where you choose WHICH MCX file to download from TCS BANCS: the MCX 90% file or the MCX Deposit file." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download MCX file</button>
+            <button class="sa-tool" id="ctclMcxSourceBtn" onclick="ctclMcxSourcePopup()" data-tip="Opens a window where you choose WHICH MCX file the next CTCL vs NMASS run uses for 'Margin Limit' (MCX 90% or MCX Deposit)." style="border-color:rgba(167,139,250,.45);color:#a78bfa">🔀 MCX file to use: <b id="ctclMcxSourceState">…</b></button>
           </div>
         </div>
         <div class="sa-banner" id="pxBanner-ctcl"><span class="dot"></span><span class="t"></span></div>
@@ -2434,14 +2446,50 @@ function ctclMcxSourcePaint(label){
 async function ctclMcxSourceRefresh(){
   try{ const d=await (await fetch(API+'/ctcl/mcx-source')).json(); _ctclMcxSource=d.source||'mcx90'; ctclMcxSourcePaint(d.label); }catch(e){}
 }
-async function ctclMcxSourceToggle(){
-  const next=_ctclMcxSource==='deposit'?'mcx90':'deposit';
-  if(!confirm('Use the '+(next==='deposit'?'MCX Deposit file (UCC Code + Margin Limit)':'MCX 90% file (Client Code + Client Margin Limit)')+' for CTCL vs NMASS from the next run?')) return;
+// Plain-language description of the two files (shared by both popups).
+const _MCX_FILES={
+  mcx90:{title:'MCX 90% file', how:'Downloaded from TCS BANCS as the "MCX 90% margin file". Each client\'s <b>Client Margin Limit</b> is taken from it. This is the file used until now — choose it for a normal run.'},
+  deposit:{title:'MCX Deposit file', how:'Downloaded from TCS BANCS as the "MCX Deposit" report (Query Cash Collateral Detailed Limit). Each client\'s <b>Margin Limit</b> is taken from it, matched by <b>UCC Code</b>. Nothing else in the file is used.'}
+};
+function _mcxCard(kind, selected, onclick, extraHtml){
+  const f=_MCX_FILES[kind];
+  return '<button type="button" class="mcx-opt'+(selected?' sel':'')+'" id="mcxOpt-'+kind+'" onclick="'+onclick+'">'
+    +'<div class="t"><span class="tick">'+(selected?'✓':'')+'</span>'+f.title+'</div><div class="d">'+f.how+'</div>'+(extraHtml||'')+'</button>';
+}
+// ── Popup: "Which MCX file should the run USE?" ──
+let _mcxPick='mcx90';
+function ctclMcxSourcePopup(){
+  _mcxPick=_ctclMcxSource;
+  saShowModal('🔀 Which MCX file should CTCL vs NMASS use?', _ctclMcxSourceBody());
+}
+function _ctclMcxSourceBody(){
+  return '<div class="mcx-note">The run needs ONE MCX file to find each client\'s <b>Margin Limit</b>. Tick the file you want. '
+    +'<b>Only the ticked file is used — the other one is ignored</b>, even if it is in the folder. The choice is used from the <b>next run</b> and is the same for everyone.</div>'
+    +_mcxCard('mcx90',_mcxPick==='mcx90',"ctclMcxPick('mcx90')")
+    +_mcxCard('deposit',_mcxPick==='deposit',"ctclMcxPick('deposit')")
+    +'<div class="mcx-note">Make sure the ticked file is already in the CTCL folder for today (use <b>📥 Download MCX file</b> or <b>⬆️ Upload files</b>). If it is missing, the run stops and tells you which file is needed.</div>'
+    +'<div style="display:flex;justify-content:flex-end;gap:10px">'
+    +'<button class="sa-tool" onclick="saCloseModal()">Cancel</button>'
+    +'<button class="sa-tool" style="background:var(--blue);color:#04101f;font-weight:700;border-color:var(--blue)" onclick="ctclMcxSourceSave()">Use '+_MCX_FILES[_mcxPick].title+'</button></div>';
+}
+function ctclMcxPick(kind){ _mcxPick=kind; document.getElementById('saModalBody').innerHTML=_ctclMcxSourceBody(); }
+async function ctclMcxSourceSave(){
   try{
-    const d=await (await fetch(API+'/ctcl/mcx-source',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:next})})).json();
-    if(d.ok===false){ alert(d.error||'Could not change the MCX file'); return; }
-  }catch(e){ alert('Network error — not changed'); return; }
-  ctclMcxSourceRefresh();
+    const d=await (await fetch(API+'/ctcl/mcx-source',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:_mcxPick})})).json();
+    if(d.ok===false){ alert(d.error||'Could not save the choice'); return; }
+  }catch(e){ alert('Network error — the choice was not saved'); return; }
+  saCloseModal(); await ctclMcxSourceRefresh();
+  try{ ctclLoadReady(); }catch(e){}
+}
+// ── Popup: "Which MCX file should be DOWNLOADED?" ──
+function ctclMcxDownloadPopup(){
+  const dl=(k)=>'<div style="margin-top:10px"><span class="sa-tool" style="display:inline-block;background:var(--blue);color:#04101f;font-weight:700;border-color:var(--blue);padding:8px 14px">📥 Download '+_MCX_FILES[k].title+'</span></div>';
+  saShowModal('📥 Which MCX file do you want to download?',
+    '<div class="mcx-note">Click the file you want. The console logs in to <b>TCS BANCS</b>, asks you for the <b>RSA SecurID token</b> in a window on this dashboard, and saves the file in the CTCL folder. It takes about 4–5 minutes. '
+    +'Downloading a file does <b>not</b> change which file the run uses — that is set with <b>🔀 MCX file to use</b> (currently: <b>'+_MCX_FILES[_ctclMcxSource].title+'</b>).</div>'
+    +_mcxCard('mcx90',false,"saCloseModal();ctclMcxDownload('mcx90')",dl('mcx90'))
+    +_mcxCard('deposit',false,"saCloseModal();ctclMcxDownload('deposit')",dl('deposit'))
+    +'<div style="display:flex;justify-content:flex-end"><button class="sa-tool" onclick="saCloseModal()">Cancel</button></div>');
 }
 setTimeout(ctclMcxSourceRefresh,1500); setInterval(ctclMcxSourceRefresh,30000);
 // ── Captcha auto-fill switch (2Captcha) ───────────────────────────────────
@@ -4598,15 +4646,18 @@ async function ctclOpenView(runNo, hasError){
   );
 }
 
-function ctclMcx90Download(){
+function ctclMcx90Download(){ return ctclMcxDownload('mcx90'); }   // kept for any older caller
+function ctclMcxDownload(kind){
+  kind = kind==='deposit' ? 'deposit' : 'mcx90';
+  const _label=_MCX_FILES[kind].title;
   const btn=document.getElementById('ctclMcx90Btn');
   const strip=document.getElementById('ctclMcx90Strip');
   if(_ctclMcx90ES){ _ctclMcx90ES.close(); _ctclMcx90ES=null; }
   if(btn){ btn.disabled=true; btn.textContent='⏳ Downloading…'; }
-  const _mcxStatus='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Downloading MCX 90% from TCS BANCS (4–5 min) — RSA SecurID token required in dashboard. Full output is saved to <b style="color:var(--ink)">🗂️ Logs</b>.</span></div>';
+  const _mcxStatus='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Downloading '+_label+' from TCS BANCS (4–5 min) — RSA SecurID token required in dashboard. Full output is saved to <b style="color:var(--ink)">🗂️ Logs</b>.</span></div>';
   if(strip){ strip.style.display='block'; strip.innerHTML=_mcxStatus; }
   captchaStartPoller();  // also polls for RSA token requests
-  const ev=new EventSource(API+'/ctcl/download/mcx90-stream'); _ctclMcx90ES=ev;
+  const ev=new EventSource(API+(kind==='deposit'?'/ctcl/download/mcx-deposit-stream':'/ctcl/download/mcx90-stream')); _ctclMcx90ES=ev;
   ev.onmessage=m=>{
     let d; try{ d=JSON.parse(m.data); }catch(_){ return; }
     if(d.type==='log'){
@@ -4619,14 +4670,14 @@ function ctclMcx90Download(){
     } else if(d.type==='end'){
       ev.close(); _ctclMcx90ES=null;
       captchaStopPoller();
-      if(btn){ btn.disabled=false; btn.textContent='📥 MCX 90%'; }
+      if(btn){ btn.disabled=false; btn.textContent='📥 Download MCX file'; }
       ctclLoadReady();
     }
   };
   ev.onerror=()=>{
     ev.close(); _ctclMcx90ES=null;
     captchaStopPoller();
-    if(btn){ btn.disabled=false; btn.textContent='📥 MCX 90%'; }
+    if(btn){ btn.disabled=false; btn.textContent='📥 Download MCX file'; }
     if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>';
   };
 }
@@ -4722,14 +4773,14 @@ function ms15Mcx90Download(){
     } else if(d.type==='end'){
       ev.close(); _ms15Mcx90ES=null;
       captchaStopPoller();
-      if(btn){ btn.disabled=false; btn.textContent='📥 MCX 90%'; }
+      if(btn){ btn.disabled=false; btn.textContent='📥 Download MCX file'; }
       ms15LoadReady();
     }
   };
   ev.onerror=()=>{
     ev.close(); _ms15Mcx90ES=null;
     captchaStopPoller();
-    if(btn){ btn.disabled=false; btn.textContent='📥 MCX 90%'; }
+    if(btn){ btn.disabled=false; btn.textContent='📥 Download MCX file'; }
     if(strip) strip.innerHTML+='<div style="color:var(--red)">❌ Connection lost.</div>';
   };
 }
@@ -5891,11 +5942,11 @@ async function pxStop(pipe){
   // silently killed whatever other box happened to be streaming at the time.
   _pxCloseES(pipe);
   if(pipe==='ctcl'){
-    try{ if(_ctclMcx90ES){ _ctclMcx90ES.close(); _ctclMcx90ES=null; const b=document.getElementById('ctclMcx90Btn'); if(b){b.disabled=false;b.textContent='📥 MCX 90%';} } }catch(e){}
+    try{ if(_ctclMcx90ES){ _ctclMcx90ES.close(); _ctclMcx90ES=null; const b=document.getElementById('ctclMcx90Btn'); if(b){b.disabled=false;b.textContent='📥 Download MCX file';} } }catch(e){}
     captchaStopPoller();
   }
   if(pipe==='ms15'){
-    try{ if(_ms15Mcx90ES){ _ms15Mcx90ES.close(); _ms15Mcx90ES=null; const b=document.getElementById('ms15Mcx90Btn'); if(b){b.disabled=false;b.textContent='📥 MCX 90%';} } }catch(e){}
+    try{ if(_ms15Mcx90ES){ _ms15Mcx90ES.close(); _ms15Mcx90ES=null; const b=document.getElementById('ms15Mcx90Btn'); if(b){b.disabled=false;b.textContent='📥 Download MCX file';} } }catch(e){}
     captchaStopPoller();
   }
   // /cli/stop kills the tracked subprocess (taskkill /F /T) instantly, regardless of

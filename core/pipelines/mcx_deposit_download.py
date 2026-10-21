@@ -22,8 +22,12 @@ _BUSY_TAG = re.compile(r"\[MCX_DEPOSIT_BUSY:(\w+)\]")
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def stream_mcx_deposit_download():
+def stream_mcx_deposit_download(output_dir=None, caller="sa"):
     """Generator that runs mcx_deposit_downloader.py and yields SSE event dicts.
+
+    `output_dir` (optional) is the folder the MCX_DEPOSIT_HH.MM.xlsx file is saved into - Short Allocation's own
+    folder when omitted, the CTCL vs NMASS folder when CTCL's "MCX file download" button asks for the Deposit file.
+    `caller` ("sa" or "ctcl") tells the dashboard's RSA token popup which box asked.
 
     Full output is written to logs/short_allocation/MCX_DEPOSIT__<timestamp>.log.
     Uses a background thread so the log is written even if the client disconnects.
@@ -84,7 +88,7 @@ def stream_mcx_deposit_download():
                                     # a slow TCS BANCS login/export-poll loop with low print
                                     # volume can then look completely hung with a near-empty
                                     # log for minutes (this is what happened to SA-03/SA-04).
-    env["MCX_DEPOSIT_CALLER"] = "sa"  # explicit (matches the default) — this is SA's OWN
+    env["MCX_DEPOSIT_CALLER"] = caller  # "sa" = SA's OWN button (the default); "ctcl" = CTCL's MCX file download — this is SA's OWN
                                         # "MCX Deposit" button; CLI's "MCX Web Allocation"
                                         # button sets "cli" instead so the dashboard's RSA
                                         # token popup shows the correct owning box.
@@ -108,9 +112,10 @@ def stream_mcx_deposit_download():
     _log_buffer = []    # last lines the script printed — used by the AI fallback below
                          # when the failure is a new/unrecognized kind (no known tag matched)
 
+    _argv = [python, "-u", script] + ([output_dir] if output_dir else [])
     try:
         proc = subprocess.Popen(
-            [python, "-u", script],
+            _argv,
             cwd=os.path.join(_REPO, "sa_codes"),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,

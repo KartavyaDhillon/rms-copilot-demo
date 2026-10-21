@@ -53,6 +53,42 @@ def check_ctcl_readiness() -> dict:
         except Exception:
             return False
 
+    # The MCX margin file depends on the "MCX file" choice of the CTCL box (core/ctcl_mcx_source.py):
+    # the MCX 90% file (random name stamped YYYYMMDD) or the MCX Deposit file (the console's own download is
+    # MCX_DEPOSIT_HH.MM.xlsx - no date in the name, so it counts when it was saved today).
+    try:
+        from core import ctcl_mcx_source as _mcxsrc
+        _source = _mcxsrc.get_source()
+    except Exception:
+        _source = "mcx90"
+    if _source == "deposit":
+        _mcx_check = {
+            "key":      "MCX_DEPOSIT_FILE",
+            "label":    "MCX Deposit File (TCS BANCS)",
+            "example":  "MCX Deposit file (MCX_DEPOSIT_hh.mm.xlsx, or <random>-" + today_ymd + "*.xlsx)",
+            "patterns": ["*.xlsx"],
+            "folder":   base_dir,
+            "date_fmt": "YYYYMMDD",
+            "mtime_today_prefix": "MCX_DEPOSIT_",
+            "exclude":  ["update limits"],   # case-insensitive
+        }
+    else:
+        _mcx_check = {
+            "key":      "MCX_90_FILE",
+            "label":    "MCX 90% Margin File (TCS BANCS)",
+            "example":  f"<TCS BANCS random name>_{today_ymd}*.xlsx",
+            "patterns": ["*.xlsx"],
+            "folder":   base_dir,
+            "date_fmt": "YYYYMMDD",
+            "exclude":  ["update limits"],   # case-insensitive
+        }
+
+    def _saved_today(fpath: str) -> bool:
+        try:
+            return datetime.fromtimestamp(os.path.getmtime(fpath)).date() == datetime.now().date()
+        except Exception:
+            return False
+
     checks = [
         {
             "key":      "CM_CLIENT_LEVEL",
@@ -86,15 +122,7 @@ def check_ctcl_readiness() -> dict:
             "folder":   base_dir,
             "date_fmt": "DDMMYYYY",
         },
-        {
-            "key":      "MCX_90_FILE",
-            "label":    "MCX 90% Margin File (TCS BANCS)",
-            "example":  f"<TCS BANCS random name>_{today_ymd}*.xlsx",
-            "patterns": ["*.xlsx"],
-            "folder":   base_dir,
-            "date_fmt": "YYYYMMDD",
-            "exclude":  ["update limits"],   # case-insensitive
-        },
+        _mcx_check,
         {
             "key":               "UPDATE_LIMITS",
             "label":             "Update Limits (manual, <30 min old)",
@@ -135,6 +163,9 @@ def check_ctcl_readiness() -> dict:
             candidates = [
                 c for c in candidates
                 if _has_today(os.path.basename(c), chk["date_fmt"])
+                or (chk.get("mtime_today_prefix")
+                    and os.path.basename(c).upper().startswith(chk["mtime_today_prefix"])
+                    and _saved_today(c))
             ]
 
             if candidates:

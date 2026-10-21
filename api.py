@@ -3215,6 +3215,32 @@ def sa_mcx_deposit_stream(request: Request):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
+@app.get("/ctcl/download/mcx-deposit-stream")
+def ctcl_mcx_deposit_download_stream(request: Request):
+    """SSE: download the MCX Deposit file (RSK383, "UCC Code" + "Margin Limit") INTO the CTCL vs NMASS folder.
+    Same downloader as Short Allocation's "MCX Deposit" button; the RSA token popup is shown to whoever clicked."""
+    import json as _cd_json
+    from core.pipelines.mcx_deposit_download import stream_mcx_deposit_download
+    from core.pipelines.mcx90_download import _pipe_folder as _cd_folder
+    _ctcl_clear_popup_state()
+    _who, _adm = _actor(request)
+    _note_who(request)
+    if _who:
+        _POPUP_OWNERS["ctcl"] = _who
+    def gen():
+        try:
+            for ev in stream_mcx_deposit_download(output_dir=_cd_folder("ctcl"), caller="ctcl"):
+                yield f"data: {_cd_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_cd_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        finally:
+            if _who and _POPUP_OWNERS.get("ctcl") == _who:
+                _POPUP_OWNERS.pop("ctcl", None)
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
 # ── CTCL download + stop endpoints ──────────────────────────────────────────
 
 @app.get("/ctcl/download/nmass-stream")
