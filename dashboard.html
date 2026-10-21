@@ -2457,21 +2457,18 @@ async function ms15McxSourceRefresh(){
   try{ const d=await (await fetch(API+'/ms15/mcx-source')).json(); _ms15McxSource=d.source||'mcx90'; }catch(e){}
 }
 function _mcxAskBody(){
-  const s=_mcxAsk, box=s.pipe==='ms15'?'Margin Shortage':'CTCL vs NMASS';
-  return '<div class="mcx-note">Which MCX file should <b>'+box+'</b> use for <b>Margin Limit</b> in this run? Click the file you want — the run starts at once. '
-    +'<b>Only the file you click is used; the other one is ignored</b> (it is kept in the backup marked NOT_USED).</div>'
-    +_mcxCard('mcx90',s.last==='mcx90',"mcxAskPick('mcx90')")
-    +_mcxCard('deposit',s.last==='deposit',"mcxAskPick('deposit')")
-    +'<div class="mcx-note" style="margin-bottom:6px">If you do nothing, the file used last time (<b>'+_MCX_FILES[s.last].title+'</b>) is used automatically in <b id="mcxAskLeft">'+s.left+'</b> seconds.</div>'
-    +'<div style="display:flex;justify-content:flex-end;gap:10px"><button class="sa-tool" onclick="mcxAskCancel()">Cancel — do not run</button>'
-    +'<button class="sa-tool" style="background:var(--blue);color:#04101f;font-weight:700;border-color:var(--blue)" onclick="mcxAskPick(_mcxAsk.last)">Use '+_MCX_FILES[s.last].title+' now</button></div>';
+  const s=_mcxAsk;
+  const card=function(k){ return '<button type="button" class="mcx-opt'+(s.last===k?' sel':'')+'" onclick="mcxAskPick(\''+k+'\')" style="padding:16px 18px"><div class="t" style="margin:0;font-size:15px"><span class="tick">'+(s.last===k?'✓':'')+'</span>'+_MCX_FILES[k].title+'</div></button>'; };
+  return card('mcx90')+card('deposit')
+    +'<div class="mcx-note" style="margin:2px 0 10px">Auto-selects <b>'+_MCX_FILES[s.last].title+'</b> in <b id="mcxAskLeft">'+s.left+'</b> s</div>'
+    +'<div style="display:flex;justify-content:flex-end"><button class="sa-tool" onclick="mcxAskCancel()">Cancel</button></div>';
 }
 async function mcxAskThen(pipe, go){
   let last='mcx90';
   try{ const d=await (await fetch(API+(pipe==='ms15'?'/ms15/mcx-source':'/ctcl/mcx-source'))).json(); last=d.source||'mcx90'; }catch(e){}
   if(_mcxAsk&&_mcxAsk.t) clearInterval(_mcxAsk.t);
   const s={pipe:pipe,go:go,last:last,left:60,done:false,t:null}; _mcxAsk=s;
-  saShowModal('📂 Which MCX file should this run use?', _mcxAskBody());
+  saShowModal('Which MCX file to use?', _mcxAskBody());
   s.t=setInterval(function(){
     if(s.done){ clearInterval(s.t); return; }
     // window closed with the X / Esc = the run is cancelled
