@@ -3553,6 +3553,52 @@ def ms15_mcx90_download_stream():
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
 
 
+@app.get("/ms15/mcx-source")
+def ms15_mcx_source_get():
+    """Current MCX file choice for Margin Shortage: {source: "mcx90"|"deposit", label, by, at}."""
+    from core import ctcl_mcx_source as _ms
+    return _ms.describe("ms15")
+
+
+@app.post("/ms15/mcx-source")
+def ms15_mcx_source_set(body: _CtclMcxSourceBody, request: Request):
+    """Choose the MCX file Margin Shortage uses (takes effect on the next run)."""
+    from core import ctcl_mcx_source as _ms
+    _who, _adm = _actor(request)
+    try:
+        _ms.set_source(body.source, _who or "", pipe="ms15")
+    except ValueError as _e:
+        return {"ok": False, "error": str(_e)}
+    except OSError as _e:
+        return {"ok": False, "error": f"Could not save the choice: {_e}"}
+    return {"ok": True, **_ms.describe("ms15")}
+
+
+@app.get("/ms15/download/mcx-deposit-stream")
+def ms15_mcx_deposit_download_stream(request: Request):
+    """SSE: download the MCX Deposit file ("UCC Code" + "Margin Limit") INTO the Margin Shortage folder."""
+    import json as _cd_json
+    from core.pipelines.mcx_deposit_download import stream_mcx_deposit_download
+    from core.pipelines.mcx90_download import _pipe_folder as _cd_folder
+    _ms15_clear_popup_state()
+    _who, _adm = _actor(request)
+    _note_who(request)
+    if _who:
+        _POPUP_OWNERS["ms15"] = _who
+    def gen():
+        try:
+            for ev in stream_mcx_deposit_download(output_dir=_cd_folder("ms15"), caller="ms15"):
+                yield f"data: {_cd_json.dumps(ev)}\n\n"
+        except Exception as e:
+            yield f"data: {_cd_json.dumps({'type':'error','msg':str(e)})}\n\n"
+        finally:
+            if _who and _POPUP_OWNERS.get("ms15") == _who:
+                _POPUP_OWNERS.pop("ms15", None)
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
 @app.post("/ms15/stop")
 def ms15_stop(request: Request):
     """Stop any running Margin Shortage download or the main pipeline run —
@@ -3753,6 +3799,17 @@ def ms15_readiness():
         _rr = bool(_rg.glob(_ros.path.join(_common, "RISK_REPORT_*.csv")))
     items.insert(4, {"key": "RISK_REPORT", "ok": _rr, "example": "RISK_REPORT",
                      "age_min": None, "why": "" if _rr else "not present", "file": ""})
+    # MCX item follows the "MCX file to use" choice of this box: a Deposit file has no stamp in its name, so
+    # its age falls back to the file time (handled by file_freshness); only the label changes here.
+    try:
+        from core import ctcl_mcx_source as _ms
+        if _ms.get_source("ms15") == "deposit":
+            for it in items:
+                if it["key"] == "MCX_90_PERCENT":
+                    it["key"] = "MCX_DEPOSIT_FILE"
+                    it["example"] = "MCX Deposit (.xlsx)"
+    except Exception:
+        pass
     return {"items": items, "folder": _dir, "max_age_min": _base["max_age_min"]}
 
 

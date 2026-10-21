@@ -878,16 +878,72 @@ def _run_margin_shortage_15min_impl():
         would otherwise make an exact-match header search fail silently."""
         return re.sub(r"\s+", " ", str(s)).strip()
 
-    def detect_header_excel(path, required_cols):
+    def detect_header_excel(path, required_cols, as_text=False):
+        """Find the header row in the first 10 rows. as_text=True reads every cell as text, so client codes keep
+        their leading zeros and a column that mixes numbers and text cannot upset later steps."""
         raw = pd.read_excel(path, header=None)
         req_norm = [_norm_header(c) for c in required_cols]
         for i in range(10):
             row_norm = [_norm_header(v) for v in raw.iloc[i].tolist()]
             if all(c in row_norm for c in req_norm):
-                df = pd.read_excel(path, header=i)
+                df = pd.read_excel(path, header=i, dtype=str) if as_text else pd.read_excel(path, header=i)
                 df.columns = [_norm_header(c) for c in df.columns]
                 return df
         raise Exception("Header not found")
+
+    # ── Which MCX file feeds "Margin Limit" / "Margin Utilization" ───────────────────────────────────────
+    # Chosen with the "MCX file to use" button of the Margin Shortage box (core/ctcl_mcx_source.py, pipe "ms15"):
+    # the MCX 90% file (Client Code / Client Margin Limit) or the MCX Deposit file (UCC Code / Margin Limit). Both
+    # carry "Margin Utilization". The file is recognised by its header columns, never by "first .xlsx found".
+    from core import ctcl_mcx_source as _mcxsrc
+    MCX_SOURCE = _mcxsrc.get_source("ms15")
+    MCX_LABEL = _mcxsrc.LABELS[MCX_SOURCE]
+    MCX_REQUIRED = set(_mcxsrc.REQUIRED_COLUMNS[MCX_SOURCE]) | {_mcxsrc.UTILIZATION_COLUMN}
+    print(f"ℹ️  MCX margin source for this run: {MCX_LABEL}")
+
+    def _mcx_candidates():
+        """Today's .xlsx files that could be the MCX file (stamped YYYYMMDD, or - for the Deposit choice - the
+        console's own MCX_DEPOSIT_HH.MM.xlsx saved today), newest first."""
+        out = []
+        for f in os.listdir(BASE_DIR):
+            if not f.endswith(".xlsx"):
+                continue
+            path = os.path.join(BASE_DIR, f)
+            stamped = today_yyyymmdd in f
+            own_deposit = (MCX_SOURCE == "deposit" and f.upper().startswith("MCX_DEPOSIT_")
+                           and datetime.fromtimestamp(os.path.getmtime(path)).date() == datetime.now().date())
+            if stamped or own_deposit:
+                out.append(path)
+        return sorted(out, key=os.path.getmtime, reverse=True)
+
+    def _has_mcx_columns(path, required):
+        try:
+            raw = pd.read_excel(path, header=None, nrows=15)
+        except Exception:
+            return False
+        need = {_norm_header(c) for c in required}
+        return any(need.issubset({_norm_header(v) for v in raw.iloc[i].tolist()}) for i in range(len(raw)))
+
+    def find_mcx_file_for_source():
+        """Newest today's file with the selected source's columns, else None."""
+        for path in _mcx_candidates():
+            if _has_mcx_columns(path, MCX_REQUIRED):
+                return path
+        return None
+
+    # ── Client-code matching: leading zeros ───────────────────────────────────────────────────────────────
+    # CM/FO/CO/deposit/MCX files write an all-digit code WITHOUT leading zeros (80011226); RISK_REPORT keeps them
+    # (080011226). Matched as plain text they are two different clients (one client split in two, or the RISK_REPORT
+    # zone lookup failing). Everything is matched on a zero-stripped key and the code PRINTED is the RISK_REPORT
+    # spelling when the client exists there. Same rule as CTCL vs NMASS (core/ctcl_mcx_source.normalize_code).
+    _zkey = _mcxsrc.normalize_code
+
+    def _rekey(df):
+        """Same frame keyed on the zero-stripped client code, rows of the same client summed."""
+        df = df.copy()
+        df["Client Code"] = df["Client Code"].map(_zkey)
+        df = df[df["Client Code"] != ""]
+        return df.groupby("Client Code", as_index=False).sum()
 
     # =====================================================
     # PRE-RUN CHECK
@@ -910,12 +966,27 @@ def _run_margin_shortage_15min_impl():
             "CO_ClientLevelCollaterals": ("CO_ClientLevelCollaterals_*", "DDMMYYYY", None),
             "CLIENTNETEFFECTIVE_DEPOSITS": ("ClientNetEffectiveDeposits_*", "DDMMYYYY", None),
             "RISK_REPORT": ("RISK_REPORT_*", "DDMMYYYY", None),
-            "MCX_RANDOM NAME": ("*.xlsx", "YYYYMMDD", 60),  # 60-minute freshness rule
         }
 
         missing_files = []
         wrong_date_files = []
         stale_files = []
+
+        # MCX file of the selected source (90% or Deposit): today's file with the right columns, <= 60 minutes old.
+        _mcx_path = find_mcx_file_for_source()
+        if _mcx_path is None:
+            _other = "mcx90" if MCX_SOURCE == "deposit" else "deposit"
+            _hint = ""
+            for _p in _mcx_candidates():
+                if _has_mcx_columns(_p, set(_mcxsrc.REQUIRED_COLUMNS[_other]) | {_mcxsrc.UTILIZATION_COLUMN}):
+                    _hint = (f" — found today's {_mcxsrc.LABELS[_other]} file ({os.path.basename(_p)}) instead: "
+                             f"switch 'MCX file to use' to {_mcxsrc.LABELS[_other]} or add the {MCX_LABEL} file")
+                    break
+            missing_files.append(f"MCX_{MCX_LABEL.replace(' ', '_')} (no today's .xlsx with columns "
+                                 f"{', '.join(sorted(MCX_REQUIRED))}){_hint}")
+        elif not is_modified_within_minutes(_mcx_path, 60):      # 60-minute freshness rule
+            _mod = datetime.fromtimestamp(os.path.getmtime(_mcx_path)).strftime("%d-%m-%Y %H:%M:%S")
+            stale_files.append(f"MCX_{MCX_LABEL.replace(' ', '_')} → {os.path.basename(_mcx_path)} (Last Modified: {_mod})")
 
         for name, (pattern, fmt, max_age_minutes) in checks.items():
             files = glob.glob(os.path.join(BASE_DIR, pattern))
@@ -1097,42 +1168,23 @@ def _run_margin_shortage_15min_impl():
     # =====================================================
     # MCX (BOTH VALUES FROM SAME FILE)
     # =====================================================
-    def find_mcx_file():
-        required_cols = {
-            "Client Code",
-            "Client Margin Limit",
-            "Margin Utilization"
-        }
-
-        for f in os.listdir(BASE_DIR):
-            if not f.endswith(".xlsx"):
-                continue
-            if today_yyyymmdd not in f:
-                continue
-
-            path = os.path.join(BASE_DIR, f)
-
-            try:
-                raw = pd.read_excel(path, header=None)
-
-                for i in range(15):
-                    row = raw.iloc[i].astype(str).str.strip()
-                    if required_cols.issubset(set(row.values)):
-                        return path
-
-            except Exception:
-                continue
-
+    mcx_file = find_mcx_file_for_source()
+    if mcx_file is None:
         raise FileNotFoundError(
-            "❌ MCX file with required columns "
-            "(Client Code, Client Margin Limit, Margin Utilization) not found"
+            f"❌ {MCX_LABEL} file with required columns ({', '.join(sorted(MCX_REQUIRED))}) not found"
         )
-
-    mcx_file = find_mcx_file()
-    mcx_df = detect_header_excel(
-        mcx_file,
-        ["Client Code", "Client Margin Limit", "Margin Utilization"]
-    )
+    if MCX_SOURCE == "deposit":
+        # MCX Deposit file: ONLY "UCC Code" (the client) and "Margin Limit" (+ "Margin Utilization") are used. The
+        # first data row is the clearing member's own total line (no UCC Code) - not a client, so it is dropped.
+        mcx_df = detect_header_excel(mcx_file, ["UCC Code", "Margin Limit", "Margin Utilization"], as_text=True)
+        mcx_df["Client Code"] = mcx_df["UCC Code"].fillna("").astype(str).str.strip()
+        mcx_df = mcx_df[mcx_df["Client Code"] != ""].copy()
+        mcx_df["Client Margin Limit"] = mcx_df["Margin Limit"]
+    else:
+        mcx_df = detect_header_excel(
+            mcx_file,
+            ["Client Code", "Client Margin Limit", "Margin Utilization"]
+        )
 
     mcx_df["Client Margin Limit"] = (
         mcx_df["Client Margin Limit"].astype(str).str.replace(",", "", regex=False)
@@ -1155,6 +1207,10 @@ def _run_margin_shortage_15min_impl():
         .sum()
     )
     mcx_final.columns = ["Client Code", "MARGIN_LIMIT", "MCX_MARGIN_UTIL"]
+
+    # One key per client (leading zeros stripped) across every file — see the note at _zkey/_rekey above.
+    cm_final, fo_final, co_final = _rekey(cm_final), _rekey(fo_final), _rekey(co_final)
+    dep_final, mcx_final = _rekey(dep_final), _rekey(mcx_final)
 
     # =====================================================
     # MERGE & CALCULATIONS
@@ -1222,6 +1278,15 @@ def _run_margin_shortage_15min_impl():
         pl.col("PISAccount"),
         pl.col("ACCOUNTID"),
     ])
+
+    # Print each client under its RISK_REPORT spelling (080011226) when it exists there, so the zone lookup below
+    # finds it and the report shows the same code as before; clients not in RISK_REPORT keep the exchange spelling.
+    _risk_disp = {}
+    for _rid in risk_pl["ACCOUNTID"].drop_nulls().to_list():
+        _rk = _zkey(_rid)
+        if _rk:
+            _risk_disp.setdefault(_rk, str(_rid).strip())
+    final_df["ACCOUNTID"] = final_df["ACCOUNTID"].map(lambda k: _risk_disp.get(k, k))
 
     final_pl = pl.from_pandas(final_df)
     final_pl = final_pl.join(risk_pl, on="ACCOUNTID", how="left")
@@ -1796,7 +1861,7 @@ The report provides a consolidated view of:<br>
 &nbsp;&nbsp;&nbsp;&nbsp;– <b>FO:</b> {fo_file}<br>
 &nbsp;&nbsp;&nbsp;&nbsp;– <b>CO:</b> {co_file}<br>
 &nbsp;&nbsp;&nbsp;&nbsp;– <b>NCDEX:</b> {clientnet_file}<br>
-&nbsp;&nbsp;&nbsp;&nbsp;– <b>MCX 90%:</b> {mcx_file_name}<br>
+&nbsp;&nbsp;&nbsp;&nbsp;– <b>{MCX_LABEL}:</b> {mcx_file_name}<br>
 • Total margin utilization<br>
 • Net difference highlighting <b>shortfall / excess</b><br><br>
 • <b>Derivative Margin Used</b> – Margin utilized in FO / NCDEX / MCX segments (excluding CM segment margin)<br>
@@ -1905,7 +1970,7 @@ The report provides a consolidated view of:<br>
 &nbsp;&nbsp;&nbsp;&nbsp;– <b>FO:</b> {fo_file}<br>
 &nbsp;&nbsp;&nbsp;&nbsp;– <b>CO:</b> {co_file}<br>
 &nbsp;&nbsp;&nbsp;&nbsp;– <b>NCDEX:</b> {clientnet_file}<br>
-&nbsp;&nbsp;&nbsp;&nbsp;– <b>MCX 90% :</b> {mcx_file_name}<br>
+&nbsp;&nbsp;&nbsp;&nbsp;– <b>{MCX_LABEL} :</b> {mcx_file_name}<br>
 • Total margin utilization<br>
 • Net difference highlighting <b>shortfall / excess</b><br><br>
 • <b>Derivative Margin Used</b> – Margin utilized in FO / NCDEX / MCX segments (excluding CM segment margin)<br>
@@ -1988,6 +2053,9 @@ Master Capital Services Ltd<br>
                 .groupby("Client Code", as_index=False)["Cash allocated (b)"].sum()
                 .rename(columns={"Client Code": "ACCOUNTID"})
             )
+            # same code spelling as final_df's ACCOUNTID (zero-stripped key -> RISK_REPORT spelling), see _risk_disp
+            _fo_cash["ACCOUNTID"] = _fo_cash["ACCOUNTID"].map(_zkey).map(lambda k: _risk_disp.get(k, k))
+            _fo_cash = _fo_cash.groupby("ACCOUNTID", as_index=False)["Cash allocated (b)"].sum()
             _sf = _sf.merge(_fo_cash, on="ACCOUNTID", how="left")
             # Accounts with no matching FO row (never traded FO today, etc.) —
             # 0, not blank, per explicit instruction.
