@@ -674,6 +674,15 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
         margin_df = detect_header_excel(margin_file, required_columns=["UCC Code", "Margin Limit"], as_text=True)
         margin_df = margin_df.with_columns(pl.col("UCC Code").cast(pl.Utf8).str.strip_chars().alias("Client Code"))
         margin_df = margin_df.filter(pl.col("Client Code").is_not_null() & (pl.col("Client Code") != ""))
+        # The CM/FO/CO/deposit files (and the old MCX 90% read, where Excel stored such codes as numbers) carry an
+        # all-digit client code WITHOUT its leading zeros (80011226), while this file keeps them as text
+        # (080011226). Strip leading zeros from all-digit codes so they join to the same client; codes with letters
+        # (03PI94, 07AGG ...) are left exactly as they are.
+        margin_df = margin_df.with_columns(
+            pl.when(pl.col("Client Code").str.contains(r"^[0-9]+$"))
+              .then(pl.col("Client Code").str.replace(r"^0+", "").replace("", "0"))
+              .otherwise(pl.col("Client Code"))
+              .alias("Client Code"))
         margin_df = _num(margin_df, "Margin Limit")
         margin_final = margin_df.group_by("Client Code").agg(pl.col("Margin Limit").sum().alias("MARGIN_LIMIT"))
     else:
@@ -723,6 +732,30 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     ctcl_final = (pl_df.group_by("Entity").agg(pl.col("ROW_CTCL").sum().alias("DEPOSIT_CTCL"))
                   .rename({"Entity": "Client Code"}))
 
+    # 5B ONE ROW PER CLIENT — match codes that differ only by leading zeros
+    # The exchange files (CM/FO/CO/deposits, MCX) write an all-digit client code without its leading zeros
+    # (80011226) while Update Limits / RISK_REPORT keep them (080011226). Joined as plain text those are two
+    # different clients, so one client showed up twice: NMASS on one row, CTCL on the other. Every file is matched
+    # on a key with the leading zeros stripped (letters-containing codes such as 03PI94 are untouched); the code
+    # PRINTED in the report is the Update Limits / RISK_REPORT spelling whenever the client exists there, so the
+    # RISK_REPORT lookup and the Kambala lists below keep working exactly as before.
+    def _ckey(col="Client Code"):
+        c = pl.col(col).cast(pl.Utf8).str.strip_chars()
+        return (pl.when(c.str.contains(r"^[0-9]+$"))
+                  .then(c.str.replace(r"^0+", "").replace("", "0"))
+                  .otherwise(c))
+
+    def _by_key(df):
+        """Same frame, keyed on the zero-stripped code, duplicates merged (summed)."""
+        return (df.with_columns(_ckey().alias("Client Code"))
+                  .group_by("Client Code").agg(pl.exclude("Client Code").sum()))
+
+    cm_final, fo_final, co_final = _by_key(cm_final), _by_key(fo_final), _by_key(co_final)
+    dep_final, margin_final = _by_key(dep_final), _by_key(margin_final)
+    ctcl_final = (ctcl_final.with_columns(_ckey().alias("CKEY"))
+                  .group_by("CKEY").agg(pl.col("DEPOSIT_CTCL").sum(), pl.col("Client Code").first().alias("DISPLAY_CODE"))
+                  .rename({"CKEY": "Client Code"}))
+
     # 6 MERGE (full outer joins — pure polars)
     # Fill CM_SUM nulls first (rows that exist only in other frames)
     final_pl = cm_final.with_columns(pl.col("CM_SUM").fill_null(0).fill_nan(0))
@@ -743,6 +776,7 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     final_pl = final_pl.with_columns(
         (pl.col("CM_SUM") + pl.col("FO_SUM") + pl.col("CO_SUM") +
          pl.col("DEP_SUM") + pl.col("MARGIN_LIMIT")).alias("DEPOSIT NMASS")
+    ).with_columns(pl.coalesce([pl.col("DISPLAY_CODE"), pl.col("Client Code")]).alias("Client Code")
     ).select(["Client Code", "DEPOSIT NMASS", "DEPOSIT_CTCL"]
     ).rename({"Client Code": "ACCOUNTID", "DEPOSIT_CTCL": "DEPOSIT CTCL"})
 
