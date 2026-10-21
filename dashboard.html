@@ -6365,9 +6365,9 @@ async function pxBackup(pipe, tab){
   const _tabs=`<div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:12px">${_tBtn('files','📦 Get files',tab==='files')}${_extraTabs}</div>`;
   // ── WhatsApp check (ms15) — who actually received a WhatsApp, per date + run(s) ──
   if(tab==='wacheck'){
-    const sel=window._ms15WaRuns||(window._ms15WaRuns=new Set([1,2,3,4,5,6,7,8,9]));
+    const sel=window._ms15WaRuns||(window._ms15WaRuns=new Set([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]));
     let chips='';
-    for(let i=1;i<=9;i++){
+    for(let i=1;i<=17;i++){
       const on=sel.has(i);
       chips+=`<button id="ms15WaChip${i}" onclick="ms15WaToggleRun(${i})" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'}">Run ${i}</button>`;
     }
@@ -6397,7 +6397,7 @@ async function pxBackup(pipe, tab){
       setTimeout(()=>{const el=document.getElementById('pxCliClient');if(el){el.focus();el.addEventListener('input',e=>{e.target.value=e.target.value.toUpperCase();});}},100);
       return;
     }
-    const p=_pxRunCount(pipe); // CTCL vs NMASS = 5 runs/day, Margin Shortage (ms15) = 9 runs/day
+    const p=_pxRunCount(pipe); // CTCL vs NMASS = 5 runs/day, Margin Shortage (ms15) = 17 runs/day
     if(window._pxRunSelPipe!==pipe){
       // Switching pipe (e.g. ctcl ↔ ms15) — reset the run-filter selection to
       // "all runs for THIS pipe" instead of carrying over a stale 5-run Set
@@ -6735,7 +6735,7 @@ async function pxBkDownloadOneGroup(label){
   return pxBkDownloadMerged(pipe, {[label]: g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file'}))}, clientCode, msg);
 }
 // ── Run-filter chip helpers ─────────────────────────────────────────────────
-function _pxRunCount(pipe){ return pipe==='ms15'?9:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=9 runs/day
+function _pxRunCount(pipe){ return pipe==='ms15'?17:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=17 runs/day
 function pxToggleRun(n){
   const p=_pxRunCount(window._pxBkPipe);
   const sel=window._pxRunSel||(window._pxRunSel=new Set(Array.from({length:p},(_,i)=>i+1)));
@@ -6798,8 +6798,8 @@ function ms15WaToggleRun(n){
   if(sel.has(n)) sel.delete(n); else sel.add(n);
   _ms15WaPaint(n);   // update just this chip — keeps the date field intact
 }
-function ms15WaRunsAll(){ window._ms15WaRuns=new Set([1,2,3,4,5,6,7,8,9]); for(let i=1;i<=9;i++)_ms15WaPaint(i); }
-function ms15WaRunsClear(){ window._ms15WaRuns=new Set(); for(let i=1;i<=9;i++)_ms15WaPaint(i); }
+function ms15WaRunsAll(){ window._ms15WaRuns=new Set([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]); for(let i=1;i<=17;i++)_ms15WaPaint(i); }
+function ms15WaRunsClear(){ window._ms15WaRuns=new Set(); for(let i=1;i<=17;i++)_ms15WaPaint(i); }
 function ms15DownloadWaReport(){
   const date=(document.getElementById('msWaDate')||{}).value||'';
   if(!date){ alert('Pick a date first.'); return; }

@@ -1623,6 +1623,7 @@ print("📘 T1_HOLDING_RECONCILIATION.xlsx generated successfully!")
 
 
 import os
+from datetime import datetime as _dt_mod
 
 file_names_used = [
     os.path.basename(file1),
@@ -1633,7 +1634,11 @@ file_names_used = [
     os.path.basename(noren_file) if noren_files else "T1_HOLDING_NOREN - NOT FOUND",
     os.path.basename(symphony_file),
     os.path.basename(risk_file),
+    # The EXCEPTION file is kept once and its name rarely changes, so the
+    # date inside the name can be old. Show its real last-modified time
+    # next to the name so the email says how fresh it actually is.
     os.path.basename(exception_file)
+    + _dt_mod.fromtimestamp(os.path.getmtime(exception_file)).strftime("  (last modified %d-%b-%Y %H:%M)")
 ]
 
 

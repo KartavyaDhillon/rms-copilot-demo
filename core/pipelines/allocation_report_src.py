@@ -1644,6 +1644,22 @@ def process_bucket(matches, window_start, window_end, window_label, permanent=Fa
     if pending_inquiries:
         apply_inquiry_confirmations(shared_rows_by_msgid, pending_inquiries)
 
+    # Guard: every attachment arrived EMPTY (0 bytes inside the email itself).
+    # That is a sender-side problem, not a parsing one -- say so clearly,
+    # keep the UIDs unmarked and drop the useless empty files. The mails
+    # themselves stay on the server, so nothing is lost.
+    if saved_files and all(os.path.getsize(p) == 0 for p in saved_files if os.path.exists(p)):
+        logging.error(
+            "ALL %d attachment(s) in %d email(s) are 0 bytes as received from the mail server -- "
+            "the sending system emailed empty logs for %s to %s. Nothing parsed, nothing marked done.",
+            len(saved_files), len(matches), window_start, window_end)
+        for p in saved_files:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        return
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_paths = []
 
