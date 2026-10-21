@@ -556,9 +556,20 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
         print("--------------------------------------------------\n")
         return {"status": "ok", "kambala_ids": kb_ids, "virtual_ids": kb_virtual, "mcx_file": mcx_file}
 
+    # ── Remove stale / duplicate inputs first (core/stale_files.py): only the newest today's file of each kind stays,
+    # so the run uses - and the backup keeps - exactly one file per kind. The MCX file NOT selected for this run stays
+    # in the folder (it was downloaded on purpose) and is stored in the backup as NOT_USED__<name>.
+    from core import stale_files as _sf
+    for _pfx, _ext in (("CM_ClientLevelCollaterals", (".csv", ".xlsx")), ("FO_ClientLevelCollaterals", (".csv", ".xlsx")),
+                       ("CO_ClientLevelCollaterals", (".csv", ".xlsx")), ("ClientNetEffectiveDeposits", (".csv", ".xlsx")),
+                       ("Update Limits", (".xlsx",)), ("RISK_REPORT_", (".csv",))):
+        _sf.purge_family(BASE_DIR, _pfx, _ext, today_ddmmyyyy)
+    _mcx_now = _sf.purge_mcx(BASE_DIR, datetime.now().strftime("%Y%m%d"), exclude=MCX_EXCLUDE)
     prerun = pre_run_file_check(BASE_DIR)
     if prerun.get("status") != "ok":
         return prerun
+    _other_mcx = _mcx_now.get("deposit" if MCX_SOURCE == "mcx90" else "mcx90")
+    UNUSED_MCX_NAMES = [os.path.basename(_other_mcx)] if _other_mcx else []
     # Loaded once during validation — reused below rather than re-read.
     KAMBALA_ID_LIST = prerun["kambala_ids"]
     VIRTUAL_ID_LIST = prerun["virtual_ids"]
@@ -1238,7 +1249,8 @@ Master Capital Services Ltd<br>
             # bloat the backups; deleting it would break the NEXT run's
             # pre-run check, which is the failure that would actually hurt.
             if fname.lower() == _kambala: continue
-            dst = os.path.join(run_folder, fname)
+            # the MCX file that was downloaded but NOT used by this run is stored as NOT_USED__<name>
+            dst = os.path.join(run_folder, _sf.mark_unused_name(fname, UNUSED_MCX_NAMES))
             kind = "input" if any(fname.startswith(p) for p in INPUT_PREFIXES) else "output"
             try:
                 shutil.copy2(fpath, dst)
@@ -1254,6 +1266,8 @@ Master Capital Services Ltd<br>
         # so it's already swept by the os.listdir(base_dir) loop above — no
         # separate extra_files handling needed.
 
+        # Say plainly in the backup which MCX file this run used and which one was only downloaded.
+        _sf.write_used_manifest(run_folder, {f"MCX file ({MCX_LABEL})": prerun.get("mcx_file")}, UNUSED_MCX_NAMES)
         if moved:
             print(f"📦 Backup: {len(moved)} files → {run_folder}")
         for err in errors:

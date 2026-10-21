@@ -3449,7 +3449,7 @@ def ctcl_readiness():
     return res
 
 
-def _readiness_for(_dir):
+def _readiness_for(_dir, pipe="ctcl"):
     """Shared by /ctcl/readiness and /ms15/readiness — both boxes download the
     same five inputs into their own folder and both now apply the SAME age
     limits, so an old file can never be silently reused as if freshly fetched.
@@ -3494,8 +3494,15 @@ def _readiness_for(_dir):
     # MCX 90% — random prefix, then YYYYMMDDHHMMSS (alkNAVlSFN-20260729145211.xlsx).
     # Identified as "any .xlsx that isn't Update Limits", matching
     # core/pipelines/ctcl_vs_nmass.py's MCX_RANDOM_NAME_FILE logic.
-    _mcx = _ff.newest(_dir, lambda f: f.lower().endswith(".xlsx")
-                      and "update limits" not in f.lower(), kind="mcx90")
+    # Both MCX files may be in the folder now (the download button fetches both), so only a file whose header
+    # columns match the SELECTED source counts - the other one must not turn this item green.
+    from core import stale_files as _sfm
+    from core import ctcl_mcx_source as _msrc
+    _want = _msrc.get_source(pipe)
+    _cols = _sfm.MCX_KINDS[_want]
+    _mcx = _ff.newest(_dir, lambda f: f.lower().endswith(".xlsx") and "update limits" not in f.lower()
+                      and (_sfm._MCX_STAMPED.search(f) or f.upper().startswith(_sfm._MCX_OWN_DEPOSIT))
+                      and _sfm.has_columns(_ros.path.join(_dir, f), _cols), kind="mcx90")
     _r = _ff.check(_mcx, kind="mcx90") if _mcx else {
         "ok": False, "age_min": None, "name": "", "why": "not present"}
     items.append({"key": "MCX_90_PERCENT", "ok": _r["ok"],
@@ -3551,6 +3558,55 @@ def ms15_mcx90_download_stream():
         yield 'data: {"type":"end"}\n\n'
     return StreamingResponse(gen(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+def _mcx_both_stream(pipe: str, request: Request):
+    """SSE: download the MCX 90% file AND the MCX Deposit file, one after the other, into `pipe`'s folder
+    ("ctcl" or "ms15"). Each login asks for its own RSA token. A failure of the first download does not stop the
+    second. The two 'done' events are merged into ONE so the dashboard shows a single result line."""
+    import json as _cb_json
+    from core.pipelines.mcx90_download import stream_mcx90_download, _pipe_folder as _cb_folder
+    from core.pipelines.mcx_deposit_download import stream_mcx_deposit_download
+    (_ctcl_clear_popup_state if pipe == "ctcl" else _ms15_clear_popup_state)()
+    _who, _adm = _actor(request)
+    _note_who(request)
+    if _who:
+        _POPUP_OWNERS[pipe] = _who
+    def gen():
+        results = []
+        def _run(label, it):
+            try:
+                for ev in it:
+                    if ev.get("type") == "done":
+                        results.append((label, bool(ev.get("ok")), ev.get("msg", "")))
+                    elif ev.get("type") != "end":
+                        yield f"data: {_cb_json.dumps(ev)}\n\n"
+            except Exception as e:
+                results.append((label, False, str(e)))
+        try:
+            yield from _run("MCX 90%", stream_mcx90_download(**({} if pipe == "ctcl" else {"pipe": pipe})))
+            yield from _run("MCX Deposit", stream_mcx_deposit_download(output_dir=_cb_folder(pipe), caller=pipe))
+        finally:
+            if _who and _POPUP_OWNERS.get(pipe) == _who:
+                _POPUP_OWNERS.pop(pipe, None)
+        ok = bool(results) and all(r[1] for r in results)
+        msg = " | ".join(f"{('✅' if r[1] else '❌')} {r[0]}: {r[2]}".strip() for r in results) or "No download result"
+        yield f"data: {_cb_json.dumps({'type': 'done', 'ok': ok, 'msg': msg})}\n\n"
+        yield 'data: {"type":"end"}\n\n'
+    return StreamingResponse(gen(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
+
+
+@app.get("/ctcl/download/mcx-both-stream")
+def ctcl_mcx_both_stream(request: Request):
+    """Download both MCX files (90% + Deposit) into the CTCL vs NMASS folder."""
+    return _mcx_both_stream("ctcl", request)
+
+
+@app.get("/ms15/download/mcx-both-stream")
+def ms15_mcx_both_stream(request: Request):
+    """Download both MCX files (90% + Deposit) into the Margin Shortage folder."""
+    return _mcx_both_stream("ms15", request)
 
 
 @app.get("/ms15/mcx-source")
@@ -3787,7 +3843,7 @@ def ms15_readiness():
     # Same age rules as CTCL (4 min collaterals, 45 min MCX 90%) — this box
     # runs 11 times a day, so reusing an old file here is even easier to do by
     # accident than on CTCL.
-    _base = _readiness_for(_dir)
+    _base = _readiness_for(_dir, "ms15")
     # MS15 has no "Update Limits"; it needs RISK_REPORT instead, which may live
     # in the shared common folder. RISK_REPORT is dropped once per day by hand,
     # NOT downloaded per run, so it is checked for PRESENCE only — an age limit

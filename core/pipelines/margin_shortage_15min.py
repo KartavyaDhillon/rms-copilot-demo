@@ -1041,9 +1041,21 @@ def _run_margin_shortage_15min_impl():
     _unc_map = _uncleared_prepare(BASE_DIR, today_ddmmyyyy, _count_todays_backup_runs(BASE_DIR, today_str))
 
     _stage("checking input files…")
+    # Remove stale / duplicate inputs first (core/stale_files.py): only the newest today's file of each kind stays, so
+    # the run uses - and the backup keeps - one file per kind. The MCX file NOT selected for this run stays (it was
+    # downloaded on purpose) and is stored in the backup as NOT_USED__<name>.
+    from core import stale_files as _sf
+    for _pfx, _ext in (("CM_ClientLevelCollaterals", (".csv", ".xlsx")), ("FO_ClientLevelCollaterals", (".csv", ".xlsx")),
+                       ("CO_ClientLevelCollaterals", (".csv", ".xlsx")), ("ClientNetEffectiveDeposits", (".csv", ".xlsx")),
+                       ("RISK_REPORT_", (".csv",))):
+        _sf.purge_family(BASE_DIR, _pfx, _ext, today_ddmmyyyy)
+    _mcx_now = _sf.purge_mcx(BASE_DIR, today_yyyymmdd)
     _prerun = pre_run_file_check()
     if _prerun is not None:
         return _prerun
+    _mcx_used_path = find_mcx_file_for_source()
+    _other_mcx = _mcx_now.get("deposit" if MCX_SOURCE == "mcx90" else "mcx90")
+    UNUSED_MCX_NAMES = [os.path.basename(_other_mcx)] if _other_mcx else []
     _stage("files OK — reading & computing shortage…")
 
     # ── SAFE TEST RUN: consume the arm (see the block above _safe_test_marker_path).
@@ -2171,12 +2183,15 @@ Master Capital Services Ltd<br>
                 print(f"⏭️ Skipping Risk Report (not last run): {f}")
                 continue
 
-            dst = os.path.join(backup_root, f)
+            # the MCX file downloaded but NOT used by this run is stored as NOT_USED__<name>
+            dst = os.path.join(backup_root, _sf.mark_unused_name(f, UNUSED_MCX_NAMES))
             shutil.copy2(src, dst)
             kind = "output" if f.startswith(("Shortage_vs_CC_Deposit", "Margin_Shortage_Alert")) else "input"
             _archive_to_db(db_tag, kind, dst)
             os.remove(src)
             print(f"🗂️ Backed up & removed: {f}")
+
+        _sf.write_used_manifest(backup_root, {f"MCX file ({MCX_LABEL})": _mcx_used_path}, UNUSED_MCX_NAMES)
 
         # ── Allocation files ──────────────────────────────────────────────
         # The sweep above only looks at files sitting directly in base_dir and
