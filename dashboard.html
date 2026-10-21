@@ -641,6 +641,7 @@ body {
             <button class="sa-tool" onclick="pxStop('ctcl')" data-tip="Stops whatever's currently running for CTCL vs NMASS." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="pxLogs('ctcl')" data-tip="View the full saved output of past runs.">🗂️ Logs</button>
             <button class="sa-tool" id="ctclMcx90Btn" onclick="ctclMcx90Download()" data-tip="Logs in to TCS BANCS and downloads just the MCX 90% margin file — separate from the main Run." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX 90%</button>
+            <button class="sa-tool" id="ctclMcxSourceBtn" onclick="ctclMcxSourceToggle()" data-tip="Which MCX file supplies 'Margin Limit' in the run: the MCX 90% file (Client Code + Client Margin Limit) or the MCX Deposit file (UCC Code + Margin Limit). Click to switch; it applies to the next run." style="border-color:rgba(167,139,250,.45);color:#a78bfa">🔀 MCX file: <b id="ctclMcxSourceState">…</b></button>
           </div>
         </div>
         <div class="sa-banner" id="pxBanner-ctcl"><span class="dot"></span><span class="t"></span></div>
@@ -2424,6 +2425,25 @@ function captchaStartPoller(){
     }catch(e){}
   },2000);
 }
+// ── CTCL vs NMASS: MCX file option (MCX 90% / MCX Deposit) ────────────────
+// One server-side choice (/ctcl/mcx-source) used by the next CTCL run; the button shows it and flips it.
+let _ctclMcxSource='mcx90';
+function ctclMcxSourcePaint(label){
+  const el=document.getElementById('ctclMcxSourceState'); if(el) el.textContent=label||(_ctclMcxSource==='deposit'?'MCX Deposit':'MCX 90%');
+}
+async function ctclMcxSourceRefresh(){
+  try{ const d=await (await fetch(API+'/ctcl/mcx-source')).json(); _ctclMcxSource=d.source||'mcx90'; ctclMcxSourcePaint(d.label); }catch(e){}
+}
+async function ctclMcxSourceToggle(){
+  const next=_ctclMcxSource==='deposit'?'mcx90':'deposit';
+  if(!confirm('Use the '+(next==='deposit'?'MCX Deposit file (UCC Code + Margin Limit)':'MCX 90% file (Client Code + Client Margin Limit)')+' for CTCL vs NMASS from the next run?')) return;
+  try{
+    const d=await (await fetch(API+'/ctcl/mcx-source',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:next})})).json();
+    if(d.ok===false){ alert(d.error||'Could not change the MCX file'); return; }
+  }catch(e){ alert('Network error — not changed'); return; }
+  ctclMcxSourceRefresh();
+}
+setTimeout(ctclMcxSourceRefresh,1500); setInterval(ctclMcxSourceRefresh,30000);
 // ── Captcha auto-fill switch (2Captcha) ───────────────────────────────────
 // The server keeps ONE switch for everybody (/captcha/auto); the buttons here only show and flip it.
 let _captchaAuto={enabled:false,key_configured:false};

@@ -419,6 +419,42 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
         modified_time = datetime.fromtimestamp(os.path.getmtime(filepath))
         return (datetime.now() - modified_time).total_seconds() <= minutes * 60
 
+    # ── Which MCX file feeds the "Margin Limit" part of DEPOSIT NMASS ─────────────────────────────────────
+    # Chosen with the "MCX file" button of the CTCL box (core/ctcl_mcx_source.py): the MCX 90% file (columns
+    # "Client Code" + "Client Margin Limit") or the MCX Deposit file (columns "UCC Code" + "Margin Limit").
+    # Both are random-named TCS BANCS .xlsx exports stamped with today's YYYYMMDD, so the right one is picked by
+    # its header columns - never "the first .xlsx that happens to be there".
+    from core import ctcl_mcx_source as _mcxsrc
+    MCX_SOURCE = _mcxsrc.get_source()
+    MCX_LABEL = _mcxsrc.LABELS[MCX_SOURCE]
+    MCX_EXCLUDE = ("Update Limits", "KAMBALA", "FULL_FILE_CTCL_VS_NMASS")
+    print(f"ℹ️  MCX margin source for this run: {MCX_LABEL}")
+
+    def _xlsx_has_columns(path, required_columns):
+        """True when the first 10 rows of the sheet contain every required header (whitespace-normalised)."""
+        import pandas as _pd
+        try:
+            raw = _pd.read_excel(path, header=None, nrows=10)
+        except Exception:
+            return False
+        need = [re.sub(r"\s+", " ", str(c)).strip() for c in required_columns]
+        for i in range(len(raw)):
+            row = [re.sub(r"\s+", " ", str(v)).strip() for v in raw.iloc[i].tolist()]
+            if all(c in row for c in need):
+                return True
+        return False
+
+    def find_mcx_margin_file(base_dir):
+        """Newest TODAY file in `base_dir` whose header matches the selected MCX source, else None."""
+        today_tag = datetime.now().strftime("%Y%m%d")
+        cands = [f for f in glob.glob(os.path.join(base_dir, "*.xlsx"))
+                 if today_tag in os.path.basename(f)
+                 and not any(x.lower() in os.path.basename(f).lower() for x in MCX_EXCLUDE)]
+        for f in sorted(cands, key=os.path.getmtime, reverse=True):
+            if _xlsx_has_columns(f, _mcxsrc.REQUIRED_COLUMNS[MCX_SOURCE]):
+                return f
+        return None
+
     def pre_run_file_check(base_dir):
         required_files = {
             "CM_CLIENT_LEVEL": {"patterns": ["CM_ClientLevelCollaterals_*.csv","CM_ClientLevelCollaterals_*.xlsx","CM_ClientLevelCollaterals_*.csv.crdownload"], "date_format": "DDMMYYYY"},
@@ -427,15 +463,8 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
             "CLIENT_NET_EFFECTIVE_DEPOSITS": {"patterns": ["ClientNetEffectiveDeposits_*.csv","ClientNetEffectiveDeposits_*.xlsx"], "date_format": "DDMMYYYY"},
             "UPDATE_LIMITS_FILE": {"patterns": ["Update Limits*.xlsx"], "date_format": "DDMMYYYY", "check_modified_minutes": 30},
             "RISK_REPORT": {"patterns": ["RISK_REPORT_*.csv"], "date_format": "DDMMYYYY"},
-            # MCX 90% arrives with a random prefix + YYYYMMDD stamp, so it is
-            # identified as "any .xlsx that isn't one of ours". Every permanent
-            # or generated .xlsx in this folder must be excluded here or it will
-            # be picked up as the margin file — KAMBALA (permanent reference)
-            # and FULL_FILE_CTCL_VS_NMASS (this run's own output, present when
-            # a run is retried) are exactly those cases.
-            "MCX_RANDOM_NAME_FILE": {"patterns": ["*.xlsx"], "date_format": "YYYYMMDD",
-                                     "exclude_contains": ["Update Limits", "KAMBALA",
-                                                          "FULL_FILE_CTCL_VS_NMASS"]},
+            # The MCX margin file (90% or Deposit) is checked separately below: it arrives with a random
+            # prefix + YYYYMMDD stamp, so it is recognised by its header columns, not by its name.
         }
         # T5 DEBIT report is only compulsory on Run 1 (that's the only run that
         # triggers CASH RISK CODES). By Run 2+ it's already been swept into
@@ -468,6 +497,23 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
                     wrong_date.append(f"{name} → {fname} (Last Modified: {modified_at}, older than {cfg['check_modified_minutes']} minutes)"); continue
             found[name] = latest_file
 
+        # ── MCX margin file (selected source) — today's file with the right header columns ──────────────
+        mcx_file = find_mcx_margin_file(base_dir)
+        if mcx_file:
+            found[f"MCX_MARGIN_LIMIT ({MCX_LABEL})"] = mcx_file
+        else:
+            other = "mcx90" if MCX_SOURCE == "deposit" else "deposit"
+            hint = ""
+            today_tag = datetime.now().strftime("%Y%m%d")
+            for f in glob.glob(os.path.join(base_dir, "*.xlsx")):
+                if today_tag in os.path.basename(f) and not any(x.lower() in os.path.basename(f).lower() for x in MCX_EXCLUDE) \
+                        and _xlsx_has_columns(f, _mcxsrc.REQUIRED_COLUMNS[other]):
+                    hint = (f" — found today's {_mcxsrc.LABELS[other]} file ({os.path.basename(f)}) instead; "
+                            f"switch the 'MCX file' button to {_mcxsrc.LABELS[other]} or add the {MCX_LABEL} file")
+                    break
+            missing.append(f"MCX_MARGIN_LIMIT ({MCX_LABEL}) → no today's .xlsx with columns "
+                           f"{' + '.join(_mcxsrc.REQUIRED_COLUMNS[MCX_SOURCE])}{hint}")
+
         # ── KAMBALA reference — checked HERE, not above ──────────────────────
         # It gets its own block because it breaks every rule the loop applies:
         # it is a permanent fixture, so there is no date to validate and no
@@ -498,7 +544,7 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
             print(f"   {k}: {os.path.basename(v)}")
         print(f"   KAMBALA lists: {len(kb_ids)} allocation IDs, {len(kb_virtual)} virtual IDs")
         print("--------------------------------------------------\n")
-        return {"status": "ok", "kambala_ids": kb_ids, "virtual_ids": kb_virtual}
+        return {"status": "ok", "kambala_ids": kb_ids, "virtual_ids": kb_virtual, "mcx_file": mcx_file}
 
     prerun = pre_run_file_check(BASE_DIR)
     if prerun.get("status") != "ok":
@@ -544,16 +590,18 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
         import re as _re
         return _re.sub(r"\s+", " ", str(s)).strip()
 
-    def detect_header_excel(path, required_columns):
+    def detect_header_excel(path, required_columns, as_text=False):
         """Scan first 10 rows to find the header, return a polars DataFrame.
-        Uses pandas for the scan (identical to original logic that worked)."""
+        Uses pandas for the scan (identical to original logic that worked).
+        as_text=True reads every cell as text (client codes like 070012138 keep their leading zero and a column that
+        mixes numbers and text cannot break the pandas -> polars conversion)."""
         import pandas as _pd
         raw = _pd.read_excel(path, header=None)
         req_norm = [_norm_header(c) for c in required_columns]
         for i in range(10):
             row_norm = [_norm_header(v) for v in raw.iloc[i].tolist()]
             if all(col in row_norm for col in req_norm):
-                df = _pd.read_excel(path, header=i)
+                df = _pd.read_excel(path, header=i, dtype=str) if as_text else _pd.read_excel(path, header=i)
                 df.columns = [_norm_header(c) for c in df.columns]
                 return pl.from_pandas(df)
         raise Exception(f"Header row not found in first 10 rows of {path}")
@@ -619,10 +667,21 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
                        .rename({"Client/CP Code": "Client Code"}))
 
     # 4 MARGIN LIMIT
-    margin_file = find_file(contains=today_yyyymmdd)
-    margin_df = detect_header_excel(margin_file, required_columns=["Client Code", "Client Margin Limit"])
-    margin_df = _num(margin_df, "Client Margin Limit")
-    margin_final = margin_df.group_by("Client Code").agg(pl.col("Client Margin Limit").sum().alias("MARGIN_LIMIT"))
+    margin_file = prerun["mcx_file"]               # chosen by header columns in the pre-run check
+    if MCX_SOURCE == "deposit":
+        # MCX Deposit file: ONLY "UCC Code" (the client) and "Margin Limit" are used. The first data row is the
+        # clearing member's own total line (no UCC Code) - it is not a client, so rows without a UCC Code are dropped.
+        margin_df = detect_header_excel(margin_file, required_columns=["UCC Code", "Margin Limit"], as_text=True)
+        margin_df = margin_df.with_columns(pl.col("UCC Code").cast(pl.Utf8).str.strip_chars().alias("Client Code"))
+        margin_df = margin_df.filter(pl.col("Client Code").is_not_null() & (pl.col("Client Code") != ""))
+        margin_df = _num(margin_df, "Margin Limit")
+        margin_final = margin_df.group_by("Client Code").agg(pl.col("Margin Limit").sum().alias("MARGIN_LIMIT"))
+    else:
+        margin_df = detect_header_excel(margin_file, required_columns=["Client Code", "Client Margin Limit"])
+        margin_df = _num(margin_df, "Client Margin Limit")
+        margin_final = margin_df.group_by("Client Code").agg(pl.col("Client Margin Limit").sum().alias("MARGIN_LIMIT"))
+    print(f"✅ MCX margin limit loaded from {MCX_LABEL} file: {os.path.basename(margin_file)} "
+          f"({margin_final.height} clients, total {margin_final['MARGIN_LIMIT'].sum():,.2f})")
 
     # 5 UPDATE LIMITS → CTCL
     update_limits_file = find_file(starts_with="Update Limits", contains=today_ddmmyyyy)
@@ -840,7 +899,7 @@ This report has been generated based on the following logic:
                 <b>ClientNetEffectiveDeposits</b>,
             </li>
             <li>
-                <b>Margin Limit</b> from the <b>MCX Margin Limit file 90%</b>.
+                <b>Margin Limit</b> from the <b>{"MCX Deposit file (UCC Code / Margin Limit)" if MCX_SOURCE == "deposit" else "MCX Margin Limit file 90%"}</b>.
             </li>
         </ul>
     </li>

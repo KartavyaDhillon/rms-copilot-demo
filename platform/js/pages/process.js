@@ -27,6 +27,7 @@
       el.innerHTML =
         '<div class="pc-bar"><div class="l"></div>' +
         '<div style="display:flex;gap:8px">' +
+        '<button class="btn sm ghost" id="pcCaptchaAuto" title="Automatic NMASS / NCDEX captcha filling (2Captcha)">⚡ Captcha auto-fill: <b id="pcCaptchaAutoState">…</b></button>' +
         '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
         '<a class="btn sm ghost" href="/legacy" target="_blank" title="Original console with sidebar and internal views, in a new tab">' + RMS.icon("external") + " Standalone</a></div></div>" +
@@ -38,9 +39,43 @@
         }
       };
       $("#pcCommon").onclick = openCommon;
+      captchaAutoInit();
       booted = true;
     },
   };
+
+  /* ── Captcha auto-fill switch: one server-side switch (/captcha/auto) shared by everybody ── */
+  let captchaAuto = { enabled: false, key_configured: false };
+
+  function captchaAutoPaint() {
+    const btn = $("#pcCaptchaAuto"), st = $("#pcCaptchaAutoState");
+    if (!btn || !st) return;
+    const on = captchaAuto.enabled && captchaAuto.key_configured;
+    st.textContent = !captchaAuto.key_configured ? "No key" : (captchaAuto.enabled ? "On" : "Off");
+    st.style.color = on ? "#4ade80" : (captchaAuto.key_configured ? "" : "#fbbf24");
+    const t = captchaAuto.today;
+    btn.title = captchaAuto.key_configured
+      ? "Fills NMASS / NCDEX captchas automatically (up to " + (captchaAuto.max_tries || 5) + " tries of " + (captchaAuto.timeout_s || 45) +
+        " s each), then the normal captcha popup appears. Applies to everybody." + (t ? " Today: " + t.accepted + " accepted, " + t.rejected + " wrong." : "")
+      : "No 2Captcha key found. Add APIKEY_2CAPTCHA=... to the .env file and restart the server.";
+  }
+
+  async function captchaAutoRefresh() {
+    try { captchaAuto = await (await fetch("/captcha/auto")).json(); captchaAutoPaint(); } catch (e) { /* server not updated yet */ }
+  }
+
+  function captchaAutoInit() {
+    $("#pcCaptchaAuto").onclick = async () => {
+      if (!captchaAuto.key_configured) { popup("Captcha auto-fill", "No 2Captcha key found.\nAdd APIKEY_2CAPTCHA=... to the .env file and restart the server.", false); return; }
+      try {
+        const d = await (await fetch("/captcha/auto", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !captchaAuto.enabled }) })).json();
+        if (d.ok === false) popup("Captcha auto-fill", d.error || "Could not change the switch", false);
+      } catch (e) { popup("Captcha auto-fill", "Could not reach the server: " + e.message, false); }
+      captchaAutoRefresh();
+    };
+    captchaAutoRefresh();
+    setInterval(captchaAutoRefresh, 30000);
+  }
 
   /* ── Upload Common Files: strictly today's HOLDING + RISK_REPORT ── */
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

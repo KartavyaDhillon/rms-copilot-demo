@@ -2951,6 +2951,33 @@ def captcha_auto_set(body: _CaptchaAutoBody, request: Request):
     return {"ok": True, "enabled": _st["enabled"], "key_configured": bool(_cs.api_key())}
 
 
+# ── CTCL vs NMASS: which MCX file supplies "Margin Limit" (MCX 90% or MCX Deposit) ──────────────────────────
+# One switch for everybody, kept in a small JSON file the run itself reads (core/ctcl_mcx_source.py).
+@app.get("/ctcl/mcx-source")
+def ctcl_mcx_source_get():
+    """Current MCX source for CTCL vs NMASS: {source: "mcx90"|"deposit", label, by, at}."""
+    from core import ctcl_mcx_source as _ms
+    return _ms.describe()
+
+
+class _CtclMcxSourceBody(_SA_BaseModel):
+    source: str
+
+
+@app.post("/ctcl/mcx-source")
+def ctcl_mcx_source_set(body: _CtclMcxSourceBody, request: Request):
+    """Choose the MCX file CTCL vs NMASS uses (takes effect on the next run)."""
+    from core import ctcl_mcx_source as _ms
+    _who, _adm = _actor(request)
+    try:
+        _ms.set_source(body.source, _who or "")
+    except ValueError as _e:
+        return {"ok": False, "error": str(_e)}
+    except OSError as _e:
+        return {"ok": False, "error": f"Could not save the choice: {_e}"}
+    return {"ok": True, **_ms.describe()}
+
+
 _ctcl_last_answered_at: dict = {}   # {source: timestamp} — per-source, NOT shared across
                                      # NMASS/NCDEX (a shared single timestamp used to leak a
                                      # false "previous attempt failed" reason from one login
