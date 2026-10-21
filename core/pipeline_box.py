@@ -1501,19 +1501,39 @@ def extract_known_failure_reason(log_text):
 # ── reusable config / windows / run-state (per pipeline) ─────────────────────
 from core.short_allocation import check_password as _pb_pw, mask_number as _pb_mask
 
+_COUNTER_LAST = {}   # file path -> (date, n) of the last value read successfully
+
+
 def _read_counter(p):
+    """How many runs are done today for this pipe (from its run_counter.txt).
+
+    The dashboard polls this every few seconds while a run is rewriting the file (open(...,"w") truncates it first), so
+    a poll could catch the file EMPTY / half-written / locked and the old code answered 0 - the tiles then flashed
+    "CTCL-01 overdue" for a few seconds until the next poll. Now a failed or empty read is retried a few times, and if it
+    still fails the last good value of today is returned. Only a file that really does not exist (or is dated another
+    day) counts as 0."""
+    import time as _t
     base = os.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))
     fp = os.path.join(base, p.get("state_file", "run_counter.txt"))
-    try:
-        content = open(fp, encoding="utf-8", errors="replace").read().strip()
-        today = datetime.datetime.now().strftime("%Y-%m-%d")
-        if "|" in content:
-            d, n = content.split("|", 1)
-            return int(n) if d.strip() == today else 0
-        ints = re.findall(r"\d+", content)
-        return int(ints[-1]) if ints else 0
-    except Exception:
-        return 0
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    for _attempt in range(4):
+        try:
+            content = open(fp, encoding="utf-8", errors="replace").read().strip()
+            if not content:
+                raise ValueError("empty - being rewritten")
+            if "|" in content:
+                d, n = content.split("|", 1)
+                n = int(n.strip())                       # "2026-10-21|" (half-written) raises -> retry
+                _COUNTER_LAST[fp] = (d.strip(), n)
+                return n if d.strip() == today else 0
+            ints = re.findall(r"\d+", content)
+            return int(ints[-1]) if ints else 0
+        except FileNotFoundError:
+            return 0
+        except Exception:
+            _t.sleep(0.05)
+    last = _COUNTER_LAST.get(fp)
+    return last[1] if last and last[0] == today else 0
 
 def _overrides_path(p):
     base = os.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))

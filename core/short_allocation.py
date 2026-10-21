@@ -433,15 +433,27 @@ def _auth_server(line):
     return None
 
 
+_RUN_STATE_LAST = {}   # state file -> last RUN= value read successfully
+
+
 def read_run_state(state_path):
-    try:
-        for line in open(state_path, encoding="utf-8", errors="replace"):
-            line = line.strip()
-            if line.upper().startswith("RUN="):
-                return int(line.split("=", 1)[1])
-    except Exception:
-        return None
-    return None
+    """RUN=<n> from the state file. A read that fails while another process is rewriting the file is retried, and if it
+    still fails the last good value is returned - so the dashboard does not flash "run 0" for a few seconds."""
+    import time as _t
+    for _attempt in range(4):
+        try:
+            for line in open(state_path, encoding="utf-8", errors="replace"):
+                line = line.strip()
+                if line.upper().startswith("RUN="):
+                    n = int(line.split("=", 1)[1])
+                    _RUN_STATE_LAST[state_path] = n
+                    return n
+            raise ValueError("no RUN= line yet")
+        except FileNotFoundError:
+            return None
+        except Exception:
+            _t.sleep(0.05)
+    return _RUN_STATE_LAST.get(state_path)
 
 
 def stop_short_allocation():

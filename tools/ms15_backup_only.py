@@ -1,7 +1,7 @@
 """Margin Shortage (15-min): back up today's files ONLY - no calculation, no emails, no WhatsApp.
 
 Use after a run that finished its sending but crashed at the backup step. It does exactly what the run's own backup
-does: the files in MARGIN_SHORTAGE_FOLDER go to BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\<NN> (the downloaded-but-unused MCX
+does: the files in MARGIN_SHORTAGE_FOLDER go to BACKUPFILES AUTOMATED\\<YYYY-MM-DD>\\<NN> (the downloaded-but-unused MCX
 file as NOT_USED__<name>, plus USED_FILES.txt), ALLOC_FILES go along, the run counter moves on and the files are archived
 to the database.
 
@@ -21,7 +21,7 @@ from core import stale_files as stale  # noqa: E402
 from core.pipelines import margin_shortage_15min as ms  # noqa: E402
 
 BASE = os.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
-today_str = datetime.now().strftime("%d-%m-%Y")
+today_str = datetime.now().strftime("%Y-%m-%d")   # same folder format as the run (2026-10-21)
 source = mcxsrc.get_source("ms15")
 label = mcxsrc.LABELS[source]
 
