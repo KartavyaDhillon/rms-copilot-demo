@@ -1307,6 +1307,8 @@ _LOG_LABELS = {
     "ctcl": [
         ("ctcl_download",     "📥 Download"),
         ("ctcl_mcx90",        "📥 MCX 90% Download"),
+        ("ctcl_mcx_deposit",  "📥 MCX Deposit Download"),
+        ("ctcl_mcx_both",     "📥 MCX files (90% + Deposit)"),
         ("ctcl_top20_retry",  "🔁 MarginTop20 (retry)"),
         ("ctcl_payout_retry", "🔁 Payout (retry)"),
         ("ctcl_payout",       "💰 Payout Check"),
@@ -1344,6 +1346,8 @@ _LOG_LABELS = {
     "ms15": [
         ("ms15_download",     "📥 NMASS/NCDEX"),
         ("ms15_mcx90",        "📥 MCX 90%"),
+        ("ms15_mcx_deposit",  "📥 MCX Deposit"),
+        ("ms15_mcx_both",     "📥 MCX files (90% + Deposit)"),
         ("ms15_alloc_upload", "📤 Allocation Upload"),
         ("UPLOAD",            "📤 Upload"),
         ("RESTORE",           "♻️ Restore"),
@@ -1501,6 +1505,7 @@ def extract_known_failure_reason(log_text):
 # ── reusable config / windows / run-state (per pipeline) ─────────────────────
 from core.short_allocation import check_password as _pb_pw, mask_number as _pb_mask
 
+_OVERRIDES_LAST = {}   # overrides file -> last good 'runs' dict
 _COUNTER_LAST = {}   # file path -> (date, n) of the last value read successfully
 
 
@@ -1510,7 +1515,7 @@ def _read_counter(p):
     The dashboard polls this every few seconds while a run is rewriting the file (open(...,"w") truncates it first), so
     a poll could catch the file EMPTY / half-written / locked and the old code answered 0 - the tiles then flashed
     "CTCL-01 overdue" for a few seconds until the next poll. Now a failed or empty read is retried a few times, and if it
-    still fails the last good value of today is returned. Only a file that really does not exist (or is dated another
+    still fails the last good value of today is returned. Only a file that stays missing with no value earlier today (or one dated another
     day) counts as 0."""
     import time as _t
     base = os.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))
@@ -1528,9 +1533,7 @@ def _read_counter(p):
                 return n if d.strip() == today else 0
             ints = re.findall(r"\d+", content)
             return int(ints[-1]) if ints else 0
-        except FileNotFoundError:
-            return 0
-        except Exception:
+        except Exception:                                # includes "file briefly missing" while another process swaps it
             _t.sleep(0.05)
     last = _COUNTER_LAST.get(fp)
     return last[1] if last and last[0] == today else 0
@@ -1555,16 +1558,20 @@ def _read_overrides(p):
     versus manually marked done. Superset of the client-side record; the
     frontend now prefers this and falls back to localStorage only for entries
     created before this existed."""
+    import time as _t
     fp = _overrides_path(p)
     today = datetime.datetime.now().strftime("%Y-%m-%d")
-    try:
-        with open(fp, encoding="utf-8", errors="replace") as f:
-            data = json.load(f)
-        if data.get("date") != today:
-            return {}
-        return data.get("runs", {})
-    except Exception:
-        return {}
+    for _attempt in range(4):                            # a half-written / briefly missing file is retried
+        try:
+            with open(fp, encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+            if data.get("date") != today:
+                return {}
+            _OVERRIDES_LAST[fp] = data.get("runs", {})
+            return _OVERRIDES_LAST[fp]
+        except Exception:
+            _t.sleep(0.05)
+    return _OVERRIDES_LAST.get(fp, {})                    # still unreadable: last good value, else none
 
 def _write_override(p, run_num, info):
     """Record run `run_num` as manually overridden today. Merges with any

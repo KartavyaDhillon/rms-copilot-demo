@@ -652,7 +652,7 @@ body {
             <button class="sa-tool" onclick="pxBackup('ctcl')" data-tip="Browse/restore past days' files, or look up one client's numbers across runs.">📦 Backup files</button>
             <button class="sa-tool" onclick="pxStop('ctcl')" data-tip="Stops whatever's currently running for CTCL vs NMASS." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="pxLogs('ctcl')" data-tip="View the full saved output of past runs.">🗂️ Logs</button>
-            <button class="sa-tool" id="ctclMcx90Btn" onclick="ctclMcxDownload('both')" data-tip="Downloads BOTH MCX files from TCS BANCS (MCX 90% and MCX Deposit) into this folder, one after the other. Each login asks for an RSA token. The file to USE is chosen in a window when you press Run." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download MCX files</button>
+            <button class="sa-tool" id="ctclMcx90Btn" onclick="ctclMcxDownload('both')" data-tip="Downloads BOTH MCX files from TCS BANCS (MCX 90% and MCX Deposit) into this folder in ONE login (one RSA token). The file to USE is chosen in a window when you press Run." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download MCX files</button>
           </div>
         </div>
         <div class="sa-banner" id="pxBanner-ctcl"><span class="dot"></span><span class="t"></span></div>
@@ -677,7 +677,7 @@ body {
             <button class="sa-tool" onclick="pxStop('ms15')" data-tip="Stops whatever's currently running for Margin Shortage." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="pxLogs('ms15')" data-tip="View the full saved output of past runs.">🗂️ Logs</button>
             <button class="sa-tool" id="ms15NmassBtn" onclick="ms15NmassDownload()" data-tip="Downloads CM/FO/CO ClientLevelCollaterals + ClientNetEffectiveDeposits into this box's own folder — separate download from CTCL vs NMASS's copy." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 NMASS/NCDEX</button>
-            <button class="sa-tool" id="ms15Mcx90Btn" onclick="ms15Mcx90Download('both')" data-tip="Downloads BOTH MCX files from TCS BANCS (MCX 90% and MCX Deposit) into this folder, one after the other. Each login asks for an RSA token. The file to USE is chosen in a window when you press Run." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download MCX files</button>
+            <button class="sa-tool" id="ms15Mcx90Btn" onclick="ms15Mcx90Download('both')" data-tip="Downloads BOTH MCX files from TCS BANCS (MCX 90% and MCX Deposit) into this folder in ONE login (one RSA token). The file to USE is chosen in a window when you press Run." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 Download MCX files</button>
             <button class="sa-tool" id="ms15TestBtn" onclick="ms15TestRun()" data-tip="Runs the FULL pipeline exactly like a real run — file check, calculations, and the main + zone emails (which currently go to your test inbox) — but does NOT send any WhatsApp to clients. Each eligible client is listed as '[TEST] would send' in the log so you can verify everything works safely." style="border-color:rgba(251,191,36,.5);color:var(--amber)">🧪 Test run</button>
           </div>
         </div>
@@ -4659,7 +4659,7 @@ function ctclMcxDownload(kind){
   if(_ctclMcx90ES){ _ctclMcx90ES.close(); _ctclMcx90ES=null; }
   if(btn){ btn.disabled=true; btn.textContent='⏳ Downloading…'; }
   const _mcxStatus='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>Downloading '+_label+' from TCS BANCS (4–5 min) — RSA SecurID token required in dashboard. Full output is saved to <b style="color:var(--ink)">🗂️ Logs</b>.</span></div>';
-  if(strip){ strip.style.display='block'; strip.innerHTML=_mcxStatus; }
+  if(strip){ clearTimeout(strip._ft); strip.style.display='block'; strip.innerHTML=_mcxStatus; }
   captchaStartPoller();  // also polls for RSA token requests
   const ev=new EventSource(API+(kind==='both'?'/ctcl/download/mcx-both-stream':kind==='deposit'?'/ctcl/download/mcx-deposit-stream':'/ctcl/download/mcx90-stream')); _ctclMcx90ES=ev;
   ev.onmessage=m=>{
@@ -4673,7 +4673,7 @@ function ctclMcxDownload(kind){
       if(strip) strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+((d.msg||'').replace(/[<>]/g,s=>s==='<'?'&lt;':'&gt;'))+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
     } else if(d.type==='end'){
       ev.close(); _ctclMcx90ES=null;
-      captchaStopPoller();
+      captchaStopPoller(); _stripFade(strip);
       if(btn){ btn.disabled=false; btn.textContent='📥 Download MCX files'; }
       ctclLoadReady();
     }
@@ -4700,7 +4700,7 @@ async function ctclLoadReady(){
   // tracking (core.pipeline_box._PB), so this works regardless of which tab
   // or mechanism started the run.
   let st;
-  try{ st=await (await fetch(API+'/px/status?pipe=ctcl')).json(); }
+  try{ st=await pxStatusStable('ctcl'); if(!st) throw 0; }
   catch(e){ box.style.display='none'; return; }
   if(st.running){ box.style.display='none'; return; }
   const wins=st.windows||{}, runs=st.runs||0, completed=Math.max(0,Math.min(runs,(st.run_state||0))), now=pxNowMin();
@@ -4743,7 +4743,7 @@ function ms15NmassDownload(onDone){
       _ok=(d.ok!==false);
     } else if(d.type==='end'){
       ev.close(); _ms15NmassES=null;
-      captchaStopPoller();
+      captchaStopPoller(); _stripFade(strip);
       if(btn){ btn.disabled=false; btn.textContent='📥 NMASS/NCDEX'; }
       ms15LoadReady();
       if(typeof onDone==='function') onDone(_ok);
@@ -4764,8 +4764,8 @@ function ms15Mcx90Download(kind){
   const strip=document.getElementById('ms15Mcx90Strip');
   if(_ms15Mcx90ES){ _ms15Mcx90ES.close(); _ms15Mcx90ES=null; }
   if(btn){ btn.disabled=true; btn.textContent='⏳ Checking…'; }
-  const _mcxStatus='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>'+(kind==='both'?'Downloading BOTH MCX files (90% then Deposit) — two TCS BANCS logins, an RSA SecurID token is asked for each (about 8–10 min in total).':kind==='deposit'?'Downloading the MCX Deposit file — logs in to TCS BANCS (4–5 min, RSA SecurID token required).':'Checking for today\'s MCX 90% file (skips the download if CTCL vs NMASS already shared it) — otherwise logs in to TCS BANCS (4–5 min, RSA SecurID token required).')+' Full output saved to <b style="color:var(--ink)">🗂️ Logs</b>.</span></div>';
-  if(strip){ strip.style.display='block'; strip.innerHTML=_mcxStatus; }
+  const _mcxStatus='<div style="display:flex;align-items:center;gap:8px;color:var(--muted)"><div style="width:12px;height:12px;border-radius:50%;border:2px solid var(--blue);border-top-color:transparent;animation:spin .7s linear infinite;flex-shrink:0"></div><span>'+(kind==='both'?'Downloading BOTH MCX files (90% + Deposit) in one TCS BANCS login — one RSA SecurID token is asked (4–5 min).':kind==='deposit'?'Downloading the MCX Deposit file — logs in to TCS BANCS (4–5 min, RSA SecurID token required).':'Checking for today\'s MCX 90% file (skips the download if CTCL vs NMASS already shared it) — otherwise logs in to TCS BANCS (4–5 min, RSA SecurID token required).')+' Full output saved to <b style="color:var(--ink)">🗂️ Logs</b>.</span></div>';
+  if(strip){ clearTimeout(strip._ft); strip.style.display='block'; strip.innerHTML=_mcxStatus; }
   captchaStartPoller();  // also polls for RSA token requests
   const ev=new EventSource(API+(kind==='both'?'/ms15/download/mcx-both-stream':kind==='deposit'?'/ms15/download/mcx-deposit-stream':'/ms15/download/mcx90-stream')); _ms15Mcx90ES=ev;
   ev.onmessage=m=>{
@@ -4777,7 +4777,7 @@ function ms15Mcx90Download(kind){
       if(strip) strip.innerHTML='<div style="font-weight:700;color:'+(d.ok?'var(--green)':'var(--amber)')+'">'+((d.msg||'').replace(/[<>]/g,s=>s==='<'?'&lt;':'&gt;'))+' <span style="font-weight:400;color:var(--dim)">— full log in 🗂️ Logs</span></div>';
     } else if(d.type==='end'){
       ev.close(); _ms15Mcx90ES=null;
-      captchaStopPoller();
+      captchaStopPoller(); _stripFade(strip);
       if(btn){ btn.disabled=false; btn.textContent='📥 Download MCX files'; }
       ms15LoadReady();
     }
@@ -4907,7 +4907,7 @@ function _ms15TestRunGo(){
 async function ms15LoadReady(){
   const box=document.getElementById('ms15Ready'); if(!box) return;
   let st;
-  try{ st=await (await fetch(API+'/px/status?pipe=ms15')).json(); }
+  try{ st=await pxStatusStable('ms15'); if(!st) throw 0; }
   catch(e){ box.style.display='none'; return; }
   if(st.running){ box.style.display='none'; return; }
   const wins=st.windows||{}, runs=st.runs||0, completed=Math.max(0,Math.min(runs,(st.run_state||0))), now=pxNowMin();
@@ -5769,7 +5769,7 @@ async function cliLoadReady(){
   // client-only _pxRunning, so this banner doesn't freeze on stale data across
   // reloads/other tabs, or when a run was kicked off some other way.
   let st;
-  try{ st=await (await fetch(API+'/px/status?pipe=cli')).json(); }
+  try{ st=await pxStatusStable('cli'); if(!st) throw 0; }
   catch(e){ box.style.display='none'; return; }
   if(st.running){ box.style.display='none'; return; }
   const wins=st.windows||{}, runs=st.runs||0, completed=Math.max(0,Math.min(runs,(st.run_state||0))), now=pxNowMin();
@@ -6071,7 +6071,23 @@ function pxRunTip(pipe){
 }
 function pxNowMin(){ const d=new Date(); return d.getHours()*60+d.getMinutes(); }
 function pxParseWin(w){ if(!w) return null; const m=w.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/); return m?{s:(+m[1])*60+(+m[2]),e:(+m[3])*60+(+m[4])}:null; }
-async function pxStatus(pipe){ let s; try{ const r=await fetch(API+'/px/status?pipe='+pipe); if(!r.ok) throw 0; s=await r.json(); }catch(e){ s=null; } pxRenderRuns(pipe,s); }
+// /px/status with glitch protection: if the run count suddenly DROPS (e.g. 3 -> 0 because the backend caught its counter
+// file mid-rewrite), ask once more after 1.5 s and use that answer - so tiles never flash "run 01" for a few seconds.
+// A real reset (Manual overrides) still shows, 1.5 s later.
+// A download result line (green/amber strip) disappears 60 s after the download ends.
+function _stripFade(el){ if(!el) return; clearTimeout(el._ft); var snap=el.innerHTML; el._ft=setTimeout(function(){ if(el.innerHTML===snap) el.style.display='none'; },60000); }
+const _pxLastRS={};
+async function pxStatusStable(pipe){
+  const get=async function(){ try{ const r=await fetch(API+'/px/status?pipe='+pipe); if(!r.ok) return null; return await r.json(); }catch(e){ return null; } };
+  let s=await get();
+  if(s && typeof s.run_state==='number'){
+    const prev=_pxLastRS[pipe];
+    if(prev!=null && s.run_state<prev){ await new Promise(function(r){ setTimeout(r,1500); }); const s2=await get(); if(s2) s=s2; }
+    if(s && typeof s.run_state==='number') _pxLastRS[pipe]=s.run_state;
+  }
+  return s;
+}
+async function pxStatus(pipe){ const s=await pxStatusStable(pipe); pxRenderRuns(pipe,s); }
 function pxRenderRuns(pipe,s){
   const wrap=document.getElementById('pxRuns-'+pipe); if(!wrap) return;
   if(!s){ wrap.innerHTML='<div style="grid-column:1/-1;text-align:center;color:var(--amber);font-size:12.5px;padding:14px;border:1px dashed rgba(251,191,36,.4);border-radius:10px;background:rgba(251,191,36,.06)">&#9888; Backend not reachable — start uvicorn.</div>'; return; }

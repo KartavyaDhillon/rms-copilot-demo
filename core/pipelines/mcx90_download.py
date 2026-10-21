@@ -216,15 +216,18 @@ def _friendly_auth_msg(server, reason):
             f"Update it in Credentials and try again.")
 
 
-def stream_mcx90_download(pipe="ctcl"):
+def stream_mcx90_download(pipe="ctcl", both=False):
     """Generator that runs the MCX90 download script and yields SSE event dicts.
 
     `pipe` is "ctcl" (default, CTCL vs NMASS box) or "ms15" (Margin Shortage
     15-min box) - selects which folder the file lands in, and is used for the
     CTCL<->Margin-Shortage MCX90 sharing check (see module docstring).
 
-    Full output is ALSO written to logs/ctcl/MCX90__<timestamp>.log so it shows
-    up in the dashboard's Logs modal (the UI only shows a one-line status).
+    both=True downloads the MCX 90% file AND the MCX Deposit file in ONE login / ONE RSA token (the script's
+    MCX_DOWNLOAD_BOTH mode); both are saved in this pipe's folder and everything goes to ONE log file.
+
+    Full output is ALSO written to logs/<pipe>/<pipe>_mcx90__<timestamp>.log so it shows
+    up in that box's Logs modal (the UI only shows a one-line status).
 
     Event shapes:
       {"type": "log",   "msg": str}              - one output line
@@ -245,25 +248,32 @@ def stream_mcx90_download(pipe="ctcl"):
     for _pl in _purge_stale_mcx_files(own_dir):
         yield {"type": "log", "msg": _pl}
     _existing = _today_mcx_file(own_dir, _MCX90_MAX_AGE_MIN)
+    if _existing and both:
+        # both files wanted: only skip when a fresh MCX Deposit file is in the folder too
+        _dep = [f for f in glob.glob(os.path.join(own_dir, "MCX_DEPOSIT_*.xlsx"))
+                if (_file_age_min(f) or 1e9) <= _MCX90_MAX_AGE_MIN]
+        if not _dep:
+            _existing = None
     if _existing:
         _age = _file_age_min(_existing)
         _agetxt = f", {_age:.0f} min old" if _age is not None else ""
         _msg1 = ("Today's MCX 90% file already present (" + os.path.basename(_existing)
                  + _agetxt + ") - skipping download.")
         yield {"type": "log", "msg": _msg1}
-        yield {"type": "done", "ok": True, "msg": "MCX 90% file already available"}
+        yield {"type": "done", "ok": True,
+               "msg": ("MCX 90% and MCX Deposit files already available" if both else "MCX 90% file already available")}
         yield {"type": "end"}
         return
 
     # -- persistent log file (appears in the CTCL Logs modal) --------------
     _lf = None
     try:
-        _logdir = os.path.join(_REPO, "logs", "ctcl")
+        _logdir = os.path.join(_REPO, "logs", pipe if pipe in ("ctcl", "ms15") else "ctcl")   # each box's own Logs
         os.makedirs(_logdir, exist_ok=True)
         _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        _lf = open(os.path.join(_logdir, f"ctcl_mcx90__{_ts}.log"), "w",
+        _lf = open(os.path.join(_logdir, f"{pipe if pipe in ('ctcl', 'ms15') else 'ctcl'}_{'mcx_both' if both else 'mcx90'}__{_ts}.log"), "w",
                    encoding="utf-8", errors="replace")
-        _lf.write(f"# MCX 90% download  start={_ts}\n"); _lf.flush()
+        _lf.write(f"# {'MCX 90% + MCX Deposit' if both else 'MCX 90%'} download  start={_ts}\n"); _lf.flush()
     except Exception:
         _lf = None
 
@@ -287,6 +297,8 @@ def stream_mcx90_download(pipe="ctcl"):
     env["PYTHONUNBUFFERED"] = "1"  # child stdout is block-buffered on a pipe otherwise -
                                     # a slow login/retry loop with low print volume can then
                                     # look completely hung with a near-empty log for minutes
+    if both:
+        env["MCX_DOWNLOAD_BOTH"] = "1"     # script: RSK383 (Deposit) + RSK335 (90%) in one login
     env["MCX90_SAVE_DIR"]  = own_dir  # tells MCX_90_PERCENT_FILE_API.py where to save
                                         # this run's file - ctcl's folder by default,
                                         # Margin Shortage's folder when pipe="ms15"
@@ -299,7 +311,7 @@ def stream_mcx90_download(pipe="ctcl"):
         yield {"type": "end"}
         return
 
-    for _m in (f"Starting MCX 90% download: {os.path.basename(script)}",
+    for _m in (f"Starting {'MCX 90% + MCX Deposit' if both else 'MCX 90%'} download: {os.path.basename(script)}",
                "RSA SecurID popup will appear on your desktop - enter the 8-digit token code.",
                "TCS BANCS server can take 4-5 min - please wait..."):
         _log(_m)
@@ -370,7 +382,7 @@ def stream_mcx90_download(pipe="ctcl"):
     _pb["proc"] = None; _pb["running"] = False
 
     if rc == 0:
-        _log("MCX 90% file downloaded successfully")
+        _log("MCX 90% + MCX Deposit files downloaded successfully" if both else "MCX 90% file downloaded successfully")
         _downloaded = _today_mcx_file(own_dir)
         _share_msgs = _maybe_share_with_sibling(pipe, _downloaded) if _downloaded else []
         for _sm in _share_msgs:
@@ -378,7 +390,8 @@ def stream_mcx90_download(pipe="ctcl"):
             yield {"type": "log", "msg": _sm}
         _close_log()
         yield {"type": "done", "ok": True,
-               "msg": "MCX 90% file downloaded successfully"}
+               "msg": ("MCX 90% and MCX Deposit files downloaded successfully" if both
+                       else "MCX 90% file downloaded successfully")}
     elif _auth_fail:
         _log(f"MCX90 download finished with exit code {rc}")
         _close_log()

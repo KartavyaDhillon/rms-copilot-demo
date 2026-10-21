@@ -525,6 +525,84 @@ FETCH_HEADERS = {
 
 
 # =========================
+# 🚀 BOTH FILES IN ONE LOGIN (MCX_DOWNLOAD_BOTH=1)
+# =========================
+# One login / one RSA token / one wait loop for BOTH reports: the MCX Deposit report (RSK383, "UCC Code" +
+# "Margin Limit") is exported first, then the MCX 90% report (RSK335, below); the wait loop further down waits until
+# BOTH are "Report Generated" and then downloads both. Without MCX_DOWNLOAD_BOTH this script behaves exactly as before
+# (RSK335 only).
+BOTH = os.getenv("MCX_DOWNLOAD_BOTH", "") == "1"
+export_trigger_time_383 = None
+if BOTH:
+    print("\n🌐 Opening RSK383 page (MCX Deposit)...")
+    RSK383_URL = BASE_URL + "/Bancs/RSK/RSK383.do"
+    init_383 = {
+        "app": "bancsapp?prefix=/RSK", "page": "/RSK383.do", "confViewSize": "50", "reqType": "0",
+        "mode": "DEF_MODE", "parentName": "blank", "browserType": "IE55", "GuiWinName": "RSK383",
+        "compname": "RSK", "over_ride_button": "Cancel", "AvlHt": "744", "AvlWd": "1481", "tblWd": "1465",
+        "GuiBrowserInst": "0", "theme": "black", "pageId": "RSK383", "wintitle": "Query Detailed Limit",
+        "availHeight": "816", "availWidth": "1536", "tabId": "panel2", "rndaak": rndaak,
+        "reqtoken": "", "parentToChildData": "",
+    }
+    session.post(RSK383_URL, headers=INIT_HEADERS, data=init_383)
+    H383 = dict(FETCH_HEADERS)
+    H383["Referer"] = RSK383_URL
+
+    _today_api = datetime.now().strftime("%Y%m%d")
+    _today_enc = datetime.now().strftime("%d/%m/%Y").replace("/", "%2F")
+    search_383 = {}
+    for _f in ("clearingMemberCode", "tradingMemberCode", "uCCcode", "clientName", "fromDate", "toDate",
+               "clearingMemberName", "tradingMemberName", "currency"):
+        search_383[f"MCB_SearchWC_wca_{_f}"] = _today_api if _f in ("fromDate", "toDate") else ""
+        search_383[f"propertyMap(MCB_SearchWC_wca_{_f}_op)"] = "="
+    search_383.update({
+        "GRID_RESPONSE": "RSK383_Table", "operationType": "ET", "searchClicked": "true", "PageNum": "0",
+        "service": "queryCashCollDetLimit", "windowName": "RSK383", "MODE": "DEF_MODE", "compName": "RSK",
+        "lgbinst": "0", "WRITE_APP": "true", "REQ_TYPE": "0", "reqType": "1", "butvalue": "50",
+        "sQuery": f"Transaction From Date  Equals  {_today_enc} AND Transaction To Date  Equals  {_today_enc}",
+        "MCBrowserEventInformation": "sourceElementName~|~Search#*#eventType~|~click#*#butId~|~null",
+        "IXHRts": str(int(time.time() * 1000)), "XHR": "true", "rndaak": rndaak, "theme": "black",
+        "tabId": "panel2", "mode": "DEF_MODE", "GuiBrowserInst": "0", "parentName": "blank",
+        "browserType": "IE55", "GuiWinName": "RSK383", "compname": "RSK", "confViewSize": "50",
+    })
+    print("🔍 Running RSK383 search...")
+    _res383 = session.post(RSK383_URL, headers=H383, data=search_383)
+    print("📥 RSK383 Status:", _res383.status_code)
+    if "RSK383_Table" not in _res383.text:
+        raise Exception("❌ RSK383 search failed")
+    print("✅ RSK383 search successful")
+
+    export_383 = search_383.copy()
+    export_383.update({
+        "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "100",
+        "dateStamp": datetime.now().strftime("%Y%m%d"), "timeStamp": datetime.now().strftime("%H:%M:%S"),
+        "PageNum": "1", "undefined": "",
+        "MCBrowserEventInformation": "sourceElementName~|~undefined#*#eventType~|~callListExport#*#butId~|~null",
+        "IXHRts": str(int(time.time() * 1000)),
+    })
+    _exp383 = session.post(RSK383_URL, headers=H383, data=export_383)
+    if "ExportBatchSuccess" not in _exp383.text:
+        raise Exception("❌ RSK383 export failed")
+    export_trigger_time_383 = datetime.now()
+    print("✅ RSK383 export triggered")
+    print(f"⏱ RSK383 Export Time: {export_trigger_time_383.strftime('%Y%m%d%H%M%S')}")
+    # same as the browser: PageLoader + the export-download page before the next report page is opened
+    session.get(BASE_URL + "/Bancs/common/PageLoader.html",
+                headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html",
+                         "Referer": BASE_URL + "/Bancs/login.do?method=Login"})
+    session.post(BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do",
+                 headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded",
+                          "Origin": BASE_URL, "Referer": BASE_URL + "/Bancs/common/PageLoader.html"},
+                 data={"app": "bancsapp?prefix=/ARCHGUI", "page": "/ar_w_DataExport.do", "confViewSize": "50",
+                       "reqType": "0", "mode": "DEF_MODE", "parentName": "blank", "browserType": "IE55",
+                       "GuiWinName": "ar_w_DataExport", "compname": "ARCHGUI", "over_ride_button": "Cancel",
+                       "AvlHt": "678", "AvlWd": "914", "tblWd": "898", "GuiBrowserInst": "0", "theme": "black",
+                       "pageId": "ar_w_DataExport", "wintitle": "Download Exported Files",
+                       "availHeight": "816", "availWidth": "1536", "tabId": "panel4", "rndaak": rndaak,
+                       "reqtoken": "", "parentToChildData": ""})
+
+
+# =========================
 # 🚀 OPEN RSK335 PAGE (CORRECT FLOW)
 # =========================
 print("\n🌐 Opening RSK335 page...")
@@ -1083,6 +1161,9 @@ elapsed = 0
 
 target_file_335 = None
 ready_335 = False
+target_file_383 = None            # MCX Deposit report (only when BOTH)
+ready_383 = False
+file_locked_383 = False
 
 last_time_335 = None
 file_locked_335 = False
@@ -1287,6 +1368,19 @@ while elapsed < max_wait:
             query = cols[2].text.strip().replace("%2F", "/")
 
             if (
+                BOTH and not file_locked_383
+                and abs((file_time - export_trigger_time_383).total_seconds()) <= 45
+                and "Transaction From Date" in query
+            ):
+                target_file_383 = file_name
+                file_locked_383 = True
+                print(f"🔒 LOCKED RSK383 FILE: {target_file_383}")
+
+            if BOTH and file_locked_383 and file_name == target_file_383:
+                if "Generated" in status:
+                    ready_383 = True
+
+            if (
                 not file_locked_335
                 and abs((file_time - export_trigger_time_335).total_seconds()) <= 15
                 and "Client Code" in query
@@ -1302,8 +1396,8 @@ while elapsed < max_wait:
         except:
             continue
 
-    if ready_335:
-        print("\n🎉 RSK335 FILE READY")
+    if ready_335 and (ready_383 or not BOTH):
+        print("\n🎉 " + ("BOTH FILES READY" if BOTH else "RSK335 FILE READY"))
         break
 
     time.sleep(interval)
@@ -1319,17 +1413,26 @@ if not target_file_335:
 if not ready_335:
     raise Exception("❌ RSK335 not generated in time")
 
+if BOTH:
+    if not target_file_383:
+        raise Exception("❌ RSK383 not found")
+    if not ready_383:
+        raise Exception("❌ RSK383 not generated in time")
+
 
 
 
 # =========================
-# ⬇️ STEP 3: DOWNLOAD FILE (RSK335 ONLY)
+# ⬇️ STEP 3: DOWNLOAD FILE(S)  (RSK335, plus RSK383 when BOTH)
 # =========================
 
-print("\n⬇️ STARTING DOWNLOAD PROCESS FOR RSK335...")
+print("\n⬇️ STARTING DOWNLOAD PROCESS FOR " + ("BOTH FILES..." if BOTH else "RSK335..."))
 
-label = "RSK335"
-file_name = target_file_335
+# (label, name on the server, name it is saved under)
+files_to_download = [("RSK335", target_file_335, target_file_335)]
+if BOTH:
+    # the console's MCX Deposit file name: MCX_DEPOSIT_<hh.mm>.xlsx (12-hour clock, no AM/PM)
+    files_to_download.insert(0, ("RSK383", target_file_383, f"MCX_DEPOSIT_{datetime.now().strftime('%I.%M')}.xlsx"))
 
 DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -1340,70 +1443,43 @@ DOWNLOAD_HEADERS = {
     "Referer": BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do?app=bancsapp?prefix=/ARCHGUI"
 }
 
-print(f"\n🔽 Processing {label} → {file_name}")
+for label, file_name, save_name in files_to_download:
+    print(f"\n🔽 Processing {label} → {file_name}")
 
-# =========================
-# 🔍 CHECK FILE EXISTS (RETRY LOGIC)
-# =========================
-check_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=checkForFile"
+    # 🔍 CHECK FILE EXISTS (RETRY LOGIC)
+    check_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=checkForFile"
+    file_ready = False
+    retry = 0
+    max_retry = 10
+    while retry < max_retry:
+        retry += 1
+        print(f"🔍 Checking file ({retry}/{max_retry})...")
+        check_res = session.post(check_url, headers=DOWNLOAD_HEADERS, data={"rndaak": rndaak})
+        if "FileExists" in check_res.text:
+            file_ready = True
+            print("✅ File is ready")
+            break
+        print("⏳ Not ready yet, waiting 5 sec...")
+        time.sleep(5)
+    if not file_ready:
+        raise Exception(f"❌ {label} file not ready for download")
 
-file_ready = False
-retry = 0
-max_retry = 10
+    # ⬇️ DOWNLOAD FILE
+    download_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=downloadFile"
+    print("⬇️ Downloading...")
+    download_res = session.post(download_url, headers=DOWNLOAD_HEADERS, data={"rndaak": rndaak}, stream=True)
+    print("📥 Status:", download_res.status_code)
+    if download_res.status_code != 200:
+        print(download_res.text[:200])
+        raise Exception(f"❌ Download failed for {label}")
 
-while retry < max_retry:
-    retry += 1
+    # 💾 SAVE FILE
+    save_path = os.path.join(INPUT_FOLDER, save_name)
+    with open(save_path, "wb") as f:
+        for chunk in download_res.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+    print(f"✅ {label} DOWNLOADED: {save_path}")
 
-    print(f"🔍 Checking file ({retry}/{max_retry})...")
-
-    check_res = session.post(
-        check_url,
-        headers=DOWNLOAD_HEADERS,
-        data={"rndaak": rndaak}
-    )
-
-    if "FileExists" in check_res.text:
-        file_ready = True
-        print("✅ File is ready")
-        break
-
-    print("⏳ Not ready yet, waiting 5 sec...")
-    time.sleep(5)
-
-if not file_ready:
-    raise Exception(f"❌ {label} file not ready for download")
-
-# =========================
-# ⬇️ DOWNLOAD FILE
-# =========================
-download_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=downloadFile"
-
-print("⬇️ Downloading...")
-
-download_res = session.post(
-    download_url,
-    headers=DOWNLOAD_HEADERS,
-    data={"rndaak": rndaak},
-    stream=True
-)
-
-print("📥 Status:", download_res.status_code)
-
-if download_res.status_code != 200:
-    print(download_res.text[:200])
-    raise Exception(f"❌ Download failed for {label}")
-
-# =========================
-# 💾 SAVE FILE
-# =========================
-save_path = os.path.join(INPUT_FOLDER, file_name)
-
-with open(save_path, "wb") as f:
-    for chunk in download_res.iter_content(chunk_size=8192):
-        if chunk:
-            f.write(chunk)
-
-print(f"✅ {label} DOWNLOADED: {save_path}")
-
-print("\n🎉 RSK335 FILE DOWNLOADED SUCCESSFULLY")
+print("\n🎉 " + ("BOTH FILES (MCX Deposit + MCX 90%) DOWNLOADED SUCCESSFULLY" if BOTH else "RSK335 FILE DOWNLOADED SUCCESSFULLY"))
 print("\n🛑 Script finished — closing now")

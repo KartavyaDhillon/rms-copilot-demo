@@ -56,10 +56,12 @@ def stream_mcx_deposit_download(output_dir=None, caller="sa"):
     # ── persistent log file (appears in SA Logs modal) ───────────────────────
     _lf = None
     try:
-        _logdir = os.path.join(_REPO, "logs", "short_allocation")
+        # CTCL / Margin Shortage downloads are logged in THEIR OWN Logs; the SA button keeps the SA log.
+        _own = caller in ("ctcl", "ms15")
+        _logdir = os.path.join(_REPO, "logs", caller if _own else "short_allocation")
         os.makedirs(_logdir, exist_ok=True)
         _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        _lf = open(os.path.join(_logdir, f"MCX_DEPOSIT__{_ts}.log"),
+        _lf = open(os.path.join(_logdir, (f"{caller}_mcx_deposit__{_ts}.log" if _own else f"MCX_DEPOSIT__{_ts}.log")),
                    "w", encoding="utf-8", errors="replace")
         _lf.write(f"# mcx_deposit_downloader.py  start={_ts}\n")
         _lf.flush()

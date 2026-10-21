@@ -1414,7 +1414,10 @@ def run_ncdex():
         s = soup_of(page_resp)
         img = s.find("img", src=lambda x: x and "Captcha.aspx" in x)
         if not img:
-            raise RuntimeError("Captcha <img> not on page — see " + DEBUG_DIR)
+            # The site returned an error / half page instead of the login form: restart the whole login (same as a
+            # missing captcha image) instead of giving up.
+            raise NcdexCaptchaUnavailable("Captcha <img> not on page (status %s) — NCDEX is erroring, see %s"
+                                          % (getattr(page_resp, "status_code", "?"), DEBUG_DIR))
         cap_url = ROOT + "/Login/" + urllib.parse.quote(img["src"], safe=":/?=&")
         cap_resp = None
         for _cap_attempt in range(1, 4):                      # captcha download: 3 tries
@@ -1516,6 +1519,12 @@ def run_ncdex():
             allow_redirects=False,
         )
         dump("POST login (attempt %d)" % attempt, login_resp, body_chars=0)
+
+        if login_resp.status_code >= 500:
+            # 502/503/504 = NCDEX's own server failed the login POST. That is NOT a wrong captcha: do not count it
+            # against the captcha solver, and do not reuse this error page - start the whole login again.
+            raise NcdexCaptchaUnavailable("NCDEX login server error: HTTP %d on the login POST "
+                                          "(the site is overloaded or down)" % login_resp.status_code)
 
         if login_resp.status_code in (301, 302):
             print("✅ login POST accepted → %s" % login_resp.headers.get("Location"))
