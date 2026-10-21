@@ -253,8 +253,14 @@ def snapshot():
     # own label, same precedent as the NMASS/NCFE login resource lock below.
     try:
         from core.pipeline_box import running_actions, act_label, _busy_label_for as _blf3
+        from core.pipeline_box import _ACT as _ACT_SLOTS
         for _pipe, _action, _started in running_actions():
             _key = f"act_{_pipe}_{_action}"
+            # Show the PERSON who clicked the button (recorded in the action
+            # slot as "by"); only fall back to the box label when unknown.
+            _who = (_ACT_SLOTS.get(f"{_pipe}:{_action}") or {}).get("by")
+            if not _who or _who == "unknown user":
+                _who = _blf3(_pipe) or _pipe
             locks.append({
                 # kind:"action" (not "process") tells the frontend this is a
                 # single standalone button, not a whole-box run — it should
@@ -263,7 +269,7 @@ def snapshot():
                 # "process"/"resource" lock that's also active for this pipe.
                 "key": _key, "kind": "action", "state": "RUNNING",
                 "pipe": _pipe, "label": act_label(_pipe, _action),
-                "by": _blf3(_pipe) or _pipe, "ip": "",
+                "by": _who, "ip": "",
                 "started_at": _started, "elapsed_s": _elapsed(_started) if _started else None,
                 "affects": _AFFECTS.get(f"px_{_pipe}", [_pipe]),
                 "button": _ACTION_BUTTON.get((_pipe, _action)),
