@@ -4,6 +4,7 @@ Short, human-readable notes on notable changes. Newest first.
 
 ## 2026-10-22
 - Docs: added this changelog so changes are easy to trace.
+- Docs: noted that `SAVE.bat` only commits locally; run `git push` to publish.
 
 ## 2026-10-21
 - MCX files: one button downloads both the 90% and Deposit files in a single login.
