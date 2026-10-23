@@ -532,11 +532,8 @@ def run(opts: dict) -> int:
         log(f"\n  opening balances: looking for the {odate:%d-%m-%Y} folder in {m.BACKUP_ROOT}")
         dfolder = m.find_date_folder(odate)
         if dfolder:
-            srcf = m.oldest_time_subfolder(dfolder)
-            if srcf:
-                for p in m.pick_opening_files(srcf).values():
-                    shutil.copy2(p, os.path.join(m.WORK_FOLDER, os.path.basename(p)))
-                    opening_used.append(p)
+            # BOD (07-11), AFTERNOON (15:30-18:00) and EVENING (anything else, optional) CLI backups
+            opening_used = m.collect_snapshots(dfolder, m.WORK_FOLDER)      # [(label, path)]
         if not opening_used:
             log("[FRIENDLY_MSG] No opening-balance files found for this day — they are treated as 0.")
 
@@ -624,9 +621,10 @@ def run(opts: dict) -> int:
             if opening_used:
                 od = os.path.join(dest, "opening_balance_files")
                 os.makedirs(od, exist_ok=True)
-                for p in opening_used:
+                for label, p in opening_used:
                     try:
-                        shutil.copy2(p, os.path.join(od, os.path.basename(p)))
+                        os.makedirs(os.path.join(od, label), exist_ok=True)
+                        shutil.copy2(p, os.path.join(od, label, os.path.basename(p)))
                     except Exception as e:
                         log(f"  [!] couldn't back up {os.path.basename(p)}: {e}")
             m.save_log_slices(dest, log_offsets)

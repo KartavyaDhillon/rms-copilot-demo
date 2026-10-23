@@ -2060,13 +2060,50 @@ def system_action_label(rec):
         return "D (DOWNWARDS)"
     return a or ""
 
-def build_timeline(rows, opening_totals=None, opening_time=None):
-    opening_totals = opening_totals or {}   # {segment: {client: amount}}
-    opening_time = opening_time or {}       # {segment: 'HH:MM:SS'}
+# ---- Back Office snapshots (BOD / AFTERNOON / EVENING allocation) ---------
+# The CLI Prudential box backs up its Back Office files every time it runs. Each
+# backup folder is classified by the time it was taken:
+#     07:00 - 11:00            -> "BOD allocation"
+#     15:30 - 18:00            -> "AFTERNOON allocation"
+#     anything else            -> "EVENING allocation"   (optional - often absent)
+# Every snapshot becomes one starting row per client+segment in the timeline,
+# with Change Type "Back Office". Log rows that come after a snapshot are
+# calculated from that snapshot's level.
+SNAP_BOD = "BOD allocation"
+SNAP_AFTERNOON = "AFTERNOON allocation"
+SNAP_EVENING = "EVENING allocation"
+SNAP_ORDER = (SNAP_BOD, SNAP_AFTERNOON, SNAP_EVENING)
+CHANGE_TYPE_BACK_OFFICE = "Back Office"      # B and O capitals - exactly like this
+SNAP_SUBDIR = "_snapshots"                   # work-folder sub-folder holding the AFTERNOON / EVENING files
 
-    segments_seen = sorted(
-        {(r.get("Segment") or "(blank)") for r in rows} | set(opening_totals.keys())
-    )
+
+def snapshot_label(hour, minute):
+    """Which snapshot a CLI backup taken at hour:minute is."""
+    t = hour * 60 + minute
+    if 7 * 60 <= t < 11 * 60:
+        return SNAP_BOD
+    if 15 * 60 + 30 <= t <= 18 * 60:
+        return SNAP_AFTERNOON
+    return SNAP_EVENING
+
+
+def _hms_to_seconds(text):
+    """'HH:MM[:SS]' -> seconds since midnight, or None when it can't be read."""
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?", str(text or ""))
+    if not m:
+        return None
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3) or 0)
+
+
+def build_timeline(rows, opening_totals=None, opening_time=None, snapshots=None):
+    opening_totals = opening_totals or {}   # {segment: {client: amount}}   (BOD allocation)
+    opening_time = opening_time or {}       # {segment: 'HH:MM:SS'}
+    snapshots = snapshots or []             # [(label, {segment: {client: amount}}, {segment: 'HH:MM:SS'})]  AFTERNOON / EVENING
+
+    seg_set = {(r.get("Segment") or "(blank)") for r in rows} | set(opening_totals.keys())
+    for _lbl, _tot, _tm in snapshots:
+        seg_set |= set(_tot.keys())
+    segments_seen = sorted(seg_set)
 
     by_client = defaultdict(list)
     for r in rows:
@@ -2075,6 +2112,9 @@ def build_timeline(rows, opening_totals=None, opening_time=None):
     all_clients = set(by_client.keys())
     for seg_totals in opening_totals.values():
         all_clients.update(seg_totals.keys())
+    for _lbl, _tot, _tm in snapshots:
+        for seg_totals in _tot.values():
+            all_clients.update(seg_totals.keys())
 
     timeline_rows = []
     seg_summary = defaultdict(lambda: {
@@ -2082,7 +2122,7 @@ def build_timeline(rows, opening_totals=None, opening_time=None):
         "alloc_amt": 0.0, "dealloc_amt": 0.0,
     })
     latest_per_client = {}   # client -> {seg: last known level}
-    latest_time_per_client = {}   # client -> time of their last record (real or opening)
+    latest_time_per_client = {}   # client -> time of their last record (real or snapshot)
 
     for client in sorted(all_clients):
         events = by_client.get(client, [])
@@ -2092,6 +2132,7 @@ def build_timeline(rows, opening_totals=None, opening_time=None):
         # client's first real event of the day show the true change instead
         # of a false "Allocated" for their whole opening balance.
         current_level = {seg: round(opening_totals.get(seg, {}).get(client, 0.0), 2) for seg in segments_seen}
+        client_start = len(timeline_rows)
 
         # One "BOD allocation" row per segment this client has an opening
         # balance in - the starting line of the client's timeline.
@@ -2102,7 +2143,7 @@ def build_timeline(rows, opening_totals=None, opening_time=None):
             val = round(seg_opening[client], 2)
             row_out = [
                 client, opening_time.get(seg, ""), seg,
-                "BOD allocation", "ALLOCATION", val, 0.0, val,
+                SNAP_BOD, CHANGE_TYPE_BACK_OFFICE, val, 0.0, val,
             ]
             for s in segments_seen:
                 row_out.append(round(current_level.get(s, 0.0), 2))
@@ -2113,7 +2154,32 @@ def build_timeline(rows, opening_totals=None, opening_time=None):
             row_out += ["", "", "", "", ""]
             timeline_rows.append(row_out)
 
+        # AFTERNOON / EVENING snapshots of this client, in time order. Each is
+        # emitted just before the first log row that is at or after its time.
+        pending = []
+        for label, snap_totals, snap_times in snapshots:
+            for seg in segments_seen:
+                if client in snap_totals.get(seg, {}):
+                    stamp = snap_times.get(seg, "")
+                    secs = _hms_to_seconds(stamp)
+                    pending.append((secs if secs is not None else 10**9, label, seg,
+                                    round(snap_totals[seg][client], 2), stamp))
+        pending.sort(key=lambda x: x[0])
+
+        def emit_snapshot(item):
+            _secs, label, seg, val, stamp = item
+            current_level[seg] = val              # later log rows are calculated from this level
+            row_out = [client, stamp, seg, label, CHANGE_TYPE_BACK_OFFICE, val, 0.0, val]
+            for s in segments_seen:
+                row_out.append(round(current_level.get(s, 0.0), 2))
+            row_out += ["", "", "", "", ""]
+            timeline_rows.append(row_out)
+
         for rec in events:
+            ev_secs = _hms_to_seconds(rec.get("RequestTime"))
+            while pending and ev_secs is not None and pending[0][0] <= ev_secs:
+                emit_snapshot(pending.pop(0))
+
             seg = rec.get("Segment") or "(blank)"
             new_level = round(rec["Amount"], 2)
             prev_level = current_level.get(seg, 0.0)
@@ -2145,16 +2211,15 @@ def build_timeline(rows, opening_totals=None, opening_time=None):
                 rec.get("InquiryStatusCode", ""), rec.get("InquiryReceivedTime", ""),
             ]
             timeline_rows.append(row_out)
+        for item in pending:                      # snapshots later than every log row of this client
+            emit_snapshot(item)
 
-        # after walking all of this client's events, current_level holds the
+        # after walking all of this client's rows, current_level holds the
         # last known value per segment - i.e. the value as of their last
         # (latest by time) record, which is what "latest CM/FO value" means.
         latest_per_client[client] = dict(current_level)
-        if events:
-            latest_time_per_client[client] = events[-1].get("RequestTime", "")
-        else:
-            opening_seg_times = [opening_time.get(s, "") for s in segments_seen if client in opening_totals.get(s, {})]
-            latest_time_per_client[client] = next((t for t in reversed(opening_seg_times) if t), "")
+        latest_time_per_client[client] = next(
+            (r[1] for r in reversed(timeline_rows[client_start:]) if r[1]), "")
 
     return timeline_rows, segments_seen, seg_summary, latest_per_client, latest_time_per_client
 
@@ -2187,8 +2252,16 @@ def write_sheet(wb, title, headers, rows, money_cols=(), freeze="A2"):
 
 def build_report(folder, rows, excluded, log_date):
     opening_totals, opening_time = read_opening_balances(folder)
+    # AFTERNOON / EVENING allocation snapshots (optional) live in sub-folders of the work folder.
+    snapshots = []
+    for label in (SNAP_AFTERNOON, SNAP_EVENING):
+        sub = os.path.join(folder, SNAP_SUBDIR, label)
+        if os.path.isdir(sub):
+            snap_totals, snap_times = read_opening_balances(sub)
+            if snap_totals:
+                snapshots.append((label, snap_totals, snap_times))
     timeline_rows, segments_seen, seg_summary, latest_per_client, latest_time_per_client = build_timeline(
-        rows, opening_totals, opening_time
+        rows, opening_totals, opening_time, snapshots
     )
 
     excluded_by_segment = defaultdict(int)
@@ -2470,6 +2543,52 @@ def pick_opening_files(src_folder):
     return picked
 
 
+def pick_snapshot_folders(date_folder):
+    """{label: folder} - the CLI backup folders (named HH-MM-SS) of one day, classified by the
+    time they were taken (see snapshot_label). BOD = the oldest one in 07:00-11:00; AFTERNOON and
+    EVENING = the newest one in their range, so a re-run replaces an earlier one. A label with no
+    folder is simply absent (EVENING is optional)."""
+    found = {}
+    for name in sorted(os.listdir(date_folder)):
+        full = os.path.join(date_folder, name)
+        m = re.match(r"^(\d{2})-(\d{2})-(\d{2})$", name.strip())
+        if not (os.path.isdir(full) and m):
+            continue
+        hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        found.setdefault(snapshot_label(hh, mm), []).append(((hh, mm, ss), name, full))
+    chosen = {}
+    for label, lst in found.items():
+        lst.sort()
+        chosen[label] = (lst[0] if label == SNAP_BOD else lst[-1])[2]
+        print(f"  {label:<21}: {os.path.basename(chosen[label])}"
+              + (f"   (other folders in this range ignored: {', '.join(x[1] for x in lst if x[2] != chosen[label])})" if len(lst) > 1 else ""))
+    return chosen
+
+
+def collect_snapshots(date_folder, work_folder):
+    """Copies the Back Office files of every snapshot found for the day into the work folder:
+    BOD allocation flat (as always), AFTERNOON / EVENING into <work>/_snapshots/<label>/.
+    Returns [(label, original_path), ...]. A missing snapshot is skipped quietly."""
+    chosen = pick_snapshot_folders(date_folder)
+    used = []
+    for label in SNAP_ORDER:
+        folder = chosen.get(label)
+        if not folder:
+            print(f"  {label:<21}: no backup found -- skipped"
+                  + ("" if label == SNAP_EVENING else "  [!]"))
+            continue
+        files = pick_opening_files(folder)
+        if not files:
+            print(f"  {label}: no usable files in {os.path.basename(folder)} -- skipped")
+            continue
+        dest = work_folder if label == SNAP_BOD else os.path.join(work_folder, SNAP_SUBDIR, label)
+        os.makedirs(dest, exist_ok=True)
+        for p in files.values():
+            shutil.copy2(p, os.path.join(dest, os.path.basename(p)))
+            used.append((label, p))
+    return used
+
+
 def clean_folder(path):
     if os.path.isdir(path):
         shutil.rmtree(path, ignore_errors=True)
@@ -2707,14 +2826,10 @@ def run_once(args, as_of_dt):
     print(f"  looking for the {run_start:%d-%m-%Y} folder "
           f"(date the run STARTED, not the clock now)")
 
-    opening_used = []
+    opening_used = []          # [(snapshot label, original path)] - BOD / AFTERNOON / EVENING allocation
     date_folder = find_date_folder(run_start.date())
     if date_folder:
-        src = oldest_time_subfolder(date_folder)
-        if src:
-            for path in pick_opening_files(src).values():
-                shutil.copy2(path, os.path.join(WORK_FOLDER, os.path.basename(path)))
-                opening_used.append(path)
+        opening_used = collect_snapshots(date_folder, WORK_FOLDER)
     else:
         print("  [!] carrying on without opening balances (treated as 0)")
 
@@ -2775,9 +2890,10 @@ def run_once(args, as_of_dt):
     if opening_used:
         ob_dest = os.path.join(dest, "opening_balance_files")
         os.makedirs(ob_dest, exist_ok=True)
-        for p in opening_used:
+        for label, p in opening_used:
             try:
-                shutil.copy2(p, os.path.join(ob_dest, os.path.basename(p)))
+                os.makedirs(os.path.join(ob_dest, label), exist_ok=True)
+                shutil.copy2(p, os.path.join(ob_dest, label, os.path.basename(p)))
             except Exception as e:
                 print(f"  [!] couldn't back up {os.path.basename(p)}: {e}")
         print(f"  {len(opening_used)} opening-balance file(s) -> {ob_dest}")
