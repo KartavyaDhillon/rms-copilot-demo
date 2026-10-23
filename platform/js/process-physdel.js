@@ -23,106 +23,117 @@
   function modal(t, h) { if (typeof window.saShowModal === 'function') window.saShowModal(t, h); }
   function closeModal() { if (typeof window.saCloseModal === 'function') window.saCloseModal(); }
 
-  // ───────────────────────── card ─────────────────────────
-  var BTN = 'class="sa-tool" ';
+  // ───────────────────────── tile (small card, like MTF Impact Cost / Allocation Report) ─────────────────────────
+  var TITLE = 'PHYSICAL DELIVERY';
   function build() {
     var slot = $('physdelSlot');
     if (!slot) return false;
     if ($('task-physdel')) return true;
     var tile = document.createElement('div');
     tile.className = 'tile'; tile.id = 'task-physdel';
-    tile.style.cssText = '--tile-accent:var(--amber);grid-column:1/-1;min-height:0;transform:none';
+    tile.style.cssText = '--tile-accent:var(--amber);cursor:pointer';
+    tile.onclick = function () { pdOpen(); };
     tile.innerHTML =
-      '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
-        '<div class="tile-icon" style="margin:0">📦</div>' +
-        '<div class="tile-name" style="margin:0;font-size:16px">PHYSICAL DELIVERY <span class="st" id="pdChip">idle</span></div>' +
-        '<div id="pdWindow" style="font-size:12px;color:var(--muted);flex:1;min-width:240px">Checking…</div>' +
-      '</div>' +
-      '<div class="tile-desc">Prices the physical-delivery stocks, then e-mails every branch, region and zone and WhatsApps the clients and the 1 Cr alert. ' +
-        'Run once a day in the 5 trading days before the last Tuesday, and as often as needed on that Tuesday.</div>' +
-      '<div id="pdTest" style="display:none;font-size:12px;font-weight:700;padding:8px 12px;border-radius:9px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fbbf24"></div>' +
-      '<div id="pdFiles" style="font-size:12px"></div>' +
-      '<div class="sa-tools" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:2px">' +
-        '<button ' + BTN + 'id="pdRunBtn" onclick="pdRun()" style="background:var(--amber);color:#1a0d00;border-color:transparent;font-weight:700" data-tip="Asks the CASH % and starts the run. Never blocked by the date.">▶ Run</button>' +
-        '<button ' + BTN + 'onclick="pdSafeTest()" data-tip="One rehearsal: everything really runs but every mail / WhatsApp goes only to the test address.">🧪 Safe test run</button>' +
-        '<button ' + BTN + 'onclick="pxConfig(\'physdel\')" data-tip="Zone and log e-mail addresses (To / CC).">✉️ Email To / CC</button>' +
-        '<button ' + BTN + 'onclick="pdWa()" data-tip="WhatsApp numbers that get the 1 Cr alert pictures (Delhi, Ludhiana, Chandigarh, Mumbai, full list).">📱 WhatsApp numbers</button>' +
-        '<button ' + BTN + 'onclick="pxCredentials(\'physdel\')" data-tip="Mail account, WhatsApp token, webpayout login, Excel password.">🔑 Credentials</button>' +
-        '<button ' + BTN + 'onclick="pdUpload()" data-tip="PositionBook, master files, risk report.">⬆️ Upload files</button>' +
-        '<button ' + BTN + 'onclick="pxBackup(\'physdel\')" data-tip="Past runs\' files.">📦 Backup files</button>' +
-        '<button ' + BTN + 'onclick="pxLogs(\'physdel\')" data-tip="Saved output of past runs.">🗂️ Logs</button>' +
-        '<button ' + BTN + 'onclick="pdStop()" style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>' +
-      '</div>' +
-      '<div class="sa-status" id="pxStatus-physdel"><div class="sa-status-empty">Run status appears here. The full output is saved in Logs.</div></div>';
+      '<div class="tile-icon">📦</div>' +
+      '<div class="tile-name">PHYSICAL DELIVERY <span class="st" id="pdChip">idle</span></div>' +
+      '<div class="tile-desc">Prices the physical-delivery stocks, then e-mails every branch, region and zone and WhatsApps the clients. Runs 5 trading days before the last Tuesday, many times on that Tuesday.</div>' +
+      '<div class="tile-desc" id="pdMini" style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">Checking…</div>' +
+      '<div class="tile-actions"><button class="tbtn" style="background:var(--amber);color:#1a0d00" onclick="event.stopPropagation();pdOpen()" data-tip="Open PHYSICAL DELIVERY: run, upload files, e-mail, WhatsApp, credentials, backup, logs.">Open</button></div>';
     slot.parentNode.insertBefore(tile, slot);
     return true;
+  }
+  function modalOpen() {
+    var t = $('saModalTitle'), m = $('saModal');
+    return !!(t && m && m.classList.contains('show') && t.textContent === TITLE);
   }
 
   function fileRow(label, info, extra) {
     var ok = !!info;
     return '<div style="display:flex;gap:8px;align-items:baseline;padding:3px 0">' +
       '<span style="width:16px;color:' + (ok ? 'var(--green)' : 'var(--red)') + '">' + (ok ? '✓' : '✗') + '</span>' +
-      '<span style="width:170px;color:var(--dim);flex:none">' + esc(label) + '</span>' +
-      '<span style="flex:1;font-family:var(--mono);font-size:11.5px;color:' + (ok ? 'var(--ink)' : 'var(--red)') + '">' +
+      '<span style="width:150px;color:var(--dim);flex:none;font-size:12px">' + esc(label) + '</span>' +
+      '<span style="flex:1;font-family:var(--mono);font-size:11px;color:' + (ok ? 'var(--ink)' : 'var(--red)') + '">' +
       (ok ? esc(info.name) + ' <span style="color:var(--dim)">— ' + esc(info.where) + (info.mtime ? ', saved ' + esc(when(info.mtime)) : '') + '</span>' : esc(extra || 'not found')) +
       '</span></div>';
   }
   function filesHtml(d) {
     var i = d.inputs || {};
-    var h = '<div style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:2px 0 4px">Files the next run will use</div>';
+    var h = '<div style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:0 0 4px">Files the next run will use</div>';
     h += fileRow('PositionBook', i.positionbook, 'not uploaded yet — use Upload files');
     h += fileRow('CTCL vs NMASS output', i.ctcl, 'no CTCL vs NMASS backup found');
     h += fileRow('Risk report', i.risk, 'today\'s RISK_REPORT is not in COMMON FILES');
     (i.masters || []).forEach(function (m) {
-      h += fileRow('Master — ' + m.label, m.present ? { name: m.name, where: 'master files', mtime: m.mtime } : null, m.name + ' missing — upload it under Upload files › Master files');
+      h += fileRow('Master — ' + m.label, m.present ? { name: m.name, where: 'master files', mtime: m.mtime } : null, m.name + ' missing — upload under Upload files › Master files');
     });
     return h;
   }
+  function lbl(t) { return '<div style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:0 0 6px">' + t + '</div>'; }
+
+  // ───────────────────────── the window (all buttons + a big Run button) ─────────────────────────
+  function dynHtml() {
+    var d = S.d || {}, w = d.window || {}, st = d.safe_test || {}, miss = d.missing || [];
+    var col = w.phase === 'expiry_day' ? 'var(--red)' : (w.phase === 'window' ? 'var(--green)' : 'var(--muted)');
+    var h = '<div style="font-size:12.5px;color:var(--muted);line-height:1.55;margin-bottom:12px"><span style="color:' + col + '">●</span> ' + esc(w.text || 'Checking…') +
+      (d.last_run ? '<br><span style="color:var(--dim)">Last run ' + esc(dmy(d.last_run.date)) + ' ' + esc(d.last_run.time) + (d.last_run.ok ? ' — ok' : ' — with errors') + (d.last_run.test ? ' (test)' : '') + ', CASH ' + esc(d.last_run.percent) + '%</span>' : '') + '</div>';
+    if (st.armed) h += '<div style="margin-bottom:12px;padding:9px 12px;border-radius:9px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fbbf24;font-size:12.5px;font-weight:700">🧪 SAFE TEST ARMED — the next Run sends only to ' + esc((st.email_to || []).join(', ')) + ' / ' + esc(st.wa_to || '') + '. It switches itself off after that run.</div>';
+    h += '<div style="margin:0 0 12px;padding:10px 12px;border:1px dashed var(--line-2);border-radius:10px">' + filesHtml(d) + '</div>';
+    if (miss.length) h += '<div style="color:var(--red);font-size:12px;margin:0 0 12px">The run will stop at once because:<br>• ' + miss.map(esc).join('<br>• ') + '</div>';
+    return h;
+  }
+  function pdOpen() {
+    window._saReturn = null;
+    var INP = 'style="background:transparent;border:1px solid var(--line-2);border-radius:8px;color:var(--ink);padding:7px 9px;font-size:12.5px;font-family:inherit;width:110px"';
+    modal(TITLE,
+      '<div id="pdDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>' +
+      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px">' +
+        '<button class="sa-tool" onclick="pdSub(function(){pxConfig(\'physdel\')})">✉️ Email To / CC</button>' +
+        '<button class="sa-tool" onclick="pdSub(pdWa)">📱 WhatsApp numbers</button>' +
+        '<button class="sa-tool" onclick="pdSub(function(){pxCredentials(\'physdel\')})">🔑 Credentials</button>' +
+        '<button class="sa-tool" onclick="pdSub(pdUpload)">⬆️ Upload files</button>' +
+        '<button class="sa-tool" onclick="pdSub(function(){pxBackup(\'physdel\')})">📦 Backup files</button>' +
+        '<button class="sa-tool" onclick="pdSub(function(){pxLogs(\'physdel\')})">🗂️ Logs</button>' +
+        '<button class="sa-tool" onclick="pdSub(pdSafeTest)">🧪 Safe test run</button>' +
+        '<button class="sa-tool" onclick="pdStop()" style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>' +
+      '</div>' +
+      lbl('CASH % (how much the price is moved up / down)') +
+      '<div style="margin:0 0 14px"><input id="pdPct" type="number" step="0.1" min="0.1" max="100" value="' + esc((S.d || {}).percent || 2) + '" ' + INP + ' onkeydown="if(event.keyCode===13)pdStart()"> <span style="color:var(--dim);font-size:12px">%</span></div>' +
+      '<button id="pdRunBtn" onclick="pdStart()" style="width:100%;border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">▶ Run PHYSICAL DELIVERY</button>' +
+      '<div class="sa-msg" id="pdRunMsg"></div>' +
+      '<div class="sa-status" id="pxStatus-physdel" style="margin-top:12px">' + (S.running ? '<div class="sa-prog"><span class="sa-pill running" id="pxP-physdel">running…</span></div><div id="pxEvents-physdel"></div>' : '<div class="sa-status-empty">Run status appears here. The full output is saved in Logs.</div>') + '</div>');
+    paintDyn();
+    refresh();
+  }
+  window.pdOpen = pdOpen;
+  window.pdSub = function (fn) { window._saReturn = pdOpen; fn(); };
+  function paintDyn() {
+    var e = $('pdDyn'); if (e && modalOpen()) e.innerHTML = dynHtml();
+    var b = $('pdRunBtn'); if (b) { b.disabled = S.running; b.style.opacity = S.running ? '.5' : '1'; b.textContent = S.running ? 'Running…' : (((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY'); }
+  }
 
   function refresh() {
-    if (!$('task-physdel')) return;
     jget('/pd/status').then(function (d) {
       S.d = d;
-      var w = d.window || {}, col = w.phase === 'expiry_day' ? 'var(--red)' : (w.phase === 'window' ? 'var(--green)' : 'var(--muted)');
-      var el = $('pdWindow');
-      if (el) el.innerHTML = '<span style="color:' + col + '">●</span> ' + esc(w.text || '') +
-        (d.last_run ? ' <span style="color:var(--dim)">· last run ' + esc(dmy(d.last_run.date)) + ' ' + esc(d.last_run.time) + (d.last_run.ok ? ' ok' : ' with errors') + (d.last_run.test ? ' (test)' : '') + ', CASH ' + esc(d.last_run.percent) + '%</span>' : '');
-      var f = $('pdFiles'); if (f) f.innerHTML = filesHtml(d);
-      var t = $('pdTest'), st = d.safe_test || {};
-      if (t) { t.style.display = st.armed ? 'block' : 'none'; if (st.armed) t.textContent = '🧪 SAFE TEST ARMED — the next Run sends only to ' + (st.email_to || []).join(', ') + ' / ' + (st.wa_to || '') + '. It switches itself off after that run.'; }
+      var w = d.window || {}, el = $('pdMini');
+      if (el && !S.running) el.textContent = (w.phase === 'expiry_day' ? 'Expiry day — run as needed' : (w.phase === 'window' ? 'Window open — ' + (w.runs_today ? 'run today' : 'not run today') : 'Not due — window opens ' + dmy(w.window_start))) + (d.safe_test && d.safe_test.armed ? ' · 🧪 test armed' : '');
+      paintDyn();
     }).catch(function () {});
     jget('/px/status?pipe=' + PIPE).then(function (s) { if (!S.es) setRunning(!!(s && s.running)); }).catch(function () {});
   }
   function setRunning(on) {
     S.running = on;
     var c = $('pdChip'); if (c) { c.textContent = on ? 'running' : 'idle'; c.style.color = on ? 'var(--amber)' : 'var(--dim)'; }
-    var b = $('pdRunBtn'); if (b) { b.disabled = on; b.style.opacity = on ? '.5' : '1'; }
+    var m = $('pdMini'); if (m && on) m.textContent = 'Running… open to follow it';
+    paintDyn();
   }
 
-  // ───────────────────────── Run (with the CASH % popup) ─────────────────────────
-  window.pdRun = function () {
-    if (S.running) return;
-    jget('/pd/status').then(function (d) {
-      S.d = d;
-      var armed = d.safe_test && d.safe_test.armed, miss = d.missing || [];
-      var h = '<div style="font-size:13px;color:var(--muted);margin-bottom:12px;line-height:1.55">' + esc((d.window || {}).text || '') + '</div>' +
-        (armed ? '<div style="margin-bottom:12px;padding:9px 12px;border-radius:9px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fbbf24;font-size:12.5px;font-weight:700">🧪 Safe test is armed — this run sends only to the test address.</div>' : '') +
-        '<div class="sa-field"><label>CASH % (how much the price is moved up / down)</label>' +
-        '<input id="pdPct" type="number" step="0.1" min="0.1" max="100" value="' + esc(d.percent) + '" onkeydown="if(event.keyCode===13)pdStart()"></div>' +
-        '<div style="margin:10px 0 4px;padding:10px 12px;border:1px dashed var(--line-2);border-radius:10px">' + filesHtml(d) + '</div>' +
-        (miss.length ? '<div style="color:var(--red);font-size:12px;margin:8px 0">The run will stop at once because:<br>• ' + miss.map(esc).join('<br>• ') + '</div>' : '') +
-        '<button class="sa-save" style="width:100%;margin-top:8px" onclick="pdStart()">' + (armed ? '🧪 Start test run' : '▶ Start run') + '</button>' +
-        '<div class="sa-msg" id="pdRunMsg"></div>';
-      modal('PHYSICAL DELIVERY — run', h);
-      setTimeout(function () { var e = $('pdPct'); if (e) { e.focus(); e.select(); } }, 60);
-    });
-  };
+  // ───────────────────────── Run ─────────────────────────
   window.pdStart = function () {
+    if (S.running) return;
     var v = ($('pdPct') || {}).value, msg = $('pdRunMsg');
     if (msg) msg.innerHTML = '<span style="color:var(--muted)">Starting…</span>';
     jpost('/pd/percent?value=' + encodeURIComponent(v || '')).then(function (r) {
       if (!r.ok) { if (msg) msg.innerHTML = '<span style="color:var(--red)">' + esc(r.error || 'Enter a number like 2') + '</span>'; return; }
-      closeModal();
+      if (msg) msg.innerHTML = '';
       streamRun();
     }).catch(function () { if (msg) msg.innerHTML = '<span style="color:var(--red)">Could not reach the backend.</span>'; });
   };

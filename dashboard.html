@@ -768,7 +768,6 @@ body {
 
       <div class="sec">Processing &amp; Reports</div>
       <div class="tile-grid">
-        <div id="physdelSlot" style="display:contents"></div><!-- PHYSICAL DELIVERY card is built here by process-physdel.js -->
         <div class="tile" id="task-mtfic" style="--tile-accent:var(--teal);cursor:pointer" onclick="mtficOpen()">
           <div class="tile-icon">🧾</div>
           <div class="tile-name">MTF Impact Cost <span class="st" id="mtficChip">idle</span></div>
@@ -787,6 +786,7 @@ body {
             <button class="tbtn" style="background:var(--blue);color:#061020" onclick="event.stopPropagation();allocOpen()" data-tip="Open the Allocation Report window. The nightly close runs by itself from the Scheduler.">Open</button>
           </div>
         </div>
+        <div id="physdelSlot" style="display:contents"></div><!-- PHYSICAL DELIVERY card is built here by process-physdel.js -->
       </div>
     </div><!-- /view-dashboard -->
 
