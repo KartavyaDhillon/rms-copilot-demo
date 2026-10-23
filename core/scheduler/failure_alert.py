@@ -150,25 +150,26 @@ def render_image(out: Path, *, process: str, schedule: str, failed_at: str, star
     f_lbl, f_val, f_big, f_txt, f_small = _font(28, True), _font(40, True), _font(68, True), _font(36), _font(28)
 
     title, subtitle, status_text, when_lbl, _pre = KINDS.get(kind, KINDS["FAILED"])
-    rows = [("Process", process), ("Schedule", schedule), (when_lbl, failed_at), ("Started", started),
-            ("Trigger", trigger), ("Attempt", attempt_text), ("Status", status_text)]
+    # Kept deliberately SHORT and plain for non-technical readers: which process, when, what happened, what to do.
+    # (Schedule name, trigger, attempt, run id and the technical error stay in the run's log - not on the picture.)
+    rows = [("Process", process), (when_lbl, failed_at), ("Status", status_text)]
     head_lines = _wrap(probe, headline, f_txt, W - 160)
-    det_lines = _wrap(probe, detail, f_small, W - 160)[:5]
-    todo = {"INTERRUPTED": ["1. Open Scheduler > History and check what the run had already done.",
-                            "2. It is NOT re-run automatically - run it again if needed.",
-                            "3. Check why the console stopped (restart, power, update)."],
-            "MISSED": ["1. The console / scheduler was not running at the scheduled time.",
-                       "2. Open Scheduler > History to see what was missed.",
-                       "3. Use Run Now on the schedule if the work is still needed."]}.get(kind, [
-            "1. Open Scheduler > History and read the log of this run.",
-            "2. Fix the cause, then use Run Now on the schedule.",
-            "3. Anything not finished is NOT marked done - nothing is lost."])
+    det_lines: List[str] = []
+    todo = {"INTERRUPTED": ["1. This process was stopped in the middle.",
+                            "2. It may be only half done.",
+                            "3. Please inform the process owner."],
+            "MISSED": ["1. This process did not start at its time.",
+                       "2. Its work has not been done.",
+                       "3. Please inform the process owner."]}.get(kind, [
+            "1. This process did not finish its work.",
+            "2. Its report / file may be missing or incomplete.",
+            "3. Please inform the process owner."])
 
     row_h = 92
     proc_lines = {i: _wrap(probe, v, f_val, W - 160) for i, (_k, v) in enumerate(rows)}
-    extra = sum((len(v) - 1) * 46 for v in proc_lines.values())
+    extra = sum((len(v) - 1) * 46 for v in proc_lines.values()) + 12 + 10 * len(proc_lines[0])
     card1 = 40 + len(rows) * row_h + extra
-    card2 = 70 + len(head_lines) * 52 + 20 + len(det_lines) * 38 + 30
+    card2 = 70 + len(head_lines) * 52 + 30
     card3 = 80 + len(todo) * 52 + 24
     H = 300 + 40 + card1 + 30 + card2 + 30 + card3 + 100
 
@@ -191,8 +192,8 @@ def render_image(out: Path, *, process: str, schedule: str, failed_at: str, star
         d.text((80, y), k.upper(), font=f_lbl, fill=GREY)
         y += 38
         for ln in proc_lines[i]:
-            d.text((80, y), ln, font=f_val, fill=RED if k == "Status" else DARK)
-            y += 46
+            d.text((80, y), ln, font=(_font(52, True) if k == "Process" else f_val), fill=RED if k == "Status" else DARK)
+            y += 58 if k == "Process" else 46
         y += row_h - 38 - 46
 
     y0 = y0 + card1 + 30
@@ -202,10 +203,6 @@ def render_image(out: Path, *, process: str, schedule: str, failed_at: str, star
     for ln in head_lines:
         d.text((80, y), ln, font=f_txt, fill=DARK)
         y += 52
-    y += 14
-    for ln in det_lines:
-        d.text((80, y), ln, font=f_small, fill=GREY)
-        y += 38
 
     y0 = y0 + card2 + 30
     card(y0, card3, fill="#FFF8E1", outline="#FFB300", width=3)
@@ -215,7 +212,7 @@ def render_image(out: Path, *, process: str, schedule: str, failed_at: str, star
         d.text((80, y), t, font=_font(32), fill=DARK)
         y += 52
 
-    d.text((W // 2, H - 50), f"RMS Copilot  |  Master Capital Services Ltd  |  Run {run_id[:8]}  |  Automated alert",
+    d.text((W // 2, H - 50), "RMS Copilot  |  Master Capital Services Ltd  |  Automated alert",
            font=_font(24), fill=GREY, anchor="mm")
     out.parent.mkdir(parents=True, exist_ok=True)
     im.save(out)
