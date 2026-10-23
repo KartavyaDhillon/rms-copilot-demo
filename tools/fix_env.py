@@ -53,7 +53,9 @@ def fix(lines):
             if ln.lstrip().startswith("#"):                                 # next section: the mess is over
                 break
             km = KEY.match(ln)
-            if km and _closed(km.group(2)):                                 # a complete setting pushed into the list
+            if km and not _closed(km.group(2)):                             # the NEXT broken list starts here
+                break
+            if km:                                 # a complete setting pushed into the list
                 moved.append(ln)
                 j += 1
                 continue
