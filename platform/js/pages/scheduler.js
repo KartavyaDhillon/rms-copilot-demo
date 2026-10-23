@@ -648,6 +648,27 @@
       $("#scBody").innerHTML = '<div class="card"><div class="bm-empty">No schedulable processes are registered yet.</div></div>';
       return;
     }
+    // The card's buttons. E-mail and WhatsApp numbers are TWO buttons; "Add schedule" fills whatever is left of the
+    // 3-column row so the card never shows a lonely button.
+    const toolsHtml = (p, procParams, isPhone, isMail, missingReq) => {
+      const hasUp = p.upload_exts && p.upload_exts.length;
+      const lead = p.key === "rms_limits_mand_kambala" ? '<button class="sch-tool blue full" data-add="' + esc(p.key) + '">⏰ Add schedule</button>' : "";
+      const items = [];
+      const needMail = procParams.some((q) => q.fmt === "emails" && q.required && !String(((S.pset && S.pset[p.key]) || {})[q.name] || "").trim());
+      const needPhone = procParams.some((q) => q.fmt === "phones" && q.required && !String(((S.pset && S.pset[p.key]) || {})[q.name] || "").trim());
+      if (isMail) items.push('<button class="sch-tool' + (needMail ? " warn" : "") + '" data-recip="' + esc(p.key) + '" data-kind="mail">✉️ Email To / CC</button>');
+      if (isPhone) items.push('<button class="sch-tool' + (needPhone ? " warn" : "") + '" data-recip="' + esc(p.key) + '" data-kind="phone">📱 WhatsApp numbers</button>');
+      if ((p.uses || []).length) items.push('<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>');
+      if (hasUp) items.push('<button class="sch-tool green" data-upload="' + esc(p.key) + '">⬆️ Upload files</button>');
+      if (p.key === "rms_limits_mand_kambala") items.push('<button class="sch-tool green" data-addcodes="1">➕ Add client codes</button>');
+      items.push('<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>');
+      let add = "";
+      if (p.key !== "rms_limits_mand_kambala") {
+        const left = items.length % 3;
+        add = '<button class="sch-tool blue ' + (left === 0 ? "full" : left === 1 ? "wide" : "") + '" data-add="' + esc(p.key) + '">⏰ Add schedule</button>';
+      }
+      return lead + items.join("") + add;
+    };
     const card = (p) => {
       const mine = S.schedules.filter((s) => s.process_key === p.key);
       const live = mine.some((s) => s.status === "enabled");
@@ -672,14 +693,7 @@
       const logo = LOGO[p.key] || p.name.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
       return '<div class="sch-box" data-pk="' + esc(p.key) + '"><div class="sch-head"><div class="sch-logo ' + (wa ? "wa" : "mail") + '">' + esc(logo) + "</div>" +
         '<div class="sch-tw"><div class="sch-title">' + esc(p.name) + '</div><div class="sch-sub">' + esc(p.description || "") + "</div></div>" + state + "</div>" +
-        '<div class="sch-tools">' +
-        (p.key === "rms_limits_mand_kambala" ? '<button class="sch-tool blue full" data-add="' + esc(p.key) + '">⏰ Add schedule</button>' : "") +
-        (procParams.length ? '<button class="sch-tool' + (missingReq ? " warn" : "") + '" data-recip="' + esc(p.key) + '">' + (isPhone && isMail ? "📱✉️ WhatsApp numbers / Email To & CC" : isPhone ? "📱 WhatsApp numbers" : "✉️ Email To / CC") + "</button>" : "") +
-        ((p.uses || []).length ? '<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>' : "") +
-        (p.upload_exts && p.upload_exts.length ? '<button class="sch-tool green" data-upload="' + esc(p.key) + '">⬆️ Upload files</button>' : "") +
-        (p.key === "rms_limits_mand_kambala" ? '<button class="sch-tool green" data-addcodes="1">➕ Add client codes</button>' : "") +
-        '<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>' +
-        (p.key === "rms_limits_mand_kambala" ? "" : '<button class="sch-tool blue ' + (p.upload_exts && p.upload_exts.length ? "wide" : "full") + '" data-add="' + esc(p.key) + '">⏰ Add schedule</button>') + "</div>" +
+        '<div class="sch-tools">' + toolsHtml(p, procParams, isPhone, isMail, missingReq) + "</div>" +
         '<div class="sch-foot">' + (sched || '<div class="sch-none">No schedule yet</div>') + "</div></div>";
     };
     const hadFocus = document.activeElement && document.activeElement.id === "pcSearch";
@@ -706,7 +720,7 @@
     b.querySelectorAll("[data-edit]").forEach((x) => { x.onclick = () => openEditor(S.schedules.find((s) => s.id === x.dataset.edit)); });
     b.querySelectorAll("[data-add]").forEach((x) => { x.onclick = () => openEditor(null, x.dataset.add); });
     b.querySelectorAll("[data-upload]").forEach((x) => { x.onclick = () => openUpload(x.dataset.upload); });
-    b.querySelectorAll("[data-recip]").forEach((x) => { x.onclick = () => openRecipients(x.dataset.recip); });
+    b.querySelectorAll("[data-recip]").forEach((x) => { x.onclick = () => openRecipients(x.dataset.recip, x.dataset.kind); });
     b.querySelectorAll("[data-cred]").forEach((x) => { x.onclick = () => openCredentials(x.dataset.cred); });
     b.querySelectorAll("[data-logs]").forEach((x) => { x.onclick = () => openLogs(x.dataset.logs); });
     b.querySelectorAll("[data-addcodes]").forEach((x) => { x.onclick = () => openAddCodes(); });
@@ -722,10 +736,12 @@
   }
 
   /* ── Email To/CC · WhatsApp numbers (process-level, shared by all its schedules) ── */
-  async function openRecipients(key) {
+  async function openRecipients(key, kind) {
     try {
       const d = await jget("/sched/process-settings/" + encodeURIComponent(key));
       const p = S.procs.find((x) => x.key === key) || { name: key };
+      if (kind === "mail") d.params = d.params.filter((q) => q.fmt === "emails");        // the ✉️ button shows only e-mail boxes
+      else if (kind === "phone") d.params = d.params.filter((q) => q.fmt === "phones");  // the 📱 button shows only WhatsApp boxes
       const phone = d.params.some((q) => q.fmt === "phones");
       const mail = d.params.some((q) => q.fmt === "emails");
       const both = phone && mail;

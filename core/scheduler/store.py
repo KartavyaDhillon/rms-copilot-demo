@@ -430,6 +430,13 @@ def touch_running(worker: str, now: dt.datetime):
     _write("UPDATE sched_executions SET heartbeat_utc=? WHERE status='RUNNING' AND worker=?", (ts(now), worker))
 
 
+def stale_running_ids(now: dt.datetime, stale_seconds: int) -> List[str]:
+    """Ids of the RUNNING rows fail_stale_running() is about to mark Interrupted (call it just before)."""
+    cutoff = ts(now - dt.timedelta(seconds=stale_seconds))
+    return [r["id"] for r in _rows("SELECT id FROM sched_executions WHERE status='RUNNING' "
+                                   "AND (heartbeat_utc IS NULL OR heartbeat_utc < ?)", (cutoff,))]
+
+
 def fail_stale_running(now: dt.datetime, stale_seconds: int) -> int:
     """RUNNING rows nobody has touched for a while belong to a crashed / restarted instance."""
     cutoff = ts(now - dt.timedelta(seconds=stale_seconds))

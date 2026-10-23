@@ -115,7 +115,18 @@ class SchedulerEngine:
             self.last_error = str(e)
         if not store.acquire_lease(LEASE_NAME, self.worker, now, LEASE_SECONDS):
             return {"leader": False}
+        stale = []
+        try:
+            stale = store.stale_running_ids(now, STALE_EXEC_SECONDS)
+        except Exception:
+            pass
         store.fail_stale_running(now, STALE_EXEC_SECONDS)
+        for _eid in stale:                                  # runs cut short by a crash / restart -> WhatsApp warning
+            try:
+                from core.scheduler import failure_alert
+                failure_alert.notify_execution(_eid, "INTERRUPTED")
+            except Exception as e:
+                print(f"[scheduler] interrupted-run alert failed: {e}", flush=True)
         self._run_due_retries(now)
         self._run_queued(now)
         evaluated = 0
@@ -168,15 +179,22 @@ class SchedulerEngine:
     def _record_missed(self, s: dict, skipped: list, now: dt.datetime):
         if not skipped:
             return
+        last_id = None
         if len(skipped) > AGGREGATE_MISSED_OVER:
-            store.create_execution(s, skipped[-1], "SCHEDULED", "MISSED", now,
-                                   error_type="Missed",
-                                   error_msg=f"{len(skipped)} scheduled runs were missed while the scheduler was not running "
-                                             f"(latest: {rules.fmt_local(skipped[-1], s['tz'], True)}).")
-            return
-        for o in skipped:
-            store.create_execution(s, o, "SCHEDULED", "MISSED", now, error_type="Missed",
-                                   error_msg="Missed (scheduler was not running) — not run, per the missed-run setting.")
+            last_id = store.create_execution(s, skipped[-1], "SCHEDULED", "MISSED", now,
+                                             error_type="Missed",
+                                             error_msg=f"{len(skipped)} scheduled runs were missed while the scheduler was not running "
+                                                       f"(latest: {rules.fmt_local(skipped[-1], s['tz'], True)}).")
+        else:
+            for o in skipped:
+                last_id = store.create_execution(s, o, "SCHEDULED", "MISSED", now, error_type="Missed",
+                                                 error_msg="Missed (scheduler was not running) — not run, per the missed-run setting.") or last_id
+        if last_id:                                         # ONE warning per schedule, however many slots were missed
+            try:
+                from core.scheduler import failure_alert
+                failure_alert.notify_execution(last_id, "MISSED")
+            except Exception as e:
+                print(f"[scheduler] missed-run alert failed: {e}", flush=True)
 
     # ── starting a run ──────────────────────────────────────────────────────
     def _external_busy(self, pdef) -> Optional[str]:

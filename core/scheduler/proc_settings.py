@@ -43,12 +43,16 @@ def view(pdef) -> Dict[str, str]:
 
 def save(pdef, values: dict, user: str) -> Dict[str, str]:
     """Validate (phone / e-mail formats …) then write to .env. Raises ValueError listing every problem."""
+    import dataclasses
     from core.scheduler import catalog, store
-    errs, clean = catalog.validate_params(pdef, values, scope="process")
+    # Only the settings that were SENT are checked and saved: the process card has separate e-mail and WhatsApp
+    # buttons, and saving one list must never blank (or demand) the other.
+    sent = dataclasses.replace(pdef, params=[p for p in pdef.params if p.scope != "process" or p.name in values])
+    errs, clean = catalog.validate_params(sent, values, scope="process")
     if errs:
         raise ValueError("; ".join(errs))
     before = get(pdef)
-    names = {p.name: p for p in pdef.params if p.scope == "process"}
+    names = {p.name: p for p in pdef.params if p.scope == "process" and p.name in values}
     updates = {envstore.proc_key(pdef.key, n): _norm(names[n], clean.get(n, "")) for n in names}
     envstore.write(envstore.shared_file(), f"process: {pdef.name}", updates)
     after = get(pdef)

@@ -75,6 +75,8 @@ def _switch_on(value: str) -> bool:
 
 # ───────────────────────── the reason, in plain words ─────────────────────────
 _REASONS = [
+    (r"server stopped or restarted", "The console was stopped or restarted while this was running."),
+    (r"scheduler was not running|Missed", "The console / scheduler was not running at the scheduled time."),
     (r"No Allocation_Logs|decoded to 0 bytes|0 bytes", "No allocation data could be built - the e-mails arrived empty or are missing."),
     (r"timed? ?out|timeout", "The server did not answer in time (timeout)."),
     (r"401|403|login|password|credential|authenticat|unauthori[sz]ed|refused", "Login or credentials were refused."),
@@ -133,20 +135,34 @@ def _wrap(draw, text: str, font, max_w: int) -> List[str]:
     return lines or [""]
 
 
+KINDS = {   # kind -> (banner title, banner sub-title, status line, "when" label, WhatsApp label prefix)
+    "FAILED": ("SCHEDULER FAILED", "A scheduled process did NOT complete", "FAILED - not completed", "Failed at", "FAILED"),
+    "INTERRUPTED": ("RUN INTERRUPTED", "The server stopped while a process was running", "INTERRUPTED - may be half done", "Stopped at", "INTERRUPTED"),
+    "MISSED": ("RUN MISSED", "A scheduled run did NOT start", "MISSED - not run", "Noticed at", "MISSED"),
+}
+
+
 def render_image(out: Path, *, process: str, schedule: str, failed_at: str, started: str, trigger: str,
-                 attempt_text: str, headline: str, detail: str, run_id: str) -> Path:
+                 attempt_text: str, headline: str, detail: str, run_id: str, kind: str = "FAILED") -> Path:
     """Draw the alert. Height grows with the text so nothing is ever cut off."""
     from PIL import Image, ImageDraw
     probe = ImageDraw.Draw(Image.new("RGB", (W, 10)))
     f_lbl, f_val, f_big, f_txt, f_small = _font(28, True), _font(40, True), _font(68, True), _font(36), _font(28)
 
-    rows = [("Process", process), ("Schedule", schedule), ("Failed at", failed_at), ("Started", started),
-            ("Trigger", trigger), ("Attempt", attempt_text), ("Status", "FAILED - not completed")]
+    title, subtitle, status_text, when_lbl, _pre = KINDS.get(kind, KINDS["FAILED"])
+    rows = [("Process", process), ("Schedule", schedule), (when_lbl, failed_at), ("Started", started),
+            ("Trigger", trigger), ("Attempt", attempt_text), ("Status", status_text)]
     head_lines = _wrap(probe, headline, f_txt, W - 160)
     det_lines = _wrap(probe, detail, f_small, W - 160)[:5]
-    todo = ["1. Open Scheduler > History and read the log of this run.",
+    todo = {"INTERRUPTED": ["1. Open Scheduler > History and check what the run had already done.",
+                            "2. It is NOT re-run automatically - run it again if needed.",
+                            "3. Check why the console stopped (restart, power, update)."],
+            "MISSED": ["1. The console / scheduler was not running at the scheduled time.",
+                       "2. Open Scheduler > History to see what was missed.",
+                       "3. Use Run Now on the schedule if the work is still needed."]}.get(kind, [
+            "1. Open Scheduler > History and read the log of this run.",
             "2. Fix the cause, then use Run Now on the schedule.",
-            "3. Anything not finished is NOT marked done - nothing is lost."]
+            "3. Anything not finished is NOT marked done - nothing is lost."])
 
     row_h = 92
     proc_lines = {i: _wrap(probe, v, f_val, W - 160) for i, (_k, v) in enumerate(rows)}
@@ -162,8 +178,8 @@ def render_image(out: Path, *, process: str, schedule: str, failed_at: str, star
     cx, cy = 150, 150
     d.polygon([(cx, cy - 85), (cx + 95, cy + 80), (cx - 95, cy + 80)], fill="white")
     d.text((cx, cy + 25), "!", font=_font(110, True), fill=RED, anchor="mm")
-    d.text((290, 90), "SCHEDULER FAILED", font=f_big, fill="white")
-    d.text((290, 185), "A scheduled process did NOT complete", font=_font(38), fill="#FFE0E0")
+    d.text((290, 90), title, font=f_big, fill="white")
+    d.text((290, 185), subtitle, font=_font(36), fill="#FFE0E0")
 
     def card(y, h, fill="white", outline="#DDDDDD", width=2):
         d.rounded_rectangle([40, y, W - 40, y + h], radius=24, fill=fill, outline=outline, width=width)
@@ -231,7 +247,7 @@ class _Ctx:                                  # the WhatsApp helper only needs a 
 
 
 def notify(schedule: dict, pdef, execution_id: str, etype: str, emsg: str, ended, trigger: str,
-           attempt: int, log_text: str = "", now: Optional[float] = None) -> dict:
+           attempt: int, log_text: str = "", now: Optional[float] = None, kind: str = "FAILED") -> dict:
     """Build the image and WhatsApp it. Returns {'sent': bool, 'reason': str, ...}. Never raises."""
     rec = {"at": dt.datetime.now().isoformat(timespec="seconds"), "execution": execution_id,
            "schedule": (schedule or {}).get("name"), "process": getattr(pdef, "name", None)}
@@ -248,12 +264,12 @@ def notify(schedule: dict, pdef, execution_id: str, etype: str, emsg: str, ended
             sid = str((schedule or {}).get("id") or "")
             t = time.time() if now is None else now
             with _LOCK:
-                last = _LAST.get(sid)
+                last = _LAST.get(sid + ":" + kind)
                 if last is not None and t - last < DEDUPE_MINUTES * 60:
                     rec.update(sent=False, reason=f"already alerted for this schedule in the last {DEDUPE_MINUTES} min")
                     _log(rec)
                     return rec
-                _LAST[sid] = t
+                _LAST[sid + ":" + kind] = t
             process = getattr(pdef, "name", None) or (schedule or {}).get("process_key") or "Unknown process"
             head, detail = friendly_reason(etype, emsg)
             started = ""
@@ -267,11 +283,11 @@ def notify(schedule: dict, pdef, execution_id: str, etype: str, emsg: str, ended
                 str(trigger or ""), str(trigger or "-").replace("_", " ").title())
             from core.scheduler import paths, helpers as H
             img = render_image(
-                paths.sched_root() / "alerts" / f"failed_{re.sub(r'[^A-Za-z0-9]+', '_', process)[:40]}_{int(t)}.png",
+                paths.sched_root() / "alerts" / f"{kind.lower()}_{re.sub(r'[^A-Za-z0-9]+', '_', process)[:40]}_{int(t)}.png",
                 process=process, schedule=str((schedule or {}).get("name") or process), failed_at=_fmt(ended),
-                started=started or "-", trigger=trig, attempt_text=f"{attempt}" + (" (final)" if attempt else ""),
-                headline=head, detail=detail, run_id=str(execution_id))
-            label = re.sub(r"\s+", " ", f"FAILED - {process}".upper())[:60]
+                started=started or "-", trigger=trig, attempt_text=(f"{attempt}" + (" (final)" if kind == "FAILED" else "")) if attempt else "-",
+                headline=head, detail=detail, run_id=str(execution_id), kind=kind)
+            label = re.sub(r"\s+", " ", f"{KINDS.get(kind, KINDS['FAILED'])[4]} - {process}".upper())[:60]
             date_text = dt.datetime.now().strftime("%d-%m-%Y %H:%M")
             ok, bad = [], []
             for n in numbers:
@@ -288,3 +304,19 @@ def notify(schedule: dict, pdef, execution_id: str, etype: str, emsg: str, ended
     _log(rec)
     print(f"[scheduler] failure alert: {rec.get('reason')}", flush=True)
     return rec
+
+
+def notify_execution(eid: str, kind: str) -> dict:
+    """Alert for a STORED run (e.g. one just marked 'Interrupted'). Never raises."""
+    try:
+        from core.scheduler import catalog, store
+        row = store.get_execution(eid) or {}
+        sched = store.get_schedule(row.get("schedule_id")) or {"id": row.get("schedule_id"), "name": row.get("schedule_name"),
+                                                               "process_key": row.get("process_key")}
+        pdef = catalog.get(row.get("process_key"))
+        ended = store.parse_ts(row.get("ended_utc")) if row.get("ended_utc") else None
+        return notify(sched, pdef, eid, row.get("error_type") or kind.title(), row.get("error_msg") or "",
+                      ended, row.get("trigger_type") or "", int(row.get("attempt") or 0), kind=kind)
+    except Exception as e:
+        print(f"[scheduler] failure alert ({kind}) could not run: {type(e).__name__}: {e}", flush=True)
+        return {"sent": False, "reason": f"{type(e).__name__}: {e}"}

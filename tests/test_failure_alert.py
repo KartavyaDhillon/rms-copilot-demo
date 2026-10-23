@@ -87,6 +87,34 @@ class FailureAlert(unittest.TestCase):
         label = m.call_args[0][2]
         self.assertTrue(label.startswith("FAILED - ALLOCATION REPORT"))
 
+    def test_missed_and_interrupted_alerts_use_their_own_wording(self):
+        with self._settings(), mock.patch("core.scheduler.helpers.whatsapp_send_image") as m:
+            sched = {"id": "s9", "name": "Nightly", "process_key": "alloc"}
+            with mock.patch("core.scheduler.paths.sched_root", return_value=self.tmp), \
+                    mock.patch("core.scheduler.proc_settings.get", return_value={}):
+                r1 = fa.notify(sched, _P(), "e1" * 6, "Missed", "scheduler was not running", None, "SCHEDULED", 0, kind="MISSED", now=5000.0)
+                r2 = fa.notify(sched, _P(), "e2" * 6, "Interrupted", "The server stopped or restarted", None, "SCHEDULED", 1,
+                               kind="INTERRUPTED", now=5001.0)
+                r3 = fa.notify(sched, _P(), "e3" * 6, "RuntimeError", "boom", None, "SCHEDULED", 1, kind="FAILED", now=5002.0)
+        self.assertTrue(r1["sent"] and r2["sent"] and r3["sent"])            # different kinds never block each other
+        labels = [c[0][2] for c in m.call_args_list]
+        self.assertEqual([l.split(" - ")[0] for l in labels], ["MISSED", "INTERRUPTED", "FAILED"])
+
+    def test_saving_one_list_does_not_wipe_the_other(self):
+        import importlib
+        from core.scheduler import catalog, proc_settings
+        d = catalog.register("tmp_two_lists", "Two lists", lambda p, c: None, params=[
+            catalog.Param("to", "To", "text", required=True, fmt="emails", scope="process")])
+        try:
+            with mock.patch("core.scheduler.envstore.write") as w, mock.patch("core.scheduler.store.audit"), \
+                    mock.patch.object(proc_settings, "get", return_value={}):
+                proc_settings.save(d, {catalog.ALERT_PARAM: "9812345678 #A"}, "me")     # only the WhatsApp box sent
+            updates = w.call_args[0][2]
+            self.assertEqual(len(updates), 1)                                           # 'to' untouched, not required here
+            self.assertIn("+919812345678", list(updates.values())[0])
+        finally:
+            catalog.unregister("tmp_two_lists")
+
     def test_a_failing_send_never_raises(self):
         with self._settings(), mock.patch("core.scheduler.helpers.whatsapp_send_image", side_effect=RuntimeError("down")):
             r = self._run()
