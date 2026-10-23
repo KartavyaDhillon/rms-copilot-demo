@@ -948,8 +948,23 @@ def append_mapping_row(filepath, columns, row_dict):
     forever, across every window/day/backfill run -- it's the audit
     trail. Header-aware so a future column change can't silently
     misalign against an older file."""
+    wb = None
     if os.path.exists(filepath):
-        wb = load_workbook(filepath)
+        try:
+            wb = load_workbook(filepath)
+        except Exception as e:
+            # The log file is damaged (half-written by a crash / two runs at once / a 0-byte leftover). Do NOT let
+            # that kill the whole report: keep the damaged file aside for inspection and start a fresh log.
+            bad = f"{filepath}.corrupt_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            try:
+                os.replace(filepath, bad)
+            except OSError:
+                bad = "(could not be moved)"
+            logging.getLogger(__name__).warning(
+                "Email mapping log %s was unreadable (%s: %s) - moved to %s and started a new one.",
+                filepath, type(e).__name__, e, bad)
+            wb = None
+    if wb is not None:
         ws = wb["Detail"] if "Detail" in wb.sheetnames else wb.active
         effective_columns = _existing_header(ws) or columns
     else:
@@ -963,7 +978,9 @@ def append_mapping_row(filepath, columns, row_dict):
 
     ws.append([row_dict.get(col, "") for col in effective_columns])
     _rebuild_summary_sheet(wb, ws, effective_columns)
-    wb.save(filepath)
+    tmp = filepath + ".tmp"                      # write to a temp file, then swap: a crash can no longer leave a half file
+    wb.save(tmp)
+    os.replace(tmp, filepath)
 
 def _rebuild_summary_sheet(wb, detail_ws, columns):
     if "Summary" in wb.sheetnames:
