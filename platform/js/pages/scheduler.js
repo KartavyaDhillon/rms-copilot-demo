@@ -748,11 +748,14 @@
       const ttl = both ? "WhatsApp numbers / Email To & CC — " : phone ? "WhatsApp numbers — " : "Email To / CC — ";
       const pwd = await unlock(d.needs_password, ttl + p.name);
       if (pwd === null) return;
-      const helpPhone = "WhatsApp: one number per line, only the 10-digit mobile number (+91 is added automatically). Add the person's name after # so the list is easy to read, e.g. <b>9812345678 #Ravi Sharma</b>. Add more numbers here for 'CC'.";
-      const helpMail = "E-mail: one address per line or separated by commas. Optional name after #, e.g. <b>ravi@mastertrust.co.in #Ravi</b>.";
+      const helpPhone = "<b>How to add WhatsApp numbers:</b> type ONE number per line (press Enter for the next number), or put a comma between numbers. " +
+        "Type only the 10-digit mobile number - +91 is added by itself. To remember whose number it is, write a name after # . " +
+        "Example:<br><b>9812345678 #Ravi</b><br><b>9876543210 #Amit</b>";
+      const helpMail = "<b>How to add e-mail addresses:</b> type ONE address per line (press Enter for the next one), or put a comma between addresses. " +
+        "To remember whose address it is, write a name after # . Example:<br><b>ravi@mastertrust.co.in #Ravi</b><br><b>amit@mastertrust.co.in #Amit</b>";
       const body = '<div id="rcErr" style="color:var(--err);font-size:12.5px;margin-bottom:8px;white-space:pre-wrap"></div>' +
-        '<div class="card-sub" style="margin-bottom:10px">' + (both ? helpPhone + "<br>" + helpMail : phone ? helpPhone : helpMail) +
-        " These apply to every schedule of <b>" + esc(p.name) + "</b>. Saved in the .env file under “# scheduler process: " + esc(p.name) + "”.</div>" +
+        '<div class="card-sub" style="margin-bottom:10px">' + (both ? helpPhone + "<br><br>" + helpMail : phone ? helpPhone : helpMail) +
+        "<br><br>These lists are used for every schedule of <b>" + esc(p.name) + "</b>.</div>" +
         d.params.map((q) => field(esc(q.label) + (q.required ? " *" : ""),
           '<textarea class="f-input" data-rc="' + q.name + '" rows="4" style="width:100%" placeholder="' + (q.fmt === "phones" ? "9812345678 #Name" : "name@company.com #Name") + '">' + esc(d.values[q.name] || "").replace(/,/g, ",\n") + "</textarea>", esc(q.help || ""))).join("") +
         '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="rcCancel">Cancel</button><button class="btn primary" id="rcSave">Save</button></div>';

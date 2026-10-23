@@ -107,10 +107,10 @@ def register(key, name, run, description="", params=None, retry_safe=False, para
     if not any(q.name == ALERT_PARAM for q in plist):
         # EVERY process gets its own "who is warned when I fail" list (edited with the process' WhatsApp-numbers
         # button, stored per process in .env) - see core/scheduler/failure_alert.py
-        plist.append(Param(ALERT_PARAM, "Failure alert - WhatsApp numbers (warned when this process fails)", "text",
+        plist.append(Param(ALERT_PARAM, "WhatsApp numbers to warn when this process FAILS", "text",
                            fmt="phones", scope="process",
-                           help="Only these people get the WhatsApp warning image when THIS process fails. "
-                                "Empty = the common list in Credentials > WhatsApp (if any)."))
+                           help="These people get a WhatsApp warning picture when this process fails. "
+                                "If you leave it empty, the common list in Credentials > WhatsApp is used."))
     d = ProcessDef(key=key, name=name, run=run, description=description, params=plist,
                    retry_safe=retry_safe, parallel_safe=parallel_safe, lock_pipe=lock_pipe, category=category,
                    folder=folder, upload_exts=tuple(e.lower() for e in upload_exts), upload_help=upload_help,
