@@ -280,7 +280,8 @@ class SchedulerEngine:
             if not retry_scheduled:                         # final failure -> WhatsApp warning image (never raises)
                 try:
                     from core.scheduler import failure_alert
-                    failure_alert.notify(s, pdef, eid, etype, emsg, end, trigger, attempt, ctx.text())
+                    rec = failure_alert.notify(s, pdef, eid, etype, emsg, end, trigger, attempt, ctx.text())
+                    store.append_log(eid, "\n" + failure_alert.outcome_line(rec))      # visible in History > Logs
                 except Exception as e:
                     print(f"[scheduler] failure alert could not run: {e}", flush=True)
 

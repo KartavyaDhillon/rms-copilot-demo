@@ -115,6 +115,44 @@ class FailureAlert(unittest.TestCase):
         finally:
             catalog.unregister("tmp_two_lists")
 
+    def test_outcome_line_says_sent_or_why_not(self):
+        self.assertIn("SENT to …3210", fa.outcome_line({"sent": True, "to_ok": ["3210"]}))
+        self.assertIn("NOT sent - alert switch is off", fa.outcome_line({"sent": False, "reason": "alert switch is off"}))
+
+    def test_smtp_454_is_retried_but_a_wrong_password_is_not(self):
+        import smtplib
+        from core.scheduler import helpers as H
+
+        class Ctx:
+            cancelled = False
+            def log(self, m): pass
+
+        class S:
+            calls = 0
+            def __init__(s, *a, **k): pass
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+            def ehlo(s): pass
+            def starttls(s, **k): pass
+            def login(s, u, p):
+                S.calls += 1
+                if S.code == 454 and S.calls == 1:
+                    raise smtplib.SMTPAuthenticationError(454, b"4.7.0 Temporary authentication failure")
+                if S.code == 535:
+                    raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+            def send_message(s, *a, **k): pass
+
+        conn = {"server": "x", "port": "587", "email": "a@b.com", "password": "p"}
+        with mock.patch.object(H.connections, "require", return_value=conn), mock.patch("smtplib.SMTP", S), \
+                mock.patch("time.sleep"):
+            S.code, S.calls = 454, 0
+            H.send_email("s", "b", ["to@x.com"], [], [], Ctx(), attempts=3, delay=0)         # recovers on the 2nd try
+            self.assertEqual(S.calls, 2)
+            S.code, S.calls = 535, 0
+            with self.assertRaises(RuntimeError):
+                H.send_email("s", "b", ["to@x.com"], [], [], Ctx(), attempts=3, delay=0)
+            self.assertEqual(S.calls, 1)                                                      # no retry on a wrong password
+
     def test_a_failing_send_never_raises(self):
         with self._settings(), mock.patch("core.scheduler.helpers.whatsapp_send_image", side_effect=RuntimeError("down")):
             r = self._run()

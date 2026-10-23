@@ -320,3 +320,13 @@ def notify_execution(eid: str, kind: str) -> dict:
     except Exception as e:
         print(f"[scheduler] failure alert ({kind}) could not run: {type(e).__name__}: {e}", flush=True)
         return {"sent": False, "reason": f"{type(e).__name__}: {e}"}
+
+
+def outcome_line(rec: dict) -> str:
+    """One readable line for the run's log: was the WhatsApp failure alert sent, and if not, why."""
+    stamp = dt.datetime.now().strftime("%H:%M:%S")
+    if rec.get("sent"):
+        n = ", ".join("…" + x for x in rec.get("to_ok") or [])
+        bad = f" (failed for: {'; '.join(rec['to_failed'])})" if rec.get("to_failed") else ""
+        return f"[{stamp}] WhatsApp failure alert SENT to {n}{bad}."
+    return f"[{stamp}] WhatsApp failure alert NOT sent - {rec.get('reason', 'unknown reason')}."

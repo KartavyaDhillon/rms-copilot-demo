@@ -399,6 +399,11 @@ def create_execution(schedule: dict, scheduled_for: dt.datetime, trigger: str, s
     return eid if n == 1 else None
 
 
+def append_log(eid: str, text: str) -> None:
+    """Add a line to a stored run's log (e.g. the outcome of the WhatsApp failure alert)."""
+    _write("UPDATE sched_executions SET log_text = COALESCE(log_text, '') || ? WHERE id = ?", (text, eid))
+
+
 def get_execution(eid: str) -> Optional[dict]:
     return _one("SELECT * FROM sched_executions WHERE id = ?", (eid,))
 
