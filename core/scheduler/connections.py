@@ -223,6 +223,8 @@ def update(group: str, values: dict, user: str) -> List[str]:
             continue                                        # keep the existing secret
         if "\n" in v or "\r" in v:
             raise ValueError(f"'{k}' must be a single line.")
+        if k.endswith("_url") and v and not v.lower().startswith(("http://", "https://")):
+            raise ValueError(f"'{k}' must be a web address starting with http:// or https:// (you typed '{v[:40]}').")
         if _raw(group, k) != v and (v or not secret[k]):
             (secrets if secret[k] else plain)[_key(group, k)] = v
             changed.append(k)
