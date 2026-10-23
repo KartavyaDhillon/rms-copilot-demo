@@ -49,9 +49,13 @@ def _run(params, ctx):
 
     txt = out / "3_TO_9%_Range_of_OTMContracts_BLOCKING_FILE.txt"
     with open(txt, "w", encoding="utf-8") as f:
-        f.write("NFO Restricted Basket|M|NFONRML\n")
+        # Kambala "RMS Blocking/UnBlocking" layout. Fixed text on both sides of the four values that change per
+        # contract (symbol, option type, strike with 2 decimals, expiry):
+        #   |||||B||NonSqroff|NFO|<SYMBOL>|OPTSTK|<CE/PE>|<strike>|<DD-MON-YYYY>|Y|||BUYING NOT ALLOWED IN OTM OPTION
+        f.write("RMS Blocking/UnBlocking\n")
         for r in df.itertuples(index=False):
-            f.write(f"OPTSTK|{r.TckrSymb}|{r.XpryDt.strftime('%d-%b-%Y').upper()}|{float(r.StrkPric)}|{r.OptnTp}\n")
+            f.write(f"|||||B||NonSqroff|NFO|{r.TckrSymb}|OPTSTK|{r.OptnTp}|{float(r.StrkPric):.2f}|"
+                    f"{r.XpryDt.strftime('%d-%b-%Y').upper()}|Y|||BUYING NOT ALLOWED IN OTM OPTION\n")
     ctx.log(f"{len(df)} contract line(s) written.")
 
     body = ("<html><body><p>Dear Team,</p><p>Please find attached the <b>3% to 9% range of OTMContracts blocking file</b> "
