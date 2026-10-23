@@ -330,7 +330,8 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=8"></script>'
-                            '<script src="/platform/js/process-alloc.js?v=6"></script></body>', 1)
+                            '<script src="/platform/js/process-alloc.js?v=6"></script>'
+                            '<script src="/platform/js/process-physdel.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4372,6 +4373,98 @@ def probable_safe_test_disarm():
     mistake must always be able to undo it instantly."""
     from core.pipelines.probable_alerts import disarm_safe_test as _disarm
     return {"ok": True, "armed": False, "was_armed": _disarm()}
+
+
+# ───────────────────────── PHYSICAL DELIVERY (card in the Process Center) ─────────────────────────
+# The report scripts live in core/pipelines/physdel_codes/; the card (platform/js/process-physdel.js) uses these
+# routes for what the generic /px/* routes do not cover: window status + files-to-be-used, the CASH % popup value,
+# the Safe test arm, and the five WhatsApp number lists.
+_PD_WA_LISTS = {"DELHI": "Delhi", "LUDHIANA": "Ludhiana", "CHANDIGARH": "Chandigarh", "MUMBAI": "Mumbai",
+                "FULL": "Full list (1 Cr alert)"}
+
+
+@app.get("/pd/status")
+def pd_status():
+    from core.pipelines import physdel_cfg as _pd
+    _pd.apply_defaults()
+    return {"window": _pd.window_info(), "inputs": _pd.inputs_report(), "missing": _pd.missing_inputs(),
+            "last_run": _pd.last_run(), "percent": _pd.get_percent(), "safe_test": _pd.safe_test_targets(),
+            "today": __import__("datetime").date.today().isoformat()}
+
+
+@app.post("/pd/percent")
+def pd_percent(value: str = ""):
+    """Saves the CASH % typed in the Run popup (the run reads it back). Anything not a positive number is refused."""
+    from core.pipelines import physdel_cfg as _pd
+    try:
+        v = _pd.parse_percent(value)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "percent": _pd.set_percent(v)}
+
+
+@app.get("/pd/safe-test")
+def pd_safe_test_status():
+    from core.pipelines import physdel_cfg as _pd
+    _pd.apply_defaults()
+    return _pd.safe_test_targets()
+
+
+@app.post("/pd/safe-test/arm")
+def pd_safe_test_arm(password: str = ""):
+    from core.short_allocation import check_password as _pw
+    if not _pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    from core.pipelines import physdel_cfg as _pd
+    t = _pd.safe_test_targets()
+    if not t["email_to"] or len("".join(c for c in str(t["wa_to"]) if c.isdigit())) < 10:
+        return {"ok": False, "error": "Set PD_TEST_EMAIL_TO and PD_TEST_WA_TO in .env first (where test messages should go)."}
+    _pd.arm_safe_test()
+    return {"ok": True, "armed": True}
+
+
+@app.post("/pd/safe-test/disarm")
+def pd_safe_test_disarm():
+    from core.pipelines import physdel_cfg as _pd
+    return {"ok": True, "armed": False, "was_armed": _pd.disarm_safe_test()}
+
+
+@app.get("/pd/wa-config")
+def pd_wa_config_get():
+    from core.pipelines import physdel_cfg as _pd
+    _pd.apply_defaults()
+    return {"lists": [{"key": k, "label": lbl, "value": os.getenv(f"PD_WA_{k}", "")} for k, lbl in _PD_WA_LISTS.items()]}
+
+
+@app.post("/pd/wa-config")
+async def pd_wa_config_set(request: Request):
+    """Body: {password, lists: {DELHI: "99..., 97...", ...}}.  Only digits are kept; max 10 per list."""
+    import re as _re
+    body = await request.json()
+    from core.short_allocation import check_password as _pw
+    if not _pw(str(body.get("password", ""))):
+        return {"ok": False, "error": "Wrong password"}
+    upd = {}
+    for k, v in (body.get("lists") or {}).items():
+        if k not in _PD_WA_LISTS:
+            continue
+        nums = []
+        for part in _re.split(r"[,;\s]+", str(v or "")):
+            d = _re.sub(r"\D", "", part)
+            if not d:
+                continue
+            if len(d) == 12 and d.startswith("91"):
+                d = d[2:]
+            if len(d) != 10:
+                return {"ok": False, "error": f"'{part}' in {_PD_WA_LISTS[k]} is not a 10-digit mobile number"}
+            if d not in nums:
+                nums.append(d)
+        if len(nums) > 10:
+            return {"ok": False, "error": f"{_PD_WA_LISTS[k]}: maximum 10 numbers"}
+        upd[f"PD_WA_{k}"] = ",".join(nums)
+    from core.pipeline_box import _write_env as _we
+    _we(upd)
+    return {"ok": True}
 
 
 @app.get("/probable/mcx-lock-status")

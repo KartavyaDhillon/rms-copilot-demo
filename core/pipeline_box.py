@@ -465,7 +465,57 @@ PIPELINES = {
                  "master_globs": ["mail list.xlsx", "branch_and_region_list.xlsx"],
                  "master_label": "MASTER",
                  },
+    # PHYSICAL DELIVERY — runs once a day in the 5 trading days before the last-Tuesday expiry, and as many
+    # times as needed on expiry day itself (so "runs" is not 1 — the once-a-day guard must not apply; the
+    # 5-minute duplicate cooldown still does).  Everything lives inside the console: the report scripts are
+    # core/pipelines/physdel_codes/{ltp,send}.py, driven by core/pipelines/physical_delivery.py, and the
+    # folders / dates / test mode by core/pipelines/physdel_cfg.py.  Uploads: PositionBook -> INPUT, master
+    # files -> MAIN_FOLDER, RISK_REPORT -> COMMON FILES.  The CTCL vs NMASS output is NOT uploaded — each run
+    # picks it from the latest CTCL vs NMASS backup and shows which file that is.
+    "physdel": {"name": "PHYSICAL DELIVERY", "module": "core.pipelines.physical_delivery",
+                "func": "run_physical_delivery", "logdir": "physdel", "runs": 20,
+                "state_dir_env": "PHYSICAL_DELIVERY_FOLDER", "state_default": r"D:\PHYSICAL DELIVERY",
+                "state_file": "run_counter.txt",
+                "email_keys": {"Chandigarh zone": ["PD_ZONE_CHND_TO", "PD_ZONE_CHND_CC"],
+                               "Ludhiana zone": ["PD_ZONE_LUDH_TO", "PD_ZONE_LUDH_CC"],
+                               "Mumbai zone": ["PD_ZONE_MUMB_TO", "PD_ZONE_MUMB_CC"],
+                               "Delhi zone": ["PD_ZONE_DELH_TO", "PD_ZONE_DELH_CC"],
+                               "Run log": ["PD_LOG_TO", "PD_LOG_CC"]},
+                "cred": {"SMTP sender (alerts account)": {"user_key": "PROBABLE_ALERTS_SMTP_EMAIL",
+                          "pass_key": "PROBABLE_ALERTS_SMTP_PASSWORD",
+                          "note": "the account every PHYSICAL DELIVERY mail is sent from (same as PROBABLE's alerts sender)"},
+                         "WhatsApp (Tata) bearer token": {"single_key": "WA_AUTH_TOKEN",
+                          "note": "client messages and the ALERT 1 CR pictures - same Tata account as the other processes"},
+                         "Mastertrust webpayout login (mobile lookup)": {"user_key": "MT_WEBPAYOUT_USER",
+                          "pass_key": "MT_WEBPAYOUT_PASSWORD",
+                          "note": "finds each client's mobile number before the WhatsApp message"},
+                         "Excel zone-file password": {"single_key": "PROBABLE_ZONE_XLSX_PASSWORD",
+                          "note": "password put on the zone Excel files before they are e-mailed"}},
+                "upload_dir_env": "PHYSICAL_DELIVERY_INPUT", "upload_default": r"D:\PHYSICAL DELIVERY\INPUT",
+                "common_dir_env": "SA_COMMON_DIR", "common_default": r"C:\COMMON FILES",
+                "common_globs": ["RISK_REPORT_*.csv"], "common_label": "COMMON FILES",
+                "backup_root_env": "PHYSICAL_DELIVERY_FOLDER", "backup_subdir": "BACKUPFILES AUTOMATED",
+                "file_types": [
+                    ["PositionBook", "PositionBook*.csv,PositionBook*.xlsx", "PositionBook_<date>.csv"],
+                ],
+                "backup_types": [
+                    ["PositionBook", "PositionBook*.csv,PositionBook*.xlsx"],
+                    ["Position report with prices", "PositionBook_With_LTP.xlsx"],
+                    ["CTCL vs NMASS output used", "FULL_FILE_CTCL_VS_NMASS*.xlsx"],
+                    ["Risk report", "RISK_REPORT_*.csv"],
+                    ["Zone / branch / region files", "*.csv,*.xlsx"],
+                ],
+                "master_dir_env": "PHYSICAL_DELIVERY_FOLDER", "master_subdir": "MAIN_FOLDER",
+                "master_globs": ["copy of t1 mail list.xlsx", "branch_and_region_list.xlsx",
+                                 "brm list_file.xlsx", "brm list_file.csv"],
+                "master_label": "MASTER FILES",
+                },
 }
+try:                                   # PHYSICAL DELIVERY folder / e-mail / WhatsApp defaults (only fills what .env lacks)
+    from core.pipelines import physdel_cfg as _pd_cfg
+    _pd_cfg.apply_defaults()
+except Exception:
+    pass
 
 # _PB used to be ONE shared dict for the whole server, covering ctcl/ms15/cli
 # (and even sa/sa_mcx_deposit at one point) — the theory being that any two
@@ -2105,6 +2155,16 @@ PROTECTED_UPLOAD_FILES = {
         "branch_and_region_list.xlsx":  {"dest_env": "PROBABLE_FOLDER",
                                           "dest_default": r"D:\PROBABLE", "dest_subdir": "MASTER"},
     },
+    "physdel": {                        # replacing a master file needs the app password (a first upload does not)
+        "copy of t1 mail list.xlsx":    {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
+                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+        "branch_and_region_list.xlsx":  {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
+                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+        "brm list_file.xlsx":           {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
+                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+        "brm list_file.csv":            {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
+                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+    },
 }
 
 
@@ -2283,7 +2343,9 @@ def pb_upload(pipe, items, target="main", password=""):
             "password_required": password_required}
 
 def pb_backup_types(pipe):
-    return [{"label": r[0], "globs": r[1]} for r in PIPELINES.get(pipe, {}).get("file_types", [])]
+    pp = PIPELINES.get(pipe, {})
+    # "backup_types" (when a pipe has it) is what the Backup files window can show; "file_types" is what may be UPLOADED.
+    return [{"label": r[0], "globs": r[1]} for r in (pp.get("backup_types") or pp.get("file_types", []))]
 
 def _pb_backup_roots(pipe):
     p = PIPELINES.get(pipe, {})

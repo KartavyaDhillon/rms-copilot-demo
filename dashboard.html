@@ -768,30 +768,7 @@ body {
 
       <div class="sec">Processing &amp; Reports</div>
       <div class="tile-grid">
-        <div class="tile" id="task-concentration" style="--tile-accent:var(--amber)">
-          <div class="tile-icon">🧮</div>
-          <div class="tile-name">Run Concentration <span class="st" id="st-concentration">idle</span></div>
-          <div class="tile-desc">Compute violations, send zone emails, backup. Run after Index + Margin Shortage download.</div>
-          <div class="tile-actions">
-            <button class="tbtn" style="background:var(--amber);color:#1a0d00" onclick="runTask('concentration')" data-tip="Compute violations, send zone emails, backup. Run after Index + Margin Shortage download.">Run</button>
-          </div>
-        </div>
-        <div class="tile" id="task-cnc" style="--tile-accent:var(--blue)">
-          <div class="tile-icon">📑</div>
-          <div class="tile-name">CNC F11 <span class="st" id="st-cnc">idle</span></div>
-          <div class="tile-desc">PositionBook buy/sell match → Sheet4 → email → backup. Needs PositionBook.csv in C:\CNC_F11.</div>
-          <div class="tile-actions">
-            <button class="tbtn" style="background:var(--blue);color:#061020" onclick="runTask('cnc')" data-tip="PositionBook buy/sell match → Sheet4 → email → backup. Needs PositionBook.csv in C:\CNC_F11.">Run</button>
-          </div>
-        </div>
-        <div class="tile" id="task-mtforder" style="--tile-accent:var(--violet)">
-          <div class="tile-icon">📋</div>
-          <div class="tile-name">MTF Order File <span class="st" id="st-mtforder">idle</span></div>
-          <div class="tile-desc">Margin match → KAMB + O319 order files → zone emails → backup. Needs MTFPOSITION + RISK files.</div>
-          <div class="tile-actions">
-            <button class="tbtn" style="background:var(--violet);color:#0d0620" onclick="runTask('mtforder')" data-tip="Margin match → KAMB + O319 order files → zone emails → backup. Needs MTFPOSITION + RISK files.">Run</button>
-          </div>
-        </div>
+        <div id="physdelSlot" style="display:contents"></div><!-- PHYSICAL DELIVERY card is built here by process-physdel.js -->
         <div class="tile" id="task-mtfic" style="--tile-accent:var(--teal);cursor:pointer" onclick="mtficOpen()">
           <div class="tile-icon">🧾</div>
           <div class="tile-name">MTF Impact Cost <span class="st" id="mtficChip">idle</span></div>
