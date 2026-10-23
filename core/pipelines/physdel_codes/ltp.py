@@ -936,6 +936,7 @@ def merge_positionbook(
     # BUILD PIVOT SHEET
     # ==========================================================
 
+    print("[FRIENDLY_MSG] Building the PIVOT sheet", flush=True)
     print("\n" + "=" * 60)
     print("BUILDING PIVOT SHEET")
     print("=" * 60)
@@ -1488,6 +1489,7 @@ def main():
 
     print(f"[2/7] CASH % Selected : {percent}")
 
+    print("[FRIENDLY_MSG] Downloading NIFTY 500 prices from NSE", flush=True)
     print("\n[3/7] Downloading NSE Constituents Data...")
     data = get_nifty500_data()
 
@@ -1525,6 +1527,7 @@ def main():
     print(f"[SUCCESS] CASH {percent}% UP Column Created")
     print(f"[SUCCESS] CASH {percent}% DOWN Column Created")
     output_file = NIFTY500_FILE
+    print("[FRIENDLY_MSG] Saving the NIFTY 500 price file", flush=True)
     print("\n[6/7] Applying Excel Formatting...")
     with pd.ExcelWriter(
         output_file,
@@ -1554,6 +1557,7 @@ def main():
 
     print(f"Rows Downloaded : {len(df)}")
     print(f"Saved File      : {output_file}")
+    print("[FRIENDLY_MSG] Merging the PositionBook, risk report and deposits", flush=True)
     merge_positionbook(
         df,
         percent

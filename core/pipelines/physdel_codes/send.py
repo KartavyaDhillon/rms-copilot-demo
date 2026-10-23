@@ -2257,10 +2257,26 @@ START_TIME = datetime.now()
 # ==========================================================
 
 STEP_ERRORS = []
+STEP_TEXT = {
+    "Split by branch": "Splitting the data branch-wise",
+    "Branch emails": "E-mailing every branch",
+    "Split by region": "Splitting the data region-wise",
+    "Region emails": "E-mailing every region",
+    "Mismatch check": "Checking branch / region mismatches",
+    "Delhi zone filter": "Preparing the Delhi zone file",
+    "Split by zone": "Splitting the data zone-wise",
+    "Zone emails": "E-mailing the zones",
+    "Filter SMS clients": "Picking the clients to message",
+    "WhatsApp messages": "Sending WhatsApp messages to clients",
+    "ALERT 1 CR image": "Sending the ALERT 1 CR pictures on WhatsApp",
+    "Log email": "E-mailing the run log",
+    "Backup": "Backing up today's files",
+}
 
 
 def run_step(label, func, *args):
     """Run a step; if it errors, report and continue with the rest."""
+    print(f"[FRIENDLY_MSG] {STEP_TEXT.get(label, label)}", flush=True)
     try:
         func(*args)
     except Exception as e:

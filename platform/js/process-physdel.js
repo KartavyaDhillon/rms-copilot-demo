@@ -8,7 +8,7 @@
   window.__physdelInjected = true;
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var PIPE = 'physdel';
-  var S = { d: null, es: null, running: false };
+  var S = { d: null, es: null, running: false, steps: [], ok: null };
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
@@ -61,7 +61,7 @@
     var h = '<div style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:0 0 4px">Files the next run will use</div>';
     h += fileRow('PositionBook', i.positionbook, 'not uploaded yet — use Upload files');
     h += fileRow('CTCL vs NMASS output', i.ctcl, 'no CTCL vs NMASS backup found');
-    h += fileRow('Risk report', i.risk, 'today\'s RISK_REPORT is not in COMMON FILES');
+    h += fileRow('Risk report', i.risk, 'today\'s RISK_REPORT missing — use Upload Common Files (top of page)');
     (i.masters || []).forEach(function (m) {
       h += fileRow('Master — ' + m.label, m.present ? { name: m.name, where: 'master files', mtime: m.mtime } : null, m.name + ' missing — upload under Upload files › Master files');
     });
@@ -84,7 +84,6 @@
     window._saReturn = null;
     var INP = 'style="background:transparent;border:1px solid var(--line-2);border-radius:8px;color:var(--ink);padding:7px 9px;font-size:12.5px;font-family:inherit;width:110px"';
     modal(TITLE,
-      '<div id="pdDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>' +
       '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px">' +
         '<button class="sa-tool" onclick="pdSub(function(){pxConfig(\'physdel\')})">✉️ Email To / CC</button>' +
         '<button class="sa-tool" onclick="pdSub(pdWa)">📱 WhatsApp numbers</button>' +
@@ -95,19 +94,29 @@
         '<button class="sa-tool" onclick="pdSub(pdSafeTest)">🧪 Safe test run</button>' +
         '<button class="sa-tool" onclick="pdStop()" style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>' +
       '</div>' +
+      '<div id="pdDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>' +
       lbl('CASH % (how much the price is moved up / down)') +
       '<div style="margin:0 0 14px"><input id="pdPct" type="number" step="0.1" min="0.1" max="100" value="' + esc((S.d || {}).percent || 2) + '" ' + INP + ' onkeydown="if(event.keyCode===13)pdStart()"> <span style="color:var(--dim);font-size:12px">%</span></div>' +
       '<button id="pdRunBtn" onclick="pdStart()" style="width:100%;border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">▶ Run PHYSICAL DELIVERY</button>' +
       '<div class="sa-msg" id="pdRunMsg"></div>' +
-      '<div class="sa-status" id="pxStatus-physdel" style="margin-top:12px">' + (S.running ? '<div class="sa-prog"><span class="sa-pill running" id="pxP-physdel">running…</span></div><div id="pxEvents-physdel"></div>' : '<div class="sa-status-empty">Run status appears here. The full output is saved in Logs.</div>') + '</div>');
+      '<div class="sa-status" id="pxStatus-physdel" style="margin-top:12px">' + '<div id="pdSteps">' + stepsHtml() + '</div><div id="pxEvents-physdel"></div>' + (!S.running && !S.steps.length ? '<div class="sa-status-empty">Run status appears here. The full output is saved in Logs.</div>' : '') + '</div>');
     paintDyn();
     refresh();
   }
   window.pdOpen = pdOpen;
   window.pdSub = function (fn) { window._saReturn = pdOpen; fn(); };
+  function stepsHtml() {
+    if (!S.steps.length) return S.running ? '<div style="color:var(--muted);font-size:12px">Starting…</div>' : '';
+    return S.steps.map(function (s, i) {
+      var cur = S.running && i === S.steps.length - 1;
+      var ic = cur ? '<span style="color:var(--amber)">●</span>' : (S.ok === false && i === S.steps.length - 1 ? '<span style="color:var(--red)">✗</span>' : '<span style="color:var(--green)">✓</span>');
+      return '<div style="display:flex;gap:8px;font-size:12.5px;padding:3px 0;color:' + (cur ? 'var(--ink)' : 'var(--muted)') + '">' + ic + '<span>' + esc(s) + (cur ? '…' : '') + '</span></div>';
+    }).join('');
+  }
+  function paintSteps() { var e = $('pdSteps'); if (e) e.innerHTML = stepsHtml(); paintDyn(); }
   function paintDyn() {
     var e = $('pdDyn'); if (e && modalOpen()) e.innerHTML = dynHtml();
-    var b = $('pdRunBtn'); if (b) { b.disabled = S.running; b.style.opacity = S.running ? '.5' : '1'; b.textContent = S.running ? 'Running…' : (((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY'); }
+    var b = $('pdRunBtn'); if (b) { b.disabled = S.running; b.style.opacity = S.running ? '.5' : '1'; b.textContent = S.running ? ('Running — ' + (S.steps.length ? S.steps[S.steps.length - 1] : 'starting') + '…') : (((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY'); }
   }
 
   function refresh() {
@@ -143,13 +152,16 @@
     if (!claim()) return;
     setRunning(true);
     var st = $('pxStatus-' + PIPE);
-    if (st) st.innerHTML = '<div class="sa-prog"><span class="sa-pill running" id="pxP-' + PIPE + '">running…</span></div><div id="pxEvents-' + PIPE + '"></div>';
+    S.steps = []; S.ok = null;
+    if (st) st.innerHTML = '<div id="pdSteps"></div><div id="pxEvents-' + PIPE + '"></div>';
+    paintSteps();
     var ev = new EventSource(API + '/px/run-stream?pipe=' + PIPE);
     S.es = ev;
     if (typeof window._pxSetES === 'function') window._pxSetES(PIPE, ev);
     ev.onmessage = function (m) {
       var d; try { d = JSON.parse(m.data); } catch (e) { return; }
-      if (typeof window.pxHandle === 'function') window.pxHandle(PIPE, d);
+      if (d.type === 'note') { if (S.steps[S.steps.length - 1] !== d.msg) S.steps.push(d.msg); paintSteps(); }
+      else if (typeof window.pxHandle === 'function') window.pxHandle(PIPE, d);
       if (d.type === 'done') {
         window._pxRunLog = window._pxRunLog || {};
         window._pxRunLog[PIPE] = { log: d.log || null, hasError: d.ok === false, err: d.err || '', ts: new Date().toISOString() };
@@ -159,8 +171,9 @@
         ev.close(); S.es = null;
         if (typeof window._pxClearES === 'function') window._pxClearES(PIPE);
         release(); setRunning(false);
-        var pp = $('pxP-' + PIPE);
-        if (pp) { pp.className = 'sa-pill ' + (d.ok === false ? 'error' : 'done'); pp.textContent = d.ok === false ? 'finished with errors' : 'done'; }
+        S.ok = d.ok !== false;
+        S.steps.push(S.ok ? 'Finished' : 'Finished with errors — open Logs to see why');
+        paintSteps();
         refresh();
       }
     };
@@ -239,14 +252,14 @@
       '<div style="display:flex;gap:10px;flex-wrap:wrap">' +
       '<button class="sa-save" style="flex:1;min-width:170px;background:var(--blue);color:var(--blue-d)" onclick="pdPick(\'main\')">📁 PositionBook</button>' +
       '<button class="sa-save" style="flex:1;min-width:170px;background:var(--violet);color:var(--violet-d)" onclick="pdPick(\'master\')">📁 Master files</button>' +
-      '<button class="sa-save" style="flex:1;min-width:170px;background:var(--teal);color:#003311" onclick="pdPick(\'common\')">📁 Risk report (COMMON FILES)</button></div>' +
+      '</div>' +
       '<div style="font-size:10.5px;color:var(--dim);margin-top:12px;font-family:var(--mono);line-height:1.8">PositionBook → ' + esc(f.input || '') + '<br>Master files → ' + esc(f.master || '') +
-      '<br>Risk report → ' + esc(f.common || '') + '</div>' +
+      '</div>' +
       '<div style="margin-top:12px;padding:10px 14px;border:1px dashed var(--line-2);border-radius:10px;font-size:11.5px;line-height:1.9">' +
       '<b style="color:var(--ink);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase">Accepted names</b><br>' +
       '<span style="font-family:var(--mono);color:var(--dim)">PositionBook*.csv / PositionBook*.xlsx</span><br>' +
       ((i.masters || []).map(function (m) { return '<span style="font-family:var(--mono);color:var(--teal)">' + esc(m.name) + '</span> <span style="color:var(--dim)">(' + esc(m.label) + ')</span>'; }).join('<br>')) +
-      '<br><span style="font-family:var(--mono);color:var(--dim)">RISK_REPORT_&lt;DDMMYYYY&gt;.csv</span></div>');
+      '</div><div style="font-size:11.5px;color:var(--amber);margin-top:10px">Risk report: upload it with the <b>Upload Common Files</b> button at the top of Process Center (it is read from COMMON FILES).</div>');
   };
   window.pdPick = function (target) {
     UP.target = target;
