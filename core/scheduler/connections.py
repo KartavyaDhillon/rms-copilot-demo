@@ -25,6 +25,11 @@ GROUPS: Dict[str, dict] = {
             ("send_url", "Send message URL", False, "https://wb.omni.tatatelebusiness.com/whatsapp-cloud/messages"),
             ("template_name", "Template name", False, "daily_report"),
             ("template_lang", "Template language", False, "en"),
+            # Global FAILURE ALERT (core/scheduler/failure_alert.py): when ANY scheduled process fails for good,
+            # a warning image is WhatsApp'd to these numbers.
+            ("alert_switch", "Failure alert to WhatsApp (on / off)", False, "on"),
+            ("alert_numbers", "Failure alert - WhatsApp numbers (comma separated, with country code)", False, ""),
+            ("alert_template", "Failure alert - template name (blank = the template above)", False, ""),
         ],
     },
     "smtp": {
@@ -183,7 +188,8 @@ def require(group: str, *keys: str) -> Dict[str, str]:
 
 
 # Alternatives / extras that may stay empty — the UI must not call the connection "not set" because of them.
-OPTIONAL = {("nse", "encrypted_password"), ("mcx_sftp", "password2"), ("mcx_eclear", "rsa_sdtid")}
+OPTIONAL = {("nse", "encrypted_password"), ("mcx_sftp", "password2"), ("mcx_eclear", "rsa_sdtid"),
+            ("whatsapp", "alert_numbers"), ("whatsapp", "alert_template")}
 
 
 def view() -> List[dict]:

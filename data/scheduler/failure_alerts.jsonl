@@ -1,0 +1,6 @@
+{"at": "2026-10-23T13:09:05", "execution": "f94c97e06bcc4b44b96d46581be72bbe", "schedule": "BAD", "process": "Failing process", "sent": false, "reason": "no alert numbers set (Credentials > WhatsApp)"}
+{"at": "2026-10-23T13:09:06", "execution": "0b266a62e19e427c88c3ce133bbb2aeb", "schedule": "S1", "process": "Flaky process", "sent": false, "reason": "no alert numbers set (Credentials > WhatsApp)"}
+{"at": "2026-10-23T13:10:17", "execution": "1841625adca4436f8e945e1e802157e7", "schedule": "BAD", "process": "Failing process", "sent": false, "reason": "no alert numbers set (process WhatsApp-numbers button, or Credentials > WhatsApp)"}
+{"at": "2026-10-23T13:10:17", "execution": "16d7380c27c149fe80859bd909e262f8", "schedule": "S1", "process": "Flaky process", "sent": false, "reason": "no alert numbers set (process WhatsApp-numbers button, or Credentials > WhatsApp)"}
+{"at": "2026-10-23T13:10:32", "execution": "0cc854d59e2d4679b1e72bf446efa9c4", "schedule": "BAD", "process": "Failing process", "sent": false, "reason": "no alert numbers set (process WhatsApp-numbers button, or Credentials > WhatsApp)"}
+{"at": "2026-10-23T13:10:32", "execution": "272c4b048b054a7bb4d8793422959a56", "schedule": "S1", "process": "Flaky process", "sent": false, "reason": "no alert numbers set (process WhatsApp-numbers button, or Credentials > WhatsApp)"}

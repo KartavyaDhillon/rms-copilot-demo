@@ -254,17 +254,24 @@ class SchedulerEngine:
         except Exception as e:
             print(f"[scheduler] could not store result of {eid}: {e}", flush=True)
         if status == "FAILED":
+            retry_scheduled = False
             try:
-                self._maybe_retry(eid, s, pdef, trigger, attempt, end)
+                retry_scheduled = bool(self._maybe_retry(eid, s, pdef, trigger, attempt, end))
             except Exception as e:
                 print(f"[scheduler] retry scheduling failed: {e}", flush=True)
+            if not retry_scheduled:                         # final failure -> WhatsApp warning image (never raises)
+                try:
+                    from core.scheduler import failure_alert
+                    failure_alert.notify(s, pdef, eid, etype, emsg, end, trigger, attempt, ctx.text())
+                except Exception as e:
+                    print(f"[scheduler] failure alert could not run: {e}", flush=True)
 
     def _maybe_retry(self, eid: str, s: dict, pdef, trigger: str, attempt: int, now: dt.datetime):
         r = s.get("retry") or {}
         if not r.get("enabled") or not pdef.retry_safe:
-            return
+            return False
         if attempt > int(r.get("max") or 0):
-            return
+            return False
         delay = float(r.get("delay_min") or 5) * 60
         if r.get("backoff"):
             delay *= 2 ** (attempt - 1)
@@ -273,6 +280,7 @@ class SchedulerEngine:
         store.create_execution(s, sched_for, trigger, "RETRY_WAIT", now, attempt=attempt + 1,
                                retry_at=now + dt.timedelta(seconds=delay),
                                error_msg=f"Retry {attempt} of {r.get('max')} waiting.")
+        return True
 
     def _run_due_retries(self, now: dt.datetime):
         for row in store.due_retries(now):

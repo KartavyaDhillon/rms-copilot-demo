@@ -397,7 +397,8 @@ def kambala_upload(files: Iterable[Path], ctx) -> bool:
 
 # ───────────────────────── WhatsApp (Tata Tele Omni) ─────────────────────────
 def whatsapp_send_image(image: Path, to: str, label: str, date_text: str, ctx,
-                        attempts: int = 4, delay: float = 15.0, template_extra: Optional[list] = None):
+                        attempts: int = 4, delay: float = 15.0, template_extra: Optional[list] = None,
+                        template_name: Optional[str] = None):
     """Upload `image` and send it with the configured template ({label}, {date_text} as the two body variables).
     Retries ONLY on network trouble / 429 / 5xx, at most `attempts` times; any other answer fails at once."""
     requests = need("requests")
@@ -436,7 +437,7 @@ def whatsapp_send_image(image: Path, to: str, label: str, date_text: str, ctx,
     ctx.log(f"Image uploaded ({image.name})")
 
     payload = {"to": to, "type": "template", "source": "external",
-               "template": {"name": c["template_name"], "language": {"code": c["template_lang"] or "en"},
+               "template": {"name": template_name or c["template_name"], "language": {"code": c["template_lang"] or "en"},
                             "components": [
                                 {"type": "header", "parameters": [{"type": "image", "image": {"id": media_id}}]},
                                 {"type": "body", "parameters": [{"type": "text", "text": label},
