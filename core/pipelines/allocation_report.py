@@ -459,6 +459,19 @@ def run(opts: dict) -> int:
         if mode == "close" and start.date() != end.date() and (end - start) > dt.timedelta(hours=30):
             log("  [!] this window spans more than one day (a night was missed?) — opening balances are those of the end day.")
 
+        # More than 3 CLI backup folders for the day -> skip the run (nothing fetched, nothing marked done);
+        # the nightly run e-mails a warning without files.
+        if mode == "close":
+            _to, _cc = _clean_mails(opts.get("to")), _clean_mails(opts.get("cc"))
+            if _to:
+                m.EMAIL_TO, m.EMAIL_CC = _to, _cc
+        _warn = m.check_too_many_snapshots(_opening_date(mode, start, end), send=(mode == "close"))
+        if _warn:
+            log(f"[FRIENDLY_MSG] {_warn}")
+            _finish(base, mode, {"ok": True, "empty": True, "msg": _warn}, start, end, clients, by, [], None)
+            progress(STEPS, "Skipped - more than 3 CLI backups", ok=True)
+            return 0
+
         log_offsets = m.log_start_offsets() if mode == "close" else None
         m.clean_folder(m.WORK_FOLDER)
 
@@ -532,7 +545,7 @@ def run(opts: dict) -> int:
         log(f"\n  opening balances: looking for the {odate:%d-%m-%Y} folder in {m.BACKUP_ROOT}")
         dfolder = m.find_date_folder(odate)
         if dfolder:
-            # BOD (07-11), AFTERNOON (15:30-18:00) and EVENING (anything else, optional) CLI backups
+            # CLI backups of the day sorted by time: 1st = BOD, 2nd = AFTERNOON, 3rd = EVENING (optional)
             opening_used = m.collect_snapshots(dfolder, m.WORK_FOLDER)      # [(label, path)]
         if not opening_used:
             log("[FRIENDLY_MSG] No opening-balance files found for this day — they are treated as 0.")

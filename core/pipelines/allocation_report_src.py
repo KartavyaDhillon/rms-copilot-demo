@@ -2061,11 +2061,12 @@ def system_action_label(rec):
     return a or ""
 
 # ---- Back Office snapshots (BOD / AFTERNOON / EVENING allocation) ---------
-# The CLI Prudential box backs up its Back Office files every time it runs. Each
-# backup folder is classified by the time it was taken:
-#     07:00 - 11:00            -> "BOD allocation"
-#     15:30 - 18:00            -> "AFTERNOON allocation"
-#     anything else            -> "EVENING allocation"   (optional - often absent)
+# The CLI Prudential box backs up its Back Office files every time it runs. The day's backup
+# folders (named HH-MM-SS) are sorted by time, oldest first, and named by position -- the clock
+# time itself does not matter:
+#     1 folder   -> BOD allocation
+#     2 folders  -> BOD allocation, AFTERNOON allocation
+#     3 folders  -> BOD allocation, AFTERNOON allocation, EVENING allocation
 # Every snapshot becomes one starting row per client+segment in the timeline,
 # with Change Type "Back Office". Log rows that come after a snapshot are
 # calculated from that snapshot's level.
@@ -2075,16 +2076,6 @@ SNAP_EVENING = "EVENING allocation"
 SNAP_ORDER = (SNAP_BOD, SNAP_AFTERNOON, SNAP_EVENING)
 CHANGE_TYPE_BACK_OFFICE = "Back Office"      # B and O capitals - exactly like this
 SNAP_SUBDIR = "_snapshots"                   # work-folder sub-folder holding the AFTERNOON / EVENING files
-
-
-def snapshot_label(hour, minute):
-    """Which snapshot a CLI backup taken at hour:minute is."""
-    t = hour * 60 + minute
-    if 7 * 60 <= t < 11 * 60:
-        return SNAP_BOD
-    if 15 * 60 + 30 <= t <= 18 * 60:
-        return SNAP_AFTERNOON
-    return SNAP_EVENING
 
 
 def _hms_to_seconds(text):
@@ -2544,25 +2535,59 @@ def pick_opening_files(src_folder):
 
 
 def pick_snapshot_folders(date_folder):
-    """{label: folder} - the CLI backup folders (named HH-MM-SS) of one day, classified by the
-    time they were taken (see snapshot_label). BOD = the oldest one in 07:00-11:00; AFTERNOON and
-    EVENING = the newest one in their range, so a re-run replaces an earlier one. A label with no
-    folder is simply absent (EVENING is optional)."""
-    found = {}
-    for name in sorted(os.listdir(date_folder)):
+    """{label: folder} - the CLI backup folders (named HH-MM-SS) of one day, sorted by time, oldest
+    first: the 1st is BOD, the 2nd AFTERNOON, the 3rd EVENING. Fewer folders just means fewer
+    snapshots (EVENING is optional). Folders beyond the third are ignored."""
+    subs = []
+    for name in os.listdir(date_folder):
         full = os.path.join(date_folder, name)
         m = re.match(r"^(\d{2})-(\d{2})-(\d{2})$", name.strip())
-        if not (os.path.isdir(full) and m):
-            continue
-        hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        found.setdefault(snapshot_label(hh, mm), []).append(((hh, mm, ss), name, full))
+        if os.path.isdir(full) and m:
+            subs.append(((int(m.group(1)), int(m.group(2)), int(m.group(3))), name, full))
+    subs.sort()
     chosen = {}
-    for label, lst in found.items():
-        lst.sort()
-        chosen[label] = (lst[0] if label == SNAP_BOD else lst[-1])[2]
-        print(f"  {label:<21}: {os.path.basename(chosen[label])}"
-              + (f"   (other folders in this range ignored: {', '.join(x[1] for x in lst if x[2] != chosen[label])})" if len(lst) > 1 else ""))
+    for label, item in zip(SNAP_ORDER, subs):
+        chosen[label] = item[2]
+        print(f"  {label:<21}: {item[1]}")
+    if len(subs) > len(SNAP_ORDER):
+        print(f"  [!] {len(subs)} backup folders found -- only the first {len(SNAP_ORDER)} are used; "
+              f"ignored: {', '.join(x[1] for x in subs[len(SNAP_ORDER):])}")
     return chosen
+
+
+def check_too_many_snapshots(run_date, send=False):
+    """Guard: the day's CLI backup folder may hold at most 3 time folders (BOD / AFTERNOON / EVENING).
+    More than that means something is wrong (a stray or duplicate backup), and guessing which three to
+    use could give a wrong report -- so the run is SKIPPED. Returns None when all is fine, otherwise the
+    warning text; with send=True the same warning is e-mailed (no attachments)."""
+    if not os.path.isdir(BACKUP_ROOT):
+        return None
+    wanted = f"{run_date:%d-%m-%Y}"
+    date_folder = next((os.path.join(BACKUP_ROOT, n) for n in os.listdir(BACKUP_ROOT)
+                        if os.path.isdir(os.path.join(BACKUP_ROOT, n)) and n.strip().startswith(wanted)), None)
+    if not date_folder:
+        return None
+    names = sorted(n for n in os.listdir(date_folder)
+                   if os.path.isdir(os.path.join(date_folder, n)) and re.match(r"^\d{2}-\d{2}-\d{2}$", n.strip()))
+    if len(names) <= len(SNAP_ORDER):
+        return None
+    msg = (f"WARNING: {len(names)} CLI Prudential backup folders found for {wanted} "
+           f"({', '.join(names)}). At most {len(SNAP_ORDER)} are allowed (BOD, AFTERNOON, EVENING). "
+           f"The Allocation Log Report was SKIPPED and no report was produced. "
+           f"Please remove the extra backup folder(s) from {date_folder} and run the report again.")
+    logging.warning(msg)
+    if send and EMAIL_TO and SMTP_PASSWORD:
+        try:
+            body = ("Dear Team,\n\n" + msg + "\n\nNo files are attached because no report was generated.\n"
+                    "Nothing was marked as done, so the next run will cover this period again.\n") + EMAIL_SIGNATURE
+            subject = f"WARNING - Allocation Log Report skipped ({wanted}): more than {len(SNAP_ORDER)} CLI backups"
+            call_with_retry(lambda: _do_send_email(subject, body, []), what="SMTP send",
+                            permanent_exceptions=(smtplib.SMTPAuthenticationError,
+                                                  smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused))
+            logging.info("Warning e-mail sent to %s", ", ".join(EMAIL_TO))
+        except Exception:
+            logging.exception("Could not send the warning e-mail.")
+    return msg
 
 
 def collect_snapshots(date_folder, work_folder):
@@ -2724,6 +2749,10 @@ def run_once(args, as_of_dt):
     print("=" * 70)
 
     os.makedirs(BASE_FOLDER, exist_ok=True)
+    _warn = check_too_many_snapshots(run_start.date(), send=bool(args.scheduled))
+    if _warn:
+        print("\n[!] " + _warn)
+        return False
     clean_folder(WORK_FOLDER)
 
     # Note where each cumulative log file currently ends, so that at the

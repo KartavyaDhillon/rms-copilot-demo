@@ -58,7 +58,7 @@ class AllocHelpers(unittest.TestCase):
         self.assertEqual(st["last_manual"], {})
 
 class BackOfficeSnapshots(unittest.TestCase):
-    """BOD / AFTERNOON / EVENING allocation: classification by backup time, optional EVENING, Back Office rows,
+    """BOD / AFTERNOON / EVENING allocation: named by order of the day's backup folders, optional EVENING, Back Office rows,
     and log rows chained on the latest snapshot."""
 
     @classmethod
@@ -69,16 +69,21 @@ class BackOfficeSnapshots(unittest.TestCase):
         cls.m = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.m)
 
-    def test_backup_time_decides_the_label(self):
-        m = self.m
-        self.assertEqual(m.snapshot_label(7, 0), "BOD allocation")
-        self.assertEqual(m.snapshot_label(10, 59), "BOD allocation")
-        self.assertEqual(m.snapshot_label(11, 0), "EVENING allocation")
-        self.assertEqual(m.snapshot_label(15, 29), "EVENING allocation")
-        self.assertEqual(m.snapshot_label(15, 30), "AFTERNOON allocation")
-        self.assertEqual(m.snapshot_label(18, 0), "AFTERNOON allocation")
-        self.assertEqual(m.snapshot_label(18, 1), "EVENING allocation")
-        self.assertEqual(m.snapshot_label(6, 59), "EVENING allocation")
+    def test_folders_are_named_by_position(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            for n in ("20-10-00", "08-42-42", "16-01-56", "not-a-time"):
+                os.makedirs(os.path.join(tmp, n))
+            c = self.m.pick_snapshot_folders(tmp)
+            self.assertEqual(os.path.basename(c["BOD allocation"]), "08-42-42")
+            self.assertEqual(os.path.basename(c["AFTERNOON allocation"]), "16-01-56")
+            self.assertEqual(os.path.basename(c["EVENING allocation"]), "20-10-00")
+            shutil.rmtree(os.path.join(tmp, "20-10-00"))
+            self.assertEqual(set(self.m.pick_snapshot_folders(tmp)), {"BOD allocation", "AFTERNOON allocation"})
+            shutil.rmtree(os.path.join(tmp, "16-01-56"))
+            self.assertEqual(set(self.m.pick_snapshot_folders(tmp)), {"BOD allocation"})
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_missing_evening_backup_is_skipped(self):
         tmp = tempfile.mkdtemp()
@@ -89,6 +94,25 @@ class BackOfficeSnapshots(unittest.TestCase):
             self.assertEqual(set(chosen), {"BOD allocation", "AFTERNOON allocation"})
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_more_than_three_backup_folders_skips_the_run(self):
+        import datetime as _dt
+        root = tempfile.mkdtemp()
+        old = self.m.BACKUP_ROOT
+        try:
+            self.m.BACKUP_ROOT = root
+            day = os.path.join(root, "22-10-2026")
+            for n in ("08-42-42", "12-00-00", "16-01-56"):
+                os.makedirs(os.path.join(day, n))
+            self.assertIsNone(self.m.check_too_many_snapshots(_dt.date(2026, 10, 22)))       # 3 is fine
+            os.makedirs(os.path.join(day, "20-10-00"))
+            warn = self.m.check_too_many_snapshots(_dt.date(2026, 10, 22))                    # 4 is not
+            self.assertIn("WARNING", warn)
+            self.assertIn("SKIPPED", warn)
+            self.assertIsNone(self.m.check_too_many_snapshots(_dt.date(2026, 10, 21)))       # other day: nothing
+        finally:
+            self.m.BACKUP_ROOT = old
+            shutil.rmtree(root, ignore_errors=True)
 
     def test_snapshot_rows_and_chaining(self):
         m = self.m
