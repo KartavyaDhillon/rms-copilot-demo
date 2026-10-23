@@ -52,9 +52,44 @@ def conn_key(group: str, field: str) -> str:
     return f"SCHED_{group.upper()}_{field.upper()}"
 
 
+def one_line(v) -> str:
+    """A value must live on ONE line of the .env file (a multi-line value breaks the in-place edits and the
+    parser).  Lists typed one-per-line (client codes) become comma separated: 'A,\\n B' -> 'A,B'."""
+    t = str(v)
+    if "\n" in t or "\r" in t:
+        t = re.sub(r"[ \t]*[\r\n]+[ \t]*", ",", t)
+        t = re.sub(r",\s*(?:,\s*)+", ",", t).strip().strip(",").strip()
+    return t
+
+
 def quote(v) -> str:
     """Single-quoted .env value (python-dotenv understands \\\\ and \\' inside)."""
-    return "'" + str(v).replace("\\", "\\\\").replace("'", "\\'") + "'"
+    return "'" + one_line(v).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _entry_end(lines, i) -> int:
+    """Index of the LAST line of the entry that starts at lines[i] (an old multi-line quoted value spans several)."""
+    m = _KEY.match(lines[i])
+    if not m:
+        return i
+    rest = lines[i][m.end():].strip()
+    if rest[:1] not in ("'", '"'):
+        return i
+    q, j, text = rest[0], i, rest[1:]
+    while True:
+        k, closed = 0, False
+        while k < len(text):
+            if text[k] == "\\":
+                k += 2
+                continue
+            if text[k] == q:
+                closed = True
+                break
+            k += 1
+        if closed or j + 1 >= len(lines):
+            return j
+        j += 1
+        text = lines[j]
 
 
 def write(path: Path, section: str, updates: Dict[str, str]):
@@ -69,11 +104,18 @@ def write(path: Path, section: str, updates: Dict[str, str]):
         except FileNotFoundError:
             lines = []
         seen = set()
-        for i, ln in enumerate(lines):
-            m = _KEY.match(ln)
-            if m and m.group(1) in updates:
-                lines[i] = f"{m.group(1)}={quote(updates[m.group(1)])}"
-                seen.add(m.group(1))
+        i = 0
+        while i < len(lines):
+            m = _KEY.match(lines[i])
+            if m:
+                end = _entry_end(lines, i)
+                if m.group(1) in updates:
+                    lines[i:end + 1] = [f"{m.group(1)}={quote(updates[m.group(1)])}"]   # also drops old continuation lines
+                    seen.add(m.group(1))
+                    end = i
+                i = end + 1
+            else:
+                i += 1
         new = [k for k in updates if k not in seen]
         if new:
             block = [f"{k}={quote(updates[k])}" for k in new]
@@ -85,10 +127,10 @@ def write(path: Path, section: str, updates: Dict[str, str]):
             else:
                 j = hi + 1
                 while j < len(lines) and _KEY.match(lines[j]):
-                    j += 1
+                    j = _entry_end(lines, j) + 1
                 lines[j:j] = block
         tmp = Path(str(path) + ".tmp")
         tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
         os.replace(tmp, path)
     for k, v in updates.items():                         # live: no restart needed
-        os.environ[k] = str(v)
+        os.environ[k] = one_line(v)

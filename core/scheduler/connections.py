@@ -27,9 +27,9 @@ GROUPS: Dict[str, dict] = {
             ("template_lang", "Template language", False, "en"),
             # Global FAILURE ALERT (core/scheduler/failure_alert.py): when ANY scheduled process fails for good,
             # a warning image is WhatsApp'd to these numbers.
-            ("alert_switch", "Failure alert to WhatsApp (on / off)", False, "on"),
-            ("alert_numbers", "Failure alert - WhatsApp numbers (comma separated, with country code)", False, ""),
-            ("alert_template", "Failure alert - template name (blank = the template above)", False, ""),
+            ("alert_switch", "Send failure alerts (on / off)", False, "on"),
+            ("alert_numbers", "COMMON WhatsApp numbers (used by every process that has no numbers of its own)", False, ""),
+            ("alert_template", "Alert template name (blank = same as above)", False, ""),
         ],
     },
     "smtp": {

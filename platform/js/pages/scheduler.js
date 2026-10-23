@@ -778,14 +778,32 @@
   const UPLOAD_SWITCH_OWNER = { upload_enabled: "rms_limits_mand_kambala", upload_above4cr: "above_4cr_holding_blocking_file" };
   function connGroupHtml(g, canEdit, pkey) {
     g = { ...g, fields: g.fields.filter((f) => !UPLOAD_SWITCH_OWNER[f.name] || UPLOAD_SWITCH_OWNER[f.name] === pkey) };
-    return '<div class="card" style="margin-bottom:12px" data-g="' + g.group + '"><div class="sec-head"><h3>' + esc(g.label) + "</h3></div>" +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">' +
-      g.fields.map((f) => field(esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge ' + (f.optional ? "dim\">optional" : "warn\">not set") + "</span>") : ""),
-        (/^upload_/.test(f.name)
-          ? '<select class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '"' + (canEdit ? "" : " disabled") + '><option value="no"' + (String(f.value).toLowerCase() === "yes" ? "" : " selected") + '>OFF — only e-mail the file</option><option value="yes"' + (String(f.value).toLowerCase() === "yes" ? " selected" : "") + ">ON — e-mail and upload to Kambala</option></select>"
-          : '<input class="f-input" style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '" ' +
-        (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') + (canEdit ? "" : " disabled") + ">"))).join("") +
-      "</div>" + (canEdit ? '<div style="margin-top:8px"><button class="btn primary" data-save="' + g.group + '">Save ' + esc(g.label) + "</button></div>" : "") + "</div>";
+    const ALERT = /^alert_/;                                   // the WhatsApp failure-alert fields get their own box
+    const one = (f) => {
+      const lab = esc(f.label) + (f.secret ? (f.set ? ' <span class="badge ok">set ' + esc(f.hint) + "</span>" : ' <span class="badge ' + (f.optional ? "dim\">optional" : "warn\">not set") + "</span>") : "");
+      const dis = canEdit ? "" : " disabled", st = 'style="width:100%;height:42px;box-sizing:border-box" data-f="' + f.name + '"';
+      if (UPLOAD_SWITCH_OWNER[f.name]) {                       // Kambala ON/OFF switch (only these two fields, NOT upload_url)
+        const yes = String(f.value).toLowerCase() === "yes";
+        return field(lab, '<select class="f-input" ' + st + dis + '><option value="no"' + (yes ? "" : " selected") + '>OFF — only e-mail the file</option><option value="yes"' + (yes ? " selected" : "") + ">ON — e-mail and upload to Kambala</option></select>");
+      }
+      if (f.name === "alert_switch") {
+        const off = String(f.value).toLowerCase() === "off";
+        return field(lab, '<select class="f-input" ' + st + dis + '><option value="on"' + (off ? "" : " selected") + '>on</option><option value="off"' + (off ? " selected" : "") + ">off</option></select>");
+      }
+      return field(lab, '<input class="f-input" ' + st + " " + (f.secret ? 'type="password" autocomplete="new-password" placeholder="' + (f.set ? "(unchanged)" : "enter value") + '"' : 'value="' + esc(f.value || "") + '"') + dis + ">");
+    };
+    const GRID = '<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 10px;align-items:start">';
+    const main = g.fields.filter((f) => !ALERT.test(f.name)), alert = g.fields.filter((f) => ALERT.test(f.name));
+    let body = GRID + main.map(one).join("") + "</div>";
+    if (alert.length) {
+      const num = alert.find((f) => f.name === "alert_numbers"), rest = alert.filter((f) => f !== num);
+      body += '<div style="margin-top:14px;padding:12px;border:1px solid var(--border,#2a3142);border-radius:10px">' +
+        '<div style="font-weight:700;margin-bottom:4px">⚠ Failure alerts on WhatsApp — COMMON numbers</div>' +
+        '<div class="card-sub" style="margin-bottom:10px">Type the numbers here ONCE (with country code, e.g. 919812345678, separated by commas). Every process that has no numbers of its own sends its failure alert to these. A process that has its own numbers (📱 WhatsApp button on its row) uses only those.</div>' +
+        (num ? '<div style="margin-bottom:10px">' + one(num) + "</div>" : "") + GRID + rest.map(one).join("") + "</div></div>";
+    }
+    return '<div class="card" style="margin-bottom:12px" data-g="' + g.group + '"><div class="sec-head"><h3>' + esc(g.label) + "</h3></div>" + body +
+      (canEdit ? '<div style="margin-top:10px"><button class="btn primary" data-save="' + g.group + '">Save ' + esc(g.label) + "</button></div>" : "") + "</div>";
   }
 
   function bindConnSave(root, after) {
