@@ -2,7 +2,7 @@
 
     1. (optional) Safe test run  -> every e-mail / WhatsApp goes to the tester only, backup skipped
     2. check that all inputs exist and print WHICH files this run will use
-    3. copy the latest CTCL vs NMASS output + today's RISK_REPORT into INPUT  (read-only copies - the originals stay)
+    3. copy the latest CTCL vs NMASS output into INPUT (the original stays); the RISK_REPORT is read from COMMON FILES as it is
     4. physdel_codes.ltp   (NIFTY 500 prices, CASH % from the Run popup)  -> PositionBook_With_LTP.xlsx
     5. physdel_codes.send  (branch / region / zone mails, client WhatsApp, ALERT 1 CR, logs, backup)
 
@@ -86,9 +86,13 @@ def run_physical_delivery():
 
     ok = False
     try:
-        _line("[FRIENDLY_MSG] Copying the CTCL vs NMASS output and today's risk report")
+        _line("[FRIENDLY_MSG] Copying the CTCL vs NMASS output")
         _stage(rep["ctcl"]["path"], C.input_dir(), "FULL_FILE_CTCL_VS_NMASS*")
-        _stage(rep["risk"]["path"], C.input_dir(), "RISK_REPORT_*.csv")
+        for old in glob.glob(os.path.join(C.input_dir(), "RISK_REPORT_*.csv")):   # a stale copy from an older version must not be used
+            try:
+                os.remove(old)
+            except OSError:
+                pass
 
         _line("[FRIENDLY_MSG] Getting NIFTY 500 prices and building the position report")
         from core.pipelines.physdel_codes import ltp

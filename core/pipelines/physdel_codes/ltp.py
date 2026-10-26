@@ -41,10 +41,7 @@ POSITIONBOOK_CSV = os.path.join(
     "PositionBook.csv"
 )
 
-RISK_REPORT_FILE = os.path.join(
-    INPUT_FOLDER,
-    f"RISK_REPORT_{datetime.now().strftime('%d%m%Y')}.csv"
-)
+RISK_REPORT_FILE = C.risk_report_path()      # read straight from COMMON FILES - never copied or backed up here
 
 BRM_XLSX_FILE = os.path.join(
     MAIN_FOLDER,

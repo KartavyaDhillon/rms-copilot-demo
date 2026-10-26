@@ -186,6 +186,15 @@ def risk_report(today: Optional[dt.date] = None) -> Optional[dict]:
     return None
 
 
+def risk_report_path(today: Optional[dt.date] = None) -> str:
+    """Full path of today's RISK_REPORT in COMMON FILES (the file is used where it is - not copied, not backed up)."""
+    r = risk_report(today)
+    if r:
+        return r["path"]
+    today = today or dt.date.today()
+    return os.path.join(common_dir(), f"RISK_REPORT_{today:%d%m%Y}.csv")
+
+
 def positionbook_max_minutes() -> int:
     try:
         return max(1, int(os.getenv("PD_POSITIONBOOK_MAX_MIN", "15")))

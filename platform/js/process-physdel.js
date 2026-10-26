@@ -78,22 +78,21 @@
       (d.last_run ? '<br><span style="color:var(--dim)">Last run ' + esc(dmy(d.last_run.date)) + ' ' + esc(d.last_run.time) + (d.last_run.ok ? ' — ok' : ' — with errors') + (d.last_run.test ? ' (test)' : '') + ', CASH ' + esc(d.last_run.percent) + '%</span>' : '') + '</div>';
     if (st.armed) h += '<div style="margin-bottom:12px;padding:9px 12px;border-radius:9px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fbbf24;font-size:12.5px;font-weight:700">🧪 SAFE TEST ARMED — the next Run sends only to ' + esc((st.email_to || []).join(', ')) + ' / ' + esc(st.wa_to || '') + '. It switches itself off after that run.</div>';
     h += '<div style="margin:0 0 12px;padding:10px 12px;border:1px dashed var(--line-2);border-radius:10px">' + filesHtml(d) + '</div>';
-    if (miss.length) h += '<div style="color:var(--red);font-size:12px;margin:0 0 12px">The run will stop at once because:<br>• ' + miss.map(esc).join('<br>• ') + '</div>';
     return h;
   }
   function pdOpen() {
     window._saReturn = null;
     var INP = 'style="background:transparent;border:1px solid var(--line-2);border-radius:8px;color:var(--ink);padding:7px 9px;font-size:12.5px;font-family:inherit;width:110px"';
     modal(TITLE,
-      '<div style="display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px">' +
-        '<button class="sa-tool" onclick="pdSub(function(){pxConfig(\'physdel\')})">✉️ Email To / CC</button>' +
-        '<button class="sa-tool" onclick="pdSub(pdWa)">📱 WhatsApp numbers</button>' +
-        '<button class="sa-tool" onclick="pdSub(function(){pxCredentials(\'physdel\')})">🔑 Credentials</button>' +
-        '<button class="sa-tool" onclick="pdSub(pdUpload)">⬆️ Upload files</button>' +
-        '<button class="sa-tool" onclick="pdSub(function(){pxBackup(\'physdel\')})">📦 Backup files</button>' +
-        '<button class="sa-tool" onclick="pdSub(function(){pxLogs(\'physdel\')})">🗂️ Logs</button>' +
-        '<button class="sa-tool" onclick="pdSub(pdSafeTest)">🧪 Safe test run</button>' +
-        '<button class="sa-tool" onclick="pdStop()" style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>' +
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 14px">' +
+        '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap" onclick="pdSub(function(){pxConfig(\'physdel\')})">✉️ Email To / CC</button>' +
+        '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap" onclick="pdSub(pdWa)">📱 WhatsApp numbers</button>' +
+        '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap" onclick="pdSub(function(){pxCredentials(\'physdel\')})">🔑 Credentials</button>' +
+        '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap" onclick="pdSub(pdUpload)">⬆️ Upload files</button>' +
+        '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap" onclick="pdSub(function(){pxBackup(\'physdel\')})">📦 Backup files</button>' +
+        '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap" onclick="pdSub(function(){pxLogs(\'physdel\')})">🗂️ Logs</button>' +
+        '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap" onclick="pdSub(pdSafeTest)">🧪 Safe test run</button>' +
+        '<button class="sa-tool" onclick="pdStop()" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap;border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>' +
       '</div>' +
       '<div id="pdDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>' +
       '<button id="pdRunBtn" onclick="pdAskPct()" style="width:100%;border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">▶ Run PHYSICAL DELIVERY</button>' +
