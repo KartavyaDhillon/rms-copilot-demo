@@ -61,10 +61,24 @@ class PhysDel(unittest.TestCase):
 
     def test_positionbook_newest(self):
         inp = C.input_dir()
-        _touch(os.path.join(inp, "PositionBook_old.csv"), 1_000_000)
-        _touch(os.path.join(inp, "PositionBook_new.xlsx"), 2_000_000)
-        _touch(os.path.join(inp, "Other.csv"), 3_000_000)
+        import time as _t
+        now = _t.time()
+        _touch(os.path.join(inp, "PositionBook_old.csv"), now - 300)
+        _touch(os.path.join(inp, "PositionBook_new.xlsx"), now - 60)
+        _touch(os.path.join(inp, "Other.csv"), now)
         self.assertTrue(C.positionbook().endswith("PositionBook_new.xlsx"))
+
+    def test_positionbook_older_than_15_minutes_is_never_picked(self):
+        import time as _t
+        p = os.path.join(C.input_dir(), "PositionBook.csv")
+        _touch(p, _t.time() - 16 * 60)
+        self.assertIsNone(C.positionbook())
+        self.assertIsNone(C.positionbook_info())
+        self.assertEqual(C.positionbook_stale()["max_min"], 15)
+        self.assertTrue(any("min old" in m for m in C.missing_inputs()))
+        _touch(p, _t.time() - 5 * 60)
+        self.assertTrue(C.positionbook())
+        self.assertIsNone(C.positionbook_stale())
 
     def test_missing_inputs_lists_everything(self):
         m = C.missing_inputs()

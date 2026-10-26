@@ -185,17 +185,42 @@ def risk_report(today: Optional[dt.date] = None) -> Optional[dict]:
     return None
 
 
-def positionbook() -> Optional[str]:
-    """Newest PositionBook*.csv / PositionBook*.xlsx in the INPUT folder (full path) or None."""
+def positionbook_max_minutes() -> int:
+    try:
+        return max(1, int(os.getenv("PD_POSITIONBOOK_MAX_MIN", "15")))
+    except ValueError:
+        return 15
+
+
+def _newest_positionbook() -> Optional[str]:
     d = Path(input_dir())
     try:
         cands = [d / f for f in os.listdir(d)
                  if re.fullmatch(r"positionbook.*\.(csv|xlsx)", f, re.I) and not f.startswith("~$")]
     except OSError:
         return None
-    if not cands:
+    return str(max(cands, key=lambda p: p.stat().st_mtime)) if cands else None
+
+
+def positionbook(now: Optional[float] = None) -> Optional[str]:
+    """Newest PositionBook*.csv / *.xlsx in INPUT - but ONLY if it was saved in the last 15 minutes
+    (PD_POSITIONBOOK_MAX_MIN).  A PositionBook is a live snapshot; an older one is never picked."""
+    p = _newest_positionbook()
+    if not p:
         return None
-    return str(max(cands, key=lambda p: p.stat().st_mtime))
+    import time
+    age_min = ((now if now is not None else time.time()) - os.path.getmtime(p)) / 60.0
+    return p if age_min <= positionbook_max_minutes() else None
+
+
+def positionbook_stale() -> Optional[dict]:
+    """The newest PositionBook when it exists but is too old to use (else None) - so the screen can say why."""
+    p = _newest_positionbook()
+    if not p or positionbook():
+        return None
+    mt = os.path.getmtime(p)
+    return {"name": os.path.basename(p), "mtime": dt.datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
+            "age_min": int((dt.datetime.now().timestamp() - mt) // 60), "max_min": positionbook_max_minutes()}
 
 
 def positionbook_info() -> Optional[dict]:
@@ -204,7 +229,7 @@ def positionbook_info() -> Optional[dict]:
         return None
     return {"path": p, "name": os.path.basename(p),
             "mtime": dt.datetime.fromtimestamp(os.path.getmtime(p)).isoformat(timespec="seconds"),
-            "where": "uploaded (INPUT folder)"}
+            "where": f"uploaded (INPUT folder), must be under {positionbook_max_minutes()} min old"}
 
 
 MASTER_FILES = [      # (label, accepted names - first one that exists is used)
@@ -227,7 +252,7 @@ def master_status() -> List[dict]:
 
 def inputs_report(today: Optional[dt.date] = None) -> dict:
     """Everything the next run will use, in plain terms - shown on the card and printed at the start of a run."""
-    return {"positionbook": positionbook_info(), "ctcl": pick_ctcl_file(), "risk": risk_report(today),
+    return {"positionbook": positionbook_info(), "positionbook_stale": positionbook_stale(), "ctcl": pick_ctcl_file(), "risk": risk_report(today),
             "masters": master_status(), "percent": get_percent(),
             "folders": {"base": base(), "input": input_dir(), "master": main_dir(),
                         "common": common_dir(), "ctcl_backup": os.path.join(ctcl_base(), "BACKUPFILES AUTOMATED")}}
@@ -237,7 +262,12 @@ def missing_inputs(rep: Optional[dict] = None) -> List[str]:
     rep = rep or inputs_report()
     miss: List[str] = []
     if not rep["positionbook"]:
-        miss.append(f"PositionBook (upload it with 'Upload files' - expected in {input_dir()})")
+        st = rep.get("positionbook_stale")
+        if st:
+            miss.append(f"PositionBook '{st['name']}' is {st['age_min']} min old - only a file saved in the last "
+                        f"{st['max_min']} minutes is used. Upload a fresh PositionBook with 'Upload files'.")
+        else:
+            miss.append(f"PositionBook (upload it with 'Upload files' - expected in {input_dir()})")
     if not rep["ctcl"]:
         miss.append("CTCL vs NMASS output FULL_FILE_CTCL_VS_NMASS_<NN>.xlsx (no CTCL vs NMASS backup has it yet)")
     if not rep["risk"]:

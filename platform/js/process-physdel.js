@@ -59,11 +59,12 @@
   function filesHtml(d) {
     var i = d.inputs || {};
     var h = '<div style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:0 0 4px">Files the next run will use</div>';
-    h += fileRow('PositionBook', i.positionbook, 'not uploaded yet — use Upload files');
+    var st = i.positionbook_stale;
+    h += fileRow('PositionBook', i.positionbook, st ? (st.name + ' is ' + st.age_min + ' min old — only the last ' + st.max_min + ' minutes are used. Upload a fresh one.') : 'not uploaded yet — use Upload files');
     h += fileRow('CTCL vs NMASS output', i.ctcl, 'no CTCL vs NMASS backup found');
     h += fileRow('Risk report', i.risk, 'today\'s RISK_REPORT missing — use Upload Common Files (top of page)');
-    (i.masters || []).forEach(function (m) {
-      h += fileRow('Master — ' + m.label, m.present ? { name: m.name, where: 'master files', mtime: m.mtime } : null, m.name + ' missing — upload under Upload files › Master files');
+    (i.masters || []).forEach(function (m) {            // master files are shown only when one is missing
+      if (!m.present) h += fileRow('Master — ' + m.label, null, m.name + ' missing — upload under Upload files › Master files');
     });
     return h;
   }
