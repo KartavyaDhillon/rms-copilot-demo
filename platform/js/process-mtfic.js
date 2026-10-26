@@ -131,14 +131,14 @@
       '<div style="display:flex;gap:8px">' + runBtn + '</div>' +
       stepsHtml(p, running) + '<div style="font-size:11px;color:var(--dim);min-height:15px">' + line + '</div>' + msg;
     var html =
-      '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Checks today\'s MTF trades against NSE\'s security-category impact-cost file. One folder for everything: <span style="font-family:var(--mono);color:var(--dim)">' + esc(d.folder) + '</span></div>' +
-      (finished ? doneBanner : workPart) +
-      '<div style="font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:12px 0 6px">' + (finished ? "Today's result" : 'Last result') + '</div>' + resultHtml(d.last) +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
       '<button class="sa-tool" onclick="pxCredentials(\'mtfic\')" data-tip="WhatsApp token and numbers">&#128273; Credentials</button>' +
       '<button class="sa-tool" onclick="pxBackup(\'mtfic\')" data-tip="Browse past runs: every file used and generated is kept here">&#128230; Backup files</button>' +
       '<button class="sa-tool" onclick="pxLogs(\'mtfic\')" data-tip="Full saved output of past runs">&#128450;&#65039; Logs</button></div>' +
-      '<div style="font-size:10px;color:var(--dim);margin-top:8px">After a completed run the TradeBook, NSE file, Excel and image are backed up and removed from the folder. HOLDING in COMMON FILES is never touched.</div>';
+      '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">Checks today\'s MTF trades against NSE\'s security-category impact-cost file. One folder for everything: <span style="font-family:var(--mono);color:var(--dim)">' + esc(d.folder) + '</span></div>' +
+      (finished ? doneBanner : workPart) +
+      '<div style="font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:12px 0 6px">' + (finished ? "Today's result" : 'Last result') + '</div>' + resultHtml(d.last) +
+      '<div style="font-size:10px;color:var(--dim);margin-top:14px">After a completed run the TradeBook, NSE file, Excel and image are backed up and removed from the folder. HOLDING in COMMON FILES is never touched.</div>';
     var body = document.getElementById('saModalBody');
     if (body) body.innerHTML = html;
   }
