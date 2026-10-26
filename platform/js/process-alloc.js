@@ -5,7 +5,7 @@
   'use strict';
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var TITLE = 'Allocation Report';
-  var S = { mode: 'sofar', until: '15:00', fd: '', ft: '10:00', td: '', tt: '14:30', clients: [], deliver: 'download',
+  var S = { mode: 'sofar', until: '15:00', fd: '', ft: '10:00', td: '', tt: '14:30', clients: [], deliver: 'mail',
             mailto: '', data: null, busy: false, msg: '', msgKind: '', timer: null, ctl: null };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
@@ -83,7 +83,6 @@
       x.style.color = on ? 'var(--ink)' : 'var(--muted)';
       x.style.fontWeight = on ? '650' : '400';
     });
-    $('allocMail').style.display = S.deliver === 'mail' ? 'block' : 'none';
   }
   function paintChips() {
     var c = $('allocChips'); if (!c) return;
@@ -119,9 +118,7 @@
       '<div id="allocChips"></div>' +
       '<input type="text" id="allocCC" placeholder="Type a code and press Enter, or paste several" ' + INPW + ' onkeydown="allocKey(event)" onpaste="setTimeout(allocAdd,0)">' +
       '<div style="font-size:10.5px;color:var(--dim);margin-top:6px">Applies to every sheet of the report. Codes with no record in the window are listed after the run.</div></div>' +
-      '<div style="border-top:1px solid var(--line);padding-top:12px;margin-top:14px">' + lbl('Delivery') +
-      seg('allocSeg2', [['download', 'Download only'], ['mail', 'E-mail to']], S.deliver, 'allocDeliver') +
-      '<div id="allocMail" style="display:none;margin-top:10px"><input type="text" id="allocMailIn" value="' + esc(S.mailto) + '" placeholder="Leave blank to send to the saved Email To / CC, or type other addresses" ' + INPW + ' oninput="allocSet(\'mailto\',this.value)"></div></div>' +
+      '<div style="font-size:11.5px;color:var(--dim);margin-top:14px">The report is e-mailed to the saved <b style="color:var(--ink)">Email To / CC</b> when it finishes, and can also be downloaded below.</div>' +
       '<div id="allocBtnRow" style="display:flex;gap:8px;margin-top:16px"></div>' +
       '<div id="allocLive" style="font-size:11.5px;min-height:18px;margin-top:10px"></div>' +
       '<div id="allocResult"></div>';
@@ -265,7 +262,7 @@
     }
     if (S.deliver === 'mail') {
       // blank is fine: the report then goes to the saved Email To / CC (the server says so if none is saved)
-      q += '&mailto=' + encodeURIComponent(S.mailto);
+      q += '&mailto=';
     }
     S.busy = true; setMsg('', '');
     var ctl = new AbortController(); S.ctl = ctl;
