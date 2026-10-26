@@ -54,7 +54,8 @@ def _run_payout_download_impl():
     today = datetime.today().strftime("%Y-%m-%d")
     print("Today's Date:", today)
 
-    BASE       = os.getenv("KORP_BASE_URL", "http://boapi.mastertrust.co.in:15000")
+    from core import korp_api
+    BASE       = korp_api.pick_base()      # main address, or the spare one if the main does not answer
     USERNAME   = os.getenv("KORP_USERNAME")
     PASSWORD   = os.getenv("KORP_PASSWORD")
     CLIENT_IP  = os.getenv("KORP_CLIENT_IP")
@@ -70,7 +71,7 @@ def _run_payout_download_impl():
 
     print("=" * 35); print("STEP 1 - Getting Session Key"); print("=" * 35)
     r = requests.get(f"{BASE}/api/Common/SessionKey/Get", timeout=30)
-    session_key = r.text.replace('"', '')
+    session_key = korp_api.parse_session_key(r.text)
     print("Session Key:", session_key)
 
     print("\nSTEP 2 - Encrypting Password")

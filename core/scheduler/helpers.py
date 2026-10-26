@@ -396,6 +396,36 @@ def kambala_upload(files: Iterable[Path], ctx) -> bool:
 
 
 # ───────────────────────── WhatsApp (Tata Tele Omni) ─────────────────────────
+WHATSAPP_IMAGE_MAX = 4_500_000      # WhatsApp refuses pictures over 5 MB ("File too large"); stay safely under
+
+
+def fit_for_whatsapp(image: Path, ctx=None) -> Path:
+    """Return a picture WhatsApp will accept: the same file when it is small enough, otherwise a shrunken JPEG copy
+    (made smaller step by step until it is under the limit). The original file is never changed."""
+    image = Path(image)
+    try:
+        if image.stat().st_size <= WHATSAPP_IMAGE_MAX:
+            return image
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        im = Image.open(image).convert("RGB")
+        small = image.with_name(image.stem + "_wa.jpg")
+        scale, quality = 1.0, 85
+        for _ in range(8):
+            w, h = max(1, int(im.width * scale)), max(1, int(im.height * scale))
+            im.resize((w, h), Image.LANCZOS).save(small, "JPEG", quality=quality, optimize=True)
+            if small.stat().st_size <= WHATSAPP_IMAGE_MAX:
+                if ctx:
+                    ctx.log(f"Picture was too big for WhatsApp ({image.stat().st_size // 1024} KB) — shrunk to {small.stat().st_size // 1024} KB.")
+                return small
+            scale *= 0.75
+            quality = max(60, quality - 5)
+    except Exception as e:                     # fall back to the original; WhatsApp will then say why
+        if ctx:
+            ctx.log(f"Could not shrink the picture ({type(e).__name__}: {e}) — sending it as it is.")
+    return image
+
+
 def whatsapp_send_image(image: Path, to: str, label: str, date_text: str, ctx,
                         attempts: int = 4, delay: float = 15.0, template_extra: Optional[list] = None,
                         template_name: Optional[str] = None):
@@ -423,6 +453,8 @@ def whatsapp_send_image(image: Path, to: str, label: str, date_text: str, ctx,
             if i < attempts:
                 time.sleep(delay)
         raise RuntimeError(f"WhatsApp {fn_desc} failed after {attempts} tries — {last}")
+
+    image = fit_for_whatsapp(image, ctx)
 
     def up():
         with open(image, "rb") as fh:

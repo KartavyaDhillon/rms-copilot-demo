@@ -77,7 +77,7 @@ MCX_USERNAME  = os.getenv("MCX_USERNAME", "56720")
 MCX_PASSWORDS = [p.strip() for p in os.getenv("MCX_PASSWORDS", "M56720@123,M56720@789").split(",") if p.strip()]
 
 # ── EPI credentials (reuse KORP keys) ──────────────────────────────────────
-EPI_BASE       = os.getenv("KORP_BASE_URL",   "http://boapi.mastertrust.co.in:15000")
+EPI_BASE       = os.getenv("KORP_BASE_URL",   "https://boapi.mastertrust.co.in")   # replaced at run time by core.korp_api.pick_base()
 EPI_USERNAME   = os.getenv("KORP_USERNAME")
 EPI_PASSWORD   = os.getenv("KORP_PASSWORD")
 EPI_CLIENT_IP  = os.getenv("KORP_CLIENT_IP")
@@ -527,8 +527,10 @@ def download_epi_file(trade_date):
     if is_epi_file_present(): print("⏭️ EPI file already exists — skipping"); return
     print("\n📦 STARTING EPI DOWNLOAD...\n")
     epi_session = requests.Session()
+    from core import korp_api
+    EPI_BASE = korp_api.pick_base()      # main address, or the spare one if the main does not answer
     r = epi_session.get(f"{EPI_BASE}/api/Common/SessionKey/Get", timeout=30)
-    session_key = r.text.replace('"', '')
+    session_key = korp_api.parse_session_key(r.text)
     cipher = AES.new(session_key.encode(), AES.MODE_CBC, session_key.encode())
     encrypted_password = base64.b64encode(cipher.encrypt(pad(EPI_PASSWORD.encode(), 16))).decode()
     payload = {"CallFrom": "FINKORP", "UserName": EPI_USERNAME, "Password": encrypted_password,

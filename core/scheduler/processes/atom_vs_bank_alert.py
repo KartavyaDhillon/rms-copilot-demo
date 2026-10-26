@@ -137,9 +137,10 @@ def fetch_bank(out_dir, ctx):
     from cryptography.hazmat.primitives import padding
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     c = connections.require("backoffice", "base_url", "username", "password", "client_ip", "client_mac")
-    base = c["base_url"].rstrip("/")
+    from core import korp_api
+    base = korp_api.pick_base(c["base_url"], log=ctx.log)      # the saved address first, then main / spare
     s = requests.Session()
-    key = s.get(f"{base}/api/Common/SessionKey/Get", timeout=30).text.replace('"', "").encode()
+    key = korp_api.parse_session_key(s.get(f"{base}/api/Common/SessionKey/Get", timeout=30).text).encode()
     pdr = padding.PKCS7(128).padder()
     enc = Cipher(algorithms.AES(key), modes.CBC(key)).encryptor()
     pw = base64.b64encode(enc.update(pdr.update(c["password"].encode()) + pdr.finalize()) + enc.finalize()).decode()
@@ -203,7 +204,12 @@ def _status(row, pd):
     return OK
 
 
+MAX_IMAGE_ROWS = 30        # a picture with hundreds of rows is unreadable and too big for WhatsApp (5 MB limit)
+
+
 def _alert_image(df, path):
+    total = len(df)
+    df = df.head(MAX_IMAGE_ROWS)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -225,7 +231,10 @@ def _alert_image(df, path):
             cell.set_facecolor("#FFCCCC" if "❌" in txt else "#FFF2CC" if "⚠" in txt else "#CCFFCC")
         cell.set_edgecolor("black")
         cell.set_linewidth(1.5)
-    fig.savefig(path, bbox_inches="tight", dpi=200)
+    if total > len(df):
+        fig.text(0.5, 0.01, f"Showing the first {len(df)} of {total} rows - the full list is in the e-mailed report.",
+                 ha="center", fontsize=11, color="#B00000", weight="bold")
+    fig.savefig(path, bbox_inches="tight", dpi=150)
     plt.close(fig)
 
 

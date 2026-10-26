@@ -45,7 +45,7 @@ load_dotenv()
 CONCENTRATION_FOLDER = os.getenv("CONCENTRATION_FOLDER", r"D:\CONCENTRATION")
 
 # ---- KORP credentials ----
-KORP_BASE_URL  = os.getenv("KORP_BASE_URL", "http://boapi.mastertrust.co.in:15000")
+KORP_BASE_URL  = os.getenv("KORP_BASE_URL", "https://boapi.mastertrust.co.in")   # main address; the spare is tried by core.korp_api
 KORP_USERNAME  = os.getenv("KORP_USERNAME")
 KORP_PASSWORD  = os.getenv("KORP_PASSWORD")
 KORP_CLIENT_IP = os.getenv("KORP_CLIENT_IP")
@@ -238,7 +238,8 @@ def download_concentration_files():
     # CONFIGURATION
     # ===================================================
 
-    BASE = os.getenv("KORP_BASE_URL", "http://boapi.mastertrust.co.in:15000")
+    from core import korp_api
+    BASE = korp_api.pick_base()          # main address, or the spare one if the main does not answer
 
     USERNAME = os.getenv("KORP_USERNAME")
     PASSWORD = os.getenv("KORP_PASSWORD")
@@ -300,7 +301,7 @@ def download_concentration_files():
             timeout=30
         )
 
-        session_key = r.text.replace('"', '')
+        session_key = korp_api.parse_session_key(r.text)
 
         print("Session Key:", session_key)
 

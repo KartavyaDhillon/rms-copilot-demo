@@ -146,7 +146,7 @@ GROUPS: Dict[str, dict] = {
     "backoffice": {
         "label": "Back-office API (Bank alerts)",
         "fields": [
-            ("base_url", "API address", False, "http://boapi.mastertrust.co.in:15000"),
+            ("base_url", "API address", False, "https://boapi.mastertrust.co.in"),
             ("username", "User name", False, ""),
             ("password", "Password", True, ""),
             ("client_ip", "Client IP sent with login", False, ""),

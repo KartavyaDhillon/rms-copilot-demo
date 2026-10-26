@@ -95,9 +95,7 @@
         '<button class="sa-tool" onclick="pdStop()" style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>' +
       '</div>' +
       '<div id="pdDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>' +
-      lbl('CASH % (how much the price is moved up / down)') +
-      '<div style="margin:0 0 14px"><input id="pdPct" type="number" step="0.1" min="0.1" max="100" value="' + esc((S.d || {}).percent || 2) + '" ' + INP + ' onkeydown="if(event.keyCode===13)pdStart()"> <span style="color:var(--dim);font-size:12px">%</span></div>' +
-      '<button id="pdRunBtn" onclick="pdStart()" style="width:100%;border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">▶ Run PHYSICAL DELIVERY</button>' +
+      '<button id="pdRunBtn" onclick="pdAskPct()" style="width:100%;border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">▶ Run PHYSICAL DELIVERY</button>' +
       '<div class="sa-msg" id="pdRunMsg"></div>' +
       '<div class="sa-status" id="pxStatus-physdel" style="margin-top:12px">' + '<div id="pdSteps">' + stepsHtml() + '</div><div id="pxEvents-physdel"></div>' + (!S.running && !S.steps.length ? '<div class="sa-status-empty">Run status appears here. The full output is saved in Logs.</div>' : '') + '</div>');
     paintDyn();
@@ -136,14 +134,32 @@
   }
 
   // ───────────────────────── Run ─────────────────────────
+  // The CASH % is asked in a popup every time Run is pressed - nobody can forget to fill it.
+  window.pdAskPct = function () {
+    if (S.running) return;
+    var last = (S.d || {}).percent, armed = ((S.d || {}).safe_test || {}).armed;
+    window._saReturn = pdOpen;
+    modal('CASH % for this run',
+      '<div style="padding:16px;border-radius:14px;border:2px solid var(--amber);background:rgba(251,191,36,.08);margin-bottom:14px">' +
+        '<div style="font-size:15px;font-weight:700;color:var(--amber);margin-bottom:4px">Enter the CASH % for this run</div>' +
+        '<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">How much the price is moved up / down. Last run used <b style="color:var(--ink)">' + esc(last) + '%</b>.</div>' +
+        '<div style="display:flex;gap:10px;align-items:center"><input id="pdPct" type="number" step="0.1" min="0.1" max="100" placeholder="e.g. 2" ' +
+          'style="flex:1;font-size:26px;font-weight:700;text-align:center;padding:12px;border-radius:12px;border:2px solid var(--amber);background:transparent;color:var(--ink)" onkeydown="if(event.keyCode===13)pdStart()">' +
+          '<span style="font-size:26px;font-weight:700;color:var(--amber)">%</span></div>' +
+        '<div style="margin-top:10px"><button class="sa-tool" onclick="document.getElementById(\'pdPct\').value=' + esc(last) + '">Use last value (' + esc(last) + '%)</button></div>' +
+      '</div>' +
+      (armed ? '<div style="margin-bottom:12px;color:#fbbf24;font-size:12.5px;font-weight:700">🧪 Safe test is armed — this run sends only to the test address.</div>' : '') +
+      '<button onclick="pdStart()" style="width:100%;border:0;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">' + (armed ? '🧪 Start test run' : '▶ Start run') + '</button>' +
+      '<div class="sa-msg" id="pdRunMsg"></div>');
+    setTimeout(function () { var e = $('pdPct'); if (e) e.focus(); }, 60);
+  };
   window.pdStart = function () {
     if (S.running) return;
     var v = ($('pdPct') || {}).value, msg = $('pdRunMsg');
     if (msg) msg.innerHTML = '<span style="color:var(--muted)">Starting…</span>';
     jpost('/pd/percent?value=' + encodeURIComponent(v || '')).then(function (r) {
       if (!r.ok) { if (msg) msg.innerHTML = '<span style="color:var(--red)">' + esc(r.error || 'Enter a number like 2') + '</span>'; return; }
-      if (msg) msg.innerHTML = '';
-      streamRun();
+      window._saReturn = null; pdOpen(); streamRun();
     }).catch(function () { if (msg) msg.innerHTML = '<span style="color:var(--red)">Could not reach the backend.</span>'; });
   };
   function claim() { return typeof window._pxMarkRunning === 'function' ? window._pxMarkRunning(PIPE) : true; }
