@@ -52,7 +52,7 @@ def _emails(key):
 
 # Same classification rule backup_and_cleanup() uses below — pulled to module
 # level so backfill_run_to_db() can reuse it without duplicating the list.
-INPUT_PREFIXES = ("CM_Client", "FO_Client", "CO_Client", "ClientNet", "Update Limits", "RISK_REPORT", "T5DEBIT")
+INPUT_PREFIXES = ("CM_Client", "FO_Client", "CO_Client", "ClientNet", "Update Limits", "RISK_REPORT", "MTF_RISK_REPORT", "T5DEBIT")
 
 
 # ── KAMBALA reference file ───────────────────────────────────────────────────
@@ -473,6 +473,8 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
             "CLIENT_NET_EFFECTIVE_DEPOSITS": {"patterns": ["ClientNetEffectiveDeposits_*.csv","ClientNetEffectiveDeposits_*.xlsx"], "date_format": "DDMMYYYY"},
             "UPDATE_LIMITS_FILE": {"patterns": ["Update Limits*.xlsx"], "date_format": "DDMMYYYY", "check_modified_minutes": 30},
             "RISK_REPORT": {"patterns": ["RISK_REPORT_*.csv"], "date_format": "DDMMYYYY"},
+            # MTF risk report: uploaded ONCE a day, reused by runs 1-5 (kept in the folder, backed up + deleted after run 5)
+            "MTF_RISK_REPORT": {"patterns": ["MTF_RISK_REPORT_*.csv"], "date_format": "DDMMYYYY"},
             # The MCX margin file (90% or Deposit) is checked separately below: it arrives with a random
             # prefix + YYYYMMDD stamp, so it is recognised by its header columns, not by its name.
         }
@@ -506,6 +508,19 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
                     modified_at = datetime.fromtimestamp(os.path.getmtime(latest_file)).strftime("%d-%m-%Y %H:%M:%S")
                     wrong_date.append(f"{name} → {fname} (Last Modified: {modified_at}, older than {cfg['check_modified_minutes']} minutes)"); continue
             found[name] = latest_file
+
+        # MTF risk report must really contain the three columns the deduction needs
+        if "MTF_RISK_REPORT" in found:
+            try:
+                _hdr = pl.read_csv(found["MTF_RISK_REPORT"], n_rows=0, infer_schema_length=0).columns
+                _lack = [c for c in ("ACCOUNTID", "MTFProfit", "MTFLoss") if c not in _hdr]
+                if _lack:
+                    wrong_date.append(f"MTF_RISK_REPORT → {os.path.basename(found['MTF_RISK_REPORT'])} "
+                                      f"(missing column(s): {', '.join(_lack)})")
+                    found.pop("MTF_RISK_REPORT")
+            except Exception as _me:
+                wrong_date.append(f"MTF_RISK_REPORT → unreadable ({_me})")
+                found.pop("MTF_RISK_REPORT", None)
 
         # ── MCX margin file (selected source) — today's file with the right header columns ──────────────
         mcx_file = find_mcx_margin_file(base_dir)
@@ -554,7 +569,7 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
             print(f"   {k}: {os.path.basename(v)}")
         print(f"   KAMBALA lists: {len(kb_ids)} allocation IDs, {len(kb_virtual)} virtual IDs")
         print("--------------------------------------------------\n")
-        return {"status": "ok", "kambala_ids": kb_ids, "virtual_ids": kb_virtual, "mcx_file": mcx_file}
+        return {"status": "ok", "kambala_ids": kb_ids, "virtual_ids": kb_virtual, "mcx_file": mcx_file, "found": found}
 
     # ── Remove stale / duplicate inputs first (core/stale_files.py): only the newest today's file of each kind stays,
     # so the run uses - and the backup keeps - exactly one file per kind. The MCX file NOT selected for this run stays
@@ -562,7 +577,7 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     from core import stale_files as _stale
     for _pfx, _ext in (("CM_ClientLevelCollaterals", (".csv", ".xlsx")), ("FO_ClientLevelCollaterals", (".csv", ".xlsx")),
                        ("CO_ClientLevelCollaterals", (".csv", ".xlsx")), ("ClientNetEffectiveDeposits", (".csv", ".xlsx")),
-                       ("Update Limits", (".xlsx",)), ("RISK_REPORT_", (".csv",))):
+                       ("Update Limits", (".xlsx",)), ("RISK_REPORT_", (".csv",)), ("MTF_RISK_REPORT_", (".csv",))):
         _stale.purge_family(BASE_DIR, _pfx, _ext, today_ddmmyyyy)
     _mcx_now = _stale.purge_mcx(BASE_DIR, datetime.now().strftime("%Y%m%d"), exclude=MCX_EXCLUDE)
     prerun = pre_run_file_check(BASE_DIR)
@@ -801,6 +816,31 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     ).select(["Client Code", "DEPOSIT NMASS", "DEPOSIT_CTCL"]
     ).rename({"Client Code": "ACCOUNTID", "DEPOSIT_CTCL": "DEPOSIT CTCL"})
 
+    # 7B MTF LOSS DEDUCTION — MTF_RISK_REPORT_<DDMMYYYY>.csv, columns ACCOUNTID / MTFProfit / MTFLoss.
+    # net = MTFProfit - MTFLoss; only NEGATIVE nets count; the sign is ignored and that amount is subtracted
+    # from DEPOSIT CTCL (e.g. net -9876 on CTCL 7000 -> 7000 - 9876 = -2876).
+    MTF_FILE = prerun["found"].get("MTF_RISK_REPORT")
+    MTF_STATS = {"file": os.path.basename(MTF_FILE) if MTF_FILE else None, "clients": 0, "total": 0.0}
+    _mtf = pl.read_csv(MTF_FILE, infer_schema_length=0, ignore_errors=True).select(["ACCOUNTID", "MTFProfit", "MTFLoss"])
+    _mtf = _num(_mtf, "MTFProfit"); _mtf = _num(_mtf, "MTFLoss")
+    _mtf = (_mtf.with_columns((pl.col("MTFProfit") - pl.col("MTFLoss")).alias("NET"))
+                .filter(pl.col("NET") < 0)
+                .with_columns(_ckey("ACCOUNTID").alias("MTF_KEY"), (-pl.col("NET")).alias("MTF_DEDUCTION"))
+                .group_by("MTF_KEY").agg(pl.col("MTF_DEDUCTION").sum()))
+    final_pl = (final_pl.with_columns(_ckey("ACCOUNTID").alias("MTF_KEY"))
+                        .join(_mtf, on="MTF_KEY", how="left")
+                        .with_columns(pl.col("MTF_DEDUCTION").fill_null(0.0)))
+    MTF_STATS["clients"] = final_pl.filter(pl.col("MTF_DEDUCTION") > 0).height
+    MTF_STATS["total"] = float(final_pl["MTF_DEDUCTION"].sum())
+    _skipped = _mtf.height - MTF_STATS["clients"]
+    final_pl = final_pl.with_columns((pl.col("DEPOSIT CTCL") - pl.col("MTF_DEDUCTION")).alias("DEPOSIT CTCL")
+                                     ).drop(["MTF_KEY", "MTF_DEDUCTION"])
+    print(f"MTF deduction: {MTF_STATS['file']} -> {MTF_STATS['clients']} clients, total {MTF_STATS['total']:,.2f} "
+          f"subtracted from DEPOSIT CTCL" + (f" ({_skipped} MTF clients not in this report, ignored)" if _skipped else ""))
+    MTF_NOTE_HTML = (f"<li><b>MTF loss</b> – from <b>{MTF_STATS['file']}</b> we took MTFProfit &minus; MTFLoss per ACCOUNTID; "
+                     f"where the result is negative, that amount (sign ignored) is subtracted from DEPOSIT CTCL "
+                     f"({MTF_STATS['clients']} clients, total {MTF_STATS['total']:,.0f}).</li>")
+
     # 8 RISK REPORT + DIFF + REMARKS (all polars)
     risk_file = find_file(starts_with="RISK_REPORT", contains=today_ddmmyyyy)
     if not risk_file:
@@ -976,6 +1016,7 @@ This report has been generated based on the following logic:
                 (negative values are treated as 0 and ignored; positive
                 values are subtracted).
             </li>
+            {MTF_NOTE_HTML}
         </ul>
     </li>
 
@@ -1249,6 +1290,8 @@ Master Capital Services Ltd<br>
             # bloat the backups; deleting it would break the NEXT run's
             # pre-run check, which is the failure that would actually hurt.
             if fname.lower() == _kambala: continue
+            # MTF risk report: uploaded once, reused by runs 1-5 -> only backed up (and removed) after run 5
+            if fname.startswith("MTF_RISK_REPORT") and run_number < 5: continue
             # the MCX file that was downloaded but NOT used by this run is stored as NOT_USED__<name>
             dst = os.path.join(run_folder, _stale.mark_unused_name(fname, UNUSED_MCX_NAMES))
             kind = "input" if any(fname.startswith(p) for p in INPUT_PREFIXES) else "output"

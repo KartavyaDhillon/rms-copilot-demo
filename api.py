@@ -3422,6 +3422,20 @@ def ctcl_readiness():
     except Exception as _kb_e:
         print(f"[ctcl] readiness: KAMBALA check skipped: {type(_kb_e).__name__}: {_kb_e}", flush=True)
 
+    # MTF risk report — needed by EVERY run (MTFProfit/MTFLoss deduction). Uploaded by hand once a day, reused by runs 1-5,
+    # backed up and removed after run 5 — so it is "upload_only" (never part of the download shortcut).
+    try:
+        import datetime as _mtdt, glob as _mtglob
+        _mtname = f"MTF_RISK_REPORT_{_mtdt.date.today().strftime('%d%m%Y')}.csv"
+        _mtok = os.path.isfile(os.path.join(_dir, _mtname))
+        res["items"].append({
+            "key": "MTF_RISK_REPORT", "ok": _mtok, "example": f"MTF risk report ({_mtname})",
+            "age_min": None, "upload_only": True,
+            "why": "" if _mtok else "not present — upload today's file once; runs 1-5 reuse it",
+            "file": _mtname if _mtok else ""})
+    except Exception as _mte:
+        print(f"[ctcl] readiness: MTF risk report check skipped: {type(_mte).__name__}: {_mte}", flush=True)
+
     # T5 DEBIT report — compulsory on RUN 1 ONLY (pre_run_file_check() in ctcl_vs_nmass.py requires it just for run 1;
     # by run 2+ it has been swept into the backup folder). It is uploaded by hand, never downloaded, so it is flagged
     # "upload_only": the dashboard lists it as missing but it must not stop the "skip download" shortcut.

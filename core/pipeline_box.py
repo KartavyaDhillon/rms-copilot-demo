@@ -111,6 +111,7 @@ PIPELINES = {
                  ["Client Net Effective Deposits", "ClientNetEffectiveDeposits_*.csv,ClientNetEffectiveDeposits_*.xlsx", "ClientNetEffectiveDeposits_<date>.csv"],
                  ["Update Limits", "Update Limits*.xlsx", "Update Limits <date>.xlsx"],
                  ["RISK_REPORT", "RISK_REPORT_*.csv", "RISK_REPORT_<date>.csv"],
+                 ["MTF risk report", "MTF_RISK_REPORT_*.csv", "MTF_RISK_REPORT_<date>.csv"],
                  ["T5 DEBIT report", "T5DEBIT_*.csv", "T5DEBIT_<date>.csv"],
                  ["MCX 90% file (xlsx)", "*.xlsx", "<random>-<YYYYMMDDHHMMSS>.xlsx"],
                  ["CTCL output file", "FULL_FILE_CTCL_VS_NMASS_*.xlsx", "FULL_FILE_CTCL_VS_NMASS_<NN>.xlsx"],
@@ -2250,14 +2251,14 @@ def pb_upload(pipe, items, target="main", password=""):
         globs = common_globs
         spec = {**spec,
                 "label": p.get("common_label", "COMMON FILES"),
-                "examples": [x for x in spec["examples"] if "risk_report" in x.lower()] or spec["examples"]}
+                "examples": [x for x in spec["examples"] if x.lower().startswith("risk_report")] or spec["examples"]}
     else:
         dest = os.getenv(p.get("upload_dir_env", ""), p.get("upload_default", ""))
         # RISK_REPORT belongs in the common folder — reject it here so it can't
         # land in the wrong place.
         globs = [g for g in spec["globs"] if g.lower() not in common_globs]
         spec = {**spec,
-                "examples": [x for x in spec["examples"] if "risk_report" not in x.lower()]}
+                "examples": [x for x in spec["examples"] if not x.lower().startswith("risk_report")]}
     # If the real base folder can't be created/reached (e.g. this dashboard is
     # running on a different machine than the one with D:\CLI_PRUDENTIAL_LIMIT
     # etc. actually mapped), fall back to a generic temp folder instead of
@@ -2978,7 +2979,7 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
 
     KNOWN_PREFIXES = ("cm_clientlevelcollaterals", "fo_clientlevelcollaterals",
                       "co_clientlevelcollaterals", "clientneteffectivedeposits",
-                      "full_file_ctcl_vs_nmass", "update limits", "risk_report")
+                      "full_file_ctcl_vs_nmass", "update limits", "risk_report", "mtf_risk_report")
 
     # ── 1. Walk backup folders, group files by (date, run_n) directory ────────
     # Structure: root/<date-folder>/<NN>/files  where NN = zero-padded run
