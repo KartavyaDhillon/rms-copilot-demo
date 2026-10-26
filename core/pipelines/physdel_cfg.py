@@ -4,7 +4,7 @@ Everything the PHYSICAL DELIVERY pipeline needs that is NOT the report logic its
 scripts (physdel_codes/ltp.py and physdel_codes/send.py) only read plain values from this one module.
 
 Folders (all inside the console's own data unless .env says otherwise):
-    PHYSICAL_DELIVERY_FOLDER      base folder            default  <console>\\data\\PHYSICAL DELIVERY
+    PHYSICAL_DELIVERY_FOLDER      base folder            default  <console's parent>\\data\\PHYSICAL DELIVERY  (D:\\CONSOLE\\data\\PHYSICAL DELIVERY)
     PHYSICAL_DELIVERY_INPUT       today's PositionBook   default  <base>\\INPUT
     <base>\\MAIN_FOLDER            master files (mail list, branch/region list, BRM list) - updated now and then
     <base>\\BACKUPFILES AUTOMATED\\<DD-MM-YYYY>\\<HH-MM-SS>   everything a finished run moves out of the way
@@ -27,7 +27,8 @@ REPO = Path(__file__).resolve().parents[2]
 
 # ───────────────────────── folders ─────────────────────────
 def base() -> str:
-    return os.getenv("PHYSICAL_DELIVERY_FOLDER") or str(REPO / "data" / "PHYSICAL DELIVERY")
+    # Always <console parent>\data\PHYSICAL DELIVERY - i.e. D:\CONSOLE\data\PHYSICAL DELIVERY, next to the other processes
+    return os.getenv("PHYSICAL_DELIVERY_FOLDER") or str(REPO.parent / "data" / "PHYSICAL DELIVERY")
 
 
 def input_dir() -> str:
@@ -450,3 +451,8 @@ def apply_defaults() -> None:
         os.environ.setdefault(k, v)
     os.environ.setdefault("PHYSICAL_DELIVERY_FOLDER", base())
     os.environ.setdefault("PHYSICAL_DELIVERY_INPUT", input_dir())
+    for d in (base(), input_dir(), main_dir(), backup_dir()):     # the folders are made on first use - nothing to create by hand
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass

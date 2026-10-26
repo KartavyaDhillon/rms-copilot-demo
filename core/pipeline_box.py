@@ -474,7 +474,7 @@ PIPELINES = {
     # picks it from the latest CTCL vs NMASS backup and shows which file that is.
     "physdel": {"name": "PHYSICAL DELIVERY", "module": "core.pipelines.physical_delivery",
                 "func": "run_physical_delivery", "logdir": "physdel", "runs": 20,
-                "state_dir_env": "PHYSICAL_DELIVERY_FOLDER", "state_default": r"D:\PHYSICAL DELIVERY",
+                "state_dir_env": "PHYSICAL_DELIVERY_FOLDER", "state_default": r"D:\CONSOLE\data\PHYSICAL DELIVERY",
                 "state_file": "run_counter.txt",
                 "email_keys": {"Chandigarh zone": ["PD_ZONE_CHND_TO", "PD_ZONE_CHND_CC"],
                                "Ludhiana zone": ["PD_ZONE_LUDH_TO", "PD_ZONE_LUDH_CC"],
@@ -491,7 +491,7 @@ PIPELINES = {
                           "note": "finds each client's mobile number before the WhatsApp message"},
                          "Excel zone-file password": {"single_key": "PROBABLE_ZONE_XLSX_PASSWORD",
                           "note": "password put on the zone Excel files before they are e-mailed"}},
-                "upload_dir_env": "PHYSICAL_DELIVERY_INPUT", "upload_default": r"D:\PHYSICAL DELIVERY\INPUT",
+                "upload_dir_env": "PHYSICAL_DELIVERY_INPUT", "upload_default": r"D:\CONSOLE\data\PHYSICAL DELIVERY\INPUT",
                 "common_dir_env": "SA_COMMON_DIR", "common_default": r"C:\COMMON FILES",
                 "common_globs": ["RISK_REPORT_*.csv"], "common_label": "COMMON FILES",
                 "backup_root_env": "PHYSICAL_DELIVERY_FOLDER", "backup_subdir": "BACKUPFILES AUTOMATED",
@@ -2157,13 +2157,13 @@ PROTECTED_UPLOAD_FILES = {
     },
     "physdel": {                        # replacing a master file needs the app password (a first upload does not)
         "copy of t1 mail list.xlsx":    {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
-                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+                                          "dest_default": r"D:\CONSOLE\data\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
         "branch_and_region_list.xlsx":  {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
-                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+                                          "dest_default": r"D:\CONSOLE\data\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
         "brm list_file.xlsx":           {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
-                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+                                          "dest_default": r"D:\CONSOLE\data\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
         "brm list_file.csv":            {"dest_env": "PHYSICAL_DELIVERY_FOLDER",
-                                          "dest_default": r"D:\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
+                                          "dest_default": r"D:\CONSOLE\data\PHYSICAL DELIVERY", "dest_subdir": "MAIN_FOLDER"},
     },
 }
 
