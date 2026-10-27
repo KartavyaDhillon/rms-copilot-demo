@@ -22,6 +22,13 @@ from datetime import datetime
 
 
 def check_ctcl_readiness() -> dict:
+    """Same check, asked again (up to 4 times, 0.5 s apart) before reporting a file as missing."""
+    from core.file_probe import settle
+    r = settle(lambda: (lambda x: x if x.get("ready") else None)(_check_ctcl_readiness_once()), tries=4, delay=0.5)
+    return r or _check_ctcl_readiness_once()
+
+
+def _check_ctcl_readiness_once() -> dict:
     """Check whether all input files required by run_ctcl_vs_nmass() are present."""
     try:
         from dotenv import load_dotenv

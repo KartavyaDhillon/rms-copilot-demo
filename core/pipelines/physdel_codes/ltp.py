@@ -338,6 +338,24 @@ def fix_leading_zero_client_ids(pos_df):
     return pos_df
 
 
+def keep_nfo_bfo_only(pos_df):
+    """PositionBook: keep ONLY the rows whose Exch is NFO or BFO - done first, before any calculation."""
+    col = next((c for c in pos_df.columns if str(c).strip().lower() in ("exch", "exchange")), None)
+    if col is None:
+        print("\n❌ The PositionBook has no 'Exch' column, so NFO / BFO rows cannot be selected.")
+        print("[FRIENDLY_MSG] The PositionBook has no 'Exch' column - please upload the correct PositionBook file.")
+        raise SystemExit(1)
+    before = len(pos_df)
+    vals = pos_df[col].astype(str).str.strip().str.upper()
+    pos_df = pos_df[vals.isin(["NFO", "BFO"])].copy()
+    print(f"\nPositionBook filter ({col} = NFO / BFO only): kept {len(pos_df):,} of {before:,} rows"
+          f" ({', '.join(f'{k}: {v:,}' for k, v in vals[vals.isin(['NFO', 'BFO'])].value_counts().items()) or 'none'})")
+    if pos_df.empty:
+        print("[FRIENDLY_MSG] The PositionBook has no NFO / BFO rows in the 'Exch' column - nothing to calculate.")
+        raise SystemExit(1)
+    return pos_df
+
+
 def merge_positionbook(
     nifty_df,
     percent
@@ -358,6 +376,7 @@ def merge_positionbook(
         print("\nPositionBook file not found.")
         return
 
+    pos_df = keep_nfo_bfo_only(pos_df)          # only NFO / BFO rows, before any calculation
     pos_df = fix_leading_zero_client_ids(pos_df)
 
     percent_text = f"{percent:g}"

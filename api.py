@@ -68,6 +68,15 @@ def _scheduler_startup():
 
 
 @app.on_event("startup")
+def _file_flicker_watch_startup():
+    try:
+        from core import file_probe as _fp
+        _fp.start_watch()
+    except Exception as _e:
+        print(f"⚠️  file watcher not started: {_e}")
+
+
+@app.on_event("startup")
 def _common_ftp_startup():
     """Fetch today's HOLDING / RISK_REPORT from the FTP into COMMON FILES (07:30-08:15, every 5 min). Never blocks startup."""
     try:
@@ -338,7 +347,7 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=1"></script>'
+                            '<script src="/platform/js/process-locks.js?v=2"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
@@ -4428,6 +4437,46 @@ def pd_percent(value: str = ""):
     return {"ok": True, "percent": _pd.set_percent(v)}
 
 
+@app.get("/ops/progress")
+def ops_progress(pipe: str = ""):
+    """What the CURRENT (or latest) run of ANY process box is doing, read from its log - so every open window shows the live
+    steps even when somebody else started the run (generic version of /pd/progress)."""
+    import glob as _g, os as _os, re as _re
+    from core.pipeline_box import LOG_BASE, PIPELINES
+    if not _re.fullmatch(r"[a-z0-9_]{1,20}", pipe or ""):
+        return {"ok": False, "steps": []}
+    sub = "short_allocation" if pipe == "sa" else (PIPELINES.get(pipe) or {}).get("logdir")
+    if not sub:
+        return {"ok": False, "steps": []}
+    d = _os.path.join(LOG_BASE, sub)
+    files = [f for f in _g.glob(_os.path.join(d, "*.log"))
+             if not _os.path.basename(f).upper().startswith("UPLOAD") and "_download__" not in _os.path.basename(f)]
+    if not files:
+        return {"ok": True, "steps": [], "latest": ""}
+    f = max(files, key=_os.path.getmtime)
+    try:
+        with open(f, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()[-4000:]
+    except OSError:
+        return {"ok": True, "steps": [], "latest": ""}
+    steps, latest = [], ""
+    for ln in lines:
+        m = _re.search(r"\[FRIENDLY_MSG\]\s*(.+?)\s*$", ln)
+        t = m.group(1) if m else None
+        if t is None:
+            m2 = _re.match(r"^\[\d\d:\d\d:\d\d\]\s+(.*\S.*)$", ln)
+            if m2 and _re.search(r"[✅⏳📦📧📤📥🔄▶⚠❌]|\b(downloading|downloaded|merging|saving|sending|sent|created|completed|backup|uploading|checking|reading|building)\b", m2.group(1), _re.I):
+                t = m2.group(1)
+        if t:
+            t = t.strip()[:160]
+            if not steps or steps[-1] != t:
+                steps.append(t)
+        if ln.strip() and not ln.startswith("#"):
+            latest = _re.sub(r"^\[\d\d:\d\d:\d\d\]\s*", "", ln).strip()[:160]
+    done = any(l.startswith("# Ended") for l in lines)
+    return {"ok": True, "steps": steps[-12:], "latest": latest, "finished": done, "log": _os.path.basename(f)}
+
+
 @app.get("/pd/progress")
 def pd_progress(pipe: str = "physdel"):
     """What the CURRENT (or latest) PHYSICAL DELIVERY run is doing, read from its log - so every open window can show the
@@ -4987,7 +5036,8 @@ def common_status():
         _src = {}
     for label, name in _common_names_today().items():
         p = _sa_os.path.join(folder, name)
-        have = _sa_os.path.isfile(p)
+        from core.file_probe import settle as _settle
+        have = bool(_settle(lambda: _sa_os.path.isfile(p), tries=4, delay=0.4))   # a file being replaced for a moment is not "missing"
         mod = ""
         if have:
             import datetime as _cdt

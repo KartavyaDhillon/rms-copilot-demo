@@ -224,6 +224,11 @@ def pick_ctcl_file(root: Optional[str] = None) -> Optional[dict]:
 
 
 def risk_report(today: Optional[dt.date] = None) -> Optional[dict]:
+    from core.file_probe import settle
+    return settle(lambda: _risk_report_once(today), tries=4, delay=0.5)
+
+
+def _risk_report_once(today: Optional[dt.date] = None) -> Optional[dict]:
     """Today's RISK_REPORT_<DDMMYYYY>.csv in COMMON FILES (case-insensitive name match)."""
     today = today or dt.date.today()
     want = f"RISK_REPORT_{today:%d%m%Y}.csv".lower()

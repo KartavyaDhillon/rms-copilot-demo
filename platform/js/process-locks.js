@@ -189,6 +189,38 @@
     ban.classList.remove("lm-busy");
   }
 
+  /* ── live steps of a run somebody else started (what it is doing right now, like the PHYSICAL DELIVERY window) ── */
+  var STEP_TIMER = {}, STEP_SIG = {};
+  var st2 = document.createElement("style");
+  st2.textContent = ".lm-steps{margin:-4px 0 12px;padding:10px 14px;border:1px dashed rgba(96,165,250,.35);border-radius:11px;font-size:12px;line-height:1.7;color:var(--muted,#93a0b4)}" +
+    ".lm-steps .ok{color:#34d399}.lm-steps .cur{color:var(--ink,#e9eef6);font-weight:700}" +
+    ".lm-spin{display:inline-block;width:12px;height:12px;box-sizing:border-box;border:2px solid #fbbf24;border-right-color:transparent;border-radius:50%;animation:lmSp .8s linear infinite;vertical-align:-2px;margin-right:6px}" +
+    "@keyframes lmSp{to{transform:rotate(360deg)}}";
+  document.head.appendChild(st2);
+  function esc(x) { return String(x).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+  function watchSteps(target, box, strip) {
+    if (STEP_TIMER[target]) return;
+    var tick = function () {
+      var stillLocked = LOCKS.some(function (l) { return (l.affects || []).indexOf(target) >= 0 && l.kind !== "action"; });
+      var el = box.querySelector(".lm-steps");
+      if (!stillLocked || !document.contains(box)) { if (el) el.remove(); clearInterval(STEP_TIMER[target]); delete STEP_TIMER[target]; delete STEP_SIG[target]; return; }
+      fetch("/ops/progress?pipe=" + encodeURIComponent(target), { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!d || !d.ok) return;
+        var steps = d.steps || [];
+        if (!steps.length && d.latest) steps = [d.latest];
+        var html = steps.map(function (x, i) {
+          var last = i === steps.length - 1;
+          return last ? '<div class="cur"><span class="lm-spin"></span>' + esc(x) + "</div>" : '<div><span class="ok">✓</span> ' + esc(x) + "</div>";
+        }).join("") || "Starting…";
+        var el2 = box.querySelector(".lm-steps");
+        if (!el2) { el2 = document.createElement("div"); el2.className = "lm-steps"; strip.insertAdjacentElement("afterend", el2); }
+        if (STEP_SIG[target] !== html) { el2.innerHTML = html; STEP_SIG[target] = html; }
+      }).catch(function () {});
+    };
+    STEP_TIMER[target] = setInterval(tick, 3000);
+    tick();
+  }
+
   /* ── core apply ─────────────────────────────────────────────────────── */
   function apply() {
     var wanted = {};   // boxTarget -> lock
@@ -209,7 +241,7 @@
     // RUNNING strip and never had its buttons locked from another screen — even
     // though it builds the same #pxBox-probable / #pxBanner-probable markup as
     // every other pipe and the backend already emits locks for it.
-    ["ctcl", "ms15", "cli", "sa", "probable"].forEach(function (t) {
+    ["ctcl", "ms15", "cli", "sa", "probable", "r1r2", "reco", "mtfic", "alloc"].forEach(function (t) {
       var box = boxEl(t);
       if (!box) return;
       var strip = box.querySelector(".lm-strip");
@@ -231,12 +263,14 @@
           box.insertBefore(strip, box.firstChild);
         }
         if (strip.dataset.sig !== html) { strip.innerHTML = html; strip.dataset.sig = html; }
+        if (lock.kind !== "action") watchSteps(t, box, strip);
         // The green "ready — run it now" banner is specifically about the Run
         // button, which a standalone-download action lock never touches — so
         // only rewrite it busy for a real whole-box lock.
         if (lock.kind === "action") banFree(t); else banBusy(t, lock);
       } else {
         if (strip) strip.remove();
+        var stp = box.querySelector(".lm-steps"); if (stp) stp.remove();
         enableBox(box);
         banFree(t);
       }

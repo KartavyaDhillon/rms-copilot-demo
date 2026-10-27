@@ -465,7 +465,7 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
                 return f
         return None
 
-    def pre_run_file_check(base_dir):
+    def _pre_run_file_check_once(base_dir):
         required_files = {
             "CM_CLIENT_LEVEL": {"patterns": ["CM_ClientLevelCollaterals_*.csv","CM_ClientLevelCollaterals_*.xlsx","CM_ClientLevelCollaterals_*.csv.crdownload"], "date_format": "DDMMYYYY"},
             "FO_CLIENT_LEVEL": {"patterns": ["FO_ClientLevelCollaterals_*.csv","FO_ClientLevelCollaterals_*.xlsx","FO_ClientLevelCollaterals_*.csv.crdownload"], "date_format": "DDMMYYYY"},
@@ -570,6 +570,19 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
         print(f"   KAMBALA lists: {len(kb_ids)} allocation IDs, {len(kb_virtual)} virtual IDs")
         print("--------------------------------------------------\n")
         return {"status": "ok", "kambala_ids": kb_ids, "virtual_ids": kb_virtual, "mcx_file": mcx_file, "found": found}
+
+    def pre_run_file_check(base_dir):
+        # a file that is being replaced / scanned for a moment must not stop the run: ask again before believing "missing"
+        import io as _io, contextlib as _cl
+        from core.file_probe import settle
+        def _quiet():
+            buf = _io.StringIO()
+            with _cl.redirect_stdout(buf):
+                r = _pre_run_file_check_once(base_dir)
+            return r if r.get("status") == "ok" else None
+        if settle(_quiet, tries=3, delay=0.7):
+            pass
+        return _pre_run_file_check_once(base_dir)
 
     # ── Remove stale / duplicate inputs first (core/stale_files.py): only the newest today's file of each kind stays,
     # so the run uses - and the backup keeps - exactly one file per kind. The MCX file NOT selected for this run stays
