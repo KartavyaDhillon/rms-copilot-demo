@@ -834,39 +834,26 @@ def merge_positionbook(
 
     if brm_df is not None:
 
-        brm_df["Branch"] = (
-            brm_df["Branch"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-        )
+        # BRM is looked up on Zone + Region + Branch (all three, trimmed / upper case).
+        # If a row finds no exact match, the Branch alone is tried (a branch has one BRM in the list).
+        def _norm(s):
+            return s.astype(str).str.strip().str.upper().replace({"NAN": "", "NONE": ""})
 
-        final_df["Branch"] = (
-            final_df["Branch"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-        )
+        for _c in ("Zone", "Region", "Branch"):
+            brm_df[_c] = _norm(brm_df[_c])
+            final_df[_c] = _norm(final_df[_c])
+        brm_df["BRM"] = brm_df["BRM"].astype(str).str.strip().str.upper()
 
-        brm_required = brm_df[
-            [
-                "Branch",
-                "BRM"
-            ]
-        ].drop_duplicates()
+        brm_full = brm_df[["Zone", "Region", "Branch", "BRM"]].drop_duplicates(
+            subset=["Zone", "Region", "Branch"])
+        brm_branch = brm_df[["Branch", "BRM"]].drop_duplicates(
+            subset=["Branch"]).rename(columns={"BRM": "BRM_BRANCH"})
 
-        final_df = final_df.merge(
-            brm_required,
-            on="Branch",
-            how="left"
-        )
-
-        final_df["BRM"] = (
-            final_df["BRM"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-        )
+        final_df = final_df.merge(brm_full, on=["Zone", "Region", "Branch"], how="left")
+        final_df = final_df.merge(brm_branch, on="Branch", how="left")
+        final_df["BRM"] = final_df["BRM"].fillna(final_df["BRM_BRANCH"]).fillna("")
+        final_df.drop(columns=["BRM_BRANCH"], inplace=True)
+        print(f"BRM not found for {(final_df['BRM'] == '').sum()} rows")
 
         print(
             "BRM Mapping Completed"
@@ -1028,6 +1015,7 @@ def merge_positionbook(
 def build_pivot_sheet(final_df):
     """
     Build the PIVOT sheet from SMS FLAG = YES rows.
+    (Columns: Zone, Region, Branch, BRM, ClientID, ... - Region/Branch from the Risk Report, BRM from BRM LIST_File)
 
     Steps:
     1. Filter SMS FLAG = YES
@@ -1066,10 +1054,15 @@ def build_pivot_sheet(final_df):
     # STEP 2: Pivot — SUM of DELIVERY VALUE by ClientID
     # ----------------------------------------------------------
 
+    # Zone / Region / Branch come from the Risk Report (matched on ACCOUNTID = ClientID when the Data sheet was built);
+    # BRM comes from BRM LIST_File on Zone + Region + Branch.
     pivot = sms_yes.groupby("ClientID").agg(
         {
             "DELIVERY VALUE": "sum",
-            "Zone": "first"
+            "Zone": "first",
+            "Region": "first",
+            "Branch": "first",
+            "BRM": "first"
         }
     ).reset_index()
 
@@ -1476,6 +1469,9 @@ def build_pivot_sheet(final_df):
     pivot = pivot[
         [
             "Zone",
+            "Region",
+            "Branch",
+            "BRM",
             "ClientID",
             "SUM OF DELIVERY VALUE",
             "NET LEDGER",
