@@ -136,6 +136,23 @@ GROUPS: Dict[str, dict] = {
             ("upload_above4cr", "Upload ABOVE 4 CR HOLDING BLOCKING file to Kambala", False, "no"),
         ],
     },
+    "common_ftp": {
+        "label": "COMMON FILES FTP (HOLDING / RISK_REPORT fetch)",
+        # the fetch code (core/common_ftp.py) reads these existing COMMON_FTP_* settings
+        "env": {"host": "COMMON_FTP_HOST", "port": "COMMON_FTP_PORT", "user": "COMMON_FTP_USER", "password": "COMMON_FTP_PASS",
+                "folder": "COMMON_FTP_DIR", "secure": "COMMON_FTP_TLS", "alert_to": "COMMON_FTP_ALERT_TO",
+                "alert_cc": "COMMON_FTP_ALERT_CC"},
+        "fields": [
+            ("host", "FTP server", False, "202.58.232.124"),
+            ("port", "Port", False, "21"),
+            ("user", "User name", False, ""),
+            ("password", "Password", True, ""),
+            ("folder", "Folder on the server", False, "/GINNI_AUTOMATION_FILE"),
+            ("secure", "Use secure FTP / FTPS (true / false) - this server does NOT support it, keep false", False, "false"),
+            ("alert_to", "Alert e-mail goes to (if a file is still missing)", False, "rms_del@mastertrust.co.in"),
+            ("alert_cc", "Alert e-mail Cc", False, ""),
+        ],
+    },
     "atom": {
         "label": "ATOM merchant console",
         "fields": [
@@ -189,7 +206,8 @@ def require(group: str, *keys: str) -> Dict[str, str]:
 
 # Alternatives / extras that may stay empty — the UI must not call the connection "not set" because of them.
 OPTIONAL = {("nse", "encrypted_password"), ("mcx_sftp", "password2"), ("mcx_eclear", "rsa_sdtid"),
-            ("whatsapp", "alert_numbers"), ("whatsapp", "alert_template")}
+            ("whatsapp", "alert_numbers"), ("whatsapp", "alert_template"),
+            ("common_ftp", "alert_cc")}
 
 
 def view() -> List[dict]:

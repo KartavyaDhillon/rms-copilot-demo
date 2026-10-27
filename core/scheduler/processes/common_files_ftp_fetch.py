@@ -55,5 +55,5 @@ register(
     run=_run,
     params=[Param("alert_after", "Alert after (HH:MM)", "str", default="08:15", scope="process",
                   help="If a file is still missing after this time, ONE alert e-mail goes to the RMS team.")],
-    retry_safe=True, parallel_safe=False, category="Housekeeping", folder=FOLDER,
+    retry_safe=False, parallel_safe=False, category="Housekeeping", folder=FOLDER, uses=("common_ftp",),
 )
