@@ -523,11 +523,8 @@ def apply_defaults() -> None:
             pass
 
 
-def run_by_name() -> str:
-    """Name of the person who pressed the button, for the e-mail sign-off ('Priyanshu (M0214485)' -> 'Priyanshu').
-    Falls back to the name of the sending account (raj.kumari@... -> 'Raj Kumari')."""
-    by = re.sub(r"\(.*?\)", "", os.getenv("PD_RUN_BY", "")).strip()
-    if by and by.lower() not in ("unknown user", "unknown", "-"):
-        return by
+def sender_name() -> str:
+    """Name of the e-mail SENDER account for the sign-off (raj.kumari@mastertrust.co.in -> 'Raj Kumari'),
+    whoever pressed the button."""
     local = os.getenv("PROBABLE_ALERTS_SMTP_EMAIL", "").split("@")[0]
-    return " ".join(w.capitalize() for w in re.split(r"[._\-]+", local) if w) or "Risk Management Team"
+    return " ".join(w.capitalize() for w in re.split(r"[._\-]+", local) if w) or "Raj Kumari"
