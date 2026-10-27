@@ -209,6 +209,25 @@ def run_full_file():
                                          body, [dst])
         ok = True
         _line("[FRIENDLY_MSG] Full file e-mailed")
+
+        # Mail is out: back up what this run used and leave nothing stale behind (only after a successful e-mail -
+        # if it failed, the PositionBook stays so the button can simply be pressed again).
+        _line("[FRIENDLY_MSG] Backing up and clearing the files this run used")
+        bk = os.path.join(C.backup_dir(), dt.date.today().strftime("%d-%m-%Y"), f"{stamp}_FULL FILE")
+        os.makedirs(bk, exist_ok=True)
+        shutil.copy2(dst, bk)                                                   # the finished full file (also stays in FULL FILES)
+        moved = 0
+        for pat in ("PositionBook*", "FULL_FILE_CTCL_VS_NMASS*"):              # PositionBook(s) + the staged CTCL copy
+            for f in glob.glob(os.path.join(C.input_dir(), pat)):
+                try:
+                    if pat.startswith("PositionBook"):
+                        shutil.copy2(f, bk)                                     # backed up ...
+                    os.remove(f)                                                # ... and deleted from INPUT
+                    moved += 1
+                except OSError as e:
+                    _line(f"   could not clear {os.path.basename(f)}: {e}")
+        _line(f"Backup : {bk}")
+        _line(f"INPUT folder cleared ({moved} file(s) removed) - nothing stale is left.")
     finally:
         C.clear_busy()
         os.environ.pop("PD_FILE_MODE", None)

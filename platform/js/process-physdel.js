@@ -98,7 +98,7 @@
       '<div id="pdDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>' +
       '<button id="pdRunBtn" onclick="pdAskPct()" style="width:100%;border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">▶ Run PHYSICAL DELIVERY</button>' +
       '<button id="pdFileBtn" onclick="pdAskPct(\'file\')" style="width:100%;margin-top:10px;border:1px solid rgba(96,165,250,.55);border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;background:rgba(96,165,250,.12);color:var(--blue)">📄 Create Full File &amp; Email to RMS Team</button>' +
-      '<div style="font-size:11.5px;color:var(--dim);margin:6px 2px 0;text-align:center">Makes the complete file only and e-mails it to the RMS team. Nothing is sent to branches, regions, zones or clients.</div>' +
+      '<div style="font-size:11.5px;color:var(--dim);margin:6px 2px 0;text-align:center">Makes the complete file only and e-mails it to the RMS team. Nothing is sent to branches, regions, zones or clients. After the e-mail, the PositionBook is backed up and cleared.</div>' +
       '<div class="sa-msg" id="pdRunMsg"></div>' +
       '<div class="sa-status" id="pxStatus-physdel" style="margin-top:12px">' + '<div id="pdSteps">' + stepsHtml() + '</div><div id="pxEvents-physdel"></div>' + (!S.running && !S.steps.length ? '<div class="sa-status-empty">Run status appears here. The full output is saved in Logs.</div>' : '') + '</div>');
     paintDyn();
