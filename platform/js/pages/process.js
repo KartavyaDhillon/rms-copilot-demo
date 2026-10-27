@@ -149,6 +149,15 @@
     try { st = await (await fetch("/common/status", { credentials: "same-origin" })).json(); }
     catch (e) { popup("Upload Common Files", "Could not reach the server: " + e.message, false); return; }
     if (!st.items) { popup("Upload Common Files", "The server has not been updated with this feature yet. Copy the new api.py to the live folder and restart the console.", false); return; }
+    let fs = {};
+    try { fs = await (await fetch("/common/ftp/status", { credentials: "same-origin" })).json(); } catch (e) { fs = {}; }
+    const ftpLine = (f) => {
+      if (!f || f.configured === undefined) return "";
+      if (!f.configured) return "Automatic fetch from the FTP is not set up yet (COMMON_FTP_* in .env). Uploading by hand works as always.";
+      const per = Object.keys(f.files || {}).map((n) => esc(n) + ": " + esc((f.files[n] || {}).detail || "") + " (" + esc((f.files[n] || {}).at || "") + ")").join("<br>");
+      return (f.enabled ? "Automatic fetch from the FTP runs every morning " + esc(f.window || "") + " and skips a file you already uploaded. " : "Automatic fetch is switched off. ") +
+        (f.running ? "<b>Fetching now…</b> " : "") + (f.message ? esc(f.message) + ". " : "") + (per ? "<br>" + per : "");
+    };
     const rows = (st.items || []).map((i) =>
       "<tr><td><b>" + esc(i.name) + "</b></td><td style='text-align:right'>" +
       (i.present
@@ -165,6 +174,8 @@
       '<div id="pcTabUp">' +
       '<div class="card-sub" style="margin-bottom:10px">Only <b>today\'s</b> HOLDING and RISK_REPORT files are accepted, named exactly as below. Anything else is rejected. An existing file of the same name is replaced.</div>' +
       '<table class="htable"><tbody>' + rows + "</tbody></table>" +
+      '<div id="pcFtpLine" class="card-sub" style="margin-top:10px;padding:8px 10px;border:1px dashed var(--line,#2a3342);border-radius:8px;line-height:1.5">' + ftpLine(fs) + "</div>" +
+      (fs.configured ? '<button class="btn" id="pcFtpGo" style="width:100%;justify-content:center;height:38px;margin-top:8px">📥 Fetch from FTP now</button>' : "") +
       '<input type="file" id="pcCommonFile" accept=".csv" multiple style="display:none">' +
       '<button class="btn primary" id="pcCommonPick" style="width:100%;justify-content:center;height:44px;margin-top:12px">⬆️ Choose file(s) to upload</button>' +
       '<div id="pcCommonMsg" class="card-sub" style="min-height:18px;margin-top:8px"></div></div>' +
@@ -182,6 +193,23 @@
       };
     });
     let getBooted = false;
+    if ($("#pcFtpGo")) $("#pcFtpGo").onclick = async () => {
+      $("#pcFtpGo").disabled = true; $("#pcFtpGo").style.opacity = ".5";
+      let r = {};
+      try { r = await (await fetch("/common/ftp/fetch", { method: "POST", credentials: "same-origin" })).json(); } catch (e) { r = { ok: false, error: e.message }; }
+      if (!r.ok) { $("#pcFtpLine").innerHTML = '<span style="color:var(--err)">' + esc(r.error || "Could not start the fetch") + "</span>"; $("#pcFtpGo").disabled = false; $("#pcFtpGo").style.opacity = ""; return; }
+      $("#pcFtpLine").innerHTML = "<b>Fetching from the FTP…</b> big files can take a minute or two.";
+      const t0 = Date.now();
+      const tick = async () => {
+        let f = {};
+        try { f = await (await fetch("/common/ftp/status", { credentials: "same-origin" })).json(); } catch (e) {}
+        const el = $("#pcFtpLine"); if (!el) return;                       // window was closed
+        el.innerHTML = ftpLine(f);
+        if (f.running && Date.now() - t0 < 30 * 60 * 1000) { setTimeout(tick, 3000); return; }
+        close(); openCommon();                                              // reopen so the Present / Missing badges are fresh
+      };
+      setTimeout(tick, 2500);
+    };
     $("#pcCommonPick").onclick = () => $("#pcCommonFile").click();
     $("#pcCommonFile").onchange = async () => {
       const list = Array.from($("#pcCommonFile").files || []);

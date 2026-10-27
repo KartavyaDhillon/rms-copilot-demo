@@ -67,6 +67,16 @@ def _scheduler_startup():
         print(f"⚠️  Scheduler startup failed: {type(_e).__name__}: {_e}")
 
 
+@app.on_event("startup")
+def _common_ftp_startup():
+    """Fetch today's HOLDING / RISK_REPORT from the FTP into COMMON FILES (07:30-08:15, every 5 min). Never blocks startup."""
+    try:
+        from core import common_ftp as _cf
+        _cf.start_background()
+    except Exception as _e:
+        print(f"⚠️  COMMON FILES auto-fetch not started: {type(_e).__name__}: {_e}")
+
+
 @app.on_event("shutdown")
 def _scheduler_shutdown():
     try:
@@ -331,7 +341,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
-                            '<script src="/platform/js/process-physdel.js?v=2"></script></body>', 1)
+                            '<script src="/platform/js/process-physdel.js?v=4"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4417,6 +4427,45 @@ def pd_percent(value: str = ""):
     return {"ok": True, "percent": _pd.set_percent(v)}
 
 
+@app.get("/pd/progress")
+def pd_progress(pipe: str = "physdel"):
+    """What the CURRENT (or latest) PHYSICAL DELIVERY run is doing, read from its log - so every open window can show the
+    steps and counts even when somebody else started the run.  steps = the plain-English step lines in order."""
+    import glob as _g, os as _os, re as _re
+    from core.pipeline_box import LOG_BASE
+    if pipe not in ("physdel", "physdelfile"):
+        return {"ok": False, "steps": []}
+    files = _g.glob(_os.path.join(LOG_BASE, "physdel", f"{pipe}__*.log"))
+    if not files:
+        return {"ok": True, "steps": [], "detail": ""}
+    f = max(files, key=_os.path.getmtime)
+    try:
+        txt = open(f, encoding="utf-8", errors="replace").read()
+    except OSError:
+        return {"ok": True, "steps": [], "detail": ""}
+    steps = []
+    for m in _re.finditer(r"^\[FRIENDLY_MSG\]\s*(.+?)\s*$", txt, _re.M):
+        if not steps or steps[-1] != m.group(1):
+            steps.append(m.group(1))
+    c = lambda pat: len(_re.findall(pat, txt))
+    br, rg, zn, wa = c(r"Branch Mail Sent"), c(r"Region Mail Sent"), c(r"Zone Mail Sent"), c(r"\| .{0,3}WhatsApp Sent")
+    wf = c(r"WhatsApp (?:Failed|failed)")
+    tot = _re.search(r"Unique clients in pivot : (\d+)", txt)
+    last = steps[-1] if steps else ""
+    detail = ""
+    if "WhatsApp" in last and wa:
+        detail = f"{wa} client WhatsApp messages sent" + (f" of {tot.group(1)} clients" if tot else "") + (f" · {wf} failed" if wf else "")
+    elif "branch" in last.lower() and br:
+        detail = f"{br} branch e-mails sent so far"
+    elif "region" in last.lower() and rg:
+        detail = f"{rg} region e-mails sent so far"
+    elif "zone" in last.lower() and zn:
+        detail = f"{zn} zone e-mails sent so far"
+    done = bool(_re.search(r"^# Ended", txt, _re.M))
+    return {"ok": True, "steps": steps, "detail": detail, "finished": done, "log": _os.path.basename(f),
+            "counts": {"branch": br, "region": rg, "zone": zn, "whatsapp": wa}}
+
+
 @app.post("/pd/file-percent")
 def pd_file_percent(value: str = ""):
     """Saves the CASH % typed for the 'Create full file & e-mail it' button (0 is allowed)."""
@@ -4939,6 +4988,31 @@ def common_status():
             mod = _cdt.datetime.fromtimestamp(_sa_os.path.getmtime(p)).strftime("%H:%M:%S")
         items.append({"label": label, "name": name, "present": have, "modified": mod})
     return {"items": items}
+
+
+@app.get("/common/ftp/status")
+def common_ftp_status():
+    """State of the automatic FTP fetch of today's HOLDING / RISK_REPORT (shown in the Upload Common Files window)."""
+    from core import common_ftp as _cf
+    return _cf.status()
+
+
+@app.post("/common/ftp/fetch")
+def common_ftp_fetch(request: Request):
+    """'Fetch from FTP now' button: one pass in the background (skips files already in COMMON FILES)."""
+    import threading as _th
+    from core import common_ftp as _cf
+    if not _cf.configured():
+        return {"ok": False, "error": "FTP is not set up - add COMMON_FTP_HOST / COMMON_FTP_USER / COMMON_FTP_PASS to .env."}
+    if _cf.status().get("running"):
+        return {"ok": True, "message": "A fetch is already running."}
+    try:
+        _by, _adm = _actor(request)
+    except Exception:
+        _by = ""
+    print(f"📥 COMMON FILES FTP fetch started by {_by or 'unknown'}", flush=True)
+    _th.Thread(target=lambda: _cf.fetch_once(manual=True), daemon=True, name="common-ftp-manual").start()
+    return {"ok": True, "message": "Started - it takes a minute or two for big files."}
 
 
 _COMMON_KINDS = {"HOLDING": "HOLDING", "RISK_REPORT": "RISK_REPORT"}

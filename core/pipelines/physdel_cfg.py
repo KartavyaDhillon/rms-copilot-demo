@@ -415,11 +415,11 @@ def window_info(today: Optional[dt.date] = None, hol: Optional[set] = None) -> d
             "runs_today": n, "today_is_trading_day": _is_td(today, hol)}
 
 
-def record_run(ok: bool, percent: float, test: bool = False, by: str = "") -> None:
+def record_run(ok: bool, percent: float, test: bool = False, by: str = "", kind: str = "") -> None:
     st = _load_state()
     runs = [r for r in st.get("runs", []) if r.get("date", "") >= (dt.date.today() - dt.timedelta(days=45)).isoformat()]
     runs.append({"date": dt.date.today().isoformat(), "time": dt.datetime.now().strftime("%H:%M:%S"),
-                 "ok": bool(ok), "percent": percent, "test": bool(test), "by": by})
+                 "ok": bool(ok), "percent": percent, "test": bool(test), "by": by, "kind": kind})
     st["runs"] = runs
     _save_state(st)
 

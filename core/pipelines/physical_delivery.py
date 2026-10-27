@@ -230,4 +230,8 @@ def run_full_file():
         _line(f"INPUT folder cleared ({moved} file(s) removed) - nothing stale is left.")
     finally:
         C.clear_busy()
+        try:
+            C.record_run(ok, pct, by=by, kind="full file")
+        except Exception:
+            pass
         os.environ.pop("PD_FILE_MODE", None)

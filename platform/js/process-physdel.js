@@ -9,7 +9,7 @@
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var PIPE = 'physdel';
   var PIPE_FILE = 'physdelfile';
-  var S = { d: null, es: null, running: false, steps: [], ok: null, pipe: 'physdel' };
+  var S = { d: null, es: null, running: false, steps: [], ok: null, pipe: 'physdel', detail: '', lock: null };
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
@@ -76,7 +76,9 @@
     var d = S.d || {}, w = d.window || {}, st = d.safe_test || {}, miss = d.missing || [];
     var col = w.phase === 'expiry_day' ? 'var(--red)' : (w.phase === 'window' ? 'var(--green)' : 'var(--muted)');
     var h = '<div style="font-size:12.5px;color:var(--muted);line-height:1.55;margin-bottom:12px"><span style="color:' + col + '">●</span> ' + esc(w.text || 'Checking…') +
-      (d.last_run ? '<br><span style="color:var(--dim)">Last run ' + esc(dmy(d.last_run.date)) + ' ' + esc(d.last_run.time) + (d.last_run.ok ? ' — ok' : ' — with errors') + (d.last_run.test ? ' (test)' : '') + ', CASH ' + esc(d.last_run.percent) + '%</span>' : '') + '</div>';
+      (d.last_run ? '<br><span style="color:var(--dim)">Last run ' + esc(dmy(d.last_run.date)) + ' ' + esc(d.last_run.time) + (d.last_run.ok ? ' — ok' : ' — with errors') + (d.last_run.test ? ' (test)' : '') + (d.last_run.kind ? ' — ' + esc(d.last_run.kind) : '') + ', CASH ' + esc(d.last_run.percent) + '%' + (d.last_run.by ? ' — by ' + esc(d.last_run.by) : '') + '</span>' : '') + '</div>';
+    var L = S.lock;
+    if (L) h += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:9px;background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.45);color:var(--amber);font-size:12.5px;line-height:1.5"><span class="pdSpin" style="margin-right:8px"></span><b>' + (L.pipe === PIPE_FILE ? 'Full file' : 'PHYSICAL DELIVERY run') + ' is running</b> — started by <b>' + esc(L.by || 'unknown user') + '</b>' + (L.ip ? ' from ' + esc(L.ip) : '') + (L.started_at ? ' at ' + esc(String(L.started_at).slice(11, 16)) : '') + (L.elapsed_s != null ? ' (' + Math.floor(L.elapsed_s / 60) + ' min ' + (L.elapsed_s % 60) + ' s ago)' : '') + '</div>';
     if (st.armed) h += '<div style="margin-bottom:12px;padding:9px 12px;border-radius:9px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fbbf24;font-size:12.5px;font-weight:700">🧪 SAFE TEST ARMED — the next Run sends only to ' + esc((st.email_to || []).join(', ')) + ' / ' + esc(st.wa_to || '') + '. It switches itself off after that run.</div>';
     h += '<div style="margin:0 0 12px;padding:10px 12px;border:1px dashed var(--line-2);border-radius:10px">' + filesHtml(d) + '</div>';
     return h;
@@ -112,12 +114,12 @@
       var cur = S.running && i === S.steps.length - 1;
       var ic = cur ? '<span class="pdSpin" style="color:var(--amber);margin-right:0"></span>' : (S.ok === false && i === S.steps.length - 1 ? '<span style="color:var(--red)">✗</span>' : '<span style="color:var(--green)">✓</span>');
       return '<div style="display:flex;gap:8px;font-size:12.5px;padding:3px 0;color:' + (cur ? 'var(--ink)' : 'var(--muted)') + '">' + ic + '<span>' + esc(s) + (cur ? '…' : '') + '</span></div>';
-    }).join('');
+    }).join('') + (S.running && S.detail ? '<div style="margin:2px 0 0 22px;font-size:12px;color:var(--teal)">' + esc(S.detail) + '</div>' : '');
   }
   function paintSteps() { var e = $('pdSteps'); if (e) e.innerHTML = stepsHtml(); paintDyn(); }
   function paintDyn() {
     var e = $('pdDyn'); if (e && modalOpen()) e.innerHTML = dynHtml();
-    var last = S.steps.length ? S.steps[S.steps.length - 1] : 'starting', isFile = S.pipe === PIPE_FILE;
+    var last = S.steps.length ? S.steps[S.steps.length - 1] : (S.lock ? 'started by ' + (S.lock.by || 'another user') : 'starting'), isFile = S.pipe === PIPE_FILE;
     var runTxt = ((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY';
     var b = $('pdRunBtn');
     if (b) {
@@ -140,8 +142,21 @@
       if (el && !S.running) el.textContent = (w.phase === 'expiry_day' ? 'Expiry day — run as needed' : (w.phase === 'window' ? 'Window open — ' + (w.runs_today ? 'run today' : 'not run today') : 'Not due — window opens ' + dmy(w.window_start))) + (d.safe_test && d.safe_test.armed ? ' · 🧪 test armed' : '');
       paintDyn();
     }).catch(function () {});
-    jget('/px/status?pipe=' + PIPE).then(function (s) { if (!S.es) { if (s && s.running) S.pipe = PIPE; setRunning(!!(s && s.running)); } }).catch(function () {});
-    jget('/px/status?pipe=' + PIPE_FILE).then(function (s) { if (!S.es && s && s.running) { S.pipe = PIPE_FILE; setRunning(true); } }).catch(function () {});
+    // who is running it right now (also when someone ELSE started it): the console's lock list
+    jget('/ops/locks').then(function (r) {
+      var mine = null;
+      (r.locks || []).forEach(function (l) { if (l.pipe === PIPE || l.pipe === PIPE_FILE) mine = l; });
+      S.lock = mine;
+      if (!S.es) { if (mine) S.pipe = mine.pipe; setRunning(!!mine); }
+      if (mine || S.es) {
+        jget('/pd/progress?pipe=' + (mine ? mine.pipe : S.pipe)).then(function (p) {
+          S.detail = p.detail || '';
+          if (!S.es && p.steps && p.steps.length) S.steps = p.steps;      // a run started by somebody else: show its steps here too
+          paintSteps();
+        }).catch(function () {});
+      } else { S.detail = ''; }
+      paintDyn();
+    }).catch(function () {});
   }
   function setRunning(on) {
     S.running = on;
@@ -335,7 +350,7 @@
     if (!document.getElementById('pdSpinCss')) { var st = document.createElement('style'); st.id = 'pdSpinCss'; st.textContent = '@keyframes pdSpin{to{transform:rotate(360deg)}}.pdSpin{display:inline-block;width:14px;height:14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:pdSpin .8s linear infinite;vertical-align:-2px;margin-right:8px}'; document.head.appendChild(st); }
     if (!build()) { setTimeout(init, 250); return; }
     refresh();
-    setInterval(function () { if (!S.running) refresh(); }, 15000);
+    setInterval(refresh, 5000);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
