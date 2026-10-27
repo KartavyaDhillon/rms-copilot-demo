@@ -110,7 +110,7 @@
     if (!S.steps.length) return S.running ? '<div style="color:var(--muted);font-size:12px">Starting…</div>' : '';
     return S.steps.map(function (s, i) {
       var cur = S.running && i === S.steps.length - 1;
-      var ic = cur ? '<span style="color:var(--amber)">●</span>' : (S.ok === false && i === S.steps.length - 1 ? '<span style="color:var(--red)">✗</span>' : '<span style="color:var(--green)">✓</span>');
+      var ic = cur ? '<span class="pdSpin" style="color:var(--amber);margin-right:0"></span>' : (S.ok === false && i === S.steps.length - 1 ? '<span style="color:var(--red)">✗</span>' : '<span style="color:var(--green)">✓</span>');
       return '<div style="display:flex;gap:8px;font-size:12.5px;padding:3px 0;color:' + (cur ? 'var(--ink)' : 'var(--muted)') + '">' + ic + '<span>' + esc(s) + (cur ? '…' : '') + '</span></div>';
     }).join('');
   }
@@ -118,8 +118,19 @@
   function paintDyn() {
     var e = $('pdDyn'); if (e && modalOpen()) e.innerHTML = dynHtml();
     var last = S.steps.length ? S.steps[S.steps.length - 1] : 'starting', isFile = S.pipe === PIPE_FILE;
-    var b = $('pdRunBtn'); if (b) { b.disabled = S.running; b.style.opacity = S.running ? '.5' : '1'; b.textContent = (S.running && !isFile) ? ('Running — ' + last + '…') : (((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY'); }
-    var f = $('pdFileBtn'); if (f) { f.disabled = S.running; f.style.opacity = S.running ? '.5' : '1'; f.innerHTML = (S.running && isFile) ? ('Making the full file — ' + esc(last) + '…') : '📄 Create Full File &amp; Email to RMS Team'; }
+    var runTxt = ((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY';
+    var b = $('pdRunBtn');
+    if (b) {
+      b.disabled = S.running; b.style.cursor = S.running ? 'default' : 'pointer';
+      if (S.running && !isFile) { b.style.opacity = '1'; b.innerHTML = '<span class="pdSpin"></span>Running — ' + esc(last) + '…'; }
+      else { b.style.opacity = S.running ? '.45' : '1'; b.innerHTML = runTxt; }
+    }
+    var f = $('pdFileBtn');
+    if (f) {
+      f.disabled = S.running; f.style.cursor = S.running ? 'default' : 'pointer';
+      if (S.running && isFile) { f.style.opacity = '1'; f.innerHTML = '<span class="pdSpin"></span>Making the full file — ' + esc(last) + '…'; }
+      else { f.style.opacity = S.running ? '.45' : '1'; f.innerHTML = '📄 Create Full File &amp; Email to RMS Team'; }
+    }
   }
 
   function refresh() {
@@ -321,6 +332,7 @@
 
   // ───────────────────────── start ─────────────────────────
   function init() {
+    if (!document.getElementById('pdSpinCss')) { var st = document.createElement('style'); st.id = 'pdSpinCss'; st.textContent = '@keyframes pdSpin{to{transform:rotate(360deg)}}.pdSpin{display:inline-block;width:14px;height:14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:pdSpin .8s linear infinite;vertical-align:-2px;margin-right:8px}'; document.head.appendChild(st); }
     if (!build()) { setTimeout(init, 250); return; }
     refresh();
     setInterval(function () { if (!S.running) refresh(); }, 15000);

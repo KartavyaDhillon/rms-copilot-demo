@@ -204,7 +204,7 @@ def run_full_file():
         body = (f"Dear Team,\n\nPlease find attached the full Physical Delivery file "
                 f"(CASH {pct:g}%) generated on {today} at {stamp.replace('-', ':')}.\n"
                 f"This is the complete file - it has not been split branch / region / zone-wise and nothing "
-                f"has been sent to branches or clients.\n\nBest regards,\nRisk Management Team")
+                f"has been sent to branches or clients.\n\nBest regards,\n{C.run_by_name()}")
         send.send_email_with_attachments(to, cc, f"Physical Delivery full file - CASH {pct:g}% - {today} {stamp.replace('-', ':')}",
                                          body, [dst])
         ok = True

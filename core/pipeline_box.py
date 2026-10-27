@@ -1033,7 +1033,8 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None, force=Fa
             else:
                 code = f"from {p['module']} import {p['func']} as _f; _f()"
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
-                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO, **(extra_env or {})}
+                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO,
+                   **({"PD_RUN_BY": str(_by)} if key in ("physdel", "physdelfile") else {}), **(extra_env or {})}
             saw_fail = False; last_exc = ""; recovered_after_fail = False; retry_signaled = False
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
                 lf.write(_log_header(p["name"], _started_dt, _by, _ip))
