@@ -194,10 +194,13 @@
     });
     let getBooted = false;
     if ($("#pcFtpGo")) $("#pcFtpGo").onclick = async () => {
-      $("#pcFtpGo").disabled = true; $("#pcFtpGo").style.opacity = ".5";
+      const goBtn = $("#pcFtpGo"), goTxt = goBtn.innerHTML;
+      goBtn.disabled = true; goBtn.style.opacity = ".7";
+      goBtn.innerHTML = '<span class="rms-spin"></span>Fetching… please wait';          // spinner stays for the whole fetch
+      const unbusy = () => { goBtn.disabled = false; goBtn.style.opacity = ""; goBtn.innerHTML = goTxt; };
       let r = {};
       try { r = await (await fetch("/common/ftp/fetch", { method: "POST", credentials: "same-origin" })).json(); } catch (e) { r = { ok: false, error: e.message }; }
-      if (!r.ok) { $("#pcFtpLine").innerHTML = '<span style="color:var(--err)">' + esc(r.error || "Could not start the fetch") + "</span>"; $("#pcFtpGo").disabled = false; $("#pcFtpGo").style.opacity = ""; return; }
+      if (!r.ok) { $("#pcFtpLine").innerHTML = '<span style="color:var(--err)">' + esc(r.error || "Could not start the fetch") + "</span>"; unbusy(); return; }
       $("#pcFtpLine").innerHTML = "<b>Fetching from the FTP…</b> big files can take a minute or two.";
       const t0 = Date.now();
       const tick = async () => {
@@ -206,7 +209,8 @@
         const el = $("#pcFtpLine"); if (!el) return;                       // window was closed
         el.innerHTML = ftpLine(f);
         if (f.running && Date.now() - t0 < 30 * 60 * 1000) { setTimeout(tick, 3000); return; }
-        close(); openCommon();                                              // reopen so the Present / Missing badges are fresh
+        close(); await openCommon();                                        // reopen so the Present / Missing badges are fresh
+        const l2 = $("#pcFtpLine"); if (l2) l2.innerHTML = ftpLine(f);       // keep the result message visible
       };
       setTimeout(tick, 2500);
     };

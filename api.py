@@ -337,6 +337,7 @@ def serve_dashboard(embed: int = 0):
         # anywhere (server is the source of truth). Injected at serve time —
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
+                            '<script src="/platform/js/rms-busy.js?v=1"></script>'
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
