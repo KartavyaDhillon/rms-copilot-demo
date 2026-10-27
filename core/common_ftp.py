@@ -87,10 +87,18 @@ def log_dir() -> str:
     return os.path.join(common_dir(), "FTP FETCH LOGS")
 
 
+LOG_HOOK = None          # the scheduler sets this to its run-log writer while it runs the fetch
+
+
 def _log(msg: str) -> None:
     """Console line + a daily log file (FTP FETCH LOGS\\ftp_fetch_<date>.log) so the history can be read later from the screen."""
     line = f"[common-ftp {dt.datetime.now():%H:%M:%S}] {msg}"
     print(line, flush=True)
+    if LOG_HOOK:
+        try:
+            LOG_HOOK(line)
+        except Exception:
+            pass
     try:
         os.makedirs(log_dir(), exist_ok=True)
         with open(os.path.join(log_dir(), f"ftp_fetch_{dt.date.today():%Y-%m-%d}.log"), "a", encoding="utf-8") as f:
@@ -452,6 +460,9 @@ def start_background() -> None:
     global _THREAD
     if _THREAD and _THREAD.is_alive():
         return
+    if _env("COMMON_FTP_AUTO_LOOP", "false").lower() not in ("1", "true", "yes", "on"):
+        _log("built-in loop is off - the scheduler process 'COMMON FILES FTP FETCH' does the morning fetch")
+        return
     if not enabled():
         _log("auto-fetch is switched off (COMMON_FTP_ENABLED=false)")
         return
@@ -461,3 +472,24 @@ def start_background() -> None:
     _STOP.clear()
     _THREAD = threading.Thread(target=run_loop, name="common-ftp", daemon=True)
     _THREAD.start()
+
+
+def is_fetching() -> bool:
+    return _LOCK.locked()
+
+
+def alert_once_if_missing(detail: str = "") -> bool:
+    """Used by the scheduler process after the window: ONE alert e-mail per day if something is still missing."""
+    today = dt.date.today().isoformat()
+    if _STATE.get("date") != today:
+        _STATE.update(date=today, files={}, attempts=0, alerted=False, done=False, message="")
+    if _STATE.get("alerted"):
+        return False
+    folder = common_dir()
+    miss = [n for k, n in names_today().items() if not local_ok(os.path.join(folder, n), k)]
+    if not miss:
+        return False
+    _STATE["alerted"] = True
+    send_alert(miss, detail or _STATE.get("message") or "not found on the FTP")
+    _write_status()
+    return True
