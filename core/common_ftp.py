@@ -83,8 +83,32 @@ def names_today(today: Optional[dt.date] = None) -> Dict[str, str]:
     return {k: f"{k}_{d}.csv" for k in KINDS}
 
 
+def log_dir() -> str:
+    return os.path.join(common_dir(), "FTP FETCH LOGS")
+
+
 def _log(msg: str) -> None:
-    print(f"[common-ftp {dt.datetime.now():%H:%M:%S}] {msg}", flush=True)
+    """Console line + a daily log file (FTP FETCH LOGS\\ftp_fetch_<date>.log) so the history can be read later from the screen."""
+    line = f"[common-ftp {dt.datetime.now():%H:%M:%S}] {msg}"
+    print(line, flush=True)
+    try:
+        os.makedirs(log_dir(), exist_ok=True)
+        with open(os.path.join(log_dir(), f"ftp_fetch_{dt.date.today():%Y-%m-%d}.log"), "a", encoding="utf-8") as f:
+            f.write(f"{dt.datetime.now():%Y-%m-%d} {line[len('[common-ftp '):].replace('] ', ' ', 1)}\n")
+    except Exception:
+        pass
+
+
+def read_log(date: str = "", lines: int = 300) -> dict:
+    d = date or f"{dt.date.today():%Y-%m-%d}"
+    fp = os.path.join(log_dir(), f"ftp_fetch_{d}.log")
+    days = sorted(x[10:20] for x in (os.listdir(log_dir()) if os.path.isdir(log_dir()) else []) if x.startswith("ftp_fetch_") and x.endswith(".log"))
+    try:
+        with open(fp, encoding="utf-8", errors="replace") as f:
+            txt = "".join(f.readlines()[-lines:])
+    except Exception:
+        txt = ""
+    return {"date": d, "days": days[-30:], "text": txt}
 
 
 # ───────────────────────── local file checks ─────────────────────────

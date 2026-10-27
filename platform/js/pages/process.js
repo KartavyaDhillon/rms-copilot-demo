@@ -180,7 +180,8 @@
       '<div class="card-sub" style="margin-bottom:10px">Only <b>today\'s</b> HOLDING and RISK_REPORT files are accepted, named exactly as below. Anything else is rejected. An existing file of the same name is replaced.</div>' +
       '<table class="htable"><tbody>' + rows + "</tbody></table>" +
       '<div id="pcFtpLine" class="card-sub" style="margin-top:10px;padding:8px 10px;border:1px dashed var(--line,#2a3342);border-radius:8px;line-height:1.5">' + ftpLine(fs) + "</div>" +
-      (fs.configured ? '<button class="btn" id="pcFtpGo" style="width:100%;justify-content:center;height:38px;margin-top:8px">📥 Fetch from FTP now</button>' : "") +
+      (fs.configured ? '<button class="btn" id="pcFtpGo" style="width:100%;justify-content:center;height:38px;margin-top:8px">📥 Fetch from FTP now</button>' +
+        '<button class="btn ghost" id="pcFtpLog" data-no-busy style="width:100%;justify-content:center;height:34px;margin-top:6px">📜 View FTP log</button>' : "") +
       '<input type="file" id="pcCommonFile" accept=".csv" multiple style="display:none">' +
       '<button class="btn primary" id="pcCommonPick" style="width:100%;justify-content:center;height:44px;margin-top:12px">⬆️ Choose file(s) to upload</button>' +
       '<div id="pcCommonMsg" class="card-sub" style="min-height:18px;margin-top:8px"></div></div>' +
@@ -198,6 +199,18 @@
       };
     });
     let getBooted = false;
+    if ($("#pcFtpLog")) $("#pcFtpLog").onclick = async () => {
+      const show = async (d) => {
+        let r = {}; try { r = await (await fetch("/common/ftp/log" + (d ? "?date=" + d : ""), { credentials: "same-origin" })).json(); } catch (e) {}
+        const opts = (r.days || []).slice().reverse().map((x) => '<option' + (x === r.date ? " selected" : "") + ">" + x + "</option>").join("");
+        const box = $("#pcLogBody"); if (!box) return;
+        box.innerHTML = '<div style="margin-bottom:8px">Day: <select id="pcLogDay">' + (opts || "<option>" + esc(r.date || "") + "</option>") + "</select></div>" +
+          '<pre style="max-height:50vh;overflow:auto;white-space:pre-wrap;font-size:12px;line-height:1.5;margin:0">' + (esc(r.text || "") || "Nothing logged for this day yet.") + "</pre>";
+        $("#pcLogDay").onchange = (e) => show(e.target.value);
+      };
+      RMS.modal("FTP fetch log", '<div id="pcLogBody">Loading…</div>');
+      show("");
+    };
     if ($("#pcFtpGo")) $("#pcFtpGo").onclick = async () => {
       const goBtn = $("#pcFtpGo"), goTxt = goBtn.innerHTML;
       goBtn.disabled = true; goBtn.style.opacity = ".7";

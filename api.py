@@ -5004,6 +5004,14 @@ def common_ftp_status():
     return _cf.status()
 
 
+@app.get("/common/ftp/log")
+def common_ftp_log(date: str = ""):
+    """Daily log of the FTP fetch (auto + button) - shown from the Upload Common Files window."""
+    import re as _re
+    from core import common_ftp as _cf
+    return _cf.read_log(date if _re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or "") else "")
+
+
 @app.post("/common/ftp/fetch")
 def common_ftp_fetch(request: Request):
     """'Fetch from FTP now' button: one pass in the background (skips files already in COMMON FILES)."""
