@@ -8,7 +8,8 @@
   window.__physdelInjected = true;
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var PIPE = 'physdel';
-  var S = { d: null, es: null, running: false, steps: [], ok: null };
+  var PIPE_FILE = 'physdelfile';
+  var S = { d: null, es: null, running: false, steps: [], ok: null, pipe: 'physdel' };
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
@@ -96,6 +97,8 @@
       '</div>' +
       '<div id="pdDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>' +
       '<button id="pdRunBtn" onclick="pdAskPct()" style="width:100%;border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">▶ Run PHYSICAL DELIVERY</button>' +
+      '<button id="pdFileBtn" onclick="pdAskPct(\'file\')" style="width:100%;margin-top:10px;border:1px solid rgba(96,165,250,.55);border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer;background:rgba(96,165,250,.12);color:var(--blue)">📄 Create Full File &amp; Email to RMS Team</button>' +
+      '<div style="font-size:11.5px;color:var(--dim);margin:6px 2px 0;text-align:center">Makes the complete file only and e-mails it to the RMS team. Nothing is sent to branches, regions, zones or clients.</div>' +
       '<div class="sa-msg" id="pdRunMsg"></div>' +
       '<div class="sa-status" id="pxStatus-physdel" style="margin-top:12px">' + '<div id="pdSteps">' + stepsHtml() + '</div><div id="pxEvents-physdel"></div>' + (!S.running && !S.steps.length ? '<div class="sa-status-empty">Run status appears here. The full output is saved in Logs.</div>' : '') + '</div>');
     paintDyn();
@@ -114,7 +117,9 @@
   function paintSteps() { var e = $('pdSteps'); if (e) e.innerHTML = stepsHtml(); paintDyn(); }
   function paintDyn() {
     var e = $('pdDyn'); if (e && modalOpen()) e.innerHTML = dynHtml();
-    var b = $('pdRunBtn'); if (b) { b.disabled = S.running; b.style.opacity = S.running ? '.5' : '1'; b.textContent = S.running ? ('Running — ' + (S.steps.length ? S.steps[S.steps.length - 1] : 'starting') + '…') : (((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY'); }
+    var last = S.steps.length ? S.steps[S.steps.length - 1] : 'starting', isFile = S.pipe === PIPE_FILE;
+    var b = $('pdRunBtn'); if (b) { b.disabled = S.running; b.style.opacity = S.running ? '.5' : '1'; b.textContent = (S.running && !isFile) ? ('Running — ' + last + '…') : (((S.d || {}).safe_test || {}).armed ? '🧪 Run as safe test' : '▶ Run PHYSICAL DELIVERY'); }
+    var f = $('pdFileBtn'); if (f) { f.disabled = S.running; f.style.opacity = S.running ? '.5' : '1'; f.innerHTML = (S.running && isFile) ? ('Making the full file — ' + esc(last) + '…') : '📄 Create Full File &amp; Email to RMS Team'; }
   }
 
   function refresh() {
@@ -124,7 +129,8 @@
       if (el && !S.running) el.textContent = (w.phase === 'expiry_day' ? 'Expiry day — run as needed' : (w.phase === 'window' ? 'Window open — ' + (w.runs_today ? 'run today' : 'not run today') : 'Not due — window opens ' + dmy(w.window_start))) + (d.safe_test && d.safe_test.armed ? ' · 🧪 test armed' : '');
       paintDyn();
     }).catch(function () {});
-    jget('/px/status?pipe=' + PIPE).then(function (s) { if (!S.es) setRunning(!!(s && s.running)); }).catch(function () {});
+    jget('/px/status?pipe=' + PIPE).then(function (s) { if (!S.es) { if (s && s.running) S.pipe = PIPE; setRunning(!!(s && s.running)); } }).catch(function () {});
+    jget('/px/status?pipe=' + PIPE_FILE).then(function (s) { if (!S.es && s && s.running) { S.pipe = PIPE_FILE; setRunning(true); } }).catch(function () {});
   }
   function setRunning(on) {
     S.running = on;
@@ -135,35 +141,38 @@
 
   // ───────────────────────── Run ─────────────────────────
   // The CASH % is asked in a popup every time Run is pressed - nobody can forget to fill it.
-  window.pdAskPct = function () {
+  window.pdAskPct = function (mode) {
     if (S.running) return;
-    var last = (S.d || {}).percent, armed = ((S.d || {}).safe_test || {}).armed;
+    var isFile = mode === 'file';
+    var last = isFile ? (S.d || {}).file_percent : (S.d || {}).percent, armed = !isFile && ((S.d || {}).safe_test || {}).armed;
     window._saReturn = pdOpen;
-    modal('CASH % for this run',
+    modal(isFile ? 'Full file - CASH %' : 'CASH % for this run',
       '<div style="padding:16px;border-radius:14px;border:2px solid var(--amber);background:rgba(251,191,36,.08);margin-bottom:14px">' +
         '<div style="font-size:15px;font-weight:700;color:var(--amber);margin-bottom:4px">Enter the CASH % for this run</div>' +
-        '<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">How much the price is moved up / down. Last run used <b style="color:var(--ink)">' + esc(last) + '%</b>.</div>' +
-        '<div style="display:flex;gap:10px;align-items:center"><input id="pdPct" type="number" step="0.1" min="0.1" max="100" placeholder="e.g. 2" ' +
-          'style="flex:1;font-size:26px;font-weight:700;text-align:center;padding:12px;border-radius:12px;border:2px solid var(--amber);background:transparent;color:var(--ink)" onkeydown="if(event.keyCode===13)pdStart()">' +
+        (isFile ? '<div style="font-size:12px;color:var(--blue);margin-bottom:6px">This only creates the full file and e-mails it to the RMS team. Nothing goes to branches or clients.</div>' : '') +
+        '<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">How much the price is moved up / down. Any number from 0 (like 0, 0.5 or 2). Last time you used <b style="color:var(--ink)">' + esc(last) + '%</b>.</div>' +
+        '<div style="display:flex;gap:10px;align-items:center"><input id="pdPct" type="number" step="0.1" min="0" max="100" placeholder="e.g. 2" ' +
+          'style="flex:1;font-size:26px;font-weight:700;text-align:center;padding:12px;border-radius:12px;border:2px solid var(--amber);background:transparent;color:var(--ink)" onkeydown="if(event.keyCode===13)pdStart(' + (isFile ? '\'file\'' : '') + ')">' +
           '<span style="font-size:26px;font-weight:700;color:var(--amber)">%</span></div>' +
         '<div style="margin-top:10px"><button class="sa-tool" onclick="document.getElementById(\'pdPct\').value=' + esc(last) + '">Use last value (' + esc(last) + '%)</button></div>' +
       '</div>' +
       (armed ? '<div style="margin-bottom:12px;color:#fbbf24;font-size:12.5px;font-weight:700">🧪 Safe test is armed — this run sends only to the test address.</div>' : '') +
-      '<button onclick="pdStart()" style="width:100%;border:0;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">' + (armed ? '🧪 Start test run' : '▶ Start run') + '</button>' +
+      '<button onclick="pdStart(' + (isFile ? '\'file\'' : '') + ')" style="width:100%;border:0;border-radius:12px;padding:14px;font-size:15px;font-weight:700;cursor:pointer;background:#34e3a5;color:#04261a">' + (isFile ? '📄 Create file &amp; email it' : (armed ? '🧪 Start test run' : '▶ Start run')) + '</button>' +
       '<div class="sa-msg" id="pdRunMsg"></div>');
     setTimeout(function () { var e = $('pdPct'); if (e) e.focus(); }, 60);
   };
-  window.pdStart = function () {
+  window.pdStart = function (mode) {
     if (S.running) return;
+    var isFile = mode === 'file';
     var v = ($('pdPct') || {}).value, msg = $('pdRunMsg');
     if (msg) msg.innerHTML = '<span style="color:var(--muted)">Starting…</span>';
-    jpost('/pd/percent?value=' + encodeURIComponent(v || '')).then(function (r) {
+    jpost((isFile ? '/pd/file-percent' : '/pd/percent') + '?value=' + encodeURIComponent(v || '')).then(function (r) {
       if (!r.ok) { if (msg) msg.innerHTML = '<span style="color:var(--red)">' + esc(r.error || 'Enter a number like 2') + '</span>'; return; }
-      window._saReturn = null; pdOpen(); streamRun();
+      window._saReturn = null; S.pipe = isFile ? PIPE_FILE : PIPE; pdOpen(); streamRun();
     }).catch(function () { if (msg) msg.innerHTML = '<span style="color:var(--red)">Could not reach the backend.</span>'; });
   };
-  function claim() { return typeof window._pxMarkRunning === 'function' ? window._pxMarkRunning(PIPE) : true; }
-  function release() { if (typeof window._pxMarkDone === 'function') window._pxMarkDone(PIPE); }
+  function claim() { return typeof window._pxMarkRunning === 'function' ? window._pxMarkRunning(S.pipe) : true; }
+  function release() { if (typeof window._pxMarkDone === 'function') window._pxMarkDone(S.pipe); }
   function streamRun() {
     if (!claim()) return;
     setRunning(true);
@@ -171,9 +180,9 @@
     S.steps = []; S.ok = null;
     if (st) st.innerHTML = '<div id="pdSteps"></div><div id="pxEvents-' + PIPE + '"></div>';
     paintSteps();
-    var ev = new EventSource(API + '/px/run-stream?pipe=' + PIPE);
+    var ev = new EventSource(API + '/px/run-stream?pipe=' + S.pipe);
     S.es = ev;
-    if (typeof window._pxSetES === 'function') window._pxSetES(PIPE, ev);
+    if (typeof window._pxSetES === 'function') window._pxSetES(S.pipe, ev);
     ev.onmessage = function (m) {
       var d; try { d = JSON.parse(m.data); } catch (e) { return; }
       if (d.type === 'note') { if (S.steps[S.steps.length - 1] !== d.msg) S.steps.push(d.msg); paintSteps(); }
@@ -185,7 +194,7 @@
       }
       if (d.type === 'end' || d.type === 'done') {
         ev.close(); S.es = null;
-        if (typeof window._pxClearES === 'function') window._pxClearES(PIPE);
+        if (typeof window._pxClearES === 'function') window._pxClearES(S.pipe);
         release(); setRunning(false);
         S.ok = d.ok !== false;
         S.steps.push(S.ok ? 'Finished' : 'Finished with errors — open Logs to see why');
@@ -195,15 +204,15 @@
     };
     ev.onerror = function () {
       ev.close(); S.es = null;
-      if (typeof window._pxClearES === 'function') window._pxClearES(PIPE);
+      if (typeof window._pxClearES === 'function') window._pxClearES(S.pipe);
       release(); setRunning(false);
       if (typeof window.pxEv === 'function') window.pxEv(PIPE, false, 'Connection lost — is the backend running?', 'stream');
     };
   }
   window.pdStop = function () {
     try { if (S.es) { S.es.close(); S.es = null; } } catch (e) {}
-    if (typeof window._pxCloseES === 'function') { try { window._pxCloseES(PIPE); } catch (e) {} }
-    fetch(API + '/px/stop?pipe=' + PIPE, { method: 'POST' }).catch(function () {});
+    if (typeof window._pxCloseES === 'function') { try { window._pxCloseES(S.pipe); } catch (e) {} }
+    fetch(API + '/px/stop?pipe=' + S.pipe, { method: 'POST' }).catch(function () {});
     release(); setRunning(false);
     if (typeof window.pxEv === 'function') window.pxEv(PIPE, false, 'Process terminated by user', 'stopped');
   };

@@ -481,7 +481,8 @@ PIPELINES = {
                                "Ludhiana zone": ["PD_ZONE_LUDH_TO", "PD_ZONE_LUDH_CC"],
                                "Mumbai zone": ["PD_ZONE_MUMB_TO", "PD_ZONE_MUMB_CC"],
                                "Delhi zone": ["PD_ZONE_DELH_TO", "PD_ZONE_DELH_CC"],
-                               "Run log": ["PD_LOG_TO", "PD_LOG_CC"]},
+                               "Run log": ["PD_LOG_TO", "PD_LOG_CC"],
+                               "Full file (the button under Run)": ["PD_FILE_TO", "PD_FILE_CC"]},
                 "cred": {"SMTP sender (alerts account)": {"user_key": "PROBABLE_ALERTS_SMTP_EMAIL",
                           "pass_key": "PROBABLE_ALERTS_SMTP_PASSWORD",
                           "note": "the account every PHYSICAL DELIVERY mail is sent from (same as PROBABLE's alerts sender)"},
@@ -512,6 +513,13 @@ PIPELINES = {
                 "master_label": "MASTER FILES",
                 },
 }
+# "Create full file & e-mail it" button of the PHYSICAL DELIVERY window: its own run slot (so Stop / status work on it)
+# but the same folders, e-mail sender and logs as the main Run.  runs=1 + a counter file nobody writes => no once-a-day
+# block and no 5-minute cool-down (the file is often made several times with different CASH %).
+PIPELINES["physdelfile"] = {"name": "PHYSICAL DELIVERY - full file", "module": "core.pipelines.physical_delivery",
+                            "func": "run_full_file", "logdir": "physdel", "runs": 1,
+                            "state_dir_env": "PHYSICAL_DELIVERY_FOLDER", "state_default": PIPELINES["physdel"]["state_default"],
+                            "state_file": "full_file_counter.txt", "email_keys": {}, "cred": {}}
 try:                                   # PHYSICAL DELIVERY folder / e-mail / WhatsApp defaults (only fills what .env lacks)
     from core.pipelines import physdel_cfg as _pd_cfg
     _pd_cfg.apply_defaults()

@@ -71,32 +71,86 @@ def _save_state(st: dict) -> None:
     os.replace(tmp, p)
 
 
-def parse_percent(v) -> float:
-    """'2' / '2.5' / ' 3 % ' -> 2.0 / 2.5 / 3.0.  Raises ValueError for anything that is not a plain number above 0."""
+def parse_percent(v, allow_zero: bool = True) -> float:
+    """'2' / '0.5' / ' 3 % ' / '0' -> 2.0 / 0.5 / 3.0 / 0.0.  Raises ValueError for text or a number outside 0-100
+    (the original popup accepted 0 and decimals such as 0.5, so both are allowed)."""
     s = str(v if v is not None else "").strip().replace("%", "").strip()
     if s == "":
         raise ValueError("Please enter the CASH percentage.")
     x = float(s)                                    # ValueError for text
-    if not (0 < x <= 100):
+    if allow_zero:
+        if not (0 <= x <= 100):
+            raise ValueError("The percentage must be between 0 and 100.")
+    elif not (0 < x <= 100):
         raise ValueError("The percentage must be more than 0 and at most 100.")
     return x
+
+
+def file_mode() -> bool:
+    """True while the 'full file' button's run is active (it keeps its own CASH %, and 0 is allowed)."""
+    return os.environ.get("PD_FILE_MODE") == "1"
 
 
 def get_percent() -> float:
     """The CASH % chosen in the Run popup (default 2)."""
     try:
+        if file_mode():
+            return parse_percent(_load_state().get("file_percent", 2))
         return parse_percent(_load_state().get("percent", 2))
     except Exception:
         return 2.0
 
 
-def set_percent(v) -> float:
+def set_percent(v, file: bool = False) -> float:
     x = parse_percent(v)
     st = _load_state()
-    st["percent"] = x
+    st["file_percent" if file else "percent"] = x
     st["percent_set_at"] = dt.datetime.now().isoformat(timespec="seconds")
     _save_state(st)
     return x
+
+
+def get_file_percent() -> float:
+    try:
+        return parse_percent(_load_state().get("file_percent", 2))
+    except Exception:
+        return 2.0
+
+
+def full_files_dir() -> str:
+    """Where the 'full file' button saves its files (FULLFILE_<cash %>_<time>.xlsx)."""
+    return os.path.join(base(), "FULL FILES")
+
+
+# one run at a time: the full-file button and the main Run use the same working files
+def _busy_path() -> str:
+    return os.path.join(base(), ".pd_busy")
+
+
+def busy_other() -> str:
+    """Name of the other PHYSICAL DELIVERY job that is running now ('' = none).  A lock older than 40 min is ignored."""
+    try:
+        p = _busy_path()
+        if os.path.isfile(p) and (dt.datetime.now().timestamp() - os.path.getmtime(p)) < 40 * 60:
+            return open(p, encoding="utf-8").read().strip() or "another run"
+    except OSError:
+        pass
+    return ""
+
+
+def set_busy(name: str) -> None:
+    try:
+        os.makedirs(base(), exist_ok=True)
+        open(_busy_path(), "w", encoding="utf-8").write(name)
+    except OSError:
+        pass
+
+
+def clear_busy() -> None:
+    try:
+        os.remove(_busy_path())
+    except OSError:
+        pass
 
 
 # ───────────────────────── recipients / numbers (read from .env, original values are the defaults) ─────────────────────────
@@ -447,6 +501,8 @@ DEFAULT_ENV = {      # only set when .env does not have them (so the windows sho
     "PD_ZONE_DELH_CC": "",
     "PD_LOG_TO": "rms_del@mastertrust.co.in",
     "PD_LOG_CC": "",
+    "PD_FILE_TO": "rms_del@mastertrust.co.in",      # the "full file" button e-mails its file here
+    "PD_FILE_CC": "",
     "PD_WA_DELHI": "9899547339, 9711667470, 9871410617",
     "PD_WA_LUDHIANA": "9888556665",
     "PD_WA_CHANDIGARH": "9914122055, 9814566866",
@@ -460,7 +516,7 @@ def apply_defaults() -> None:
         os.environ.setdefault(k, v)
     os.environ.setdefault("PHYSICAL_DELIVERY_FOLDER", base())
     os.environ.setdefault("PHYSICAL_DELIVERY_INPUT", input_dir())
-    for d in (base(), input_dir(), main_dir(), backup_dir()):     # the folders are made on first use - nothing to create by hand
+    for d in (base(), input_dir(), main_dir(), backup_dir(), full_files_dir()):     # the folders are made on first use - nothing to create by hand
         try:
             os.makedirs(d, exist_ok=True)
         except OSError:

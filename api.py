@@ -331,7 +331,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
-                            '<script src="/platform/js/process-physdel.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-physdel.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -4402,7 +4402,7 @@ def pd_status():
     from core.pipelines import physdel_cfg as _pd
     _pd.apply_defaults()
     return {"window": _pd.window_info(), "inputs": _pd.inputs_report(), "missing": _pd.missing_inputs(),
-            "last_run": _pd.last_run(), "percent": _pd.get_percent(), "safe_test": _pd.safe_test_targets(),
+            "last_run": _pd.last_run(), "percent": _pd.get_percent(), "file_percent": _pd.get_file_percent(), "busy": _pd.busy_other(), "safe_test": _pd.safe_test_targets(),
             "today": __import__("datetime").date.today().isoformat()}
 
 
@@ -4415,6 +4415,17 @@ def pd_percent(value: str = ""):
     except Exception as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "percent": _pd.set_percent(v)}
+
+
+@app.post("/pd/file-percent")
+def pd_file_percent(value: str = ""):
+    """Saves the CASH % typed for the 'Create full file & e-mail it' button (0 is allowed)."""
+    from core.pipelines import physdel_cfg as _pd
+    try:
+        v = _pd.set_percent(value, file=True)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "percent": v}
 
 
 @app.get("/pd/safe-test")

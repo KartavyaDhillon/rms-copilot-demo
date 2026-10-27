@@ -90,11 +90,38 @@ class PhysDel(unittest.TestCase):
     def test_percent(self):
         self.assertEqual(C.parse_percent("2.5"), 2.5)
         self.assertEqual(C.parse_percent("3%"), 3.0)
-        for bad in ("", "abc", "0", "-1", "500"):
+        for bad in ("", "abc", "-1", "500"):
             with self.assertRaises(Exception):
                 C.parse_percent(bad)
+        self.assertEqual(C.parse_percent("0"), 0.0)          # the original popup accepted 0 and decimals
+        self.assertEqual(C.parse_percent("0.5"), 0.5)
         C.set_percent(4)
         self.assertEqual(C.get_percent(), 4.0)
+
+    def test_full_file_percent_is_kept_separately(self):
+        C.set_percent(2)
+        C.set_percent(0, file=True)
+        self.assertEqual(C.get_percent(), 2.0)
+        os.environ["PD_FILE_MODE"] = "1"
+        try:
+            self.assertEqual(C.get_percent(), 0.0)
+        finally:
+            os.environ.pop("PD_FILE_MODE", None)
+        self.assertEqual(C.get_file_percent(), 0.0)
+
+    def test_busy_lock_blocks_the_other_job(self):
+        self.assertEqual(C.busy_other(), "")
+        C.set_busy("PHYSICAL DELIVERY")
+        self.assertEqual(C.busy_other(), "PHYSICAL DELIVERY")
+        C.clear_busy()
+        self.assertEqual(C.busy_other(), "")
+
+    def test_full_file_pipeline_registered(self):
+        from core import pipeline_box as pb
+        self.assertEqual(pb.PIPELINES["physdelfile"]["func"], "run_full_file")
+        self.assertIn("physdelfile", pb._PB)
+        self.assertIn("Full file (the button under Run)", pb.PIPELINES["physdel"]["email_keys"])
+        self.assertEqual(os.environ.get("PD_FILE_TO"), "rms_del@mastertrust.co.in")
 
     def test_window(self):
         hol = set()

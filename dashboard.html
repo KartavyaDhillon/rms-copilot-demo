@@ -413,6 +413,18 @@ body {
 .sa-run.active-win{border-color:var(--green);box-shadow:0 0 0 1px rgba(52,211,153,.3)}
 .sa-run.active-win.pending{animation:saGlow 1.1s infinite}
 .sa-run.running .sa-run-btn{background:var(--amber);color:var(--amber-d)}
+/* ── UNIFORM BORDERS (tool-button rows + run tiles) ───────────────────────────────────────────────────────
+   Every tool button gets the same box: 1px border, same height, icon + text centred (emoji of different
+   fonts used to make Stop / Backup files / Download MCX files taller or lower than their neighbours).
+   Run tiles: same 1px border in every state - the "ready" highlight is a glow only, so no tile grows or
+   shifts; View / Run buttons are exactly the same height. */
+.sa-tools{align-items:stretch}
+.sa-tools .sa-tool{display:inline-flex;align-items:center;justify-content:center;gap:6px;box-sizing:border-box;
+  height:36px;min-height:36px;padding:0 12px !important;line-height:1;border-width:1px !important;border-style:solid;border-radius:9px !important;white-space:nowrap;vertical-align:middle}
+.sa-run{box-sizing:border-box;border-width:1px !important;border-style:solid}
+.sa-run.active-win,.sa-run.active-win.pending{border-width:1px !important;border-color:var(--green);transform:none !important}
+.sa-run-btn{box-sizing:border-box;height:42px;min-height:42px;display:flex;align-items:center;justify-content:center;border:0 !important;line-height:1}
+.sa-run-btn:not(:disabled):hover{transform:none !important}
 /* CLI OLD/NEW: same full-width pill button CTCL's "View" uses (.sa-run-btn),
    stacked vertically — two of these side by side was "too horizontal"; two
    64px squares looked nothing like the rest of the dashboard. Stacking keeps
