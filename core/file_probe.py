@@ -81,7 +81,32 @@ def _watch() -> None:
                     _w(f"MISSING  {name} - {err}; running: {_running()}; folder now: {listing}")
         except Exception:
             pass
+        _watch_ctcl_backup(gone, seen)
         time.sleep(0.4)
+
+
+_ctcl_next = [0.0]
+
+
+def _watch_ctcl_backup(gone, seen):
+    """Same watch for the CTCL vs NMASS backup that PHYSICAL DELIVERY copies from (checked every 3 s)."""
+    if time.time() < _ctcl_next[0]:
+        return
+    _ctcl_next[0] = time.time() + 3
+    try:
+        from core.pipelines import physdel_cfg as P
+        r = P._pick_ctcl_once()
+    except Exception:
+        return
+    name = "CTCL vs NMASS backup"
+    if r:
+        if name in gone:
+            t0, before = gone.pop(name)
+            _w(f"BACK     {name} - was invisible for {time.time() - t0:.1f}s; now {r.get('name')} ({r.get('where')}); running: {_running()}")
+        seen[name] = r.get("name", "")
+    elif name in seen and name not in gone:
+        gone[name] = (time.time(), seen[name])
+        _w(f"MISSING  {name} (was {seen[name]}); running: {_running()}")
 
 
 def start_watch() -> None:

@@ -203,7 +203,11 @@
     var tick = function () {
       var stillLocked = LOCKS.some(function (l) { return (l.affects || []).indexOf(target) >= 0 && l.kind !== "action"; });
       var el = box.querySelector(".lm-steps");
-      if (!stillLocked || !document.contains(box)) { if (el) el.remove(); clearInterval(STEP_TIMER[target]); delete STEP_TIMER[target]; delete STEP_SIG[target]; return; }
+      if (!stillLocked || !document.contains(box)) {
+        // the run is over: say so right here (no refresh needed), then tidy up after a minute
+        if (el) { el.innerHTML = '<div class="ok" style="font-weight:700">✓ The run has finished.</div>' + el.innerHTML.replace(/<span class="lm-spin"><\/span>/g, '<span class="ok">✓</span> '); setTimeout(function () { if (el.parentNode) el.remove(); }, 60000); }
+        clearInterval(STEP_TIMER[target]); delete STEP_TIMER[target]; delete STEP_SIG[target]; return;
+      }
       fetch("/ops/progress?pipe=" + encodeURIComponent(target), { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (d) {
         if (!d || !d.ok) return;
         var steps = d.steps || [];
@@ -270,7 +274,6 @@
         if (lock.kind === "action") banFree(t); else banBusy(t, lock);
       } else {
         if (strip) strip.remove();
-        var stp = box.querySelector(".lm-steps"); if (stp) stp.remove();
         enableBox(box);
         banFree(t);
       }

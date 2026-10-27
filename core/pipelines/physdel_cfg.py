@@ -190,7 +190,25 @@ def _date_from(part: str) -> Optional[dt.date]:
         return None
 
 
+_LAST_CTCL = None          # (ctcl base folder, last file found)
+
+
 def pick_ctcl_file(root: Optional[str] = None) -> Optional[dict]:
+    """Latest CTCL vs NMASS main output. While a CTCL run is backing up its files the folder can look empty for a few
+    seconds, so it asks again (5 x 1 s) and, failing that, keeps showing the last file found if it is still on disk."""
+    global _LAST_CTCL
+    from core.file_probe import settle
+    r = settle(lambda: _pick_ctcl_once(root), tries=5, delay=1.0)
+    if r:
+        if root is None:
+            _LAST_CTCL = (ctcl_base(), r)
+        return r
+    if root is None and _LAST_CTCL and _LAST_CTCL[0] == ctcl_base() and os.path.isfile(_LAST_CTCL[1].get("path", "")):
+        return _LAST_CTCL[1]
+    return None
+
+
+def _pick_ctcl_once(root: Optional[str] = None) -> Optional[dict]:
     """The CTCL vs NMASS MAIN output (FULL_FILE_CTCL_VS_NMASS_<NN>.xlsx - not the zone variants) from the LATEST backup:
     the newest date folder, and inside it the highest run number.  Returns None when there is none."""
     rootp = Path(root or os.path.join(ctcl_base(), "BACKUPFILES AUTOMATED"))

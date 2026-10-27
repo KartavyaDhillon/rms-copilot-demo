@@ -79,6 +79,7 @@
       (d.last_run ? '<br><span style="color:var(--dim)">Last run ' + esc(dmy(d.last_run.date)) + ' ' + esc(d.last_run.time) + (d.last_run.ok ? ' — ok' : ' — with errors') + (d.last_run.test ? ' (test)' : '') + (d.last_run.kind ? ' — ' + esc(d.last_run.kind) : '') + ', CASH ' + esc(d.last_run.percent) + '%' + (d.last_run.by ? ' — by ' + esc(d.last_run.by) : '') + '</span>' : '') + '</div>';
     var L = S.lock;
     if (L) h += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:9px;background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.45);color:var(--amber);font-size:12.5px;line-height:1.5"><span class="pdSpin" style="margin-right:8px"></span><b>' + (L.pipe === PIPE_FILE ? 'Full file' : 'PHYSICAL DELIVERY run') + ' is running</b> — started by <b>' + esc(L.by || 'unknown user') + '</b>' + (L.ip ? ' from ' + esc(L.ip) : '') + (L.started_at ? ' at ' + esc(String(L.started_at).slice(11, 16)) : '') + (L.elapsed_s != null ? ' (' + Math.floor(L.elapsed_s / 60) + ' min ' + (L.elapsed_s % 60) + ' s ago)' : '') + '</div>';
+    if (!L && S.done && !S.running) { var lr = d.last_run || {}, okk = lr.ok !== false; h += '<div style="margin-bottom:12px;padding:10px 12px;border-radius:9px;background:' + (okk ? 'rgba(52,211,153,.10)' : 'rgba(248,113,113,.10)') + ';border:1px solid ' + (okk ? 'rgba(52,211,153,.45)' : 'rgba(248,113,113,.45)') + ';color:' + (okk ? 'var(--green)' : 'var(--red)') + ';font-size:12.5px;line-height:1.5"><b>' + (okk ? '✓ ' : '✗ ') + (S.done.pipe === PIPE_FILE ? 'Full file' : 'PHYSICAL DELIVERY run') + (okk ? ' completed' : ' finished with errors') + '</b>' + (S.done.by ? ' — started by <b>' + esc(S.done.by) + '</b>' : '') + ' at ' + esc(String(S.done.at.getHours()).padStart(2, '0') + ':' + String(S.done.at.getMinutes()).padStart(2, '0')) + ' (see the steps below)</div>'; }
     if (st.armed) h += '<div style="margin-bottom:12px;padding:9px 12px;border-radius:9px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);color:#fbbf24;font-size:12.5px;font-weight:700">🧪 SAFE TEST ARMED — the next Run sends only to ' + esc((st.email_to || []).join(', ')) + ' / ' + esc(st.wa_to || '') + '. It switches itself off after that run.</div>';
     h += '<div style="margin:0 0 12px;padding:10px 12px;border:1px dashed var(--line-2);border-radius:10px">' + filesHtml(d) + '</div>';
     return h;
@@ -146,16 +147,25 @@
     jget('/ops/locks').then(function (r) {
       var mine = null;
       (r.locks || []).forEach(function (l) { if (l.pipe === PIPE || l.pipe === PIPE_FILE) mine = l; });
-      S.lock = mine;
-      if (!S.es) { if (mine) S.pipe = mine.pipe; setRunning(!!mine); }
-      if (mine || S.es) {
-        jget('/pd/progress?pipe=' + (mine ? mine.pipe : S.pipe)).then(function (p) {
-          S.detail = p.detail || '';
-          if (!S.es && p.steps && p.steps.length) S.steps = p.steps;      // a run started by somebody else: show its steps here too
-          paintSteps();
-        }).catch(function () {});
-      } else { S.detail = ''; }
-      paintDyn();
+      if (S.es) { S.lock = mine; paintDyn(); return; }                       // this screen started the run: streamRun() drives it
+      var L0 = mine || S.wasLock;
+      if (!L0) { S.lock = null; if (S.running) setRunning(false); S.detail = ''; paintDyn(); return; }
+      jget('/pd/progress?pipe=' + L0.pipe).then(function (p) {
+        // the run is over when the lock is gone OR its own log says "Ended" (never leave a finished run showing "running")
+        var m = /__(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/.exec(p.log || ''), fresh = true;
+        if (m && L0.started_at) { var lt = new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime(), st = new Date(L0.started_at).getTime(); if (!isNaN(st)) fresh = lt >= st - 10000; }
+        var ended = !mine || (p.finished && fresh);
+        if (p.steps && p.steps.length && fresh) S.steps = p.steps;
+        if (!ended) {
+          S.lock = mine; S.wasLock = mine; S.pipe = mine.pipe; setRunning(true); S.detail = p.detail || '';
+        } else {
+          S.lock = null; S.wasLock = null; S.detail = '';
+          S.done = { by: L0.by || '', pipe: L0.pipe, at: new Date() };
+          setRunning(false);
+          setTimeout(refresh, 400);                                           // pulls the fresh "Last run" line
+        }
+        paintSteps();
+      }).catch(function () {});
     }).catch(function () {});
   }
   function setRunning(on) {

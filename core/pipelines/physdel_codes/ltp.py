@@ -1484,6 +1484,16 @@ def build_pivot_sheet(final_df):
         ]
     ]
 
+    # Every number in the PIVOT sheet is shown as a WHOLE number (the calculations above used the exact values).
+    # ClientID, Zone, Region, Branch, BRM and REMARKS are left exactly as they are.
+    for _c in pivot.columns:
+        if _c in ("Zone", "Region", "Branch", "BRM", "ClientID", "REMARKS"):
+            continue
+        _v = pd.to_numeric(pivot[_c], errors="coerce")
+        if _v.notna().any():
+            # normal rounding (412.5 -> 413, -412.5 -> -413), not Python's "round half to even"
+            pivot[_c] = (_v.abs().add(0.5).apply(lambda x: x // 1) * _v.apply(lambda x: -1 if x < 0 else 1)).astype("Int64")
+
     return pivot
 
 

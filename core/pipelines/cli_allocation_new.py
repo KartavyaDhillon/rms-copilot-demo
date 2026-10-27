@@ -30,6 +30,8 @@ so Run NEW reuses cli_download.py / cli_mcx_download.py / cli_upload.py as-is.
                 col 25 (Excel column Z) = value; abs(that value) computed per code
              4) abs(Z) is added ONLY to accounts that are both in the base CLI file
                 AND in the 'Y' set from RISK_REPORT
+             5) UnRecoCheque (RISK_REPORT, ACCOUNTID): where it is > 0 the amount is ADDED to that code's
+                limit in CLI_PRUDENTIAL_LIMIT.txt (last step; codes not in the file are added)
            writes Intermediate.csv + CLI_PRUDENTIAL_LIMIT.txt (same filenames as
            OLD — Run NEW overwrites the same output files OLD would have produced).
 
@@ -518,6 +520,37 @@ def run_cli_allocation_new():
         # minus sign in the uploaded file anyway. Adding 0.0 turns -0.0 into
         # 0.0 (IEEE-754) and leaves every other value untouched.
         df_out["Sum"] = df_out["Sum"].clip(lower=0).round(2) + 0.0
+
+        # 6) UnRecoCheque (RISK_REPORT) - LAST step, applied to the final values: every ACCOUNTID whose UnRecoCheque is
+        #    greater than 0 gets that amount ADDED to its prudential limit. A code that is not in the file yet is added
+        #    with that amount (its base limit is 0). Zero, negative, blank or non-numeric values are ignored.
+        try:
+            if os.path.exists(risk_path):
+                _ur = pd.read_csv(risk_path, dtype=str, usecols=lambda c: str(c).strip() in ("ACCOUNTID", "UnRecoCheque"))
+                _ur.columns = _ur.columns.str.strip()
+                if "UnRecoCheque" in _ur.columns:
+                    _ur["ACCOUNTID"] = _ur["ACCOUNTID"].astype(str).str.strip()
+                    _ur["UnRecoCheque"] = pd.to_numeric(_ur["UnRecoCheque"].astype(str).str.replace(",", "").str.strip(), errors="coerce")
+                    _ur = _ur[_ur["UnRecoCheque"] > 0].groupby("ACCOUNTID", as_index=False)["UnRecoCheque"].sum()
+                    _have = set(df_out["AccountID"])
+                    _inc, _new = 0, 0
+                    for _acc, _val in zip(_ur["ACCOUNTID"], _ur["UnRecoCheque"]):
+                        if _acc in _have:
+                            df_out.loc[df_out["AccountID"] == _acc, "Sum"] = (df_out.loc[df_out["AccountID"] == _acc, "Sum"] + _val).round(2)
+                            _inc += 1
+                            _p(f"   UnRecoCheque +{_val:,.2f} added to {_acc}")
+                        else:
+                            df_out = pd.concat([df_out, pd.DataFrame({"AccountID": [_acc], "Sum": [round(float(_val), 2)]})], ignore_index=True)
+                            _new += 1
+                            _p(f"   UnRecoCheque {_val:,.2f} -> {_acc} added to the file (was not in it)")
+                    _p(f"✅ UnRecoCheque > 0: {len(_ur)} code(s) - {_inc} increased, {_new} newly added (total {round(float(_ur['UnRecoCheque'].sum()), 2):,.2f})")
+                else:
+                    _p("⚠️ Risk report has no 'UnRecoCheque' column - nothing added")
+            else:
+                _p("⚠️ Risk report not found - UnRecoCheque not added")
+        except Exception as _ue:
+            _p(f"❌ UnRecoCheque step failed: {_ue}")
+            raise
 
         with open(os.path.join(base_folder, "CLI_PRUDENTIAL_LIMIT.txt"), "w") as f:
             f.write("ClientPrudentialLimit\n")
