@@ -337,7 +337,7 @@ def serve_dashboard(embed: int = 0):
         # anywhere (server is the source of truth). Injected at serve time —
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
-                            '<script src="/platform/js/rms-busy.js?v=1"></script>'
+                            '<script src="/platform/js/rms-busy.js?v=3"></script>'
                             '<script src="/platform/js/process-locks.js?v=1"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
@@ -4980,6 +4980,11 @@ def common_status():
     """Process Center 'Upload common files': is today's HOLDING / RISK_REPORT in COMMON FILES?"""
     folder = _sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
     items = []
+    try:
+        from core.common_ftp import read_sources as _rs
+        _src = _rs(folder)
+    except Exception:
+        _src = {}
     for label, name in _common_names_today().items():
         p = _sa_os.path.join(folder, name)
         have = _sa_os.path.isfile(p)
@@ -4987,7 +4992,8 @@ def common_status():
         if have:
             import datetime as _cdt
             mod = _cdt.datetime.fromtimestamp(_sa_os.path.getmtime(p)).strftime("%H:%M:%S")
-        items.append({"label": label, "name": name, "present": have, "modified": mod})
+        items.append({"label": label, "name": name, "present": have, "modified": mod,
+                      "source": (_src.get(name) or {}).get("how", "") if have else "", "source_by": (_src.get(name) or {}).get("by", "") if have else ""})
     return {"items": items}
 
 
@@ -5218,6 +5224,13 @@ async def common_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_
                 raise ValueError("this does not look like a CSV file")
             _sa_os.replace(part, _sa_os.path.join(folder, want))
             ok.append(want)
+            try:
+                from core.common_ftp import mark_source as _ms
+                try: _who = _actor(request)[0]
+                except Exception: _who = ""
+                _ms(folder, want, "Manual", _who or "")
+            except Exception:
+                pass
         except Exception as e:
             rejected.append(f"{raw}: {e}")
             try: _sa_os.remove(part)

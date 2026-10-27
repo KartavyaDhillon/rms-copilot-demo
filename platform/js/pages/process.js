@@ -154,7 +154,10 @@
     const ftpLine = (f) => {
       if (!f || f.configured === undefined) return "";
       if (!f.configured) return "Automatic fetch from the FTP is not set up yet (COMMON_FTP_* in .env). Uploading by hand works as always.";
-      const per = Object.keys(f.files || {}).map((n) => esc(n) + ": " + esc((f.files[n] || {}).detail || "") + " (" + esc((f.files[n] || {}).at || "") + ")").join("<br>");
+      const per = Object.keys(f.files || {}).map((n) => { const x = f.files[n] || {};
+        const bar = (x.status === "downloading" && x.pct != null)
+          ? '<div style="height:8px;margin:4px 0 6px;border-radius:5px;background:rgba(127,127,127,.25);overflow:hidden"><div style="height:100%;width:' + x.pct + '%;background:#4f9dff;transition:width .8s"></div></div>' : "";
+        return esc(n) + ": " + esc(x.detail || "") + " (" + esc(x.at || "") + ")" + bar; }).join("<br>");
       return (f.enabled ? "Automatic fetch from the FTP runs every morning " + esc(f.window || "") + " and skips a file you already uploaded. " : "Automatic fetch is switched off. ") +
         (f.running ? "<b>Fetching now…</b> " : "") + (f.message ? esc(f.message) + ". " : "") + (per ? "<br>" + per : "");
     };
@@ -162,6 +165,8 @@
       "<tr><td><b>" + esc(i.name) + "</b></td><td style='text-align:right'>" +
       (i.present
         ? '<span class="badge ok">Present · ' + esc(i.modified) + "</span>" +
+          (i.source === "FTP" ? ' <span class="badge" title="Fetched automatically from the FTP" style="background:rgba(168,85,247,.16);color:#c084fc;border:1px solid rgba(168,85,247,.5)">⚡ Auto-fetched</span>'
+            : i.source === "Manual" ? ' <span class="badge" title="' + esc("Uploaded by " + (i.source_by || "a user")) + '" style="background:rgba(56,189,248,.14);color:#38bdf8;border:1px solid rgba(56,189,248,.5)">✋ Uploaded by hand</span>' : "") +
           ' <a href="/common/download?name=' + encodeURIComponent(i.name) + '" download="' + esc(i.name) + '" title="Download ' + esc(i.name) + ' to this computer" ' +
           'style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;margin-left:8px;border-radius:8px;border:1px solid var(--border,#2a3342);color:inherit;text-decoration:none;vertical-align:middle">' +
           RMS.icon("download") + "</a>"
@@ -208,7 +213,7 @@
         try { f = await (await fetch("/common/ftp/status", { credentials: "same-origin" })).json(); } catch (e) {}
         const el = $("#pcFtpLine"); if (!el) return;                       // window was closed
         el.innerHTML = ftpLine(f);
-        if (f.running && Date.now() - t0 < 30 * 60 * 1000) { setTimeout(tick, 3000); return; }
+        if (f.running && Date.now() - t0 < 30 * 60 * 1000) { setTimeout(tick, 1500); return; }
         close(); await openCommon();                                        // reopen so the Present / Missing badges are fresh
         const l2 = $("#pcFtpLine"); if (l2) l2.innerHTML = ftpLine(f);       // keep the result message visible
       };

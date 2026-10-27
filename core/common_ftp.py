@@ -133,7 +133,33 @@ def _size(ftp, name: str) -> Optional[int]:
         return None
 
 
-def _download(ftp, name: str, dest_part: str, want_size: Optional[int], progress: Callable[[str], None]):
+def mark_source(folder: str, name: str, how: str, by: str = "") -> None:
+    """Remember how a file got into COMMON FILES ('FTP' = fetched automatically / by the Fetch button, 'Manual' = uploaded by a person)."""
+    try:
+        fp = os.path.join(folder, ".file_sources.json")
+        try:
+            with open(fp, encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            d = {}
+        d[name] = {"how": how, "by": by, "at": dt.datetime.now().strftime("%H:%M:%S")}
+        for k in list(d)[:-20]:          # keep it small
+            d.pop(k, None)
+        with open(fp, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+    except Exception:
+        pass
+
+
+def read_sources(folder: str) -> dict:
+    try:
+        with open(os.path.join(folder, ".file_sources.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _download(ftp, name: str, dest_part: str, want_size: Optional[int], progress: Callable[[str], None], on_bytes: Optional[Callable[[int], None]] = None):
     """Download with resume: a dropped connection continues where it stopped (up to 6 tries). Returns the live connection."""
     last_err = None
     for attempt in range(1, 7):
@@ -145,8 +171,17 @@ def _download(ftp, name: str, dest_part: str, want_size: Optional[int], progress
             return ftp
         try:
             with open(dest_part, "ab" if have else "wb") as out:
+                _last = [0.0]
                 def _w(chunk, _o=out):
                     _o.write(chunk)
+                    if on_bytes:
+                        _t = time.time()
+                        if _t - _last[0] >= 1.0:              # tell the screen at most once a second
+                            _last[0] = _t
+                            try:
+                                on_bytes(_o.tell())
+                            except Exception:
+                                pass
                 ftp.retrbinary(f"RETR {name}", _w, rest=have or None)
             if want_size is None or os.path.getsize(dest_part) == want_size:
                 return ftp
@@ -231,13 +266,19 @@ def fetch_once(manual: bool = False) -> dict:
                 files[name] = {"status": "downloading", "detail": f"downloading {(s2 or 0) / 1048576:.1f} MB", "at": at()}
                 _log(f"{name}: downloading {(s2 or 0) / 1048576:.1f} MB")
                 try:
-                    ftp = _download(ftp, name, part, s2, lambda m, n=name: _log(f"{n}: {m}"))
+                    def _prog(done, n=name, tot=s2):
+                        if tot:
+                            pct = min(99, int(done * 100 / tot))
+                            files[n] = {"status": "downloading", "pct": pct, "at": at(),
+                                        "detail": f"downloading {done / 1048576:.0f} of {tot / 1048576:.0f} MB - {pct}%"}
+                    ftp = _download(ftp, name, part, s2, lambda m, n=name: _log(f"{n}: {m}"), _prog)
                     err = _head_error(part, kind)
                     if os.path.getsize(part) == 0:
                         err = "the downloaded file is empty"
                     if err:
                         raise ValueError(err)
                     os.replace(part, os.path.join(folder, name))
+                    mark_source(folder, name, "FTP")
                     files[name] = {"status": "downloaded", "detail": f"downloaded from the FTP ({os.path.getsize(os.path.join(folder, name)) / 1048576:.1f} MB)", "at": at()}
                     _log(f"{name}: downloaded")
                     got_any = True
