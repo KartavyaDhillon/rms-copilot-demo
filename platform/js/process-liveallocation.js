@@ -128,7 +128,7 @@
         tb('⬆️ Upload files', 'laSub(laUpload)', 'Add files you captured by hand to a folder. They are saved, listed in Backup files and copied to PostgreSQL.') +
         tb('📦 Backup files', 'laSub(laBackup)', 'Pick a date or a date range, tick Full folder, and download everything as one zip.') +
         tb('🗂️ Logs', 'laLogs()', 'The full log of every capture.') +
-        tb(auto ? '⏸ Auto: ON' : '▶ Auto: OFF', 'laAuto()', 'Switch the by-itself capture on or off.', auto ? '' : ';border-color:rgba(248,113,113,.45);color:var(--red)') +
+        tb(auto ? '⏸ Auto: ON' : '▶ Auto: OFF', 'laAuto()', 'ON: every folder starts by itself at its time, nothing to click. OFF: nothing starts by itself - you press Run now yourself. Asks for the password.', auto ? '' : ';border-color:rgba(248,113,113,.45);color:var(--red)') +
         tb('⛔ Stop', 'laStop()', 'Stops the capture that is running right now.', ';border-color:rgba(248,113,113,.45);color:var(--red)') +
       '</div><div id="laMsg"></div><div id="laDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>');
     widen(true);

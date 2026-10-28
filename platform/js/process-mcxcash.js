@@ -85,14 +85,14 @@
     if (!grid) return false;
     var tile = document.createElement('div');
     tile.className = 'tile'; tile.id = 'task-mcxcash';
-    tile.style.cssText = '--tile-accent:var(--violet);cursor:pointer';
+    tile.style.cssText = '--tile-accent:#f472b6;cursor:pointer';
     tile.onclick = function () { mcOpen(); };
     tile.innerHTML =
       '<div class="tile-icon">💰</div>' +
       '<div class="tile-name">MCX CASH MAINTENANCE <span class="st" id="mcChip">idle</span></div>' +
       '<div class="tile-desc">Builds and e-mails the MCX cash maintenance shortfall reports 8 times a day, from the MCX 90%, MCX deposit and CM / FO collateral files. Fully automatic.</div>' +
       '<div class="tile-desc" id="mcMini" style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">Checking…</div>' +
-      '<div class="tile-actions"><button class="tbtn" style="background:var(--violet);color:var(--violet-d,#1a0d33)" onclick="event.stopPropagation();mcOpen()" data-tip="Open MCX CASH MAINTENANCE: the times, timings, override, credentials, e-mail To / CC, backup files, logs.">Open</button></div>';
+      '<div class="tile-actions"><button class="tbtn" style="background:#f472b6;color:#2a0a1a" onclick="event.stopPropagation();mcOpen()" data-tip="Open MCX CASH MAINTENANCE: the times, timings, override, credentials, e-mail To / CC, backup files, logs.">Open</button></div>';
     var after = $('task-liveallocation');
     if (after && after.parentNode === grid) grid.insertBefore(tile, after.nextSibling); else grid.appendChild(tile);
     return true;
@@ -133,7 +133,7 @@
         tb('⬆️ Upload files', 'mcSub(mcUpload)', 'Add files you got by hand to a time. They are saved, listed in Backup files and copied to PostgreSQL.') +
         tb('📦 Backup files', 'mcSub(mcBackup)', 'Pick a date or a date range, tick Full folder, and download everything as one zip.') +
         tb('🗂️ Logs', 'mcLogs()', 'The full log of every run.') +
-        tb(auto ? '⏸ Auto: ON' : '▶ Auto: OFF', 'mcAuto()', 'Switch the by-itself runs on or off.', auto ? '' : ';border-color:rgba(248,113,113,.45);color:var(--red)') +
+        tb(auto ? '⏸ Auto: ON' : '▶ Auto: OFF', 'mcAuto()', 'ON: every time on this card starts by itself, nothing to click. OFF: nothing starts by itself - you press Run now yourself. Asks for the password.', auto ? '' : ';border-color:rgba(248,113,113,.45);color:var(--red)') +
         tb('⛔ Stop', 'mcStop()', 'Stops the run that is going right now.', ';border-color:rgba(248,113,113,.45);color:var(--red)') +
       '</div><div id="mcMsg"></div><div id="mcDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>');
     widen(true);
