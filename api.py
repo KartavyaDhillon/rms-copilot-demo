@@ -583,6 +583,14 @@ def ops_timeline():
     except Exception as e:
         return {"error": str(e), "items": []}
 
+@app.get("/ops/overview")
+def ops_overview():
+    try:
+        from core import ops_metrics
+        return ops_metrics.overview()
+    except Exception as e:
+        return {"error": str(e), "items": []}
+
 @app.get("/ops/history")
 def ops_history(days: int = 7):
     try:

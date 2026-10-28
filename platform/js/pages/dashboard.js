@@ -25,57 +25,59 @@
       '<div class="k-foot"></div></div>';
   }
 
+  const FILTERS = [["all", "Everything"], ["todo", "Still to do"], ["attn", "Needs attention"], ["sched", "Scheduler"], ["box", "Process Center"]];
+
   function shell() {
     return (
       '<div class="dash-greet"><div><h2 id="dgHi">—</h2><div class="sub" id="dgSub"></div></div>' +
       '<div style="display:flex;gap:8px"><button class="btn" id="dgHist">' + RMS.icon("history") + " History</button>" +
       '<button class="btn primary" id="dgGo">' + RMS.icon("play") + " Open Process Center</button></div></div>" +
 
-      '<div class="dash-cols" style="margin-bottom:12px">' +
+      /* one plain-language status banner */
+      '<div class="d-banner ok" id="dBanner"><span class="d-b-ic" id="dBanIc"></span><div class="d-b-txt"><b id="dBanT">Checking…</b><small id="dBanS"></small></div>' +
+      '<div class="d-b-prog"><div class="d-b-num" id="dBanNum">—</div><div class="d-b-bar"><i id="dBanBar" style="width:0"></i></div><small id="dBanFoot"></small></div></div>' +
+
+      '<div class="kpi-grid d-kpis">' +
+      kpiCard("kRuns", "check", "Finished today", "var(--ok)") +
+      kpiCard("kRunning", "activity", "Running now", "var(--info)") +
+      kpiCard("kFail", "alert", "Needs attention", "var(--err)") +
+      kpiCard("kNext", "clock", "Next up", "var(--warn)") +
+      kpiCard("kFiles", "download", "Files downloaded") +
+      kpiCard("kMail", "mail", "Emails sent") +
+      "</div>" +
+
+      '<div class="dash-cols eq" style="margin-top:14px">' +
+      '<div class="card tl-card"><div class="card-head"><div class="card-title">' + RMS.icon("clock") + " Today's Timeline</div>" +
+      '<span class="card-sub" id="tlSub"></span></div>' +
+      '<div class="d-chips" id="tlChips">' + FILTERS.map(([k, n]) => '<button class="chip' + (k === "all" ? " on" : "") + '" data-f="' + k + '">' + n + "</button>").join("") + "</div>" +
+      '<div class="tl-body"><div class="tl" id="tlList"></div></div></div>' +
+
+      '<div class="d-side">' +
       '<div class="ai-card"><div class="ai-inner">' +
-      '<div class="card-head" style="margin-bottom:10px"><div class="card-title">' + RMS.icon("sparkles") + ' AI Copilot</div>' +
+      '<div class="card-head" style="margin-bottom:8px"><div class="card-title">' + RMS.icon("sparkles") + ' AI Copilot</div>' +
       '<div style="display:flex;gap:6px;align-items:center"><span class="badge dim" id="aiBadge">…</span>' +
       '<button class="btn sm ghost" id="aiRefresh" title="Regenerate">' + RMS.icon("refresh") + "</button></div></div>" +
       '<div class="ai-text" id="aiText"><span class="skel" style="display:block;width:70%"></span></div>' +
       '<div class="ai-meta" id="aiMeta"></div></div></div>' +
 
-      '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("gauge") + " Today's Success</div>" +
-      '<span class="card-sub" id="succSub"></span></div>' +
-      '<div class="ring-wrap"><svg class="ring" width="92" height="92" viewBox="0 0 92 92">' +
-      '<circle class="bgc" cx="46" cy="46" r="38" fill="none" stroke-width="9"/>' +
-      '<circle class="fgc" id="succArc" cx="46" cy="46" r="38" fill="none" stroke-width="9" stroke-dasharray="238.8" stroke-dashoffset="238.8"/></svg>' +
-      '<div><div class="k-value" id="succPct" style="font-size:30px">—</div>' +
-      '<div class="k-foot" id="succFoot">of finished executions</div></div></div>' +
-      '<div style="margin-top:12px" id="succMini"></div></div>' +
-      "</div>" +
+      '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("alert") + " Needs your attention</div>" +
+      '<span class="card-sub" id="attnSub"></span></div><div class="feed" id="attnList"></div></div>' +
 
-      '<div class="kpi-grid">' +
-      kpiCard("kRuns", "check", "Runs Completed", "var(--ok)") +
-      kpiCard("kRunning", "activity", "Running Now", "var(--info)") +
-      kpiCard("kDue", "clock", "Due / Ready", "var(--warn)") +
-      kpiCard("kFail", "alert", "Failed Today", "var(--err)") +
-      kpiCard("kFiles", "download", "Files Downloaded") +
-      kpiCard("kMail", "mail", "Emails Sent") +
-      kpiCard("kAvg", "gauge", "Avg Runtime") +
-      kpiCard("kExec", "terminal", "Executions") +
-      "</div>" +
-
-      '<div class="sec-head"><h3>System Resources</h3><span id="resSub"></span></div>' +
-      '<div class="card"><div class="res-strip" id="resStrip"></div></div>' +
-
-      '<div class="dash-cols" style="margin-top:12px">' +
-      '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("clock") + " Today's Timeline</div>" +
-      '<span class="card-sub" id="tlSub"></span></div><div class="tl" id="tlList"></div></div>' +
-      '<div><div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("activity") + " System Health</div>" +
-      '<button class="btn sm ghost" id="hpRefresh">' + RMS.icon("refresh") + '</button></div>' +
-      '<div class="hp-grid" id="hpGrid"></div>' +
-      '<div class="card-sub" id="hpSub" style="margin-top:10px;text-align:right"></div></div>' +
-      '<div class="card" style="margin-top:12px"><div class="card-head"><div class="card-title">' + RMS.icon("sparkles") + " Insights</div>" +
-      '<span class="card-sub" id="insSub">anomaly checks</span></div><div class="feed" id="insList"><div class="bm-empty">Analyzing…</div></div></div>' +
-      '<div class="card" style="margin-top:12px"><div class="card-head"><div class="card-title">' + RMS.icon("history") + " Recent Activity</div>" +
+      '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("history") + " Recent Activity</div>" +
       '<button class="btn sm ghost" id="feedMore">View all</button></div>' +
-      '<div class="feed" id="feedList"></div></div></div>' +
-      "</div>"
+      '<div class="feed" id="feedList"></div></div>' +
+      "</div></div>" +
+
+      '<div class="sec-head"><h3>System</h3><span id="resSub"></span></div>' +
+      '<div class="dash-cols sys">' +
+      '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("activity") + " Services &amp; connections</div>" +
+      '<div style="display:flex;gap:8px;align-items:center"><span class="card-sub" id="hpSub"></span><button class="btn sm ghost" id="hpRefresh">' + RMS.icon("refresh") + "</button></div></div>" +
+      '<div class="hp-grid hp-4" id="hpGrid"></div></div>' +
+      '<div class="d-side">' +
+      '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("gauge") + ' Server resources</div></div><div class="res-strip res-col" id="resStrip"></div></div>' +
+      '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("sparkles") + " Insights</div>" +
+      '<span class="card-sub" id="insSub">anomaly checks</span></div><div class="feed" id="insList"><div class="bm-empty">Analyzing…</div></div></div>' +
+      "</div></div>"
     );
   }
 
@@ -87,86 +89,144 @@
     el.className = "card kpi hover" + (accent ? " accent-" + accent : "");
   }
 
+  let lastSum = null, lastOv = null, tlFilter = "all";
+
+  const ST = {
+    done: ["ok", "Finished"], completed: ["ok", "Finished"], running: ["info", "Running"],
+    due: ["warn", "Ready to start"], overdue: ["err", "Late"], failed: ["err", "Failed"],
+    missed: ["err", "Missed"], waiting: ["warn", "Waiting"], upcoming: ["dim", "Later today"],
+  };
+  const isDone = (st) => st === "done" || st === "completed";
+  const isAttn = (st) => st === "failed" || st === "missed" || st === "overdue";
+  const hhmm = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+
   function renderGreeting(s) {
     const h = new Date().getHours();
     const name = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
     $("#dgHi").textContent = name + ".";
-    $("#dgSub").textContent = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) +
-      " · " + s.runs_completed + " of " + s.runs_total + " scheduled runs done";
+    $("#dgSub").textContent = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  }
+
+  function attnItems() {
+    return ((lastOv && lastOv.items) || []).filter((i) => isAttn(i.status));
+  }
+
+  function renderAttnKpi(s) {
+    const attn = attnItems().length + (s.failed_today || 0);
+    setKpi("kFail", String(attn), attn ? "failed or missed \u2014 see list below" : "no problems today", attn ? "err" : "ok");
+  }
+
+  function renderBanner(s) {
+    const total = s.runs_total || 0, done = s.runs_completed || 0;
+    const attn = attnItems().length + (s.failed_today || 0);
+    const running = (s.running || []).length;
+    const ban = $("#dBanner");
+    const cls = attn ? (attn >= 3 ? "err" : "warn") : "ok";
+    ban.className = "d-banner " + cls;
+    $("#dBanIc").innerHTML = RMS.icon(attn ? "alert" : "check");
+    $("#dBanT").textContent = attn ? attn + (attn === 1 ? " thing needs" : " things need") + " your attention" : "Everything is running smoothly";
+    $("#dBanS").textContent = attn
+      ? "Check the \u201cNeeds your attention\u201d list below \u2014 a task failed or was missed."
+      : (running ? "A task is running right now. Nothing has failed or been missed today." : "Nothing has failed or been missed today.");
+    const pct = total ? Math.round(100 * done / total) : 0;
+    $("#dBanNum").innerHTML = done + '<small> of ' + total + " tasks done</small>";
+    $("#dBanBar").style.width = pct + "%";
+    const b = s.boxes || {}, sc = s.sched || {};
+    $("#dBanFoot").textContent = pct + "% complete \u00b7 Process Center " + (b.done || 0) + "/" + (b.total || 0) + " \u00b7 Scheduler " + (sc.done || 0) + "/" + (sc.total || 0);
   }
 
   function renderSummary(s) {
+    lastSum = s;
     renderGreeting(s);
-    setKpi("kRuns", s.runs_completed + '<small> / ' + s.runs_total + "</small>", "scheduled slots today", s.runs_completed ? "ok" : "");
+    renderBanner(s);
+    const b = s.boxes || {}, sc = s.sched || {};
+    setKpi("kRuns", s.runs_completed + '<small> / ' + s.runs_total + "</small>",
+      "Process Center " + (b.done || 0) + "/" + (b.total || 0) + " \u00b7 Scheduler " + (sc.done || 0) + "/" + (sc.total || 0), s.runs_completed ? "ok" : "");
     if (s.running && s.running.length) {
       const r = s.running[0];
       setKpi("kRunning", '<span style="display:inline-flex;align-items:center;gap:8px"><span class="spinner"></span>' + esc(r.label) + "</span>",
-        (r.by && r.by !== "unknown user" ? "by " + r.by + " · " : "") +
-        "started " + (r.since ? RMS.fmtAgo(r.since) : "recently") +
-        (r.ip ? " · " + r.ip : ""));
+        (r.by && r.by !== "unknown user" ? "by " + r.by + " \u00b7 " : "") +
+        "started " + (r.since ? RMS.fmtAgo(r.since) : "recently") + (r.ip ? " \u00b7 " + r.ip : "") +
+        (s.running.length > 1 ? " \u00b7 +" + (s.running.length - 1) + " more" : ""));
       $("#navRunDot").hidden = false;
     } else { setKpi("kRunning", "0", "nothing running right now"); $("#navRunDot").hidden = true; }
-    const due = s.due_now || [];
-    setKpi("kDue", String(due.length), due.length ? due[0].id + (due[0].overdue ? " is overdue" : " window open") : "nothing due right now", due.some((d) => d.overdue) ? "err" : due.length ? "warn" : "");
-    setKpi("kFail", String(s.failed_today), s.failed_today ? "click to inspect in History" : "no failures today 🎉", s.failed_today ? "err" : "ok");
-    setKpi("kFiles", String(s.files_today ?? "—"), "across all download folders");
+    renderAttnKpi(s);
+    setKpi("kFiles", String(s.files_today ?? "\u2014"), "across all download folders");
     setKpi("kMail", String(s.emails_today ?? 0) + (s.whatsapp_today ? '<small> +' + s.whatsapp_today + " WA</small>" : ""), "detected in today's run logs");
-    setKpi("kAvg", RMS.fmtDur(s.avg_runtime_s), "per successful execution · total " + RMS.fmtDur(s.total_runtime_s));
-    setKpi("kExec", String(s.executions_today), "log files written today");
+    renderNext();
 
-    // success ring
-    const pct = s.success_rate;
-    $("#succPct").textContent = pct == null ? "—" : pct + "%";
-    $("#succSub").textContent = s.executions_today + " executions";
-    const C = 238.8;
-    const arc = $("#succArc");
-    arc.style.strokeDashoffset = pct == null ? C : C * (1 - pct / 100);
-    arc.style.stroke = pct == null ? "var(--line-2)" : pct >= 90 ? "var(--ok)" : pct >= 60 ? "var(--warn)" : "var(--err)";
-    $("#succFoot").textContent = (s.failed_today || 0) + " failed · " + Math.max(0, (s.executions_today || 0) - (s.failed_today || 0)) + " clean";
-
-    // activity feed
+    // recent activity feed
     const feed = $("#feedList");
     const rec = s.recent || [];
     feed.innerHTML = rec.length ? rec.map((e, i) =>
       '<div class="feed-item" data-i="' + i + '"><span class="feed-ic ' + e.status + '">' +
       RMS.icon(e.status === "ok" ? "check" : e.status === "failed" ? "alert" : e.status === "stopped" ? "stop" : "clock") +
-      "</span><div class=\"feed-main\"><b>" + esc(e.label) + "</b><small>" + esc(e.pipe_name) + (e.duration_s ? " · " + RMS.fmtDur(e.duration_s) : "") + "</small></div>" +
-      '<span class="badge ' + (e.status === "ok" ? "ok" : e.status === "failed" ? "err" : "dim") + '">' + e.status + "</span>" +
+      "</span><div class=\"feed-main\"><b>" + esc(e.label) + "</b><small>" + esc(e.pipe_name) + (e.duration_s ? " \u00b7 " + RMS.fmtDur(e.duration_s) : "") + "</small></div>" +
+      '<span class="badge ' + (e.status === "ok" ? "ok" : e.status === "failed" ? "err" : "dim") + '">' + (e.status === "ok" ? "ok" : e.status) + "</span>" +
       '<span class="feed-time">' + esc((e.start || "").slice(11, 16)) + "</span></div>").join("")
       : '<div class="bm-empty">No executions logged today yet.</div>';
-    feed.querySelectorAll(".feed-item").forEach((el) => {
-      el.onclick = () => RMS.openLogViewer(rec[+el.dataset.i]);
-    });
-
+    feed.querySelectorAll(".feed-item").forEach((el) => { el.onclick = () => RMS.openLogViewer(rec[+el.dataset.i]); });
+    renderAttention();
     RMS.digestRecent(rec);
   }
 
+  function renderNext() {
+    if (!lastOv) return;
+    const now = lastOv.now_min;
+    const nx = (lastOv.items || []).find((i) => i.start_min != null && i.start_min >= now && i.status === "upcoming") ||
+               (lastOv.items || []).find((i) => i.status === "due");
+    if (!nx) { setKpi("kNext", "\u2014", "nothing more scheduled today"); return; }
+    const d = nx.start_min - now;
+    const eta = nx.status === "due" ? "ready now" : d <= 0 ? "starting" : d < 60 ? "in " + d + " min" : "in " + Math.floor(d / 60) + "h " + (d % 60) + "m";
+    setKpi("kNext", hhmm(nx.start_min) + '<small> ' + eta + "</small>", nx.pipe_name + (nx.source === "scheduler" ? " \u00b7 " + nx.id : " \u00b7 " + nx.id), nx.status === "due" ? "warn" : "");
+  }
+
+  function renderAttention() {
+    const box = $("#attnList"); if (!box) return;
+    const rows = [];
+    attnItems().forEach((i) => rows.push({ st: i.status, title: i.pipe_name, sub: (i.source === "scheduler" ? "Scheduler \u00b7 " : "Process Center \u00b7 ") + i.id + " \u00b7 planned " + (i.window || "").split("-")[0] }));
+    ((lastSum && lastSum.recent) || []).filter((e) => e.status === "failed").forEach((e) =>
+      rows.push({ st: "failed", title: e.pipe_name + " \u2014 " + e.label, sub: "Failed at " + (e.start || "").slice(11, 16) + " \u00b7 click to open the log", entry: e }));
+    $("#attnSub").textContent = rows.length ? rows.length + " item" + (rows.length > 1 ? "s" : "") : "";
+    if (!rows.length) { box.innerHTML = '<div class="d-allgood">' + RMS.icon("check") + "<b>All clear</b><small>Nothing failed or was missed today.</small></div>"; return; }
+    box.innerHTML = rows.slice(0, 8).map((r, k) =>
+      '<div class="feed-item" data-k="' + k + '" style="' + (r.entry ? "" : "cursor:default") + '"><span class="feed-ic failed">' + RMS.icon("alert") + "</span>" +
+      '<div class="feed-main"><b>' + esc(r.title) + "</b><small>" + esc(r.sub) + "</small></div>" +
+      '<span class="badge err">' + (ST[r.st] || ST.failed)[1] + "</span><span></span></div>").join("");
+    box.querySelectorAll("[data-k]").forEach((el) => { const r = rows[+el.dataset.k]; if (r && r.entry) el.onclick = () => RMS.openLogViewer(r.entry); });
+  }
+
   function renderTimeline(t) {
+    lastOv = t;
     const list = $("#tlList");
-    const items = t.items || [];
-    $("#tlSub").textContent = items.filter((i) => i.status === "completed").length + " done · " +
-      items.filter((i) => ["due", "overdue"].includes(i.status)).length + " due";
+    const all = t.items || [];
+    const pass = (i) => tlFilter === "all" ? true : tlFilter === "todo" ? !isDone(i.status)
+      : tlFilter === "attn" ? isAttn(i.status) : tlFilter === "sched" ? i.source === "scheduler" : i.source !== "scheduler";
+    const items = all.filter(pass);
+    $("#tlSub").textContent = all.filter((i) => isDone(i.status)).length + " finished \u00b7 " +
+      all.filter((i) => !isDone(i.status)).length + " to go";
     let html = "", nowInserted = false;
     items.forEach((i) => {
       if (!nowInserted && i.start_min != null && i.start_min > t.now_min) {
-        html += '<div class="tl-now">NOW ' + String(Math.floor(t.now_min / 60)).padStart(2, "0") + ":" + String(t.now_min % 60).padStart(2, "0") + "</div>";
+        html += '<div class="tl-now">NOW ' + hhmm(t.now_min) + "</div>";
         nowInserted = true;
       }
-      const st = i.status;
-      const badge = st === "completed" ? '<span class="badge ok">✓ done</span>'
-        : st === "running" ? '<span class="badge info"><span class="spinner" style="width:9px;height:9px;border-width:1.5px"></span> running</span>'
-        : st === "due" ? '<span class="badge warn">ready — run now</span>'
-        : st === "overdue" ? '<span class="badge err">overdue</span>'
-        : st === "waiting" ? '<span class="badge dim">waiting</span>'
-        : '<span class="badge dim">upcoming</span>';
-      html += '<div class="tl-item ' + st + '"><span class="tl-time">' + esc((i.window || "").split("-")[0] || "—") + "</span>" +
+      const st = i.status, m = ST[st] || ST.upcoming;
+      const cls = isDone(st) ? "completed" : st;
+      const badge = st === "running" ? '<span class="badge info"><span class="spinner" style="width:9px;height:9px;border-width:1.5px"></span> Running</span>'
+        : '<span class="badge ' + m[0] + '">' + (isDone(st) ? "\u2713 " : "") + m[1] + "</span>";
+      const src = i.source === "scheduler" ? '<span class="src-tag sched">Scheduler</span>' : '<span class="src-tag box">Process Center</span>';
+      const sub = i.source === "scheduler" ? (i.id && i.id !== i.pipe_name ? i.id : "") : i.id;
+      html += '<div class="tl-item ' + cls + '"><span class="tl-time">' + esc((i.window || "").split("-")[0] || "\u2014") + "</span>" +
         '<span class="tl-rail"><span class="tl-dot"></span></span>' +
-        '<span class="tl-main"><span class="tl-id">' + esc(i.id) + '</span><span class="tl-name">' + esc(i.pipe_name) + "</span></span>" + badge + "</div>";
+        '<span class="tl-main"><span class="tl-name2"><b>' + esc(i.pipe_name) + "</b>" + (sub ? "<small>" + esc(sub) + "</small>" : "") + "</span></span>" + src + badge + "</div>";
     });
-    if (!nowInserted) html += '<div class="tl-now">NOW — end of schedule</div>';
-    list.innerHTML = html || '<div class="bm-empty">No run windows configured.</div>';
+    if (!nowInserted && items.length) html += '<div class="tl-now">NOW ' + hhmm(t.now_min) + " \u2014 end of schedule</div>";
+    list.innerHTML = html || '<div class="bm-empty">Nothing matches this filter.</div>';
     const now = list.querySelector(".tl-now");
-    if (now && !list.dataset.scrolled) { now.scrollIntoView({ block: "center" }); list.dataset.scrolled = "1"; }
+    if (now && list.dataset.scrolled !== tlFilter) { list.scrollTop = Math.max(0, now.offsetTop - list.clientHeight / 2); list.dataset.scrolled = tlFilter; }
+    if (lastSum) { renderBanner(lastSum); renderAttnKpi(lastSum); renderAttention(); }
+    renderNext();
   }
 
   function meterClass(p) { return p == null ? "" : p > 88 ? "err" : p > 72 ? "warn" : ""; }
@@ -236,6 +296,13 @@
         $("#dgGo").onclick = () => RMS.go("process");
         $("#dgHist").onclick = () => RMS.go("history");
         $("#kFail").onclick = () => RMS.go("history");
+        $("#tlChips").querySelectorAll("button").forEach((b) => {
+          b.onclick = () => {
+            tlFilter = b.dataset.f;
+            $("#tlChips").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+            if (lastOv) renderTimeline(lastOv);
+          };
+        });
         $("#feedMore").onclick = () => RMS.go("history");
         $("#aiRefresh").onclick = () => loadBrief(true);
         $("#hpRefresh").onclick = () => { RMS.api("/ops/health").then(renderHealth).catch(() => {}); };
@@ -246,7 +313,7 @@
         });
         RMS.poll(() => {
           RMS.api("/ops/summary").then(renderSummary).catch(() => {});
-          RMS.api("/ops/timeline").then(renderTimeline).catch(() => {});
+          RMS.api("/ops/overview").then(renderTimeline).catch(() => {});
         }, 12000);
         RMS.poll(() => RMS.api("/ops/health").then(renderHealth).catch(() => {}), 45000);
         // insight engine: deterministic anomaly checks over the knowledge index

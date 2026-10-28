@@ -59,7 +59,36 @@ _PIPES = [
     {"key": "ms15", "name": "Margin Shortage (15-min)","runs": 17, "win_env": "MS15_RUN{i}_WINDOW", "logdir": "ms15"},
     {"key": "cli",  "name": "Client Prudential Limit", "runs": 2, "win_env": "CLI_RUN{i}_WINDOW",  "logdir": "cli"},
 ]
-_PIPE_BY_LOGDIR = {p["logdir"]: p for p in _PIPES}
+_STATIC_PIPES = _PIPES        # fallback only - the live list is read from the Process Center registry
+
+
+def _pipes():
+    """Every Process Center box, read live from core.pipeline_box.PIPELINES (+ Short Allocation), so a
+    pipeline added there appears on the Dashboard with no change here. Cached 30 s; falls back to the
+    static list if the registry cannot be read."""
+    def build():
+        try:
+            from core.pipeline_box import PIPELINES
+            out, seen = [], set()
+            for key, p in PIPELINES.items():
+                runs = int(p.get("runs") or 0)
+                logdir = p.get("logdir") or key
+                if runs < 1 or logdir in seen:
+                    continue
+                seen.add(logdir)
+                out.append({"key": key, "name": p.get("name") or key, "runs": runs,
+                            "win_env": key.upper() + "_RUN{i}_WINDOW", "logdir": logdir})
+            if "short_allocation" not in seen:
+                out.append({"key": "sa", "name": "Short Allocation", "runs": 4,
+                            "win_env": "SA_RUN{i}_WINDOW", "logdir": "short_allocation"})
+            return out or list(_STATIC_PIPES)
+        except Exception:
+            return list(_STATIC_PIPES)
+    return _cached("pipes_live", 30, build)
+
+
+def _pipe_by_logdir():
+    return {p["logdir"]: p for p in _pipes()}
 
 _TS_RE       = re.compile(r"__(\d{8})_(\d{6})\.log$")
 _EMAIL_OK_RE = re.compile(r"email sent successfully|all emails sent", re.I)
@@ -193,7 +222,7 @@ def _scan_log(path, fname, logdir):
     except Exception:
         pass
 
-    pipe = _PIPE_BY_LOGDIR.get(logdir)
+    pipe = _pipe_by_logdir().get(logdir)
     label = fname.split("__")[0].replace("_", " ")
     if pipe and label.strip().lower() == pipe["key"]:
         label = "Pipeline run"          # e.g. "ctcl__<ts>.log" → clearer than a bare "ctcl"
@@ -288,9 +317,12 @@ def timeline():
     sa_done, _sa_runs = _sa_completed_and_runs()
 
     items = []
-    for p in _PIPES:
+    for p in _pipes():
         done = sa_done if p["key"] == "sa" else _px_completed(p["key"])
-        for i in range(1, p["runs"] + 1):
+        nruns = p["runs"]
+        if not any(os.getenv(p["win_env"].format(i=i), "").strip() for i in range(1, nruns + 1)):
+            nruns = 1          # no time windows configured (on-demand box): one slot per day, not N
+        for i in range(1, nruns + 1):
             w = os.getenv(p["win_env"].format(i=i), "").strip()
             pw = _parse_win(w)
             rid = f"{p['key'].upper()}-{i:02d}"
@@ -328,9 +360,13 @@ def _summary_inner():
     running   = _running_now()
 
     finished_runs = len(ok_logs) + failed
+    from core import ops_sched
+    sc = _cached("sched_today", 10, ops_sched.today)
     return {
         "date": today,
-        "runs_completed": completed, "runs_total": total,
+        "runs_completed": completed + sc["done"], "runs_total": total + sc["total"],
+        "boxes": {"done": completed, "total": total},
+        "sched": {k: sc.get(k, 0) for k in ("done", "total", "failed", "running", "missed", "due")},
         "due_now": [{"id": i["id"], "pipe_name": i["pipe_name"], "window": i["window"],
                      "overdue": i["status"] == "overdue"} for i in due],
         "upcoming": upcoming,
@@ -348,6 +384,18 @@ def _summary_inner():
 
 def summary():
     return _cached("summary", 10, _summary_inner)
+
+
+def overview():
+    """Dashboard timeline: manual boxes + scheduler slots in one list, plus the counters."""
+    from core import ops_sched
+    tl = timeline()
+    sc = _cached("sched_today", 10, ops_sched.today)
+    for i in tl["items"]:
+        i.setdefault("source", "box")
+    items = tl["items"] + sc["items"]
+    items.sort(key=lambda x: (x["start_min"] is None, x["start_min"] or 0))
+    return {"now_min": tl["now_min"], "items": items}
 
 
 # ── system health ─────────────────────────────────────────────────────────────
@@ -446,7 +494,7 @@ def health():
 
 # ── AI brief ──────────────────────────────────────────────────────────────────
 def _facts():
-    s = summary(); h = health(); tl = timeline()
+    s = summary(); h = health(); tl = overview()
     nxt = next((i for i in tl["items"] if i["status"] in ("due", "overdue")), None) \
           or next((i for i in tl["items"] if i["status"] == "upcoming"), None)
     warn = []
