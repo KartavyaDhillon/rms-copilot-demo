@@ -733,8 +733,11 @@ async def la_override(request: Request):
     rec = _la.mark_undone(slot, by) if body.get("mode") == "undone" else _la.mark_done(slot, by)
     return {"ok": True, "state": rec.get("status", "")}
 
+from fastapi import File as _LA_File, UploadFile as _LA_UploadFile
+from typing import List as _LA_List
+
 @app.post("/live-alloc/upload")
-async def la_upload(request: Request, slot: int = 0, files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+async def la_upload(request: Request, slot: int = 0, files: _LA_List[_LA_UploadFile] = _LA_File(...)):
     """Add files you captured by hand to one of TODAY's numbered folders (same names as the automatic capture).
     Saved in the folder, shown in Backup files, copied to PostgreSQL, and the folder turns green when all 5 are there."""
     from core import live_allocation as _la
