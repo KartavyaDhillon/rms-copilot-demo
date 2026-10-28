@@ -153,6 +153,13 @@ GROUPS: Dict[str, dict] = {
             ("missing_mail_cc", "E-mail Cc", False, ""),
         ],
     },
+    "darwinbox": {
+        "label": "Darwinbox (HR portal login)",
+        "fields": [
+            ("username", "Darwinbox user name / employee code", False, ""),
+            ("password", "Darwinbox password", True, ""),
+        ],
+    },
     "atom": {
         "label": "ATOM merchant console",
         "fields": [

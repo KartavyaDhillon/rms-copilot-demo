@@ -1,0 +1,14 @@
+{
+  "fingerprint": "1iks17d",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+  "captured": "2026-10-13 (taken from your browser network capture)",
+  "recipe": {
+    "exclude": [
+      "canvas",
+      "locales",
+      "audio",
+      "plugins"
+    ],
+    "thumbmark_sha256": "5abf71bf11bf14b2067d0b92c47e80fb2844e1937a6971f536779b819dbcb1ee"
+  }
+}

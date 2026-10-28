@@ -1,0 +1,50 @@
+URL: https://mastertrust.darwinbox.in/user/login?source=logout
+status: 200
+
+== FORMS ==
+
+== SCRIPTS ==
+inline script -> inline_1.js (2410 chars) hits=['fingerprint', 'inputdetails', 'jsencrypt', 'redirectpage', 'thumbmark', 'turnstile', 'userlogin']
+external scripts found: 37
+   https://mastertrust.darwinbox.in/assets/1eb074c9/jquery.min.js
+   https://mastertrust.darwinbox.in/assets/1eb074c9/jui/js/jquery-ui.min.js
+   https://mastertrust.darwinbox.in/assets/bdda64a/jquery.browser.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwinboxjs/default-darwinbox.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwinboxjs/default-darwinbox-external.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/bootstrap-wizard.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/bootstrap-treeview.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/star-rating.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/rating.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/tokenfield.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/bootstrap-multiselect.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/lodash.min.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/knockout.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/knockout.validation.3.0.0.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/bootstrap.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/jquery-migrate-4.0.2.min.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/jquery4-polyfills.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/jquery.simpler-sidebar.min.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/intro.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/jquery.combinedScroll.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/handsontable/jquery.handsontablenew1.full.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/js/sticky.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwin-assets/js/js-library/bootstrap-timepicker.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwin-assets/js/js-library/transition.min.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwin-assets/js/js-library/dropdown.min.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwin-assets/js/js-library/beautify-css.min.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwin-assets/js/js-library/css-vars-ponyfill.min.js
+   https://mastertrust.darwinbox.in/assets/3ea737fb/darwin-assets/js/theme.js
+   https://mastertrust.darwinbox.in/assets/cc16e5bf/dbox-currency.min.js
+   https://mastertrust.darwinbox.in/assets/df59ecda/fileuploader.js
+   https://mastertrust.darwinbox.in/assets/1908f70c/chosen.jquery.min.js
+   https://mastertrust.darwinbox.in/assets/e7fa2eef/shadowbox.js
+   https://mastertrust.darwinbox.in/assets/f4846cba/jqueryRedirect.js
+   https://mastertrust.darwinbox.in/assets/f4846cba/jsencrypt.js
+   https://mastertrust.darwinbox.in/node_modules/thumbmarkjs/dist/thumbmark.umd.js
+   https://challenges.cloudflare.com/turnstile/v0/api.js
+   https://mastertrust.darwinbox.in/ms/chatbot/assets/bot.js
+
+== EXTERNAL SCRIPTS WITH KEYWORDS ==
+   https://mastertrust.darwinbox.in/assets/f4846cba/jsencrypt.js -> ext_1_jsencrypt.js.js (212655 chars)
+   https://mastertrust.darwinbox.in/node_modules/thumbmarkjs/dist/thumbmark.umd.js -> ext_2_thumbmark.umd.js.js (17759 chars)
+   https://challenges.cloudflare.com/turnstile/v0/api.js -> ext_3_api.js.js (86732 chars)

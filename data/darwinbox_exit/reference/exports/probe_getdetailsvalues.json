@@ -1,0 +1,214 @@
+{
+  "compensation_details_array_data": [],
+  "compensation_details_array_value": [],
+  "compensation_details_array_meta_data": [],
+  "attr_compensation_details_meta_data": {
+    "ctc_proration": {
+      "type": "table",
+      "headers": []
+    }
+  },
+  "status": 1,
+  "message": "Successfully loaded Values",
+  "engagement_themes": [],
+  "engagement_subthemes": [],
+  "engagement_scale": [],
+  "primary_engagment_indicator": null,
+  "engagement_settings_sub_themes": [],
+  "engagement_settings_theme": [],
+  "add_variables_value": {
+    "firstname": "Pravin",
+    "lastname": "Kate",
+    "employee_no": "M0311185",
+    "user_id": "1774109",
+    "dob": "01 May 1990",
+    "doj": "01 Jun 2026",
+    "department": "Sales",
+    "email": "pravin.kate@mastertrust.co.in",
+    "gender": "Male",
+    "location": "Andheri, Maharashtra, India, (Mumbai)",
+    "bu": "N.A.",
+    "company_name": "Master Capital Services Ltd.",
+    "designation": "Senior Relationship Manager-Sales",
+    "manager_employee_id": "M0311154",
+    "manager_name": "Prakash Bhoite",
+    "manager": "Prakash Bhoite",
+    "primary_mobile": "",
+    "personal_number": "",
+    "primary_mobile_country_code": ""
+  },
+  "employeement_details": [],
+  "separation_details": [],
+  "is_ai_form_summarizer_enabled": false,
+  "organisation_custom_fields": [],
+  "confirmation_fields": [],
+  "employeement_details_config": {
+    "role_change": {
+      "assign_position_reportees": {
+        "display": false
+      },
+      "update_reportees_position_manager": {
+        "display": false
+      },
+      "enable_auto_archive_position": {
+        "display": false
+      },
+      "enable_position_advanced_search": {
+        "display": false
+      },
+      "update_reportee_manager_to_l2": {
+        "display": false
+      }
+    },
+    "l1_manager_replacement": {
+      "update_reportees_position_manager": {
+        "display": false
+      },
+      "enable_auto_archive_position": {
+        "display": false
+      },
+      "when": {
+        "label": "Assign replacement immediately on submission",
+        "helptext": "Assign replacement immediately on submission",
+        "display": true
+      }
+    },
+    "manager_change": {
+      "change_position_hierarchy": {
+        "display": false
+      },
+      "reassign_task": {
+        "label": "Reassign Current Tasks to New Role Holder",
+        "helptext": "Select this Option to Reassign Manager Tasks Of Workflow Subject Employee",
+        "display": true
+      }
+    },
+    "standard_role_one_change": {
+      "reassign_task": {
+        "label": "Reassign Current Tasks to New Role Holder",
+        "helptext": "Select this Option to Reassign Head of Department Tasks Of Workflow Subject Employee",
+        "display": true
+      }
+    },
+    "standard_role_two_change": {
+      "reassign_task": {
+        "label": "Reassign Current Tasks to New Role Holder",
+        "helptext": "Select this Option to Reassign Standard Role 2 Tasks Of Workflow Subject Employee",
+        "display": true
+      }
+    },
+    "standard_role_three_change": {
+      "reassign_task": {
+        "label": "Reassign Current Tasks to New Role Holder",
+        "helptext": "Select this Option to Reassign Standard Role 3 Tasks Of Workflow Subject Employee",
+        "display": true
+      }
+    },
+    "hrbp_change": {
+      "reassign_task": {
+        "label": "Reassign Current Tasks to New Role Holder",
+        "helptext": "Select this Option to Reassign HRBP Tasks Of Workflow Subject Employee",
+        "display": true
+      }
+    },
+    "dotted_line_manager_change": {
+      "reassign_task": {
+        "label": "Reassign Current Tasks to New Role Holder",
+        "helptext": "Select this Option to Reassign Dotted Line Manager Tasks Of Workflow Subject Employee",
+        "display": true
+      }
+    }
+  },
+  "section_heading_list": [
+    "role_change",
+    "employeetype_change",
+    "designation_preset",
+    "inter_company_transfer",
+    "event_sub_event"
+  ],
+  "fields_value": {
+    "bank_pan_num": "CDUPK9491G"
+  },
+  "performance": [],
+  "performance_review_process": [],
+  "hide_effective_details_for_types": [
+    "confirmation",
+    "contract",
+    "employee_add",
+    "candidate",
+    "onboarding"
+  ],
+  "field_data_values": {
+    "bank_pan_num": "CDUPK9491G"
+  },
+  "array_fields_data": [],
+  "candidate_application_array_details_array_data": [],
+  "candidate_application_array_details_array_value": [],
+  "candidate_application_array_details_array_meta_data": [],
+  "attr_candidate_application_cus_flow_meta_data": [],
+  "attr_candidate_application_cus_flow": [],
+  "meta_data": {
+    "bank_pan_num": {
+      "label": "PAN",
+      "order": 2,
+      "type": "textfield",
+      "options": null,
+      "validations": "pan",
+      "section": "personal_identity",
+      "isEnabled": true,
+      "ignore_adding_option": true,
+      "isCustom": false
+    }
+  },
+  "confirmation_fields_meta_data": [],
+  "preset_dropdown_value": [],
+  "preset_field_dropdown_value": [],
+  "pillars_values": [],
+  "scale_values": [],
+  "attr_requisition": [],
+  "assignments": [
+    "a66542fb895fdd",
+    "a665757229bef8",
+    "a667284ab44571",
+    "a6682a02fb89af",
+    "a67f75af029662",
+    "a692aca043479a048893304",
+    "a69325f1e47cf8996611063",
+    "assignment_a66542fb895fdd",
+    "assignment_a665757229bef8",
+    "assignment_a667284ab44571",
+    "assignment_a6682a02fb89af",
+    "assignment_a67f75af029662",
+    "assignment_a692aca043479a048893304",
+    "assignment_a69325f1e47cf8996611063"
+  ],
+  "asset_management_array_data": [],
+  "asset_management_array_value": [],
+  "attr_onboarding_new_form": [],
+  "attr_onboarding_new_form_meta_data": [],
+  "asset_management_array_meta_data": [],
+  "delegation_array_data": [],
+  "delegation_array_value": [],
+  "delegation_array_meta_data": [],
+  "user_date_format": "d-m-Y",
+  "user_time_zone": "Asia/Kolkata",
+  "promotion_allowed": [
+    "role_change",
+    "joblevel_change"
+  ],
+  "current_context": "",
+  "logged_in_user": "712461",
+  "is_bgv": false,
+  "fields_rejected": [],
+  "enable_verification": false,
+  "secondary_calendar": null,
+  "is_talent_review_form": "default",
+  "allow_idp_actions": true,
+  "from_profile_api": false,
+  "for_user_id": "1774109",
+  "current_context_role": "",
+  "isNewlyAdded": true,
+  "user_details": null,
+  "review_assessment_question_scale": [],
+  "review_parameter_question_scale": []
+}
