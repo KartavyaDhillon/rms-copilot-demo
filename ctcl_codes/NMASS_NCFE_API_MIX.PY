@@ -1102,7 +1102,30 @@ class NcdexCaptchaUnavailable(RuntimeError):
     """NCDEX served no usable captcha image — safe to retry from the very start of the login."""
 
 
+# NCFE allows ONE login per user. If a run leaves its session open, the next login is told "user already logged in"
+# and burns an extra captcha + a retry. With NCFE_LOGOUT_AFTER=1 (set by the LIVE ALLOCATION process) the run signs
+# out of NCFE when it is finished - also when the download failed. Off by default so the other boxes behave as before.
+_NCFE_HOLD = {}
+
+
+def _ncfe_logout():
+    fn = _NCFE_HOLD.pop("fn", None)
+    if fn is None or os.getenv("NCFE_LOGOUT_AFTER", "0").strip() != "1":
+        return
+    try:
+        fn()
+    except Exception as _e:                      # a logout problem must never hide the real result of the run
+        print(f"⚠️ NCFE logout did not complete: {type(_e).__name__}: {str(_e)[:160]}", flush=True)
+
+
 def run_ncdex():
+    try:
+        _run_ncdex_inner()
+    finally:
+        _ncfe_logout()
+
+
+def _run_ncdex_inner():
     import requests
     from bs4 import BeautifulSoup
     from Crypto.Cipher import AES
@@ -1396,6 +1419,27 @@ def run_ncdex():
             return el["value"]
         el2 = s.find("input", {"name": "__ANTIFORGERY"})
         return el2["value"] if el2 and el2.get("value") else ""
+
+    def ncfe_logout():
+        """Press the real 'Logout' image button of the NCFE master page (what the browser does), then prove it worked:
+        a 302 back to /Login/NCFEMain.aspx, and the dashboard no longer opens as a logged-in page."""
+        dash = ROOT + "/Common/Dashboard.aspx"
+        pg = session.get(dash, headers={"Referer": ROOT + "/Common/Dashboard.aspx"}, allow_redirects=True)
+        if not logged_in(pg):
+            print("ℹ️ NCFE: already signed out - nothing to do.", flush=True)
+            return
+        data = collect_fields(pg)
+        data += [("ctl00$imgBtnLogout.x", "17"), ("ctl00$imgBtnLogout.y", "16")]
+        r = session.post(dash, data=data, headers={**FORM_HEADERS, "Referer": dash}, allow_redirects=False)
+        loc = r.headers.get("Location") or ""
+        if r.status_code in (301, 302) and "NCFEMain" in loc:
+            chk = session.get(dash, headers={"Referer": dash}, allow_redirects=True)
+            if not logged_in(chk):
+                print("✅ NCFE: signed out (the next login will not hit 'user already logged in').", flush=True)
+                return
+        print(f"⚠️ NCFE: logout was not confirmed (HTTP {r.status_code}, location '{loc}').", flush=True)
+
+    _NCFE_HOLD["fn"] = ncfe_logout
 
     # -------------------------------------------------------------------
     # STEP 1: LOGIN PAGE

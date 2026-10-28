@@ -13,7 +13,7 @@ import re
 import json
 import uuid
 import traceback
-from fastapi import FastAPI, Request, UploadFile, File
+from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from urllib.parse import quote
@@ -347,11 +347,12 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=3"></script>'
+                            '<script src="/platform/js/process-locks.js?v=4"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
-                            '<script src="/platform/js/process-physdel.js?v=5"></script></body>', 1)
+                            '<script src="/platform/js/process-physdel.js?v=5"></script>'
+                            '<script src="/platform/js/process-liveallocation.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -590,6 +591,96 @@ def ops_overview():
         return ops_metrics.overview()
     except Exception as e:
         return {"error": str(e), "items": []}
+
+# ── LIVE ALLOCATION CAPTURE card (core/live_allocation.py) ───────────────────
+def _la_date(s):
+    import datetime as _dt
+    s = (s or "").strip()
+    if not s:
+        return _dt.date.today()
+    for f in ("%d-%m-%Y", "%Y-%m-%d"):
+        try:
+            return _dt.datetime.strptime(s, f).date()
+        except ValueError:
+            pass
+    raise HTTPException(400, "bad date")
+
+@app.get("/live-alloc/status")
+def la_status(date: str = ""):
+    from core import live_allocation as _la
+    try:
+        return _la.status(_la_date(date))
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": str(e), "slots": []}
+
+@app.get("/live-alloc/files")
+def la_files(date: str = ""):
+    """Every slot of one day with its files (for the Get files window)."""
+    from core import live_allocation as _la
+    d = _la_date(date)
+    st = _la.status(d)
+    return {"date": _la.dstr(d), "dates": st.get("dates", []),
+            "slots": [{"slot": s["slot"], "time": s["time"], "state": s["state"], "files": _la.list_files(d, s["slot"])}
+                      for s in st["slots"]]}
+
+@app.get("/live-alloc/file")
+def la_file(slot: int, name: str, date: str = ""):
+    from core import live_allocation as _la
+    try:
+        p = _la.file_path(_la_date(date), slot, name)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(404, "file not found")
+    return FileResponse(str(p), filename=p.name)
+
+@app.get("/live-alloc/zip")
+def la_zip(date: str = "", slot: int = 0):
+    """The whole date folder (1..8 inside, same layout as on disk) - or one slot folder - as one zip."""
+    from core import live_allocation as _la
+    d = _la_date(date)
+    try:
+        z = _la.zip_folder(d, slot or None)
+    except FileNotFoundError:
+        raise HTTPException(404, "no folder for that date")
+    nm = f"LIVE_ALLOCATION_{_la.dstr(d)}" + (f"_folder{slot}" if slot else "") + ".zip"
+    return FileResponse(str(z), filename=nm, media_type="application/zip")
+
+@app.post("/live-alloc/run")
+async def la_run(request: Request):
+    """Start one slot by hand (the timer does the same automatically). {slot, force}"""
+    import threading as _th
+    from core import live_allocation as _la
+    body = await request.json()
+    try:
+        slot = int(body.get("slot"))
+        force = bool(body.get("force"))
+    except Exception:
+        raise HTTPException(400, "slot is required")
+    by = (_actor(request)[0] or "")
+    if _la.is_running():
+        return JSONResponse({"ok": False, "error": "Another capture is running - wait for it, or press Skip / Stop on it."}, status_code=409)
+    def _go():
+        try:
+            _la.run_slot(slot, trigger="manual", by=by, force=force)
+        except Exception as e:
+            print(f"[live-alloc] manual run of slot {slot} failed: {e}", flush=True)
+    _th.Thread(target=_go, name=f"live-alloc-{slot}", daemon=True).start()
+    return {"ok": True}
+
+@app.post("/live-alloc/skip")
+async def la_skip(request: Request):
+    from core import live_allocation as _la
+    body = await request.json()
+    slot = int(body.get("slot"))
+    by = (_actor(request)[0] or "")
+    rec = _la.unskip_slot(slot) if body.get("undo") else _la.skip_slot(slot, by=by)
+    return {"ok": True, "state": rec.get("status", "")}
+
+@app.post("/live-alloc/stop")
+def la_stop():
+    from core import live_allocation as _la
+    return {"ok": True, "stopped": _la.stop_running()}
 
 @app.get("/ops/history")
 def ops_history(days: int = 7):

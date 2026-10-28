@@ -225,6 +225,37 @@
     tick();
   }
 
+  /* ── Short Allocation tile: show RUNNING on the tile that is really running ──
+     saRenderRuns() only knows about a run THIS tab started (_saRunning / _saActiveTag). On any other
+     screen - or after a page refresh - the running tile fell through to "SA ok / LAS not recorded"
+     with a blue "View" button while LAS was still going. The server lock names the run
+     ("Short Allocation SA-01"), so that tile is switched to the same "Running..." state the starter
+     sees, and put back by a fresh render the moment the lock is gone (or the run is stopped). */
+  var SA_TILE_MARKED = false;
+  function markSaTile(lock) {
+    var wrap = document.getElementById("saRuns");
+    if (!wrap) return;
+    var m = /SA-?0?(\d)/i.exec((lock && lock.label) || "");
+    var tile = m ? wrap.children[parseInt(m[1], 10) - 1] : null;
+    if (!tile) return;
+    tile.classList.remove("done", "error", "locked");
+    tile.classList.add("active-win", "pending");
+    var stt = tile.querySelector(".sa-run-state");
+    if (stt && stt.dataset.lmRun !== "1") { stt.innerHTML = "\u25cf Running\u2026"; stt.dataset.lmRun = "1"; }
+    var b = tile.querySelector(".sa-run-btn");
+    if (b) {
+      if (b.textContent !== "\u23f3 Running\u2026") b.textContent = "\u23f3 Running\u2026";
+      b.disabled = true;
+      b.removeAttribute("onclick");
+    }
+    SA_TILE_MARKED = true;
+  }
+  function unmarkSaTile() {
+    if (!SA_TILE_MARKED) return;
+    SA_TILE_MARKED = false;
+    if (typeof window.saLoadStatus === "function") window.saLoadStatus();   // repaint the real state (View / Done / Retry)
+  }
+
   /* ── core apply ─────────────────────────────────────────────────────── */
   function apply() {
     var wanted = {};   // boxTarget -> lock
@@ -272,7 +303,9 @@
         // button, which a standalone-download action lock never touches — so
         // only rewrite it busy for a real whole-box lock.
         if (lock.kind === "action") banFree(t); else banBusy(t, lock);
+        if (t === "sa" && lock.kind !== "action") markSaTile(lock);
       } else {
+        if (t === "sa") unmarkSaTile();
         if (strip) strip.remove();
         enableBox(box);
         banFree(t);
