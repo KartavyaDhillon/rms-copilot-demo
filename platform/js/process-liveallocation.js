@@ -12,7 +12,7 @@
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var TITLE = 'LIVE ALLOCATION CAPTURE';
   var PIPE = 'liveallocation';
-  var S = { data: null, sig: '', timer: null, pw: '', bk: null, msgTimer: null };
+  var S = { data: null, sig: '', timer: null, pw: '', bk: null, msgTimer: null, lastRunAt: 0, logTimer: null };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"']/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function $(id) { return document.getElementById(id); }
@@ -23,7 +23,8 @@
       .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
   }
   function ask(what, cb) { if (typeof window.saAskPassword === 'function') window.saAskPassword(what, cb); }
-  function modal(t, h) { if (typeof window.saShowModal === 'function') window.saShowModal(t, h); }
+  function hideTip() { var t = $('globalTip'); if (t) t.style.display = 'none'; }       // the hovered button is gone - its tip must go too
+  function modal(t, h) { hideTip(); if (typeof window.saShowModal === 'function') window.saShowModal(t, h); }
   function dmyToIso(s) { var p = String(s || '').split('-'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : ''; }
   function isoToday() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
   function isoAgo(n) { var d = new Date(Date.now() - n * 864e5); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -122,10 +123,10 @@
         tb('⏱️ Timings', 'laSub(laTimings)', 'Change the 8 timings. The timer uses the new times within seconds.') +
         tb('🛠️ Override', 'laSub(laOverride)', 'Mark a folder done / not done, so it is skipped or captured again at its time.') +
         tb('🔑 Credentials', 'laCreds()', 'NMASS, NCDEX and MCX logins - change a password here.') +
+        tb('⬆️ Upload files', 'laSub(laUpload)', 'Add files you captured by hand to a folder. They are saved, listed in Backup files and copied to PostgreSQL.') +
         tb('📦 Backup files', 'laSub(laBackup)', 'Pick a date or a date range, tick Full folder, and download everything as one zip.') +
         tb('🗂️ Logs', 'laLogs()', 'The full log of every capture.') +
         tb(auto ? '⏸ Auto: ON' : '▶ Auto: OFF', 'laAuto()', 'Switch the by-itself capture on or off.', auto ? '' : ';border-color:rgba(248,113,113,.45);color:var(--red)') +
-        tb('↻ Refresh', 'laRefresh()', 'Read the latest status now.') +
         tb('⛔ Stop', 'laStop()', 'Stops the capture that is running right now.', ';border-color:rgba(248,113,113,.45);color:var(--red)') +
       '</div><div id="laMsg"></div><div id="laDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>');
     widen(true);
@@ -223,7 +224,10 @@
     S.sig = sig;
     var old = $('laLogBox'), stick = !old || (old.scrollHeight - old.scrollTop - old.clientHeight < 30), keep = old ? old.scrollTop : 0;
     var any = (d.slots || []).some(function (s) { return s.state === 'running'; });
-    el.innerHTML = banner(d) + kpis(d) + logBox(d) + '<div class="la-lbl">Folders for ' + esc(d.date) + '</div><div class="la-runs">' +
+    // the live log is only shown while a capture runs and for 15 seconds after it stops or finishes
+    var showLog = any || (Date.now() - S.lastRunAt < 15000);
+    if (!any && showLog) { clearTimeout(S.logTimer); S.logTimer = setTimeout(function () { S.sig = ''; paintDyn(true); }, 15200 - (Date.now() - S.lastRunAt)); }
+    el.innerHTML = banner(d) + kpis(d) + (showLog ? logBox(d) : '') + '<div class="la-lbl">Folders for ' + esc(d.date) + '</div><div class="la-runs">' +
       (d.slots || []).map(function (s) { return tile(s, any); }).join('') + '</div>' +
       '<div style="font-size:11px;color:var(--dim);margin-top:12px;line-height:1.6">Folder numbers follow the timings: folder 1 = the first time, folder 2 = the second … A retry fills the same folder. Files are saved as <span style="font-family:var(--mono)">&lt;date&gt; / 1 … 8 / files</span>.</div>';
     var nb = $('laLogBox'); if (nb) nb.scrollTop = stick ? nb.scrollHeight : keep;
@@ -245,7 +249,7 @@
     var next = 8000;
     return get('/live-alloc/status').then(function (d) {
       S.data = d;
-      if (d && d.slots) { paintTile(d); if (modalOpen()) paintDyn(); if (d.running) next = 2500; }
+      if (d && d.slots) { if (d.running) S.lastRunAt = Date.now(); paintTile(d); if (modalOpen()) paintDyn(); if (d.running) next = 2500; }
     }).catch(function () { next = 15000; }).then(function () { schedule(next); });
   }
   function schedule(ms) {
@@ -299,7 +303,7 @@
           '<button class="sa-tool" onclick="laTimeDefault()">↺ Back to ' + esc(s.default) + '</button></div>' +
           '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:14px"><input type="checkbox" id="laAutoChk" ' + (s.auto ? 'checked' : '') + '> Start each folder by itself at its time</label>' +
           '<div style="font-size:11.5px;color:var(--dim);margin-bottom:12px;line-height:1.6">A folder that missed its time is still started up to ' + esc(s.grace_min) + ' minutes late (never after the next timing begins). A failed capture is retried ' + esc(s.retries) + ' time(s), ' + esc(s.retry_gap_min) + ' minutes apart.</div>' +
-          '<button class="sa-save" style="width:100%" onclick="laTimeSave()">Save timings</button><div class="sa-msg" id="laTimeMsg"></div>';
+          '<button class="sa-save" id="laTimeBtn" data-no-busy="1" style="width:100%" onclick="laTimeSave()">Save timings</button><div class="sa-msg" id="laTimeMsg"></div>';
         modal('⏱️ ' + TITLE + ' - timings', h);
       });
     });
@@ -321,7 +325,9 @@
     var vals = [].slice.call(document.querySelectorAll('.laTimeIn')).map(function (i) { return i.value; });
     var m = $('laTimeMsg');
     if (vals.some(function (v) { return !v; })) { if (m) m.innerHTML = '<span style="color:var(--red)">Fill every time (or remove the empty ones).</span>'; return; }
+    var btn = $('laTimeBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     post('/live-alloc/settings', { password: S.pw, times: vals.join(','), auto: $('laAutoChk').checked }).then(function (j) {
+      if (btn) { btn.disabled = false; btn.textContent = j && j.ok ? '✓ Saved' : 'Save timings'; }
       if (m) m.innerHTML = j && j.ok ? '<span style="color:var(--green)">Saved - the timer now uses: ' + esc(j.times) + '</span>' : '<span style="color:var(--red)">' + esc((j && j.error) || 'Failed') + '</span>';
       reload();
     });
@@ -364,7 +370,8 @@
   }
   window.laBackup = function (focusSlot) {
     var b = bkState();
-    if (focusSlot) { b.full = false; b.sel = {}; b.sel[focusSlot] = true; b.from = b.to = (S.data && S.data.date) ? dmyToIso(S.data.date) : isoToday(); }
+    b.full = true; b.sel = {};                                           // opens as "Full folder" every time
+    if (focusSlot) { b.full = false; b.sel[focusSlot] = true; b.from = b.to = (S.data && S.data.date) ? dmyToIso(S.data.date) : isoToday(); }
     var n = Math.max(8, ((S.data || {}).slots || []).length);
     var chips = '';
     for (var i = 1; i <= n; i++) chips += '<button class="la-chip' + (b.sel[i] ? ' on' : '') + '" id="laBkChip' + i + '" onclick="laBkToggle(' + i + ')">Folder ' + i + '</button> ';
@@ -376,7 +383,7 @@
       '<label style="display:flex;gap:8px;align-items:center;font-size:13px;font-weight:650;margin-bottom:10px"><input type="checkbox" id="laBkFull" ' + (b.full ? 'checked' : '') + ' onchange="laBkFull()"> Full folder - every folder (1 … 8) of the whole day(s)</label>' +
       '<div id="laBkChips" style="display:' + (b.full ? 'none' : 'flex') + ';gap:6px;flex-wrap:wrap;margin-bottom:12px">' + chips + '</div>' +
       '<div id="laBkList" style="margin-bottom:12px"><div style="color:var(--muted);font-size:12px">Loading…</div></div>' +
-      '<button class="sa-save" id="laBkGo" style="width:100%" onclick="laBkDownload()">⬇ Download zip</button><div class="sa-msg" id="laBkMsg"></div>');
+      '<button class="sa-save" id="laBkGo" data-no-busy="1" style="width:100%" onclick="laBkDownload()">⬇ Download zip</button><div class="sa-msg" id="laBkMsg"></div>');
     widen(true);
     laBkLoad();
   };
@@ -417,6 +424,45 @@
     if (want && !want.length) { var m = $('laBkMsg'); if (m) m.innerHTML = '<span style="color:var(--red)">Tick at least one folder, or tick Full folder.</span>'; return; }
     window.location.href = API + '/live-alloc/zip-range?from_date=' + encodeURIComponent(b.from) + '&to_date=' + encodeURIComponent(b.to) + (want ? '&slots=' + want.join(',') : '');
   };
+
+  // ───────────────────────── Upload files (captured by hand) ─────────────────────────
+  window.laUpload = function () {
+    var d = S.data || { slots: [] };
+    var first = (d.slots.filter(function (s) { return s.state !== 'done' && s.state !== 'upcoming'; })[0] || d.slots[0] || { slot: 1 }).slot;
+    var opts = d.slots.map(function (s) { return '<option value="' + s.slot + '"' + (s.slot === first ? ' selected' : '') + '>Folder ' + s.slot + ' · ' + esc(s.time) + ' · ' + esc(STATE_TXT[s.state] || s.state) + ' · ' + s.files + '/' + s.total + ' files</option>'; }).join('');
+    modal('⬆️ ' + TITLE + ' - upload files',
+      '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">Captured a folder by hand today? Choose its number and add the files here. They are saved in that folder, appear in <b>Backup files</b>, and are copied to PostgreSQL. When all 5 files are there the folder turns green by itself.</div>' +
+      '<div class="la-lbl">Folder (today)</div><select id="laUpSlot" class="la-in" style="width:100%;margin-bottom:12px">' + opts + '</select>' +
+      '<div style="padding:10px 14px;border:1px dashed var(--line-2);border-radius:10px;font-size:11.5px;line-height:1.9;margin-bottom:12px"><b style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase">Accepted names</b><br>' +
+      '<span style="font-family:var(--mono);color:var(--teal)">CM_ClientLevelCollaterals_*.csv<br>FO_ClientLevelCollaterals_*.csv<br>CO_ClientLevelCollaterals_*.csv<br>ClientNetEffectiveDeposits*.csv<br>MCX_Web_Allocation_&lt;number&gt;.xlsx</span></div>' +
+      '<button class="sa-save" data-no-busy="1" style="width:100%" onclick="laUpPick()">📁 Choose files…</button><div id="laUpRes" style="margin-top:12px"></div>');
+  };
+  window.laUpPick = function () {
+    var inp = $('laUpInput');
+    if (!inp) {
+      inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.id = 'laUpInput'; inp.style.display = 'none';
+      inp.onchange = function () { var l = [].slice.call(inp.files); inp.value = ''; if (l.length) laUpSend(l); };
+      document.body.appendChild(inp);
+    }
+    inp.click();
+  };
+  function laUpSend(files) {
+    var slot = ($('laUpSlot') || {}).value || '1', res = $('laUpRes');
+    if (res) res.innerHTML = '<div style="color:var(--muted);font-size:12.5px">Uploading ' + files.length + ' file(s) into folder ' + esc(slot) + '…</div>';
+    var fd = new FormData(); files.forEach(function (f) { fd.append('files', f); });
+    fetch(API + '/live-alloc/upload?slot=' + encodeURIComponent(slot), { method: 'POST', body: fd })
+      .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); })
+      .then(function (j) {
+        if (!res) return;
+        if (j.error || j.detail) { res.innerHTML = '<div style="color:var(--red)">' + esc(j.error || j.detail) + '</div>'; return; }
+        var h = '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Folder: <span style="font-family:var(--mono);color:var(--ink)">' + esc(j.folder) + '</span></div>';
+        (j.ok || []).forEach(function (m) { h += '<div class="sa-ev ok"><span class="ic">✓</span><span>' + esc(m) + '</span><span class="what">saved</span></div>'; });
+        (j.rejected || []).forEach(function (m) { h += '<div class="sa-ev bad"><span class="ic">✕</span><span>' + esc(m) + '</span><span class="what">not accepted</span></div>'; });
+        if ((j.ok || []).length) h += '<div style="margin-top:10px;font-size:12.5px;color:' + (j.complete ? 'var(--green)' : 'var(--amber)') + '">' +
+          (j.complete ? '✓ All 5 files are there - folder ' + esc(j.slot) + ' is now green.' : 'Still missing: ' + esc((j.missing || []).join(', ')) + '. Add them, or use Override → Mark done.') + '</div>';
+        res.innerHTML = h; reload();
+      }).catch(function (e) { if (res) res.innerHTML = '<div style="color:var(--red)">Upload failed: ' + esc(e.message || e) + '</div>'; });
+  }
 
   // ───────────────────────── start ─────────────────────────
   function start() { if (build()) load(); else setTimeout(start, 600); }

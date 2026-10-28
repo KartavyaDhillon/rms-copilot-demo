@@ -733,6 +733,29 @@ async def la_override(request: Request):
     rec = _la.mark_undone(slot, by) if body.get("mode") == "undone" else _la.mark_done(slot, by)
     return {"ok": True, "state": rec.get("status", "")}
 
+@app.post("/live-alloc/upload")
+async def la_upload(request: Request, slot: int = 0, files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+    """Add files you captured by hand to one of TODAY's numbered folders (same names as the automatic capture).
+    Saved in the folder, shown in Backup files, copied to PostgreSQL, and the folder turns green when all 5 are there."""
+    from core import live_allocation as _la
+    import datetime as _dt
+    n = len(_la.slot_times())
+    if not 1 <= slot <= max(n, 8):
+        return JSONResponse({"ok": False, "error": "Choose the folder number."}, status_code=400)
+    if _la.is_running() and _la.status().get("running") == slot:
+        return JSONResponse({"ok": False, "error": "That folder is being captured right now - Stop it first."}, status_code=409)
+    by = (_actor(request)[0] or "")
+    d = _dt.date.today()
+    ok, rejected = [], []
+    for f in files:
+        try:
+            r = _la.accept_upload(d, slot, f.filename or "", await f.read(), by=by)
+            ok.append(f"{r['name']} ({r['label']})")
+        except ValueError as e:
+            rejected.append(str(e))
+    res = _la.finish_upload(d, slot, by=by) if ok else {"complete": False, "missing": [], "found": {}, "state": ""}
+    return {"ok": ok, "rejected": rejected, "slot": slot, "folder": str(_la.slot_dir(d, slot)), **res}
+
 @app.get("/live-alloc/range")
 def la_range(from_date: str = "", to_date: str = ""):
     """Every dated folder between two days with its numbered folders and files (for the Backup files window)."""

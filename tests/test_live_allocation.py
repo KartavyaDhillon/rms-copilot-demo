@@ -368,6 +368,40 @@ class Backup(Base):
             L.zip_range(today - dt.timedelta(days=30), today - dt.timedelta(days=20))
 
 
+class ByHand(Base):
+    def test_files_added_by_hand_are_validated_replace_old_ones_and_complete_the_folder(self):
+        d = dt.date.today()
+        for n in ("CM_ClientLevelCollaterals_28102026.csv", "FO_ClientLevelCollaterals_28102026.csv",
+                  "CO_ClientLevelCollaterals_28102026.csv", "ClientNetEffectiveDeposits_28102026.csv"):
+            L.accept_upload(d, 1, n, b"data")
+        r = L.finish_upload(d, 1, by="ops")
+        self.assertFalse(r["complete"])
+        self.assertEqual(r["missing"], ["MCX web allocation"])
+        L.accept_upload(d, 1, "MCX_Web_Allocation_01.xlsx", b"x")
+        L.accept_upload(d, 1, "MCX_Web_Allocation_01.xlsx", b"newer")        # same kind again: replaces, no duplicate
+        self.assertEqual(len(os.listdir(L.slot_dir(d, 1))), 5)
+        self.assertTrue(L.finish_upload(d, 1, by="ops")["complete"])
+        self.assertEqual(L.status(d)["slots"][0]["state"], "done")
+        with self.assertRaises(ValueError):
+            L.accept_upload(d, 1, "notes.txt", b"x")
+        with self.assertRaises(ValueError):
+            L.accept_upload(d, 1, "../CM_ClientLevelCollaterals_1.csv", b"")   # empty file refused
+
+    def test_data_folder_is_named_live_allocation_capture_and_the_old_name_is_renamed(self):
+        os.environ.pop("LIVE_ALLOC_DIR", None)
+        base = tempfile.mkdtemp()
+        os.makedirs(os.path.join(base, "live_allocation", "BACKUPFILES AUTOMATED"))
+        from core.scheduler import paths
+        real = paths.data_root
+        paths.data_root = lambda: __import__("pathlib").Path(base)
+        try:
+            self.assertEqual(L.root().name, "LIVE ALLOCATION CAPTURE")
+            self.assertTrue(os.path.isdir(os.path.join(base, "LIVE ALLOCATION CAPTURE", "BACKUPFILES AUTOMATED")))
+            self.assertFalse(os.path.exists(os.path.join(base, "live_allocation")))
+        finally:
+            paths.data_root = real
+
+
 class Helper(unittest.TestCase):
     def test_schedule_helper_uses_the_agreed_timings(self):
         import tools.create_live_allocation_schedule as T

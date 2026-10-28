@@ -526,7 +526,7 @@ PIPELINES["physdelfile"] = {"name": "PHYSICAL DELIVERY - full file", "module": "
 PIPELINES["liveallocation"] = {
     "name": "LIVE ALLOCATION CAPTURE", "module": "core.live_allocation", "func": "run_slot",
     "logdir": "liveallocation", "runs": 0, "state_dir_env": "LIVE_ALLOC_DIR",
-    "state_default": r"D:\CONSOLE\data\live_allocation", "state_file": "run_counter.txt", "email_keys": {},
+    "state_default": r"D:\CONSOLE\data\LIVE ALLOCATION CAPTURE", "state_file": "run_counter.txt", "email_keys": {},
     "cred": {"NSCCL / NMASS login": {"user_key": "CTCL_NMASS_USER", "pass_key": "CTCL_NMASS_PASSWORD",
                                     "note": "connect2nsccl.com login - shared with CTCL vs NMASS and the 15-minute download"},
              "NMASS member code": {"single_key": "CTCL_NMASS_CONSCODE",

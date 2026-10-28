@@ -3,7 +3,7 @@ core/live_allocation.py - LIVE ALLOCATION CAPTURE (replaces the hand-run nn.py +
 
 Eight times a day (default 10:12 12:10 13:27 15:10 16:53 18:55 20:55 22:55) it downloads, into numbered folders,
 
-    <data>/live_allocation/BACKUPFILES AUTOMATED/<dd-mm-yyyy>/<1..8>/
+    <data>/LIVE ALLOCATION CAPTURE/BACKUPFILES AUTOMATED/<dd-mm-yyyy>/<1..8>/
         CM_ClientLevelCollaterals_<date>.csv  FO_...  CO_...      (NMASS - shared session, no captcha while it is alive)
         ClientNetEffectiveDeposits_<date>.csv                       (NCDEX - logs out afterwards)
         MCX_Web_Allocation_<NN>.xlsx                                (MCX eclear RSK383 - RSA code from the seed)
@@ -13,7 +13,7 @@ needs no change.  Slot N is the Nth timing of the day (not a counter that moves 
 fills folder 3 again and there is never a folder 9.
 
 Both the scheduler (process "LIVE ALLOCATION CAPTURE") and the Process Center card call run_slot().  Per-slot results are
-kept in <data>/live_allocation/_state/<dd-mm-yyyy>.json - outside the date folders, so the folders stay clean.
+kept in <data>/LIVE ALLOCATION CAPTURE/_state/<dd-mm-yyyy>.json - outside the date folders, so the folders stay clean.
 """
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ import zipfile
 from pathlib import Path
 
 NAME = "LIVE ALLOCATION CAPTURE"
+FOLDER_NAME = "LIVE ALLOCATION CAPTURE"                 # the folder inside the console's data folder
 PROCESS_KEY = "live_allocation_capture"
 DEFAULT_TIMES = "10:12,12:10,13:27,15:10,16:53,18:55,20:55,22:55"
 REPO = Path(__file__).resolve().parent.parent
@@ -69,9 +70,15 @@ def root() -> Path:
     else:
         try:
             from core.scheduler import paths
-            p = paths.data_root() / "live_allocation"
+            base = paths.data_root()
         except Exception:
-            p = REPO / "data" / "live_allocation"
+            base = REPO / "data"
+        p, old = base / FOLDER_NAME, base / "live_allocation"
+        if old.is_dir() and not p.exists():                    # the folder used to be called "live_allocation"
+            try:
+                os.replace(old, p)
+            except OSError:
+                p = old                                        # in use right now: keep working there, rename next start
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -501,12 +508,92 @@ def _stash_files(d, slot, labels, log=print):
         return
     dest = _state_dir() / "_replaced" / dstr(d) / str(slot) / dt.datetime.now().strftime("%H%M%S")
     dest.mkdir(parents=True, exist_ok=True)
+    try:                                                      # the aside copies are only a safety net: keep a week
+        import shutil
+        for old in (_state_dir() / "_replaced").iterdir():
+            try:
+                if (d - parse_dstr(old.name)).days > 7:
+                    shutil.rmtree(old, ignore_errors=True)
+            except ValueError:
+                pass
+    except OSError:
+        pass
     for n in names:
         try:
             os.replace(slot_dir(d, slot) / n, dest / n)
         except OSError:
             pass
     log(f"Old copies moved aside ({len(names)} file(s)) before downloading again.")
+
+
+PG_PIPELINE = "liveallocation"
+
+
+def archive_slot(d, slot, log=print) -> int:
+    """Copy this folder's files into PostgreSQL (table run_files, pipeline 'liveallocation', tag '<date>/<folder>') like the
+    other processes do. Only when USE_POSTGRES=true; each file once; never raises. Returns how many were stored."""
+    if os.getenv("USE_POSTGRES", "false").strip().lower() != "true":
+        return 0
+    try:
+        from core.db_postgres import save_run_file
+    except Exception as e:
+        log(f"Postgres archive skipped: {e}")
+        return 0
+    rec = read_state(d)["slots"].get(str(slot), {})
+    done = set(rec.get("archived") or [])
+    n = 0
+    for f in list_files(d, slot):
+        key = f"{f['name']}|{f['size']}"
+        if key in done:
+            continue
+        try:
+            save_run_file(PG_PIPELINE, "backup", f["name"], file_path(d, slot, f["name"]).read_bytes(),
+                          tag=f"{dstr(d)}/{slot}", run_date=d.isoformat())
+            done.add(key)
+            n += 1
+        except Exception as e:                                   # noqa: BLE001 - a database hiccup must not fail a capture
+            log(f"Postgres archive failed for {f['name']}: {type(e).__name__}: {e}")
+    if n:
+        _update(d, slot, archived=sorted(done))
+        log(f"{n} file(s) archived to PostgreSQL.")
+    return n
+
+
+def label_of(name: str):
+    for label, rx in EXPECTED:
+        if rx.match(name):
+            return label
+    return None
+
+
+def accept_upload(d, slot: int, name: str, data: bytes, by="", log=print) -> dict:
+    """Put one file you captured by hand into folder `slot` of day `d`. Only the 5 known file names are accepted; a file
+    of the same kind already there is moved aside (not deleted). Then the folder is archived to PostgreSQL."""
+    name = os.path.basename(name or "")
+    label = label_of(name)
+    if not label:
+        raise ValueError(f"'{name}' is not a file this capture makes (CM_/FO_/CO_ClientLevelCollaterals_*, "
+                         f"ClientNetEffectiveDeposits*, MCX_Web_Allocation_<n>.xlsx)")
+    if not data:
+        raise ValueError(f"'{name}' is empty")
+    folder = slot_dir(d, slot, create=True)
+    _stash_files(d, slot, [label], log)
+    tmp = folder / (name + ".part")
+    tmp.write_bytes(data)
+    os.replace(tmp, folder / name)
+    return {"name": name, "label": label}
+
+
+def finish_upload(d, slot: int, by="", log=print) -> dict:
+    """After files were added by hand: archive them, and if the folder is complete record it as done."""
+    chk = check_files(d, slot)
+    if not chk["missing"]:
+        rec = _update(d, slot, status="done", skipped=False, redo=False, msg=f"Files added by {by or 'a user'} (by hand).",
+                      files=chk["found"], ended=_iso(), marked_by=by, marked_at=_iso())
+    else:
+        rec = _update(d, slot, files=chk["found"])
+    archive_slot(d, slot, log)
+    return {"complete": not chk["missing"], "missing": chk["missing"], "found": chk["found"], "state": rec.get("status", "")}
 
 
 def is_running() -> bool:
@@ -578,6 +665,10 @@ def run_slot(slot: int, trigger="schedule", by="", log=print, cancelled=lambda: 
             bad = [f"{STEP_LABEL[k]}: {v.get('msg')}" for k, v in steps.items() if not v.get("ok")]
             status, msg = "failed", " | ".join(bad) or ("Missing: " + ", ".join(chk["missing"]))
         log(f"=== Folder {slot}: {status.upper()} - {msg}")
+        try:
+            archive_slot(d, slot, log)
+        except Exception:                                        # noqa: BLE001
+            pass
         return _update(d, slot, status=status, ended=_iso(), msg=msg, files=chk["found"])
     finally:
         if fh.get("f"):
