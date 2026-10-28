@@ -53,6 +53,8 @@
     '.la-note{font-size:10.5px;color:var(--muted);min-height:26px;line-height:1.35;overflow:hidden}' +
     '.la-btn{width:100%;font-family:var(--sans);font-weight:650;font-size:12px;border:0;border-radius:9px;padding:8px;cursor:pointer;background:var(--blue);color:var(--blue-d)}' +
     '.la-btn:disabled{background:var(--panel-3);color:var(--dim);cursor:not-allowed}' +
+    '@keyframes laSpin{to{transform:rotate(360deg)}}.la-spin{display:inline-block;width:14px;height:14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:laSpin .8s linear infinite;vertical-align:-2px;margin-right:8px}' +
+    '.la-btn:disabled.amber{background:var(--amber);color:var(--amber-d);cursor:default}' +
     '.la-btn.red{background:var(--red);color:#fff}.la-btn.amber{background:var(--amber);color:var(--amber-d)}' +
     '.la-link{background:none;border:0;color:var(--muted);font-size:11px;cursor:pointer;text-decoration:underline;padding:0}' +
     '.la-link:disabled{opacity:.4;cursor:not-allowed}' +
@@ -144,8 +146,9 @@
   }
 
   // ───────────────────────── render ─────────────────────────
-  var STATE_TXT = { done: '✓ Captured', running: '● Running…', failed: '✗ Failed', missed: '✗ Missed', partial: '◐ Partly done', due: '● Starting…', upcoming: 'Later today', skipped: '⏭ Skipped' };
+  var STATE_TXT = { done: '✓ Captured', running: '<span class="la-spin" style="width:10px;height:10px;margin-right:5px"></span>Running…', failed: '✗ Failed', missed: '✗ Missed', partial: '◐ Partly done', due: '● Starting…', upcoming: 'Later today', skipped: '⏭ Skipped' };
 
+  function plain(h) { return String(h).replace(/<[^>]*>/g, ''); }
   function kpi(k, v, f, extra) { return '<div class="la-kpi"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="f" title="' + esc(f) + '">' + esc(f) + '</div>' + (extra || '') + '</div>'; }
 
   function banner(d) {
@@ -189,7 +192,7 @@
       btn = '<button class="la-btn" onclick="laSub(function(){laBackup(' + s.slot + ')})">📂 View files</button>';
       sec = '<button class="la-link"' + (lock ? ' disabled' : '') + tip + ' onclick="laRun(' + s.slot + ',true)">↻ capture again</button>';
     } else if (st === 'running') {
-      btn = '<button class="la-btn amber" disabled>⏳ Running…</button>';
+      btn = '<button class="la-btn amber" disabled style="opacity:1"><span class="la-spin"></span>Running…</button>';
       sec = '<button class="la-link" onclick="laSkip(' + s.slot + ')">⏭ Skip &amp; stop this one</button>';
     } else if (st === 'skipped') {
       btn = '<button class="la-btn" onclick="laSkip(' + s.slot + ',true)">↩ Undo skip</button>';
@@ -342,7 +345,7 @@
       S.data = d;
       var rows = (d.slots || []).map(function (s) {
         return '<div class="la-ovr"><b style="width:70px">Folder ' + s.slot + '</b><span style="font-family:var(--mono);width:48px">' + esc(s.time) + '</span>' +
-          '<span style="flex:1;min-width:150px;color:var(--muted)">' + esc(STATE_TXT[s.state] || s.state) + ' · ' + s.files + '/' + s.total + ' files' + (s.override ? ' · override' : '') + (s.redo ? ' · will run again' : '') + '</span>' +
+          '<span style="flex:1;min-width:150px;color:var(--muted)">' + esc(plain(STATE_TXT[s.state] || s.state)) + ' · ' + s.files + '/' + s.total + ' files' + (s.override ? ' · override' : '') + (s.redo ? ' · will run again' : '') + '</span>' +
           '<button class="sa-tool" onclick="laOv(' + s.slot + ',\'undone\')" data-tip="Treat as NOT captured: the timer captures it again from scratch at its time (old files are kept aside).">↺ Mark not done</button>' +
           '<button class="sa-tool" onclick="laOv(' + s.slot + ',\'done\')" data-tip="Treat as captured (for example you put the files there yourself). The timer leaves it alone.">✓ Mark done</button>' +
           (s.state === 'skipped' ? '<button class="sa-tool" onclick="laSkipOv(' + s.slot + ',true)">↩ Undo skip</button>' : '<button class="sa-tool" onclick="laSkipOv(' + s.slot + ')">⏭ Skip</button>') + '</div>';
@@ -429,7 +432,7 @@
   window.laUpload = function () {
     var d = S.data || { slots: [] };
     var first = (d.slots.filter(function (s) { return s.state !== 'done' && s.state !== 'upcoming'; })[0] || d.slots[0] || { slot: 1 }).slot;
-    var opts = d.slots.map(function (s) { return '<option value="' + s.slot + '"' + (s.slot === first ? ' selected' : '') + '>Folder ' + s.slot + ' · ' + esc(s.time) + ' · ' + esc(STATE_TXT[s.state] || s.state) + ' · ' + s.files + '/' + s.total + ' files</option>'; }).join('');
+    var opts = d.slots.map(function (s) { return '<option value="' + s.slot + '"' + (s.slot === first ? ' selected' : '') + '>Folder ' + s.slot + ' · ' + esc(s.time) + ' · ' + esc(plain(STATE_TXT[s.state] || s.state)) + ' · ' + s.files + '/' + s.total + ' files</option>'; }).join('');
     modal('⬆️ ' + TITLE + ' - upload files',
       '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">Captured a folder by hand today? Choose its number and add the files here. They are saved in that folder, appear in <b>Backup files</b>, and are copied to PostgreSQL. When all 5 files are there the folder turns green by itself.</div>' +
       '<div class="la-lbl">Folder (today)</div><select id="laUpSlot" class="la-in" style="width:100%;margin-bottom:12px">' + opts + '</select>' +
