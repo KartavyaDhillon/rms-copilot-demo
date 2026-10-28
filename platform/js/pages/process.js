@@ -39,7 +39,8 @@
         '<div class="pc-bar"><div class="l"></div>' +
         '<div style="display:flex;gap:8px">' +
         '<button class="btn sm ghost" id="pcCaptchaAuto" title="Automatic NMASS / NCDEX captcha filling (2Captcha)">⚡ Captcha auto-fill: <b id="pcCaptchaAutoState">…</b></button>' +
-        '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
+        '<button class="btn sm ghost" id="pcCaptchaBal" title="Who gets the e-mail when the 2Captcha balance is low (checked every hour)">\u2709 Balance alert</button>' +
+                '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
         '<a class="btn sm ghost" href="/legacy" target="_blank" title="Original console with sidebar and internal views, in a new tab">' + RMS.icon("external") + " Standalone</a></div></div>" +
         '<iframe class="pc-frame" id="pcFrame" src="/legacy?embed=1"></iframe>';
@@ -50,6 +51,10 @@
         }
       };
       $("#pcCommon").onclick = openCommon;
+      $("#pcCaptchaBal").onclick = () => {
+        const w = $("#pcFrame").contentWindow;
+        if (w && typeof w.pxConfig === "function") w.pxConfig("captchabal"); else popup("Balance alert", "The console is still loading - try again in a moment.", false);
+      };
       captchaAutoInit();
       booted = true;
     },
@@ -64,10 +69,11 @@
     const on = captchaAuto.enabled && captchaAuto.key_configured;
     st.textContent = !captchaAuto.key_configured ? "No key" : (captchaAuto.enabled ? "On" : "Off");
     st.style.color = on ? "#4ade80" : (captchaAuto.key_configured ? "" : "#fbbf24");
-    const t = captchaAuto.today;
+    const t = captchaAuto.today, bal = captchaAuto.balance || {};
+    const balTxt = bal.balance != null ? " Balance: $" + Number(bal.balance).toFixed(2) + (bal.low ? " (LOW)" : "") + ", checked " + (bal.checked_at || "").slice(11, 16) + "." : "";
     btn.title = captchaAuto.key_configured
       ? "Fills NMASS / NCDEX captchas automatically (up to " + (captchaAuto.max_tries || 5) + " tries of " + (captchaAuto.timeout_s || 45) +
-        " s each), then the normal captcha popup appears. Applies to everybody." + (t ? " Today: " + t.accepted + " accepted, " + t.rejected + " wrong." : "")
+        " s each), then the normal captcha popup appears. Applies to everybody." + (t ? " Today: " + t.accepted + " accepted, " + t.rejected + " wrong." : "") + balTxt
       : "No 2Captcha key found. Add APIKEY_2CAPTCHA=... to the .env file and restart the server.";
   }
 

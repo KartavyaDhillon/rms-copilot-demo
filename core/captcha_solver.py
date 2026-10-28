@@ -185,6 +185,10 @@ class V2Client:
                 raise SolverError("TIMEOUT", f"no answer within {timeout_s:.0f} s")
             self.sleep(POLL_S)
 
+    def balance(self) -> float:
+        """The account balance in USD (read only)."""
+        return float(self._post("getBalance", {})["balance"])
+
     def report(self, task_id: int, good: bool) -> None:
         """Feedback to 2Captcha (wrong answers can be refunded after their review)."""
         self._post("reportCorrect" if good else "reportIncorrect", {"taskId": task_id})

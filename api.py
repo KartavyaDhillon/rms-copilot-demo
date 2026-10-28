@@ -3328,7 +3328,8 @@ def captcha_auto_get():
     from core import captcha_solver as _cs
     _st = _cs.switch_state()
     return {"enabled": _st["enabled"], "by": _st["by"], "at": _st["at"], "key_configured": bool(_cs.api_key()),
-            "max_tries": _cs.MAX_TRIES, "timeout_s": _cs.TIMEOUT_S, "today": _cs.stats_today()}
+            "max_tries": _cs.MAX_TRIES, "timeout_s": _cs.TIMEOUT_S, "today": _cs.stats_today(),
+            "balance": __import__("core.captcha_balance", fromlist=["x"]).read_state()}
 
 
 class _CaptchaAutoBody(_SA_BaseModel):
@@ -3345,6 +3346,28 @@ def captcha_auto_set(body: _CaptchaAutoBody, request: Request):
     except OSError as _e:
         return {"ok": False, "error": f"Could not save the switch: {_e}"}
     return {"ok": True, "enabled": _st["enabled"], "key_configured": bool(_cs.api_key())}
+
+
+@app.get("/captcha/balance")
+def captcha_balance_get():
+    """Last 2Captcha balance reading (hourly check) and the alert settings."""
+    from core import captcha_balance as _cb
+    st = _cb.read_state()
+    return {**st, "limit": _cb.limit(), "to": os.getenv("CAPTCHA_ALERT_TO", ""), "cc": os.getenv("CAPTCHA_ALERT_CC", "")}
+
+@app.post("/captcha/balance/check")
+def captcha_balance_check():
+    """Check the balance right now (also mails the alert if it is low and one is due)."""
+    from core import captcha_balance as _cb
+    return {"ok": True, **_cb.check()}
+
+@app.on_event("startup")
+def _captcha_balance_startup():
+    try:
+        from core import captcha_balance as _cb
+        _cb.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  2Captcha balance check not started: {type(_e).__name__}: {_e}")
 
 
 # ── CTCL vs NMASS: which MCX file supplies "Margin Limit" (MCX 90% or MCX Deposit) ──────────────────────────

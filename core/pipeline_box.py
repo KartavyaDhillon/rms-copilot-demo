@@ -556,6 +556,15 @@ PIPELINES["mcxcash"] = {
              "Report file password": {"single_key": "MCX_CASH_FILE_PASSWORD",
                                       "note": "opens the two Excel reports that are e-mailed (the recipients already know it)"}},
 }
+# 2CAPTCHA low-balance alert (core/captcha_balance.py): only here so the shared e-mail / settings window works for it
+PIPELINES["captchabal"] = {
+    "name": "2CAPTCHA BALANCE ALERT", "module": "core.captcha_balance", "func": "check", "logdir": "captchabal", "runs": 0,
+    "state_dir_env": "CAPTCHA_BALANCE_DIR", "state_default": r"D:\CONSOLE\data", "state_file": "run_counter.txt",
+    "email_default": "",
+    "email_keys": {"Low balance alert (sent when the balance is at or below the limit)": ["CAPTCHA_ALERT_TO", "CAPTCHA_ALERT_CC"]},
+    "cred": {"Alert limit in US dollars": {"single_key": "CAPTCHA_LOW_BALANCE",
+                                           "note": "A mail goes out when the 2Captcha balance is at or below this amount (default 0.80). Checked every hour."}},
+}
 try:
     from core import mcx_cash_report as _mcr
     _mcr.apply_defaults()              # To / CC defaults of the hand-run script (only fills what .env lacks)
