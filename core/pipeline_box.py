@@ -520,6 +520,23 @@ PIPELINES["physdelfile"] = {"name": "PHYSICAL DELIVERY - full file", "module": "
                             "func": "run_full_file", "logdir": "physdel", "runs": 1,
                             "state_dir_env": "PHYSICAL_DELIVERY_FOLDER", "state_default": PIPELINES["physdel"]["state_default"],
                             "state_file": "full_file_counter.txt", "email_keys": {}, "cred": {}}
+# LIVE ALLOCATION CAPTURE - runs from its own timer (core/live_allocation.py), not from this file's Run machinery
+# ("runs": 0 keeps it out of the run-counter tiles).  It is registered so the shared Credentials and Logs windows work
+# for it exactly like for the other cards.  Run logs: logs/liveallocation/liveallocation_f<folder>__<date>_<time>.log
+PIPELINES["liveallocation"] = {
+    "name": "LIVE ALLOCATION CAPTURE", "module": "core.live_allocation", "func": "run_slot",
+    "logdir": "liveallocation", "runs": 0, "state_dir_env": "LIVE_ALLOC_DIR",
+    "state_default": r"D:\CONSOLE\data\live_allocation", "state_file": "run_counter.txt", "email_keys": {},
+    "cred": {"NSCCL / NMASS login": {"user_key": "CTCL_NMASS_USER", "pass_key": "CTCL_NMASS_PASSWORD",
+                                    "note": "connect2nsccl.com login - shared with CTCL vs NMASS and the 15-minute download"},
+             "NMASS member code": {"single_key": "CTCL_NMASS_CONSCODE",
+                                   "note": "consCode sent with every NSCCL request - shared"},
+             "NCDEX / NCFE login": {"user_key": "CTCL_NCDEX_USER", "pass_key": "CTCL_NCDEX_PASSWORD",
+                                    "note": "ncfe.ncdex.com login - shared; this capture logs out after the download"},
+             "MCX RSK383 login": {"user_key": "SA_MCX_DEPOSIT_USER", "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
+                                  "note": "eclear.mcxccl.com web allocation login - shared with Short Allocation. "
+                                          "The RSA code comes from the seed (Scheduler > Connections > MCX eclear)."}},
+}
 try:                                   # PHYSICAL DELIVERY folder / e-mail / WhatsApp defaults (only fills what .env lacks)
     from core.pipelines import physdel_cfg as _pd_cfg
     _pd_cfg.apply_defaults()
@@ -1384,6 +1401,7 @@ _LOG_LABELS = {
         ("UPLOAD",           "📤 Upload"),
         ("RESTORE",          "♻️ Restore"),
     ],
+    "liveallocation": [("liveallocation_f%d" % _i, "📥 Folder %d" % _i) for _i in range(12, 0, -1)],
     "r1r2": [
         ("r1r2_download",     "📥 Download"),
         ("r1r2_mcx_download", "📥 MCX Deposit"),

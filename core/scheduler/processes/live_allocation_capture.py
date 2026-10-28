@@ -32,6 +32,9 @@ def _slot_from_schedule(ctx) -> int:
 @H.logged(FOLDER)
 def _run(params, ctx):
     K.require_trading_day(ctx)
+    if L.auto_enabled() and str(getattr(ctx, "trigger", "")).lower() != "manual":
+        # the card's own timer already captures every folder at its time - doing it twice would only fight over the portals
+        raise H.Skipped("The LIVE ALLOCATION card's built-in timer does this - nothing to do here.")
     try:
         slot = int(params.get("slot") or 0)
     except (TypeError, ValueError):

@@ -18,8 +18,25 @@ class OpsSched(unittest.TestCase):
         store._CONN_FACTORY = lambda: sqlite3.connect(db, timeout=15)
         store.ensure_schema()
         os.environ["SCHED_HOLIDAYS_FILE"] = os.path.join(tmp, "none.csv")
+        os.environ["LIVE_ALLOC_DIR"] = os.path.join(tmp, "la")           # LIVE ALLOCATION has its own folder per test
+        self.addCleanup(os.environ.pop, "LIVE_ALLOC_DIR", None)
         catalog.register("t.dash", "Dash process", lambda p, c: "ok")
         self.addCleanup(catalog.unregister, "t.dash")
+        from core import live_allocation as _la
+        _la.save_settings(auto=False)                                    # most tests here are about schedules only
+
+    def test_live_allocation_folders_are_counted_when_its_timer_is_on(self):
+        from core import live_allocation as la
+        la.save_settings(auto=True)
+        old = la._trading_day
+        la._trading_day = lambda d: True
+        self.addCleanup(setattr, la, "_trading_day", old)
+        r = ops_sched.today(ist(11, 0))
+        mine = [i for i in r["items"] if i["pipe_name"] == "LIVE ALLOCATION CAPTURE"]
+        self.assertEqual(len(mine), 8)
+        self.assertEqual([i["window"] for i in mine][:2], ["10:12", "12:10"])
+        self.assertEqual(mine[0]["status"], "missed")                    # 10:12 passed, nothing captured
+        self.assertEqual(mine[1]["status"], "upcoming")
 
     def test_slots_and_statuses(self):
         now = ist(9, 0)

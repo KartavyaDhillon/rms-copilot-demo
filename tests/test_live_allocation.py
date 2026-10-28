@@ -39,6 +39,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         os.environ["LIVE_ALLOC_DIR"] = self.tmp
+        os.environ["LIVE_ALLOC_LOG_DIR"] = os.path.join(self.tmp, "_logs")     # never write test logs into the real logs folder
         os.environ["LIVE_ALLOC_TIMES"] = L.DEFAULT_TIMES
         self.saved = dict(L.STEPS)
         self.calls = []
@@ -48,6 +49,7 @@ class Base(unittest.TestCase):
     def tearDown(self):
         L.STEPS.update(self.saved)
         os.environ.pop("LIVE_ALLOC_DIR", None)
+        os.environ.pop("LIVE_ALLOC_LOG_DIR", None)
         os.environ.pop("LIVE_ALLOC_TIMES", None)
 
 
@@ -258,6 +260,7 @@ class ThroughTheScheduler(Base):
     def test_a_schedule_at_the_eight_times_fills_the_matching_folders(self):
         from core.scheduler import service
         import tools.create_live_allocation_schedule as T
+        L.save_settings(auto=False)                          # the card's own timer would otherwise own these slots
         self.now = dt.datetime(self.day.year, self.day.month, self.day.day, 9, 0, tzinfo=self.IST).astimezone(dt.timezone.utc)
         s = service.create({"name": "LA", "process_key": "live_allocation_capture", "params": {}, "tz": "Asia/Kolkata",
                             "rule": {"type": "times", "times": T.TIMES, "days": [0, 1, 2, 3, 4]}, "skip_holidays": False,
@@ -269,6 +272,100 @@ class ThroughTheScheduler(Base):
             self.assertTrue(any(r["status"] == "SUCCESS" for r in rows), [r["status"] for r in rows])
             self.assertEqual(L.status(today)["slots"][slot - 1]["state"], "done", slot)
         self.assertEqual(self.calls.count("nmass"), 2)       # only slots 1 and 3 ran
+
+
+def at(h, m):
+    return dt.datetime.combine(dt.date.today(), dt.time(h, m))
+
+
+class Timer(Base):
+    """The built-in timer: starts each folder at its time, retries, honours skip / override / timing changes."""
+    def setUp(self):
+        super().setUp()
+        self._td = L._trading_day
+        L._trading_day = lambda d: True
+
+    def tearDown(self):
+        L._trading_day = self._td
+        super().tearDown()
+
+    def run_it(self, s, force):
+        L.run_slot(s, trigger="auto", by="timer", force=force, log=lambda m: None)
+
+    def test_nothing_before_the_time_then_the_folder_starts_at_its_time(self):
+        self.assertIsNone(L.tick(at(12, 7), runner=self.run_it))            # 12:07 - folder 2 is not due yet
+        self.assertEqual(L.tick(at(12, 10), runner=self.run_it), 2)         # 12:10 - it starts by itself
+        self.assertEqual(L.status(dt.date.today(), at(12, 11))["slots"][1]["state"], "done")
+        self.assertIsNone(L.tick(at(12, 11), runner=self.run_it))           # captured: left alone
+
+    def test_a_folder_missed_while_the_server_was_down_still_runs_but_not_after_the_next_timing(self):
+        self.assertEqual(L.tick(at(12, 50), runner=lambda s, f: None), 2)   # up late, still inside folder 2's window
+        d2 = tempfile.mkdtemp()
+        os.environ["LIVE_ALLOC_DIR"] = d2
+        self.assertEqual(L.tick(at(13, 30), runner=lambda s, f: None), 3)   # 13:27 has started: folder 3, not 2
+
+    def test_failed_capture_is_retried_twice_five_minutes_apart_then_left_for_a_human(self):
+        L.STEPS["mcx"] = fake_mcx(self.calls, ok=False)
+        seen = []
+        for hh, mm in ((12, 10), (12, 12), (12, 16), (12, 22), (12, 40)):
+            seen.append(L.tick(at(hh, mm), runner=self.run_it))
+        self.assertEqual(seen, [2, None, 2, 2, None])                       # attempts at 12:10, 12:16, 12:22 only
+
+    def test_skip_auto_off_and_override(self):
+        L.skip_slot(2, by="ops")
+        self.assertIsNone(L.tick(at(12, 10), runner=self.run_it))           # skipped folder: not started
+        L.unskip_slot(2)
+        L.save_settings(auto=False)
+        self.assertIsNone(L.tick(at(12, 10), runner=self.run_it))           # auto OFF: nothing starts
+        L.save_settings(auto=True)
+        L.mark_done(2, by="ops")
+        self.assertIsNone(L.tick(at(12, 10), runner=self.run_it))           # marked done: left alone
+        self.assertEqual(L.status(dt.date.today(), at(12, 10))["slots"][1]["state"], "done")
+
+    def test_changed_timing_and_mark_not_done_captures_again_at_the_new_time(self):
+        L.run_slot(2, log=lambda m: None)                                   # folder 2 captured at 12:10
+        self.assertEqual(L.status(dt.date.today(), at(14, 0))["slots"][1]["state"], "done")
+        L.save_settings(times="10:12,14:30,13:27,15:10")                    # moved to 14:30 (sorted: folder 2 = 13:27)
+        self.assertEqual(L.slot_times(), [612, 807, 870, 910])
+        L.mark_undone(2, by="ops")
+        st = L.status(dt.date.today(), at(13, 0))["slots"][1]
+        self.assertEqual((st["time"], st["state"]), ("13:27", "upcoming"))
+        self.assertIsNone(L.tick(at(13, 0), runner=self.run_it))            # before its (new) time
+        self.assertEqual(L.tick(at(13, 28), runner=self.run_it), 2)         # at the new time: captured again
+        d = dt.date.today()
+        self.assertEqual(len(os.listdir(L.slot_dir(d, 2))), 5)              # no duplicates in the folder
+        self.assertTrue(os.path.isdir(L._state_dir() / "_replaced" / L.dstr(d) / "2"))   # old copies kept aside
+        self.assertEqual(L.status(d, at(13, 29))["slots"][1]["state"], "done")
+        with self.assertRaises(ValueError):
+            L.save_settings(times="10:12,99:00")
+
+    def test_run_writes_a_log_the_shared_logs_window_can_list(self):
+        L.run_slot(1, log=lambda m: None)
+        logs = sorted(L.log_dir().glob("liveallocation_f1__*.log"))
+        self.assertTrue(logs)
+        txt = logs[-1].read_text(encoding="utf-8")
+        self.assertIn("LIVE ALLOCATION CAPTURE - folder 1", txt)
+        self.assertIn("DONE", txt)
+
+
+class Backup(Base):
+    def test_range_listing_and_one_zip_for_many_days(self):
+        today = dt.date.today()
+        yday = today - dt.timedelta(days=1)
+        L.run_slot(1, log=lambda m: None)
+        touch(L.slot_dir(yday, 2), "MCX_Web_Allocation_02.xlsx")
+        touch(L.slot_dir(yday, 3), "MCX_Web_Allocation_03.xlsx")
+        days = L.range_listing(yday, today)
+        self.assertEqual([x["date"] for x in days], [L.dstr(yday), L.dstr(today)])
+        self.assertEqual(days[0]["files"], 2)
+        with zipfile.ZipFile(L.zip_range(yday, today)) as z:                # full folder, both days
+            names = z.namelist()
+        self.assertIn(f"{L.dstr(yday)}/2/MCX_Web_Allocation_02.xlsx", names)
+        self.assertIn(f"{L.dstr(today)}/1/MCX_Web_Allocation_01.xlsx", names)
+        with zipfile.ZipFile(L.zip_range(yday, today, [3])) as z:           # only folder 3
+            self.assertEqual(z.namelist(), [f"{L.dstr(yday)}/3/MCX_Web_Allocation_03.xlsx"])
+        with self.assertRaises(FileNotFoundError):
+            L.zip_range(today - dt.timedelta(days=30), today - dt.timedelta(days=20))
 
 
 class Helper(unittest.TestCase):

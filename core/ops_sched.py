@@ -54,7 +54,14 @@ def today(now=None):
             by_sched.setdefault(r["schedule_id"], []).append(r)
 
         items = []
+        try:
+            from core import live_allocation as _la
+            la_auto = _la.auto_enabled()
+        except Exception:
+            _la, la_auto = None, False
         for s in store.list_schedules("enabled"):
+            if la_auto and s["process_key"] == _la.PROCESS_KEY:
+                continue                                     # the card's own timer owns these slots (added below)
             pdef = catalog.get(s["process_key"])
             pname = pdef.name if pdef else s["process_key"]
             stz = rules.get_tz(s.get("tz"))
@@ -82,6 +89,20 @@ def today(now=None):
                 items.append({"id": s["name"], "pipe": "sched", "pipe_name": pname, "source": "scheduler",
                               "window": lt.strftime("%H:%M"), "start_min": lt.hour * 60 + lt.minute,
                               "status": st, "schedule_id": s["id"]})
+        if la_auto:                                          # LIVE ALLOCATION CAPTURE: one item per folder, from its card
+            try:
+                st = _la.status(local.date(), local.replace(tzinfo=None))
+                if st.get("trading_day"):
+                    cmap = {"done": "done", "skipped": "done", "failed": "failed", "partial": "failed", "missed": "missed",
+                            "running": "running", "due": "due", "upcoming": "upcoming"}
+                    for sl in st.get("slots", []):
+                        h, m = sl["time"].split(":")
+                        items.append({"id": f"LIVE ALLOCATION - folder {sl['slot']}", "pipe": "sched",
+                                      "pipe_name": "LIVE ALLOCATION CAPTURE", "source": "scheduler", "window": sl["time"],
+                                      "start_min": int(h) * 60 + int(m), "status": cmap.get(sl["state"], "upcoming"),
+                                      "schedule_id": "live-allocation"})
+            except Exception:
+                pass
         items.sort(key=lambda x: (x["start_min"], x["id"]))
         c = {k: sum(1 for i in items if i["status"] == k) for k in ("done", "failed", "running", "missed", "due")}
         return {"items": items, "done": c["done"], "total": len(items), "failed": c["failed"],

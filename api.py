@@ -352,7 +352,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
-                            '<script src="/platform/js/process-liveallocation.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-liveallocation.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -681,6 +681,78 @@ async def la_skip(request: Request):
 def la_stop():
     from core import live_allocation as _la
     return {"ok": True, "stopped": _la.stop_running()}
+
+@app.on_event("startup")
+def _live_alloc_startup():
+    """The built-in timer: captures each numbered folder at its time, by itself (no Scheduler schedule needed)."""
+    try:
+        from core import live_allocation as _la
+        _la.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  LIVE ALLOCATION timer not started: {type(_e).__name__}: {_e}")
+
+@app.get("/live-alloc/settings")
+def la_settings_get():
+    from core import live_allocation as _la
+    s = _la.get_settings()
+    return {"times": ",".join(_la.hhmm(m) for m in _la.slot_times()), "auto": s["auto"], "custom": bool(s["times"]),
+            "default": _la.DEFAULT_TIMES, "grace_min": _la._grace_min(), "retries": _la._retry_cfg()[0],
+            "retry_gap_min": _la._retry_cfg()[1]}
+
+@app.post("/live-alloc/settings")
+async def la_settings_set(request: Request):
+    """Change the 8 timings and/or the auto switch (asks the console password, like every other settings window).
+    Takes effect within ~20 seconds - nothing to restart."""
+    from core import live_allocation as _la
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return JSONResponse({"ok": False, "error": "Wrong password"}, status_code=200)
+    try:
+        s = _la.save_settings(times=body.get("times") if "times" in body else None,
+                              auto=body.get("auto") if "auto" in body else None, by=(_actor(request)[0] or ""))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "times": ",".join(_la.hhmm(m) for m in _la.slot_times()), "auto": s["auto"]}
+
+@app.post("/live-alloc/override")
+async def la_override(request: Request):
+    """Manual override of one folder today: {slot, mode: 'undone' | 'done'}."""
+    from core import live_allocation as _la
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        slot = int(body.get("slot"))
+    except Exception:
+        raise HTTPException(400, "slot is required")
+    by = (_actor(request)[0] or "")
+    if _la.is_running() and (_la.status().get("running") == slot):
+        return JSONResponse({"ok": False, "error": "That folder is running now - Stop or Skip it first."}, status_code=409)
+    rec = _la.mark_undone(slot, by) if body.get("mode") == "undone" else _la.mark_done(slot, by)
+    return {"ok": True, "state": rec.get("status", "")}
+
+@app.get("/live-alloc/range")
+def la_range(from_date: str = "", to_date: str = ""):
+    """Every dated folder between two days with its numbered folders and files (for the Backup files window)."""
+    from core import live_allocation as _la
+    d1, d2 = _la_date(from_date), _la_date(to_date or from_date)
+    return {"from": _la.dstr(d1), "to": _la.dstr(d2), "days": _la.range_listing(d1, d2),
+            "all_dates": [_la.dstr(x) for x in _la.list_dates()[:120]]}
+
+@app.get("/live-alloc/zip-range")
+def la_zip_range(from_date: str = "", to_date: str = "", slots: str = ""):
+    """One zip of every folder in a date range (on-disk layout: <date>/<1..8>/<files>). slots='2,3' keeps only those folders."""
+    from core import live_allocation as _la
+    d1, d2 = _la_date(from_date), _la_date(to_date or from_date)
+    want = [int(x) for x in slots.split(",") if x.strip().isdigit()] or None
+    try:
+        z = _la.zip_range(d1, d2, want)
+    except FileNotFoundError:
+        raise HTTPException(404, "no files in that range")
+    nm = f"LIVE_ALLOCATION_{_la.dstr(d1)}" + (f"_to_{_la.dstr(d2)}" if d1 != d2 else "") + ".zip"
+    return FileResponse(str(z), filename=nm, media_type="application/zip")
 
 @app.get("/ops/history")
 def ops_history(days: int = 7):

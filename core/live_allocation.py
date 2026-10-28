@@ -121,10 +121,54 @@ def _parse_times(s: str):
     return out
 
 
+def _settings_path() -> Path:
+    return _state_dir() / "settings.json"
+
+
+def get_settings() -> dict:
+    """{'times': 'HH:MM,...' or '', 'auto': bool} saved from the card's Timings window."""
+    try:
+        s = json.loads(_settings_path().read_text(encoding="utf-8"))
+    except Exception:
+        s = {}
+    return {"times": str(s.get("times") or "").strip(), "auto": bool(s.get("auto", True))}
+
+
+def save_settings(times=None, auto=None, by="") -> dict:
+    """Change the timings and/or the auto switch. Takes effect on the next tick (a few seconds) - nothing to restart."""
+    cur = get_settings()
+    if times is not None:
+        mins = sorted(set(_parse_times(times)))
+        if not mins:
+            raise ValueError("enter at least one time like 10:12")
+        if len(mins) > 12:
+            raise ValueError("at most 12 timings")
+        cur["times"] = ",".join(hhmm(m) for m in mins)
+    if auto is not None:
+        cur["auto"] = bool(auto)
+    cur["by"], cur["at"] = by, _iso()
+    with _STATE_LOCK:
+        tmp = _settings_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(cur, indent=1), encoding="utf-8")
+        os.replace(tmp, _settings_path())
+    return get_settings()
+
+
+def auto_enabled() -> bool:
+    return get_settings()["auto"]
+
+
 def slot_times() -> list:
-    """Minutes-after-midnight of the 8 slots. From the process setting 'slot_times' (Scheduler > Processes), else
-    LIVE_ALLOC_TIMES in .env, else the default."""
-    raw = ""
+    """Minutes-after-midnight of the slots. From the card's Timings window (settings.json), else the process setting
+    'slot_times' (Scheduler > Processes), else LIVE_ALLOC_TIMES in .env, else the default."""
+    raw = get_settings()["times"]
+    if raw:
+        try:
+            t = sorted(set(_parse_times(raw)))
+            if t:
+                return t
+        except ValueError:
+            pass
     try:
         from core.scheduler import catalog, proc_settings
         pdef = catalog.get(PROCESS_KEY)
@@ -423,6 +467,48 @@ def step_mcx(folder: Path, slot: int, log, cancel) -> dict:
 STEPS = {"nmass_ncdex": step_nmass_ncdex, "mcx": step_mcx}      # tests replace these
 
 
+def log_dir() -> Path:
+    """Where the run logs go: logs/liveallocation - the same place the shared Logs window of the other cards reads."""
+    v = os.getenv("LIVE_ALLOC_LOG_DIR", "").strip()
+    try:
+        from core.pipeline_box import LOG_BASE
+        p = Path(v) if v else Path(LOG_BASE) / "liveallocation"
+    except Exception:
+        p = Path(v) if v else root() / "_logs"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _open_run_log(slot, trigger="", by="", force=False):
+    """One log file per capture: liveallocation_f<folder>__<yyyymmdd>_<hhmmss>.log. Never raises."""
+    try:
+        now = dt.datetime.now()
+        f = open(log_dir() / f"liveallocation_f{int(slot)}__{now:%Y%m%d_%H%M%S}.log", "w", encoding="utf-8")
+        f.write(f"===== LIVE ALLOCATION CAPTURE - folder {slot} - {now:%d-%m-%Y %H:%M:%S} =====\n"
+                f"started by: {by or trigger or 'timer'} ({trigger or 'auto'}){' - capture again (force)' if force else ''}\n\n")
+        f.flush()
+        return f
+    except Exception:
+        return None
+
+
+def _stash_files(d, slot, labels, log=print):
+    """'Capture again': move the old files of these labels out of the folder (to _state/_replaced, nothing is deleted)
+    so the folder never holds two copies of the same file."""
+    have = check_files(d, slot)["found"]
+    names = [have[l] for l in labels if l in have]
+    if not names:
+        return
+    dest = _state_dir() / "_replaced" / dstr(d) / str(slot) / dt.datetime.now().strftime("%H%M%S")
+    dest.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        try:
+            os.replace(slot_dir(d, slot) / n, dest / n)
+        except OSError:
+            pass
+    log(f"Old copies moved aside ({len(names)} file(s)) before downloading again.")
+
+
 def is_running() -> bool:
     return _RUN_LOCK.locked()
 
@@ -432,9 +518,16 @@ def run_slot(slot: int, trigger="schedule", by="", log=print, cancelled=lambda: 
     Raises Busy if another capture is running. Returns the slot record."""
     slot = int(slot)
     _out = log
+    fh = {}
 
-    def log(m, _slot=slot):                                  # every line also goes to the card's live strip
+    def log(m, _slot=slot):                                  # every line also goes to the card's live strip + the log file
         _LOG.append((dt.datetime.now().strftime("%H:%M:%S"), _slot, str(m)))
+        if fh.get("f"):
+            try:
+                fh["f"].write(f"{dt.datetime.now():%H:%M:%S}  {m}\n")
+                fh["f"].flush()
+            except Exception:
+                pass
         _out(m)
     n = len(slot_times())
     if not 1 <= slot <= max(n, 8):
@@ -453,8 +546,9 @@ def run_slot(slot: int, trigger="schedule", by="", log=print, cancelled=lambda: 
             pass
         _ACTIVE.update({"slot": slot, "date": dstr(d), "started": _iso()})
         folder = slot_dir(d, slot, create=True)
+        fh["f"] = _open_run_log(slot, trigger, by, force)
         rec = _update(d, slot, status="running", started=_iso(), ended="", trigger=trigger, by=by, msg="",
-                      steps={}, skipped=False)
+                      steps={}, skipped=False, redo=False, override_done=False)
         stop = lambda: bool(cancelled()) or cancel_requested()
         steps = {}
         for key in ("nmass_ncdex", "mcx"):
@@ -464,6 +558,8 @@ def run_slot(slot: int, trigger="schedule", by="", log=print, cancelled=lambda: 
             if not force and not any(EXPECTED[i][0] in have["missing"] for i in STEP_FILES[key]):
                 steps[key] = {"ok": True, "msg": "already there - not fetched again"}
             else:
+                if force:
+                    _stash_files(d, slot, [EXPECTED[i][0] for i in STEP_FILES[key]], log)
                 try:
                     steps[key] = STEPS[key](folder, slot, log, stop)
                 except Exception as e:                   # one portal failing must not stop the next one
@@ -481,8 +577,14 @@ def run_slot(slot: int, trigger="schedule", by="", log=print, cancelled=lambda: 
         else:
             bad = [f"{STEP_LABEL[k]}: {v.get('msg')}" for k, v in steps.items() if not v.get("ok")]
             status, msg = "failed", " | ".join(bad) or ("Missing: " + ", ".join(chk["missing"]))
+        log(f"=== Folder {slot}: {status.upper()} - {msg}")
         return _update(d, slot, status=status, ended=_iso(), msg=msg, files=chk["found"])
     finally:
+        if fh.get("f"):
+            try:
+                fh["f"].close()
+            except Exception:
+                pass
         _ACTIVE.clear()
         _RUN_LOCK.release()
 
@@ -513,6 +615,196 @@ def stop_running(by="") -> bool:
     return True
 
 
+def mark_undone(slot: int, by="") -> dict:
+    """Override: treat this folder as NOT captured. At its time (now, if that has passed) the timer captures it again
+    from scratch (old files are moved aside, not deleted)."""
+    d = dt.date.today()
+    return _update(d, slot, status="", skipped=False, redo=True, override_done=False, auto_attempts=0, last_auto="",
+                   msg=f"Marked not done by {by or 'a user'} - will be captured again.", steps={}, marked_by=by,
+                   marked_at=_iso())
+
+
+def mark_done(slot: int, by="") -> dict:
+    """Override: treat this folder as captured (e.g. the files were put there by hand). The timer leaves it alone."""
+    d = dt.date.today()
+    return _update(d, slot, status="done", skipped=False, redo=False, override_done=True,
+                   msg=f"Marked done by {by or 'a user'} (override).", marked_by=by, marked_at=_iso())
+
+
+# ───────────────────────────── the timer ─────────────────────────────
+_TICK = {"thread": None, "stop": threading.Event(), "last": ""}
+
+
+def _trading_day(d: dt.date) -> bool:
+    try:
+        from core.scheduler import helpers as H
+        return bool(H.is_trading_day(d))
+    except Exception:
+        return d.weekday() < 5
+
+
+def _grace_min() -> int:
+    try:
+        return max(5, int(os.getenv("LIVE_ALLOC_GRACE_MIN", "60")))
+    except ValueError:
+        return 60
+
+
+def _retry_cfg():
+    try:
+        n = max(0, int(os.getenv("LIVE_ALLOC_RETRIES", "2")))
+    except ValueError:
+        n = 2
+    try:
+        gap = max(1, int(os.getenv("LIVE_ALLOC_RETRY_GAP_MIN", "5")))
+    except ValueError:
+        gap = 5
+    return n, gap
+
+
+def due_slot(now: dt.datetime = None):
+    """-> (slot, force) the timer should start right now, or None.
+    A slot is due when its time has come, it is not captured / skipped, and it is still inside its window (until the next
+    timing starts, at most LIVE_ALLOC_GRACE_MIN after its own). A failed capture is retried (LIVE_ALLOC_RETRIES times,
+    LIVE_ALLOC_RETRY_GAP_MIN apart). A folder marked 'not done' runs at its time whenever that is."""
+    now = now or dt.datetime.now()
+    d = now.date()
+    if not _trading_day(d):
+        return None
+    times = slot_times()
+    st = read_state(d)["slots"]
+    cur = now.hour * 60 + now.minute
+    retries, gap = _retry_cfg()
+    for i, t in enumerate(times, start=1):
+        if t > cur:
+            break
+        rec = st.get(str(i), {})
+        if rec.get("skipped") or rec.get("override_done"):
+            continue
+        redo = bool(rec.get("redo"))
+        if not redo:
+            if not check_files(d, i)["missing"]:
+                continue
+            nxt = times[i] if i < len(times) else 24 * 60
+            if cur >= min(nxt, t + _grace_min()):
+                continue                                       # its window is over - the next timing takes over
+            n = int(rec.get("auto_attempts") or 0)
+            if n:
+                if n > retries:
+                    continue
+                last = rec.get("last_auto") or ""
+                try:
+                    if (now - dt.datetime.strptime(last, "%Y-%m-%d %H:%M:%S")).total_seconds() < gap * 60:
+                        continue
+                except ValueError:
+                    pass
+        return i, redo
+    return None
+
+
+def tick(now: dt.datetime = None, runner=None):
+    """One look at the clock (the timer calls this every ~20 s). Starts the due slot in the background.
+    `runner(slot, force)` is replaceable for tests. Returns the slot started, or None."""
+    if not auto_enabled() or _RUN_LOCK.locked():
+        return None
+    now = now or dt.datetime.now()
+    hit = due_slot(now)
+    if not hit:
+        return None
+    slot, force = hit
+    d = now.date()
+    rec = read_state(d)["slots"].get(str(slot), {})
+    _update(d, slot, auto_attempts=int(rec.get("auto_attempts") or 0) + 1, last_auto=now.strftime("%Y-%m-%d %H:%M:%S"))
+
+    def go():
+        try:
+            run_slot(slot, trigger="auto", by="timer", force=force)
+        except Busy:
+            pass
+        except Exception as e:                                  # noqa: BLE001 - the timer must never die
+            print(f"[live-alloc] timer run of folder {slot} failed: {type(e).__name__}: {e}", flush=True)
+    if runner:
+        runner(slot, force)
+    else:
+        threading.Thread(target=go, name=f"live-alloc-auto-{slot}", daemon=True).start()
+    return slot
+
+
+def start_ticker(interval_s: int = 20):
+    """Start the background timer (idempotent). Called once when the server starts."""
+    if _TICK["thread"] and _TICK["thread"].is_alive():
+        return False
+    _TICK["stop"].clear()
+
+    def loop():
+        print("[live-alloc] timer started - folders are captured at their times by themselves.", flush=True)
+        while not _TICK["stop"].wait(interval_s):
+            try:
+                tick()
+            except Exception as e:                              # noqa: BLE001
+                print(f"[live-alloc] timer error: {type(e).__name__}: {e}", flush=True)
+    th = threading.Thread(target=loop, name="live-alloc-timer", daemon=True)
+    _TICK["thread"] = th
+    th.start()
+    return True
+
+
+def stop_ticker():
+    _TICK["stop"].set()
+
+
+# ───────────────────────────── downloads across days ─────────────────────────────
+def dates_between(d_from: dt.date, d_to: dt.date) -> list:
+    if d_from > d_to:
+        d_from, d_to = d_to, d_from
+    return [x for x in sorted(list_dates()) if d_from <= x <= d_to]
+
+
+def range_listing(d_from: dt.date, d_to: dt.date) -> list:
+    """[{date, folders:[{slot, files:[{name,size,mtime}]}]}] for every dated folder in the range that exists."""
+    out = []
+    for d in dates_between(d_from, d_to):
+        base = day_dir(d)
+        slots = []
+        try:
+            names = sorted((n for n in os.listdir(base) if n.isdigit() and (base / n).is_dir()), key=int)
+        except OSError:
+            names = []
+        for n in names:
+            slots.append({"slot": int(n), "files": list_files(d, int(n))})
+        out.append({"date": dstr(d), "folders": slots, "files": sum(len(s["files"]) for s in slots)})
+    return out
+
+
+def zip_range(d_from: dt.date, d_to: dt.date, slots=None) -> Path:
+    """One zip for a range of days: every date folder, every numbered folder inside it, exactly the on-disk layout
+    (<dd-mm-yyyy>/<slot>/<file>). `slots` limits it to some folder numbers (None = all). Raises FileNotFoundError if empty."""
+    tmpdir = _state_dir() / "_tmp"
+    tmpdir.mkdir(exist_ok=True)
+    fd, path = tempfile.mkstemp(suffix=".zip", prefix="live_range_", dir=tmpdir)
+    os.close(fd)
+    want = {int(s) for s in slots} if slots else None
+    n = 0
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for d in dates_between(d_from, d_to):
+            base = day_dir(d)
+            try:
+                names = sorted((x for x in os.listdir(base) if x.isdigit() and (base / x).is_dir()), key=int)
+            except OSError:
+                continue
+            for s in names:
+                if want is not None and int(s) not in want:
+                    continue
+                for f in sorted(os.listdir(base / s)):
+                    if (base / s / f).is_file():
+                        z.write(base / s / f, f"{dstr(d)}/{s}/{f}")
+                        n += 1
+    if not n:
+        os.unlink(path)
+        raise FileNotFoundError("no files in that range")
+    return Path(path)
+
+
 # ───────────────────────────── status for the card ─────────────────────────────
 def status(d: dt.date = None, now: dt.datetime = None) -> dict:
     now = now or dt.datetime.now()
@@ -530,6 +822,10 @@ def status(d: dt.date = None, now: dt.datetime = None) -> dict:
         s = rec.get("status") or ""
         if live == i:
             state = "running"
+        elif rec.get("override_done"):
+            state = "done"
+        elif rec.get("redo"):                              # marked "not done": it will be captured again at its time
+            state = "due" if (today and cur_min >= t) else "upcoming"
         elif s == "running":                              # recorded as running but nothing is: the server was restarted
             state = "failed"
             rec["msg"] = "Interrupted (the server restarted while it was running)."
@@ -553,10 +849,14 @@ def status(d: dt.date = None, now: dt.datetime = None) -> dict:
         slots.append({"slot": i, "time": hhmm(t), "state": state, "msg": rec.get("msg", ""),
                       "started": rec.get("started", ""), "ended": rec.get("ended", ""), "by": rec.get("by", ""),
                       "trigger": rec.get("trigger", ""), "steps": rec.get("steps", {}),
+                      "attempts": int(rec.get("auto_attempts") or 0), "redo": bool(rec.get("redo")),
+                      "override": bool(rec.get("override_done")),
                       "found": chk["found"], "missing": chk["missing"], "files": len(chk["found"]),
                       "total": len(EXPECTED), "folder": str(slot_dir(d, i))})
     nxt = next((s for s in slots if s["state"] in ("due", "upcoming")), None)
-    lg = [{"t": t, "slot": sl, "msg": m} for t, sl, m in list(_LOG)[-14:] if live is None or sl == live]
+    lg = [{"t": t, "slot": sl, "msg": m} for t, sl, m in list(_LOG)[-40:]]
     return {"log": lg, "date": dstr(d), "today": today, "now": now.strftime("%H:%M"), "running": live, "slots": slots,
+            "auto": auto_enabled(), "times": ",".join(hhmm(x) for x in times), "trading_day": _trading_day(d),
+            "grace_min": _grace_min(), "retries": _retry_cfg()[0],
             "counts": count, "next": ({"slot": nxt["slot"], "time": nxt["time"]} if nxt else None),
             "root": str(root()), "dates": [dstr(x) for x in list_dates()[:30]]}
