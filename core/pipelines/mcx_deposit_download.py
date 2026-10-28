@@ -22,7 +22,7 @@ _BUSY_TAG = re.compile(r"\[MCX_DEPOSIT_BUSY:(\w+)\]")
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def stream_mcx_deposit_download(output_dir=None, caller="sa"):
+def stream_mcx_deposit_download(output_dir=None, caller="sa", extra_env=None):
     """Generator that runs mcx_deposit_downloader.py and yields SSE event dicts.
 
     `output_dir` (optional) is the folder the MCX_DEPOSIT_HH.MM.xlsx file is saved into - Short Allocation's own
@@ -90,6 +90,7 @@ def stream_mcx_deposit_download(output_dir=None, caller="sa"):
                                     # a slow TCS BANCS login/export-poll loop with low print
                                     # volume can then look completely hung with a near-empty
                                     # log for minutes (this is what happened to SA-03/SA-04).
+    env.update(extra_env or {})        # e.g. MCX_TOKEN_MODE=auto for the unattended Short Allocation auto run
     env["MCX_DEPOSIT_CALLER"] = caller  # "sa" = SA's OWN button (the default); "ctcl" = CTCL's MCX file download — this is SA's OWN
                                         # "MCX Deposit" button; CLI's "MCX Web Allocation"
                                         # button sets "cli" instead so the dashboard's RSA

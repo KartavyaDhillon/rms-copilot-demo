@@ -573,9 +573,11 @@ def _download_mcx_deposit_once(output_dir=None):
         login does, and hand the poll loop the tabId THAT call returns."""
         print("\n🚨 SESSION EXPIRED — RE-LOGIN")
         _session_expired_popup()
-        if _auto_mode():
+        if _auto_mode() and os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto":
+            # UNATTENDED run only (Short Allocation auto run, Live Allocation, MCX Cash): somebody else logged in and kicked
+            # this session out - do NOT fill a code instantly, wait (default 4 min). A run started by hand fills the next code at once.
             from core import mcx_soft_token as _mst
-            _mst.relogin_wait(log=print)           # unattended: do NOT fill a code instantly - wait (default 4 min)
+            _mst.relogin_wait(log=print)
         new_sess = requests.Session()
         new_rndaak = _do_login(
             new_sess,

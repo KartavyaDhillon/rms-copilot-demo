@@ -218,7 +218,7 @@ def _download_deposit():
     """Runs the same downloader as the MCX Deposit button. -> (ok, message)."""
     from core.pipelines.mcx_deposit_download import stream_mcx_deposit_download
     ok, msg = False, "no result"
-    for ev in stream_mcx_deposit_download():
+    for ev in stream_mcx_deposit_download(extra_env={"MCX_TOKEN_MODE": "auto"}):
         if not isinstance(ev, dict):
             continue
         if ev.get("type") == "done":
