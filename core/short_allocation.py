@@ -1106,6 +1106,11 @@ def update_env(updates: dict):
         except Exception as e:
             raise ValueError(f"Could not encrypt NSE password: {e}")
     allowed = set(SA_KEYS_WA) | set(SA_KEYS_MAIL) | set(SA_KEYS_WIN) | set(SA_KEYS_CRED)
+    if "SA_WA_FAILURE_ALERT" in updates:
+        # 10-digit numbers are fine (+91 is added automatically), "#Name" is optional; anything else is refused with a plain message
+        from core.scheduler import helpers as _H
+        # stored as +91...#Name with NO space before the '#': a " #" in a .env value would be read as a comment and cut the rest
+        updates["SA_WA_FAILURE_ALERT"] = ",".join(f"{n}#{nm}" if nm else n for n, nm in _H.phone_entries(updates["SA_WA_FAILURE_ALERT"]))
     try:
         with open(ENV_FILE, encoding="utf-8") as f: lines = f.readlines()
     except Exception:

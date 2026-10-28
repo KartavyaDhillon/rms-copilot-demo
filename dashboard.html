@@ -518,7 +518,6 @@ body {
             <button class="sa-tool" onclick="saConfig('wa')" data-tip="Change which phone numbers get each zone's WhatsApp report.">📱 WhatsApp numbers</button>
             <button class="sa-tool" onclick="saConfig('mail')" data-tip="Change which email addresses get each zone's report (To / CC).">✉️ Email To / CC</button>
             <button class="sa-tool" onclick="saCredentials()" data-tip="Change logins/passwords for NSE, MCX, NCDEX and MCX Deposit downloads.">🔑 Credentials</button>
-            <button class="sa-tool" id="saAutoBtn" onclick="saAutoOpen()" data-tip="Runs start by themselves at their time - no one has to click. Set each run's time and switch Auto on or off (runs 1-8). The MCX Deposit file is downloaded 10 minutes before, and a WhatsApp alert is sent if a file never arrives.">⚡ Auto Run</button>
             <button class="sa-tool" onclick="saUpload()" data-tip="Manually add a file yourself if the automatic download couldn't get it — only recognised filenames are accepted.">⬆️ Upload files</button>
             <button class="sa-tool" id="saStopBtn" onclick="saStop()" data-tip="Stops whatever's currently running for Short Allocation." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="saBackup()" data-tip="Browse/restore past days' files, or look up one client's numbers across runs.">📦 Backup files</button>
@@ -3384,7 +3383,7 @@ async function saOpenCreds(pw){
   window._saListMask['SA_MCX_PASSWORDS']='password';
   window._saListMask['SA_MCX_DEPOSIT_PASSWORD']='password';
   let c; try{ c=await (await fetch(API+'/sa/credentials')).json(); }catch(e){ alert('Could not load credentials'); return; }
-  let rows='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">If a website login changed, update it here, then Stop any stuck run and run again.</div>';
+  let rows='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">If a website login changed, update it here, then Stop any stuck run and run again.</div>'+(window.saAutoCardHtml?window.saAutoCardHtml():'');
   for(const srv in c){ const x=c[srv];
     const userRow = x.user_editable
       ? `<div class="sa-field"><label>User ID</label><input data-key="${x.user_key}" value="${(x.user||'').replace(/"/g,'&quot;')}" onkeydown="if(event.keyCode===13)saSaveConfig();"></div>`
@@ -3451,7 +3450,11 @@ window._saListMask = window._saListMask || {};
 function saMaskValue(key, v){
   const t=window._saListMask[key]; v=(v||'').trim();
   if(!v) return '';
-  if(t==='phone') return v.length<=4 ? v : '•••'+v.slice(-4);
+  if(t==='phone'){   // 9811122233#Kartavya -> •••2233 (KARTAVYA), like the other WhatsApp windows
+    const i=v.indexOf('#'), num=(i>=0?v.slice(0,i):v).trim(), nm=(i>=0?v.slice(i+1).trim():'');
+    const m=num.length<=4 ? num : '•••'+num.slice(-4);
+    return nm ? m+' ('+nm.toUpperCase()+')' : m;
+  }
   if(t==='email') return v.split('@')[0].split(/[._]/)[0];
   return v;
 }
@@ -3505,7 +3508,10 @@ async function saOpenEditor(kind, pw){
   if(kind==='wa'){
     window._saListState={}; for(const k in cfg.whatsapp) window._saListState[k]=(cfg.whatsapp[k]||[]).slice();
     const L={SA_WA_DELHI:'Delhi',SA_WA_CHND:'Chandigarh',SA_WA_LUDH:'Ludhiana',SA_WA_MUMB:'Mumbai',SA_WA_V1:'Vertical 1',SA_WA_V2:'Vertical 2',SA_WA_6NBB707:'6NBB707',SA_WA_FAILURE_ALERT:'⚠ FAILURE ALERT (auto run)'};
-    for(const k in cfg.whatsapp){ rows+=saListFieldCollapsed(k, L[k]||k, '+91XXXXXXXXXX', 'phone'); }
+    for(const k in cfg.whatsapp){
+      rows+=saListFieldCollapsed(k, L[k]||k, k==='SA_WA_FAILURE_ALERT'?'9811122233#Kartavya':'+91XXXXXXXXXX', 'phone');
+      if(k==='SA_WA_FAILURE_ALERT') rows+='<div style="font-size:12px;color:var(--muted);line-height:1.6;margin:-6px 0 14px">Gets the WhatsApp picture when an automatic run fails. Type just the 10-digit number — +91 is added automatically. Add #Name after a number (e.g. 9811122233#Kartavya) — optional.</div>';
+    }
   } else {
     window._saListState={};   // mail fields are plain replace-whole-value — no stale list state from a previous WA/creds session
     const L={SA2_MAIL_LUDH_TO:'LUDH · TO',SA2_MAIL_LUDH_CC:'LUDH · CC',SA2_MAIL_DELH_TO:'DELH · TO',SA2_MAIL_DELH_CC:'DELH · CC',SA2_MAIL_MUMB_TO:'MUMB · TO',SA2_MAIL_MUMB_CC:'MUMB · CC',SA2_MAIL_CHND_TO:'CHND · TO',SA2_MAIL_CHND_CC:'CHND · CC',SA2_MAIL_FULL_TO:'FULL FILE · TO',SA2_MAIL_FULL_CC:'FULL FILE · CC',SA_MAIL_SCENARIO_ALL_TO:'SCENARIO-ALL · TO',SA_MAIL_SCENARIO_ALL_CC:'SCENARIO-ALL · CC',SA_MAIL_DELHI_TO:'DELHI · TO',SA_MAIL_DELHI_CC:'DELHI · CC',SA_MAIL_TENTATIVE_TO:'TENTATIVE · TO',SA_MAIL_TENTATIVE_CC:'TENTATIVE · CC',SA_MAIL_TOP100_TO:'TOP100 · TO',SA_MAIL_TOP100_CC:'TOP100 · CC',SA_MAIL_TOP15_TO:'TOP15 · TO',SA_MAIL_TOP15_CC:'TOP15 · CC'};

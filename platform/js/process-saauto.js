@@ -1,4 +1,4 @@
-/* SHORT ALLOCATION - "Auto Run" button + window. Runs start by themselves at their time (core/sa_auto.py); here you set the time and
+/* SHORT ALLOCATION - "Auto Run" window, opened from Credentials (🔑) > Auto Run. Runs start by themselves at their time (core/sa_auto.py); here you set the time and
    the Auto switch of each run (1-8), the waiting / retry numbers, and see what happened today. Alert numbers are in the
    "WhatsApp numbers" window, row "FAILURE ALERT (auto run)". Injected at serve time (api.py /legacy). */
 (function () {
@@ -19,12 +19,19 @@
     return s;                                         // "waiting for peak file (15 min)", "retry 1"
   }
 
-  function label() {
-    var b = document.getElementById('saAutoBtn');
-    if (!b || !D) return;
-    var on = D.runs.filter(function (r) { return r.auto; }).map(function (r) { return r.run; });
-    b.innerHTML = '⚡ Auto Run' + (on.length ? ': <b style="color:var(--green)">' + on.join(', ') + ' ON</b>' : ': <span style="color:var(--muted)">all off</span>');
+  function label() { /* the summary lives in the Credentials window (saAutoCardHtml) */ }
+  function onList() {
+    return D ? D.runs.filter(function (r) { return r.auto; }).map(function (r) { return r.run; }) : [];
   }
+  /* the card shown at the top of the Credentials window */
+  window.saAutoCardHtml = function () {
+    var on = onList();
+    var sum = on.length ? 'Auto is <b style="color:var(--green)">ON</b> for run ' + on.join(', ') : 'Auto is <b style="color:var(--muted)">OFF</b> for every run';
+    return '<div style="border:1px solid rgba(52,211,153,.4);background:rgba(52,211,153,.06);border-radius:11px;padding:14px;margin-bottom:12px">' +
+      '<div style="font-weight:650;font-size:14px;margin-bottom:3px">⚡ Auto Run</div>' +
+      '<div style="font-size:10.5px;color:var(--dim);margin-bottom:10px">Runs start by themselves at their time - times, On/Off for runs 1-8, waiting, and the WhatsApp failure alert. ' + sum + '.</div>' +
+      '<button type="button" class="sa-save" style="width:100%" onclick="saAutoOpen(window._saPw)">Open Auto Run settings</button></div>';
+  };
   function load() {
     return get('/sa/auto/status').then(function (d) { if (d && d.ok) { D = d; label(); } }).catch(function () {});
   }
@@ -52,9 +59,10 @@
         ((r.state === '' || r.state === 'skipped') ? ' <a href="#" class="sa-auto-skip" data-run="' + r.run + '" data-undo="' + (r.state === 'skipped' ? 1 : 0) + '" style="color:var(--blue);margin-left:6px">' + (r.state === 'skipped' ? 'undo skip' : 'skip today') + '</a>' : '') + '</td></tr>';
     });
     var s = d.settings;
-    var nums = d.alert_numbers_count
-      ? '<span style="color:var(--green)">✓ ' + d.alert_numbers_count + ' number(s) will get the WhatsApp failure alert</span>'
-      : '<span style="color:var(--red)">✕ No alert number yet - open <b>📱 WhatsApp numbers</b> and add one under <b>FAILURE ALERT (auto run)</b></span>';
+    window._saListMask = window._saListMask || {};
+    window._saListState = window._saListState || {};
+    if (!window._saListState.SA_WA_FAILURE_ALERT) window._saListState.SA_WA_FAILURE_ALERT = (d.alert_numbers_raw || []).slice();
+    var nums = '';
     var age = d.deposit_age_min == null ? 'no MCX deposit file in the base folder' : 'MCX deposit file in the base folder is ' + d.deposit_age_min + ' min old';
     var html = '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">A run with <b>Auto ON</b> starts by itself at its time - nobody has to click, and no pop-up opens. ' +
       '10 minutes before (runs 1-6) the <b>MCX Deposit</b> file is downloaded, unless a file newer than ' + s.fresh_min + ' minutes is already in the base folder. ' +
@@ -64,16 +72,40 @@
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 18px">' +
       num('saAu_predl', s.predl_min, 'MCX deposit starts', 'minutes before the run') +
       num('saAu_fresh', s.fresh_min, 'Deposit file counts as fresh', 'if changed less than N minutes ago') +
-      num('saAu_wait', s.wait_min, 'Wait for a missing peak file', 'minutes (runs 1-4, 7, 8)') +
-      num('saAu_wait56', s.wait_min_56, 'Wait for a missing peak file', 'minutes (runs 5 and 6)') +
+      num('saAu_wait', s.wait_min, 'Wait for a missing peak file', 'minutes - every automatic run') +
       num('saAu_retries', s.retries, 'Tries again', 'times, then the alert') +
       num('saAu_grace', s.grace_min, 'Too late to start', 'minutes after its time = missed') + '</div>' +
+      '<div style="border-top:1px solid var(--line);margin:6px 0 12px;padding-top:12px">' +
+      (typeof window.saListFieldCollapsed === 'function' ? window.saListFieldCollapsed('SA_WA_FAILURE_ALERT', '⚠ FAILURE ALERT (AUTO RUN)', '9811122233#Kartavya', 'phone') : '') +
+      '<div style="font-size:12px;color:var(--muted);line-height:1.6;margin:-4px 0 10px">These numbers get a WhatsApp picture saying which run failed and why. Type just the 10-digit number - +91 is added automatically. Add #Name after a number (e.g. 9811122233#Kartavya) to remember whose it is - optional.</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><button type="button" class="sa-tool" id="saAuPreview">🖼 See the picture that will be sent</button>' +
+      '<button type="button" class="sa-tool" id="saAuTest">📲 Send a TEST alert to these numbers</button></div></div>' +
       '<button class="sa-save" style="width:100%" id="saAuSave">Save</button><div class="sa-msg" id="saAuMsg">' + (msg || '') + '</div>';
     if (typeof window.saShowModal === 'function') window.saShowModal('⚡ Auto Run - Short Allocation', html);
     wire();
+    if (typeof window.saListUpdateSummary === 'function') window.saListUpdateSummary('SA_WA_FAILURE_ALERT');
   }
 
   function wire() {
+    var pv = document.getElementById('saAuPreview');
+    if (pv) pv.onclick = function () {
+      collect();
+      window.saShowModal('🖼 The WhatsApp failure alert', '<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">This is the picture that goes out when an automatic run fails (sample wording, marked TEST).</div>' +
+        '<img src="' + API + '/sa/auto/preview?run=5&t=' + Date.now() + '" style="width:100%;border:1px solid var(--line);border-radius:10px" alt="alert preview">' +
+        '<button class="sa-save" style="width:100%;margin-top:14px" id="saAuBack">← Back</button>');
+      var bk = document.getElementById('saAuBack'); if (bk) bk.onclick = function () { render(); };
+    };
+    var ts = document.getElementById('saAuTest');
+    if (ts) ts.onclick = function () {
+      collect();
+      var m = document.getElementById('saAuMsg');
+      var list = (window._saListState.SA_WA_FAILURE_ALERT || []).filter(function (x) { return (x || '').trim(); });
+      if (!list.length) { if (m) m.innerHTML = '<span style="color:var(--red)">✕ Add a number first, then press Save, then test.</span>'; return; }
+      if (m) m.innerHTML = '<span style="color:var(--muted)">Sending the test…</span>';
+      post('/sa/auto/test-alert', { password: PW, run: 5 }).then(function (d) {
+        if (m) m.innerHTML = d && d.ok ? '<span style="color:var(--green)">✓ Test sent: ' + esc(d.reason) + '. (It goes to the numbers that are SAVED - press Save first if you just added one.)</span>' : '<span style="color:var(--red)">✕ ' + esc((d && d.error) || 'not sent') + '</span>';
+      }).catch(function () { if (m) m.innerHTML = '<span style="color:var(--red)">✕ Could not reach the server.</span>'; });
+    };
     document.querySelectorAll('.sa-auto-sw button').forEach(function (b) {
       b.onclick = function () {
         var n = +b.parentNode.dataset.run, on = b.dataset.v === '1';
@@ -99,19 +131,24 @@
     });
     var s = D.settings;
     s.predl_min = val('saAu_predl') || s.predl_min; s.fresh_min = val('saAu_fresh') || s.fresh_min;
-    s.wait_min = val('saAu_wait') || s.wait_min; s.wait_min_56 = val('saAu_wait56') || s.wait_min_56;
+    s.wait_min = val('saAu_wait') || s.wait_min;
     s.retries = val('saAu_retries') === '' ? s.retries : val('saAu_retries'); s.grace_min = val('saAu_grace') || s.grace_min;
   }
   function save() {
     collect();
     var runs = {};
     D.runs.forEach(function (r) { runs[r.run] = { time: r.time, auto: !!r.auto }; });
-    var s = D.settings, body = { runs: runs, predl_min: s.predl_min, fresh_min: s.fresh_min, wait_min: s.wait_min, wait_min_56: s.wait_min_56, retries: s.retries, grace_min: s.grace_min };
+    var s = D.settings, body = { runs: runs, predl_min: s.predl_min, fresh_min: s.fresh_min, wait_min: s.wait_min, retries: s.retries, grace_min: s.grace_min };
     var m = document.getElementById('saAuMsg'); if (m) m.innerHTML = '<span style="color:var(--muted)">Saving…</span>';
+    var nums = (window._saListState.SA_WA_FAILURE_ALERT || []).map(function (x) { return (x || '').trim(); }).filter(Boolean).join(',');
     post('/sa/auto/settings', { password: PW, settings: body }).then(function (d) {
       if (!d || !d.ok) { if (m) m.innerHTML = '<span style="color:var(--red)">✕ ' + esc((d && d.error) || 'Could not save') + '</span>'; return; }
       D = d; label();
-      done();
+      return post('/sa/config', { password: PW, updates: { SA_WA_FAILURE_ALERT: nums } }).then(function (c) {
+        if (!c || !c.ok) { if (m) m.innerHTML = '<span style="color:var(--red)">✕ Settings saved, but the numbers were not: ' + esc((c && c.error) || 'error') + '</span>'; return; }
+        delete window._saListState.SA_WA_FAILURE_ALERT;
+        load().then(done);
+      });
     }).catch(function () { if (m) m.innerHTML = '<span style="color:var(--red)">✕ Could not reach the server.</span>'; });
   }
   function done() {
@@ -121,8 +158,9 @@
       '<button class="sa-save" style="width:100%;margin-top:16px" onclick="saCloseModal()">OK</button>');
   }
 
-  window.saAutoOpen = function () {
-    var go = function (pw) { PW = pw; load().then(function () { if (D) render(); }); };
-    if (typeof window.saAskPassword === 'function') window.saAskPassword('Auto Run settings', go); else go('');
+  window.saAutoOpen = function (pw) {
+    var go = function (p) { PW = p; delete (window._saListState || {}).SA_WA_FAILURE_ALERT; load().then(function () { if (D) render(); }); };
+    if (pw) go(pw);                                    // opened from Credentials: the password was already checked there
+    else if (typeof window.saAskPassword === 'function') window.saAskPassword('Auto Run settings', go); else go('');
   };
 })();

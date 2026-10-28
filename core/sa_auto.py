@@ -6,8 +6,8 @@ What one automatic run does (for a run whose Auto switch is ON):
      It is SKIPPED when a MCX_DEPOSIT file is already in the base folder and was modified less than 45 minutes ago
      (somebody uploaded it, or an earlier try got it). The RSA code is filled by itself (Auto-fill CAPTCHA / TOKEN).
   2. At the run time: Download -> SA Processing (-> LAS Funding for runs 1-4; runs 5-8 never run LAS Funding).
-     No pop-up ever opens. If an exchange peak file has not arrived yet the run waits WAIT minutes (5; 15 for runs 5 and
-     6) and tries again, RETRIES times (2). Still missing after that (~30 min for runs 5/6) -> a WhatsApp FAILURE ALERT.
+     No pop-up ever opens. If an exchange peak file has not arrived yet the run waits WAIT minutes (15, the same for every
+     automatic run 1-8) and tries again, RETRIES times (2). Still missing after that (~30 min) -> a WhatsApp FAILURE ALERT.
   3. Any other failure sends the WhatsApp alert at once (more tries would not help).
 
 Settings (Short Allocation > Auto Run): per run the time and the Auto switch, plus the wait / retry / freshness numbers.
@@ -79,8 +79,7 @@ def defaults():
         "runs": runs,
         "predl_min": _env_int("SA_AUTO_PREDL_MIN", 10),        # MCX deposit starts this long before the run
         "fresh_min": _env_int("SA_AUTO_FRESH_MIN", 45),        # a deposit file newer than this is not downloaded again
-        "wait_min": _env_int("SA_AUTO_WAIT_MIN", 5),           # wait for a missing peak file: runs 1-4, 7, 8
-        "wait_min_56": _env_int("SA_AUTO_WAIT_MIN_56", 15),    # runs 5 and 6
+        "wait_min": _env_int("SA_AUTO_WAIT_MIN", 15),          # wait for a missing peak file - EVERY automatic run (the old 5 minutes is only for a run started by hand)
         "retries": _env_int("SA_AUTO_RETRIES", 2),
         "grace_min": _env_int("SA_AUTO_GRACE_MIN", 90),        # a run not started within this long after its time is "missed"
     }
@@ -99,7 +98,7 @@ def get_settings():
                 d["runs"][n]["time"] = _hhmm(r["time"])
             if "auto" in r:
                 d["runs"][n]["auto"] = bool(r["auto"])
-    for k in ("predl_min", "fresh_min", "wait_min", "wait_min_56", "retries", "grace_min"):
+    for k in ("predl_min", "fresh_min", "wait_min", "retries", "grace_min"):
         if k in saved:
             try:
                 d[k] = max(0, int(saved[k]))
@@ -121,7 +120,7 @@ def save_settings(update: dict, who: str = ""):
             cur["runs"][str(n)]["time"] = t
         if "auto" in r:
             cur["runs"][str(n)]["auto"] = bool(r["auto"])
-    for k in ("predl_min", "fresh_min", "wait_min", "wait_min_56", "retries", "grace_min"):
+    for k in ("predl_min", "fresh_min", "wait_min", "retries", "grace_min"):
         if k in update:
             try:
                 v = int(update[k])
@@ -140,8 +139,8 @@ def save_settings(update: dict, who: str = ""):
 
 
 def wait_minutes(n, st=None):
-    st = st or get_settings()
-    return st["wait_min_56"] if n in (5, 6) else st["wait_min"]
+    """Same for every automatic run (1-8). A run started by hand keeps the downloader's own 5-minute wait."""
+    return (st or get_settings())["wait_min"]
 
 
 # ───────────────────────── today's state ─────────────────────────
@@ -269,7 +268,7 @@ def alert_numbers():
     return failure_alert.parse_numbers(os.getenv("SA_WA_FAILURE_ALERT", ""))
 
 
-def send_alert(n, headline, detail, kind="FAILED", sender=None):
+def send_alert(n, headline, detail, kind="SA_AUTO", sender=None, test=False):
     """WhatsApp 'FAILURE ALERT' picture to the numbers in 'FAILURE ALERT (auto run)'. -> {'sent', 'reason'}. Never raises."""
     rec = {"run": n, "sent": False, "reason": ""}
     try:
@@ -289,7 +288,7 @@ def send_alert(n, headline, detail, kind="FAILED", sender=None):
             rec["reason"] = "WhatsApp auth token is not set (Scheduler > Credentials > WhatsApp)"
             log("WhatsApp failure alert NOT sent: " + rec["reason"])
             return rec
-        name = f"SHORT ALLOCATION SA-{n:02d}"
+        name = f"SHORT ALLOCATION SA-{n:02d}" + (" (TEST)" if test else "")
         now = dt.datetime.now()
         img = failure_alert.render_image(
             paths.sched_root() / "alerts" / f"sa_auto_{n:02d}_{int(time.time())}.png",
@@ -299,7 +298,7 @@ def send_alert(n, headline, detail, kind="FAILED", sender=None):
         class _C:
             def log(self, m):
                 log(m)
-        label = f"FAILURE ALERT - {name}"[:60].upper()
+        label = (("TEST - " if test else "") + f"FAILURE ALERT - {name}")[:60].upper()
         ok, bad = [], []
         for num in numbers:
             try:
@@ -314,6 +313,19 @@ def send_alert(n, headline, detail, kind="FAILED", sender=None):
         rec["reason"] = f"{type(e).__name__}: {e}"
         log("WhatsApp failure alert error: " + rec["reason"])
     return rec
+
+
+def render_sample(n=5, test=True):
+    """The exact picture the WhatsApp alert carries, drawn with sample wording. -> Path of the PNG."""
+    from core.scheduler import failure_alert, paths
+    now = dt.datetime.now()
+    head = ("THIS IS A TEST - nothing has failed. " if test else "") + "The exchange peak file has not arrived yet: MCX_PeakMargin56720_20261028_05.csv."
+    detail = f"Waited 30 minutes over 2 retries; the file was still missing. Please check the exchange / upload it by hand and run SA-{n:02d}."
+    return failure_alert.render_image(
+        paths.sched_root() / "alerts" / f"sa_auto_sample_{n:02d}.png",
+        process=f"SHORT ALLOCATION SA-{n:02d}" + (" (TEST)" if test else ""), schedule="Auto run",
+        failed_at=now.strftime("%d-%b-%Y %H:%M:%S"), started="-", trigger="Auto run", attempt_text="final",
+        headline=head, detail=detail, run_id=f"SA-{n:02d}", kind="SA_AUTO")
 
 
 # ───────────────────────── one automatic run ─────────────────────────
@@ -496,7 +508,8 @@ def status():
                      "deposit": rs.get("deposit", ""), "attempts": rs.get("attempts", 0), "msg": rs.get("msg", ""),
                      "alert_sent": rs.get("alert_sent"), "alert_reason": rs.get("alert_reason", "")})
     age = deposit_file_age_min()
-    return {"settings": {k: v for k, v in st.items() if k != "runs"}, "runs": rows, "now": now.strftime("%H:%M"),
+    raw = [x.strip() for x in os.getenv("SA_WA_FAILURE_ALERT", "").split(",") if x.strip()]
+    return {"settings": {k: v for k, v in st.items() if k != "runs"}, "runs": rows, "alert_numbers_raw": raw, "now": now.strftime("%H:%M"),
             "timer": bool(_TICK["thread"] and _TICK["thread"].is_alive()),
             "deposit_age_min": None if age is None else round(age, 1),
             "alert_numbers_count": len(alert_numbers())}

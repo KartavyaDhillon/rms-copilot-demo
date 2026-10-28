@@ -62,15 +62,15 @@ class Settings(Base):
         st = AU.get_settings()
         self.assertEqual([st["runs"][str(n)]["time"] for n in (5, 6, 7, 8)], ["17:45", "19:30", "21:30", "23:30"])
         self.assertEqual([st["runs"][str(n)]["auto"] for n in range(1, 9)], [False] * 4 + [True, True, False, False])
-        self.assertEqual((st["predl_min"], st["fresh_min"], st["wait_min"], st["wait_min_56"], st["retries"]), (10, 45, 5, 15, 2))
-        self.assertEqual(AU.wait_minutes(5, st), 15)
-        self.assertEqual(AU.wait_minutes(7, st), 5)
+        self.assertEqual((st["predl_min"], st["fresh_min"], st["wait_min"], st["retries"]), (10, 45, 15, 2))
+        for n in range(1, 9):                            # an automatic run waits the same 15 minutes whichever run it is
+            self.assertEqual(AU.wait_minutes(n, st), 15)
 
     def test_save_and_validate(self):
-        AU.save_settings({"runs": {"7": {"time": "21:45", "auto": True}}, "wait_min_56": 20})
+        AU.save_settings({"runs": {"7": {"time": "21:45", "auto": True}}, "wait_min": 20})
         st = AU.get_settings()
         self.assertEqual(st["runs"]["7"], {"time": "21:45", "auto": True})
-        self.assertEqual(st["wait_min_56"], 20)
+        self.assertEqual(st["wait_min"], 20)
         with self.assertRaises(ValueError):
             AU.save_settings({"runs": {"5": {"time": "25:99"}}})
         with self.assertRaises(ValueError):
@@ -118,6 +118,32 @@ class Timer(Base):
             self.assertIsNone(AU.tick(self.at(17, 50)))
         finally:
             SA._SA["running"] = False
+
+
+class Numbers(Base):
+    def test_ten_digit_numbers_and_names_are_stored_without_a_space_before_the_hash(self):
+        import tempfile as tf
+        with tf.TemporaryDirectory() as d:
+            old = SA.ENV_FILE
+            SA.ENV_FILE = os.path.join(d, ".env")
+            try:
+                SA.update_env({"SA_WA_FAILURE_ALERT": "9811122233 #Kartavya, +919876543210"})
+                txt = open(SA.ENV_FILE, encoding="utf-8").read()
+            finally:
+                SA.ENV_FILE = old
+        self.assertIn("SA_WA_FAILURE_ALERT=+919811122233#Kartavya,+919876543210", txt)
+
+    def test_a_bad_number_is_refused_in_plain_words(self):
+        with self.assertRaises(ValueError) as cm:
+            SA.update_env({"SA_WA_FAILURE_ALERT": "12345"})
+        self.assertIn("10-digit", str(cm.exception))
+
+    def test_stored_form_is_read_back_by_the_alert(self):
+        os.environ["SA_WA_FAILURE_ALERT"] = "+919811122233#Kartavya Dhillon,+919876543210"
+        try:
+            self.assertEqual(AU.alert_numbers(), ["+919811122233", "+919876543210"])
+        finally:
+            os.environ.pop("SA_WA_FAILURE_ALERT", None)
 
 
 class Deposit(Base):
@@ -171,17 +197,25 @@ class RunSlot(Base):
             return {"ok": False, "msg": "Download failed", "peak_missing": "MCX_PeakMargin56720_20261028_05.csv", "stopped": False}
         rs = AU.run_slot(5, run=run, sleep=sleeps.append, alert=lambda n, h, d: alerts.append((n, h, d)) or {"sent": True})
         self.assertEqual(len(tries), 3)                      # first try + 2 retries
-        self.assertEqual(sleeps, [900, 900])                 # 15 minutes each (runs 5 and 6)
+        self.assertEqual(sleeps, [900, 900])                 # 15 minutes each
         self.assertEqual(rs["status"], "failed")
         self.assertEqual(len(alerts), 1)
         self.assertIn("peak file", alerts[0][1])
         self.assertIn("30 minutes", alerts[0][2])
 
-    def test_run_7_waits_5_minutes(self):
+    def test_run_1_on_auto_follows_the_same_steps_as_5_and_6(self):
         sleeps = []
-        AU.run_slot(7, run=lambda n: {"ok": False, "msg": "x", "peak_missing": "f", "stopped": False}, sleep=sleeps.append,
+        AU.run_slot(1, run=lambda n: {"ok": False, "msg": "x", "peak_missing": "f", "stopped": False}, sleep=sleeps.append,
                     alert=lambda *a: {"sent": False})
-        self.assertEqual(sleeps, [300, 300])
+        self.assertEqual(sleeps, [900, 900])             # not the old 5 minutes: that is only for a run started by hand
+
+    def test_run_1_on_auto_gets_the_deposit_pre_step(self):
+        st = AU.get_settings()
+        st["runs"]["1"]["auto"] = True
+        st["runs"]["1"]["time"] = t = "08:30"
+        h, m = [int(x) for x in t.split(":")]
+        pre = dt.datetime(2026, 10, 28, h, m) - dt.timedelta(minutes=10)
+        self.assertEqual(AU.due_action(pre, st, {"date": "x", "runs": {"5": {"status": "done"}, "6": {"status": "done"}}}), ("deposit", 1))
 
     def test_success_on_the_second_try_sends_nothing(self):
         seq = [{"ok": False, "msg": "x", "peak_missing": "f", "stopped": False}, {"ok": True, "msg": "", "peak_missing": None, "stopped": False}]

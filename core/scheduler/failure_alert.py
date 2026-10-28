@@ -139,6 +139,8 @@ KINDS = {   # kind -> (banner title, banner sub-title, status line, "when" label
     "FAILED": ("SCHEDULER FAILED", "A scheduled process did NOT complete", "FAILED - not completed", "Failed at", "FAILED"),
     "INTERRUPTED": ("RUN INTERRUPTED", "The server stopped while a process was running", "INTERRUPTED - may be half done", "Stopped at", "INTERRUPTED"),
     "MISSED": ("RUN MISSED", "A scheduled run did NOT start", "MISSED - not run", "Noticed at", "MISSED"),
+    # SHORT ALLOCATION auto run (core/sa_auto.py)
+    "SA_AUTO": ("FAILURE ALERT", "Short Allocation auto run did NOT complete", "FAILED - not completed", "Failed at", "FAILURE ALERT"),
 }
 
 
@@ -160,7 +162,10 @@ def render_image(out: Path, *, process: str, schedule: str, failed_at: str, star
                             "3. Please inform the process owner."],
             "MISSED": ["1. This process did not start at its time.",
                        "2. Its work has not been done.",
-                       "3. Please inform the process owner."]}.get(kind, [
+                       "3. Please inform the process owner."],
+            "SA_AUTO": ["1. This Short Allocation run did not complete.",
+                        "2. Check the missing file / log, then run it by hand.",
+                        "3. Please inform the process owner."]}.get(kind, [
             "1. This process did not finish its work.",
             "2. Its report / file may be missing or incomplete.",
             "3. Please inform the process owner."])
