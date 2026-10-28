@@ -1762,7 +1762,11 @@
       var el = document.getElementById('probableReady');
       if (!el) return;
       var missing = (d.items || []).filter(function (it) { return !it.ok; });
-      if (!missing.length) { el.style.display = 'none'; return; }
+      // Already finished today (tile is green / Done): the files were used, so nothing is "needed" any more.
+      var _box = document.getElementById('pxBox-probable') || el.parentNode;
+      var _tiles = _box ? _box.querySelectorAll('.sa-run') : [];
+      var _allDone = _tiles.length > 0 && Array.prototype.every.call(_tiles, function (t) { return t.classList.contains('done'); });
+      if (!missing.length || _allDone) { el.style.display = 'none'; return; }
       el.style.display = 'block';
       el.innerHTML = '<b>Files needed before running:</b> ' +
         missing.map(function (m) { return m.key; }).join(', ');

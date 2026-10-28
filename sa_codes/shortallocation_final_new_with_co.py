@@ -47,18 +47,12 @@ def get_current_run_suffix():
     # Code-2 increments RUN after completion
     run_no = int(data.get("RUN", 1)) - 1
 
-    suffix_map = {
-        1: ("i01", "01"),
-        2: ("i02", "02"),
-        3: ("i03", "03"),
-        4: ("i04", "04"),
-    }
-
-    if run_no not in suffix_map:
+    if not 1 <= run_no <= 8:
         raise SystemExit("❌ Invalid RUN state. Cannot determine processing slot.")
 
     print(f"🔁 Processing files for RUN {run_no}")
-    return run_no, suffix_map[run_no][0], suffix_map[run_no][1]
+    return run_no, f"i{run_no:02d}", f"{run_no:02d}"
+
 
 
 # ============================================================
@@ -103,6 +97,15 @@ def backup_and_cleanup(files_used, run_no):
 # ============================================================
 run_no, nse_i, mcx_i = get_current_run_suffix()
 
+# Runs 5-8 use the exchange's 4th CASH/FO peak file (it only publishes C/F up to 4) - see sa_peak.py
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+import sa_peak as _sp
+nse_i_cf, nse_i_co, mcx_i = _sp.suffixes(run_no)
+if _sp.reuses_cf(run_no):
+    _sp.restore_cf_from_backup(BASE_FOLDER, nse_i_cf, datetime.today().strftime("%d-%m-%Y"), log=print)
+
 # ============================================================
 # OUTPUT FILE NAME (RUN-WISE)
 # ============================================================
@@ -116,9 +119,9 @@ os.makedirs(os.path.dirname(OUTPUT_EXCEL), exist_ok=True)
 
 
 patterns = {
-    "C_LIS FILE": f"C_SA01_P_06436_*_{nse_i}.lis",
-    "F_LIS FILE": f"F_SA01_P_06436_*_{nse_i}.lis",
-    "CO_LIS FILE": f"O_SA01_P_06436_*_{nse_i}.lis",
+    "C_LIS FILE": f"C_SA01_P_06436_*_{nse_i_cf}.lis",
+    "F_LIS FILE": f"F_SA01_P_06436_*_{nse_i_cf}.lis",
+    "CO_LIS FILE": f"O_SA01_P_06436_*_{nse_i_co}.lis",
     "MCX PEAK FILE": f"MCX_PeakMargin56720_*_{mcx_i}.csv",
     "NCCL PEAK FILE": f"NCCL_MARGIN_REP_*_{mcx_i}.csv",
     "MCX_DEPOSIT_XLSX": "MCX_DEPOSIT_*.xlsx",
@@ -642,16 +645,19 @@ print(f"📄 Final Excel file created:{OUTPUT_EXCEL}")
 LAS_FUNDING_FOLDER = _SAENV("SA_LAS_FUNDING_DIR", r"C:\KARTAVYA\LAS FUNDING")
 os.makedirs(LAS_FUNDING_FOLDER, exist_ok=True)
 
-# ---- Copy SA0x OUTPUT FILE ----
-try:
-    dest_sa = os.path.join(
-        LAS_FUNDING_FOLDER,
-        os.path.basename(OUTPUT_EXCEL)
-    )
-    shutil.copy2(OUTPUT_EXCEL, dest_sa)
-    print(f"📁 SA file copied to LAS funding folder → {dest_sa}")
-except Exception as e:
-    print(f"⚠ Failed to copy SA output file: {e}")
+# ---- Copy SA0x OUTPUT FILE (runs 1-4 only: runs 5-8 have no LAS Funding step) ----
+if run_no > 4:
+    print(f"ℹ Run {run_no} has no LAS Funding step - the SA output file is not copied to the LAS folder.")
+else:
+    try:
+        dest_sa = os.path.join(
+            LAS_FUNDING_FOLDER,
+            os.path.basename(OUTPUT_EXCEL)
+        )
+        shutil.copy2(OUTPUT_EXCEL, dest_sa)
+        print(f"📁 SA file copied to LAS funding folder → {dest_sa}")
+    except Exception as e:
+        print(f"⚠ Failed to copy SA output file: {e}")
 
 # RISK_REPORT is now read by LAS directly from SA_COMMON_DIR — no copy needed here.
 
@@ -722,7 +728,7 @@ trade_date = extract_trade_date_from_filename(
 
 # Expected CO file name
 trade_date_raw = trade_date.replace("-", "")
-expected_co_file = f"O_SA01_P_06436_{trade_date_raw}_{nse_i}.lis"
+expected_co_file = f"O_SA01_P_06436_{trade_date_raw}_{nse_i_co}.lis"
 
 # ---------------- WARNING BLOCK ----------------
 co_warning_html = ""

@@ -518,6 +518,7 @@ body {
             <button class="sa-tool" onclick="saConfig('wa')" data-tip="Change which phone numbers get each zone's WhatsApp report.">📱 WhatsApp numbers</button>
             <button class="sa-tool" onclick="saConfig('mail')" data-tip="Change which email addresses get each zone's report (To / CC).">✉️ Email To / CC</button>
             <button class="sa-tool" onclick="saCredentials()" data-tip="Change logins/passwords for NSE, MCX, NCDEX and MCX Deposit downloads.">🔑 Credentials</button>
+            <button class="sa-tool" id="saAutoBtn" onclick="saAutoOpen()" data-tip="Runs start by themselves at their time - no one has to click. Set each run's time and switch Auto on or off (runs 1-8). The MCX Deposit file is downloaded 10 minutes before, and a WhatsApp alert is sent if a file never arrives.">⚡ Auto Run</button>
             <button class="sa-tool" onclick="saUpload()" data-tip="Manually add a file yourself if the automatic download couldn't get it — only recognised filenames are accepted.">⬆️ Upload files</button>
             <button class="sa-tool" id="saStopBtn" onclick="saStop()" data-tip="Stops whatever's currently running for Short Allocation." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="saBackup()" data-tip="Browse/restore past days' files, or look up one client's numbers across runs.">📦 Backup files</button>
@@ -2046,12 +2047,12 @@ let _saLastFriendlyMsg=null, _saLastFriendlyId=null;
 function saGetExpectedRunNo(){
   if(window._saActiveTag) return window._saActiveTag.replace('SA-','');
   if(!_saStatus||!_saStatus.runs) return '01';
-  for(let i=1;i<=4;i++){
+  for(let i=1;i<=8;i++){
     const rs=_saStatus.runs['SA-0'+i]||{};
     const isDone=(rs.code2==='done' || rs.overall==='done');
     if(!isDone) return '0'+i;
   }
-  return '';  // all four runs complete today
+  return '';  // all eight runs complete today
 }
 
 /** Generate the exact expected filenames for today and the given run number.
@@ -2068,10 +2069,11 @@ function saExpectedFilenames(runNo, dateStr){
   const ddmmyyyy = dy+mo+yr;       // e.g. "26062026"
   const yyyymmdd = yr+mo+dy;       // e.g. "20260626"
   const n = (runNo||'01').toString().padStart(2,'0');
+  const cf = (+n > 4) ? '04' : n;      // the exchange publishes CASH / FO peak files only up to 4: runs 5-8 reuse the 4th
   return {
     sa: [
-      `C_SA01_P_06436_${ddmmyyyy}_i${n}.lis`,
-      `F_SA01_P_06436_${ddmmyyyy}_i${n}.lis`,
+      `C_SA01_P_06436_${ddmmyyyy}_i${cf}.lis`,
+      `F_SA01_P_06436_${ddmmyyyy}_i${cf}.lis`,
       `O_SA01_P_06436_${ddmmyyyy}_i${n}.lis`,
       `MCX_PeakMargin56720_${yyyymmdd}_${n}.csv`,
       `NCCL_MARGIN_REP_01292_${yyyymmdd}_${n}.csv`,
@@ -2108,7 +2110,7 @@ async function saLoadReady(){
   if(_saStatus){
     const wins=_saStatus.windows||{}, runs=_saStatus.runs||{}, now=saNowMin();
     let nextWinStart=null;
-    for(let i=1;i<=4;i++){
+    for(let i=1;i<=8;i++){
       const id='SA-0'+i, rs=runs[id]||{};
       if(rs.overall==='done') continue;  // this run is fully complete — skip
       const pw=saParseWin(wins[i]||wins[String(i)]);
@@ -2249,12 +2251,12 @@ function saRenderRuns(){
   // from run_state.txt which persists across days and caused stale "Done today".
   let completed=0;
   // SA-02+ unlocks when SA Processing (code2) done — LAS failure does NOT block.
-  for(let j=1;j<=4;j++){
+  for(let j=1;j<=8;j++){
     const r=runs['SA-0'+j]||{};
     if(r.code2==='done' || r.overall==='done') completed=j; else break;
   }
   let due=null, html='';
-  for(let i=1;i<=4;i++){
+  for(let i=1;i<=8;i++){
     const id='SA-0'+i, w=wins[i]||wins[String(i)]||'', pw=saParseWin(w);
     const rs=runs[id]||{};
     const fullDone=(rs.overall==='done');
@@ -3145,6 +3147,7 @@ function saRun(no, overrideDate, force, skipLas, lasOnly){
   document.getElementById('saBox').classList.remove('due'); document.getElementById('saBanner').classList.remove('show');
   _saCounts={};
   const dateNote=overrideDate?` <span style="color:var(--amber);font-size:11px">(date override: ${overrideDate})</span>`:'';
+  if(parseInt(no,10)>4) skipLas=true;   // runs 5-8: Download + SA Processing only - LAS Funding is never run
   const stepsHtml=lasOnly
     ? '<span class="sa-pill" style="opacity:.4">⬇ Download (skipped)</span><span class="sa-pill" style="opacity:.4">⚙ SA Process (skipped)</span><span class="sa-pill" id="saP3">📑 LAS</span>'
     : skipLas
@@ -3501,7 +3504,7 @@ async function saOpenEditor(kind, pw){
   let rows='';
   if(kind==='wa'){
     window._saListState={}; for(const k in cfg.whatsapp) window._saListState[k]=(cfg.whatsapp[k]||[]).slice();
-    const L={SA_WA_DELHI:'Delhi',SA_WA_CHND:'Chandigarh',SA_WA_LUDH:'Ludhiana',SA_WA_MUMB:'Mumbai',SA_WA_V1:'Vertical 1',SA_WA_V2:'Vertical 2',SA_WA_6NBB707:'6NBB707'};
+    const L={SA_WA_DELHI:'Delhi',SA_WA_CHND:'Chandigarh',SA_WA_LUDH:'Ludhiana',SA_WA_MUMB:'Mumbai',SA_WA_V1:'Vertical 1',SA_WA_V2:'Vertical 2',SA_WA_6NBB707:'6NBB707',SA_WA_FAILURE_ALERT:'⚠ FAILURE ALERT (auto run)'};
     for(const k in cfg.whatsapp){ rows+=saListFieldCollapsed(k, L[k]||k, '+91XXXXXXXXXX', 'phone'); }
   } else {
     window._saListState={};   // mail fields are plain replace-whole-value — no stale list state from a previous WA/creds session
@@ -3572,7 +3575,7 @@ async function saUpload(overrideRun){
   window._saUpRun = overrideRun || saGetExpectedRunNo();
   const _runLabel = window._saUpRun ? `Run <b>SA-${window._saUpRun}</b> is next — files with wrong run suffix will be rejected` : `All runs complete today — no run-suffix check`;
   const _chip=(n)=>`<button style="padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${window._saUpRun==='0'+n?'var(--teal)':'rgba(100,116,139,.4)'};background:${window._saUpRun==='0'+n?'rgba(52,211,153,.12)':'transparent'};color:${window._saUpRun==='0'+n?'var(--teal)':'var(--dim)'}" onclick="saUpload('0${n}')">SA-0${n}</button>`;
-  const _runBadge=`<div style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;padding:5px 11px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.3);border-radius:8px;font-size:11.5px;color:var(--blue)">🔢 ${_runLabel}</div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:10.5px;color:var(--dim)">Upload for:</span>${[1,2,3,4].map(n=>_chip(n)).join('')}</div>`;
+  const _runBadge=`<div style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;padding:5px 11px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.3);border-radius:8px;font-size:11.5px;color:var(--blue)">🔢 ${_runLabel}</div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:10.5px;color:var(--dim)">Upload for:</span>${[1,2,3,4,5,6,7,8].map(n=>_chip(n)).join('')}</div>`;
   // Show exact expected filenames for today + current run
   const _runDate = window._saRunDate || new Date().toISOString().slice(0,10);
   const _ef = saExpectedFilenames(window._saUpRun, _runDate);
@@ -5142,7 +5145,7 @@ function r1r2RenderTiles(s){
       btn='<button class="sa-run-btn" disabled style="opacity:.55;cursor:not-allowed">Done</button>';
     } else if(isRunningThis){
       cls+=' locked'; state='&#9654; Running&hellip;';
-      btn='<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button>';
+      btn='<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed"><span style="display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid var(--blue-d);border-top-color:transparent;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px"></span>Running&hellip;</button>';
     } else if(isLockedByOther){
       cls+=' locked'; state='Busy &mdash; another R1/R2 action is running';
       btn='<button class="sa-run-btn" disabled>Wait&hellip;</button>';
@@ -6116,7 +6119,7 @@ function pxRenderRuns(pipe,s){
     const done=i<=completed, isNext=(i===completed+1), afterStart=(!pw||now>=pw.s), enabled=isNext&&!done&&afterStart&&!_thisPipeRunning;
     // CTCL: active retry — show "Running" on the EXACT run being retried (even if backend says done)
     if(pipe==='ctcl' && _thisPipeRunning && i===_ctclRunCurrent){
-      html+=`<div class="sa-run locked"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">&#9654; Running&hellip;</div><button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button></div>`;
+      html+=`<div class="sa-run locked"><div class="sa-run-id">${id}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">&#9679; Running&hellip;</div><button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed"><span style="display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid var(--blue-d);border-top-color:transparent;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px"></span>Running&hellip;</button></div>`;
       continue;
     }
     // CTCL: done tile → clickable View button (logs); error on done tile → retry View button
@@ -6157,7 +6160,7 @@ function pxRenderRuns(pipe,s){
         state='&#10003; Done today'+_tag;
         _btn=`<button class="sa-run-btn" disabled style="opacity:.55;cursor:not-allowed">Done</button>`;
       } else if(_isRunningNow){
-        _btn=`<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button>`;
+        _btn=`<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed"><span style="display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid var(--blue-d);border-top-color:transparent;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px"></span>Running&hellip;</button>`;
       } else {
         _btn=`<div class="cli-run-stack">`
           + `<button class="sa-run-btn" ${enabled?'':'disabled'} onclick="cliRunOld()" data-tip="Runs the OLD Client Prudential Limit pipeline: Allocation Detail → Download → MCX Web Allocation → FTP upload → backup. Plain base-allocation math, no RISK_REPORT/Kambala adjustment.">&#9654; Run OLD</button>`
@@ -6166,7 +6169,7 @@ function pxRenderRuns(pipe,s){
       }
     } else {
       _btn=_isRunningNow
-        ? `<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed">&#9654; Running&hellip;</button>`
+        ? `<button class="sa-run-btn" disabled style="background:var(--blue);color:var(--blue-d);opacity:1;cursor:not-allowed"><span style="display:inline-block;width:13px;height:13px;border-radius:50%;border:2px solid var(--blue-d);border-top-color:transparent;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px"></span>Running&hellip;</button>`
         : `<button class="sa-run-btn" ${enabled?'':'disabled'} onclick="pxRun('${pipe}')" data-tip="${pxRunTip(pipe)}">${done?'&#10003; Done':'Run'}</button>`;
     }
     html+=`<div class="${cls}"><div class="sa-run-id">${displayId}</div><div class="sa-run-win">${w||'&mdash;:&mdash; &middot; &mdash;:&mdash;'}</div><div class="sa-run-state">${state}</div>${_btn}</div>`;

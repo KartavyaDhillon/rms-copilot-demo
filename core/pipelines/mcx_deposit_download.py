@@ -103,10 +103,10 @@ def stream_mcx_deposit_download(output_dir=None, caller="sa"):
         return
 
     _log("🚀 Starting MCX Deposit (RSK383) download from eclear.mcxccl.com")
-    _log("ℹ️  RSA SecurID popup will appear on your desktop — enter the token code.")
+    _log("ℹ️  RSA code: filled automatically when Token auto-fill is ON; otherwise a pop-up asks you for it.")
     _log("⏳ TCS BANCS server can take several minutes — please wait…")
     yield {"type": "log", "msg": "🚀 Starting MCX Deposit (RSK383) download"}
-    yield {"type": "log", "msg": "ℹ️  RSA SecurID popup will appear on your desktop — enter the token code."}
+    yield {"type": "log", "msg": "ℹ️  RSA code: filled automatically when Token auto-fill is ON; otherwise a pop-up asks you for it."}
 
     q: queue.Queue = queue.Queue()
     _auth_fail = False  # set True if the wrong-password tag is seen

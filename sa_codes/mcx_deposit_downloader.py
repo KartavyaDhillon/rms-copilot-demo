@@ -98,9 +98,14 @@ _AUTO_TOK = None
 def _auto_mode():
     """Generated RSA code instead of a popup: the dashboard switch must be ON, and the caller unattended or the seed present."""
     try:
+        import sys as _sys
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))     # this script runs from sa_codes/: 'core' is one level up
+        if _root not in _sys.path:
+            _sys.path.insert(0, _root)
         from core import mcx_soft_token as _m
         return _m.auto_mode()
-    except Exception:
+    except Exception as _e:
+        print(f"[token] automatic code not available ({type(_e).__name__}: {_e}) - the popup will be used.", flush=True)
         return os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto"
 
 

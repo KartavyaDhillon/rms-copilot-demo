@@ -56,7 +56,7 @@ def _pid_alive(pid) -> bool:
         return False
 
 
-NAMES = {"liveallocation": "LIVE ALLOCATION CAPTURE", "mcxcash": "MCX CASH MAINTENANCE"}
+NAMES = {"liveallocation": "LIVE ALLOCATION CAPTURE", "mcxcash": "MCX CASH MAINTENANCE", "sadeposit": "SHORT ALLOCATION (MCX DEPOSIT)"}
 
 
 def holder():

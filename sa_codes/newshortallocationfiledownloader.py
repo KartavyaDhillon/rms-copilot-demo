@@ -415,9 +415,9 @@ def get_run_suffix():
         run_no = 1
         retry = 0
 
-    # 🛑 MAX 4 RUNS PER DAY
-    if run_no > 4:
-        print("🛑 All 4 runs already completed for today.")
+    # 🛑 MAX 8 RUNS PER DAY (runs 5-8: Short Allocation only, no LAS Funding)
+    if run_no > 8:
+        print("🛑 All 8 runs already completed for today.")
         sys.exit(0)
 
     # SAVE STATE (before execution)
@@ -428,15 +428,9 @@ def get_run_suffix():
             f"RETRY={retry}\n"
         )
 
-    suffix_map = {
-        1: ("i01", "01"),
-        2: ("i02", "02"),
-        3: ("i03", "03"),
-        4: ("i04", "04"),
-    }
+    print(f"▶ RUN {run_no}/8")
+    return run_no, f"i{run_no:02d}", f"{run_no:02d}"
 
-    print(f"▶ RUN {run_no}/4")
-    return run_no, suffix_map[run_no][0], suffix_map[run_no][1]
 
 def mark_run_success():
     today = _sa_today().strftime("%Y-%m-%d")
@@ -471,6 +465,14 @@ def mark_run_success():
 
 
 run_no, nse_i, mcx_i = get_run_suffix()
+
+# Which peak-file number each segment uses (runs 5-8 reuse the exchange's 4th CASH/FO file) - see sa_peak.py
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+import sa_peak as _sp
+nse_i_cf, nse_i_co, mcx_i = _sp.suffixes(run_no)
+SA_AUTO = os.getenv("SA_AUTO_RUN", "").strip() == "1"   # fully automatic run: no pop-ups, no waiting for a person
 
 
 
@@ -603,7 +605,10 @@ def main():
     # 🔁 SKIP NSE IF FILES ALREADY EXIST
     # ---------------------------------------
     global NSE_OK
-    if nse_files_already_done(ddmmyyyy, nse_i):
+    if _sp.reuses_cf(run_no):
+        # run 4's processing moved the 4th C/F files into its backup folder: bring them back (copy) - nothing to download for C/F
+        _sp.restore_cf_from_backup(OUTPUT_DIR, nse_i_cf, _sa_today().strftime("%d-%m-%Y"), log=print)
+    if nse_files_already_done(ddmmyyyy, nse_i_cf) and not _sp.reuses_cf(run_no):
         token = None
         NSE_OK = True
     else:
@@ -614,7 +619,7 @@ def main():
     # ===============================
     if token:
         # CM SA01
-        cm_file = f"C_SA01_P_06436_{ddmmyyyy}_{nse_i}.lis.gz"
+        cm_file = f"C_SA01_P_06436_{ddmmyyyy}_{nse_i_cf}.lis.gz"
         token = safe_download_and_extract(
             segment="CM",
             filename=cm_file,
@@ -622,7 +627,7 @@ def main():
         )
 
         # FO SA01
-        fo_file = f"F_SA01_P_06436_{ddmmyyyy}_{nse_i}.lis.gz"
+        fo_file = f"F_SA01_P_06436_{ddmmyyyy}_{nse_i_cf}.lis.gz"
         token = safe_download_and_extract(
             segment="FO",
             filename=fo_file,
@@ -638,7 +643,7 @@ def main():
         # =====================================
         # OPTIONAL CO SA01 FILE
         # =====================================
-        co_file = f"O_SA01_P_06436_{ddmmyyyy}_{nse_i}.lis.gz"
+        co_file = f"O_SA01_P_06436_{ddmmyyyy}_{nse_i_co}.lis.gz"
 
         print(f"🔎 Checking optional CO file: {co_file}")
 
@@ -1089,6 +1094,12 @@ if ALL_FILES_OK:
     sys.exit(0)
 
 else:
+    if SA_AUTO:
+        # AUTOMATIC run: never a pop-up, never a person to wait for. Say exactly what is missing and stop; the auto-runner
+        # waits the configured minutes, tries again, and sends the WhatsApp alert when the retries are used up.
+        print("[SA_PEAK_MISSING] " + ", ".join(MISSING_FILES), flush=True)
+        sys.exit(3)
+
     retry_count = get_retry_flag()
 
     # ==============================

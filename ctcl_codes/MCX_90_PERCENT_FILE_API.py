@@ -100,6 +100,9 @@ def get_token_popup(attempt, max_attempts, error_msg=None, label="MCX 90%"):
     if "Password" not in (label or ""):
         # Auto-fill CAPTCHA / TOKEN switch (Process Center): ON -> the next RSA code is generated, no typing needed.
         try:
+            import sys as _sys
+            _rt = os.getenv('RMS_REPO_ROOT') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if _rt not in _sys.path: _sys.path.insert(0, _rt)
             from core import mcx_soft_token as _mst
             if _mst.auto_mode():
                 global _AUTO_TOK

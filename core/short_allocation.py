@@ -84,6 +84,29 @@ def _load():
             except Exception: pass
 
 
+MAX_RUN = 8                 # runs 1-4 = Download -> SA Processing -> LAS Funding; runs 5-8 = Download -> SA Processing only
+LAS_RUNS = 4
+# Default scheduled time of runs 5-8 (5:45 pm, 7:30 pm, 9:30 pm, 11:30 pm); overridable with SA_RUN5_TIME ... in .env
+# or in the Auto Run settings. A run's window is from its time until the next run's time.
+_DEFAULT_TIMES = {5: "17:45", 6: "19:30", 7: "21:30", 8: "23:30"}
+
+
+def _default_window(n):
+    if n <= LAS_RUNS or n not in _DEFAULT_TIMES:
+        return ""
+    t = os.getenv(f"SA_RUN{n}_TIME", "").strip() or _DEFAULT_TIMES[n]
+    if n >= MAX_RUN:
+        return f"{t}-23:59"
+    nxt = os.getenv(f"SA_RUN{n + 1}_TIME", "").strip() or _DEFAULT_TIMES.get(n + 1, "23:59")
+    try:
+        h, m = [int(x) for x in nxt.split(":")[:2]]
+        mins = max(0, h * 60 + m - 1)
+        end = f"{mins // 60:02d}:{mins % 60:02d}"
+    except ValueError:
+        end = "23:59"
+    return f"{t}-{end}"
+
+
 def cfg():
     _load(); g = os.getenv
     return {
@@ -93,7 +116,7 @@ def cfg():
         "output":  g("SA_OUTPUT_DIR", r"C:\KARTAVYA\SHORT ALLOCATION"),
         "las":     g("SA_LAS_FUNDING_DIR", r"C:\KARTAVYA\LAS FUNDING"),
         "backup_dest": g("SA_BACKUP_DEST", ""),
-        "windows": {n: g(f"SA_RUN{n}_WINDOW", "") for n in (1, 2, 3, 4)},
+        "windows": {n: g(f"SA_RUN{n}_WINDOW", "") or _default_window(n) for n in range(1, MAX_RUN + 1)},
     }
 
 
@@ -202,15 +225,17 @@ def _archive_input_files(tag, eff, c, put, is_last_run=False):
     import glob as _glob
     nse_i = f"i{eff:02d}"
     mcx_i = f"{eff:02d}"
+    # NSE CASH/FO publish peak files only up to number 4: runs 5-8 reuse (and have already archived) the 4th one.
+    cf_i = {1: "i01", 2: "i02", 3: "i03"}.get(eff, "i04")
     base = c["output"]
     # ── Per-run files: archived every run (run-number suffix keeps them distinct)
     patterns = [
-        (f"C_SA01_P_06436_*_{nse_i}.lis", "input_c_lis"),
-        (f"F_SA01_P_06436_*_{nse_i}.lis", "input_f_lis"),
         (f"O_SA01_P_06436_*_{nse_i}.lis", "input_o_lis"),
         (f"MCX_PeakMargin*_{mcx_i}.csv",   "input_mcx_peak"),
         (f"NCCL_MARGIN_REP*_{mcx_i}.csv",  "input_nccl_peak"),
     ]
+    if eff <= 4:
+        patterns += [(f"C_SA01_P_06436_*_{cf_i}.lis", "input_c_lis"), (f"F_SA01_P_06436_*_{cf_i}.lis", "input_f_lis")]
     # ── Daily files: same content all day — archive once, on the last run only
     if is_last_run:
         patterns += [
@@ -503,6 +528,8 @@ def _run_one(c, script, tag, put):
             override = _SA.get("override_date")
             if override:
                 env["SA_OVERRIDE_DATE"] = override
+            if _SA.get("auto"):
+                env["SA_AUTO_RUN"] = "1"        # fully automatic run: the downloader never opens a pop-up or waits for a person
             # CREATE_NEW_PROCESS_GROUP (Windows only): without this, this subprocess
             # shares the FastAPI server's console/process group. `uvicorn --reload`
             # restarting on a code edit (or the terminal window closing) sends a
@@ -528,6 +555,8 @@ def _run_one(c, script, tag, put):
                 lf.flush()  # write to disk immediately — if Stop kills this mid-run, whatever
                             # was already printed is preserved instead of sitting lost in a
                             # buffer that never gets flushed (log used to show 0 KB after Stop)
+                if "[SA_PEAK_MISSING]" in line:
+                    _SA["peak_missing"] = line.split("[SA_PEAK_MISSING]", 1)[1].strip()
                 _tail_buf.append(line.rstrip("\n"))
                 if len(_tail_buf) > 20:
                     _tail_buf.pop(0)
@@ -562,7 +591,7 @@ def _run_one(c, script, tag, put):
     return rc, logp
 
 
-def stream_short_allocation(run_no, override_date=None, force=False, skip_las=False, las_only=False, download_only=False):
+def stream_short_allocation(run_no, override_date=None, force=False, skip_las=False, las_only=False, download_only=False, auto=False):
     """Generator of SSE events. Mirrors SHORT & LAS.bat. run_no = '01'..'04'.
     override_date: optional YYYY-MM-DD string to run for a past date.
     force:       if True, re-run all steps even if code1/code2 were done today.
@@ -594,6 +623,12 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
     _SA["running"] = True
     _SA["auth_seen"] = set()
     _SA["override_date"] = override_date or None
+    _SA["peak_missing"] = None
+    _SA["auto"] = bool(auto)
+    try:
+        no_las = int(run_no) > LAS_RUNS   # runs 5-8: Download + SA Processing only - LAS Funding is never run
+    except (TypeError, ValueError):
+        no_las = False
 
     def stopped():
         return _SA["cancel"]
@@ -634,6 +669,8 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
                 put({"type": "log", "msg": f"SA-only mode — SA Processing will re-run; LAS Funding will be skipped for {tag}."})
 
             # ── LAS-only mode: skip Download + SA Processing, run only LAS ───────
+            if las_only and no_las:
+                put({"type": "error", "msg": "Runs 5-8 have no LAS Funding step."}); return
             if las_only:
                 put({"type": "log", "msg": f"LAS-only mode — skipping Download and SA Processing; running LAS Funding only for {tag}."})
                 _eff_las = int(run_no)   # SA-01→1, SA-02→2, etc.
@@ -815,8 +852,10 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
                 next_script, step3_name = CODE3, "code3"
             elif eff == 4:
                 next_script, step3_name = CODE4, "code4"
+            elif 5 <= eff <= MAX_RUN:
+                next_script, step3_name = None, None        # runs 5-8: no LAS step (skip_las is already on)
             else:
-                put({"type": "log", "msg": "All 4 runs already completed for today."})
+                put({"type": "log", "msg": "All 8 runs already completed for today."})
                 _record(tag, overall="done")
                 put({"type": "done", "ok": True}); return
 
@@ -871,9 +910,9 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
                     _archive_to_db(tag, "output_zone", os.path.join(_bk_base, _zf))
 
             # ── SA-only early exit — stop here, don't touch LAS ─────────────
-            if skip_las:
+            if skip_las or no_las:
                 _record(tag, overall="done")
-                put({"type": "log", "msg": "✓ SA Processing + email completed. LAS Funding intentionally skipped (SA-only run)."})
+                put({"type": "log", "msg": "✓ SA Processing + email completed. " + ("This run (5-8) has no LAS Funding step." if no_las else "LAS Funding intentionally skipped (SA-only run).")})
                 put({"type": "done", "ok": True})
                 return
 
@@ -930,7 +969,8 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
 
 
 # ── config (read / update .env), with masking ────────────────────────────────
-SA_KEYS_WA = ["SA_WA_DELHI", "SA_WA_CHND", "SA_WA_LUDH", "SA_WA_MUMB", "SA_WA_V1", "SA_WA_V2", "SA_WA_6NBB707"]
+SA_KEYS_WA = ["SA_WA_DELHI", "SA_WA_CHND", "SA_WA_LUDH", "SA_WA_MUMB", "SA_WA_V1", "SA_WA_V2", "SA_WA_6NBB707",
+              "SA_WA_FAILURE_ALERT"]      # FAILURE ALERT (auto run): who gets the WhatsApp when an automatic run fails
 SA_KEYS_MAIL = [
     # SA Processing emails (sent by shortallocation_final_new_with_co.py)
     "SA2_MAIL_LUDH_TO", "SA2_MAIL_LUDH_CC",
@@ -951,7 +991,7 @@ SA_KEYS_MAIL = [
     "SA_MAIL_TOP100_TO", "SA_MAIL_TOP100_CC",
     "SA_MAIL_TOP15_TO", "SA_MAIL_TOP15_CC",
 ]
-SA_KEYS_WIN = [f"SA_RUN{n}_WINDOW" for n in (1, 2, 3, 4)]
+SA_KEYS_WIN = [f"SA_RUN{n}_WINDOW" for n in range(1, MAX_RUN + 1)]
 SA_KEYS_CRED = ["SA_NSE_LOGINID", "SA_NSE_PASSWORD", "SA_NSE_MEMBER",
                 "SA_MCX_USER", "SA_MCX_PASSWORDS", "SA_NCDEX_USER", "SA_NCDEX_PASSWORD",
                 "SA_MCX_DEPOSIT_USER", "SA_MCX_DEPOSIT_PASSWORD",
@@ -1505,6 +1545,8 @@ def _log_friendly_label(filename):
         return "📤 Upload"
     if parts[0] == "BACKUP_RESTORE":
         return "♻️ Backup Restore"
+    if parts[0] == "AUTORUN":
+        return "⚡ Auto run"
     if len(parts) >= 3:
         # Post-email recovery run — not in STAGE_LABEL (it's a standalone
         # recovery script, not one of the four pipeline stages), but it still

@@ -886,6 +886,9 @@ _SEARCH_OVERRIDES = '''
 def get_token_popup(attempt, max_attempts, error_msg=None):
     import json as _tj, os as _tos, time as _tt
     try:
+        import sys as _sys
+        _rt = _tos.getenv('RMS_REPO_ROOT', '')
+        if _rt and _rt not in _sys.path: _sys.path.insert(0, _rt)
         from core import mcx_soft_token as _mst
         if _mst.auto_mode():
             global _AUTO_TOK

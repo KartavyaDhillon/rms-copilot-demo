@@ -42,6 +42,8 @@ from core.notify import send_peak_margin_report
 load_dotenv()
 AUTO_SEND = os.getenv("AUTO_SEND", "false").strip().lower() == "true"
 
+os.environ.setdefault("RMS_REPO_ROOT", os.path.dirname(os.path.abspath(__file__)))   # child scripts (sa_codes/, generated copies) use it to import core.*
+
 app = FastAPI(title="RMS Co-pilot API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
@@ -347,13 +349,14 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=5"></script>'
-                            '<script src="/platform/js/process-probable-box.js?v=2"></script>'
+                            '<script src="/platform/js/process-locks.js?v=6"></script>'
+                            '<script src="/platform/js/process-probable-box.js?v=3"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=6"></script>'
-                            '<script src="/platform/js/process-mcxcash.js?v=4"></script></body>', 1)
+                            '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
+                            '<script src="/platform/js/process-saauto.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -861,6 +864,46 @@ async def mc_skip(request: Request):
 def mc_stop():
     from core import mcx_cash_maintenance as _mc
     return {"ok": True, "stopped": _mc.stop_running()}
+
+# ── SHORT ALLOCATION AUTO RUN (runs start by themselves; see core/sa_auto.py) ──────────────────────────────
+@app.get("/sa/auto/status")
+def sa_auto_status():
+    from core import sa_auto as _au
+    return {"ok": True, **_au.status()}
+
+class _SAAutoSave(BaseModel):
+    password: str
+    settings: dict
+
+@app.post("/sa/auto/settings")
+def sa_auto_settings(u: _SAAutoSave, request: Request):
+    from core import sa_auto as _au
+    from core.short_allocation import check_password as _pw
+    if not _pw(u.password):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        who, _adm = _actor(request)
+        _au.save_settings(u.settings or {}, who or "")
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, **_au.status()}
+
+@app.post("/sa/auto/skip")
+def sa_auto_skip(run: int, undo: bool = False):
+    from core import sa_auto as _au
+    if not 1 <= run <= 8:
+        return {"ok": False, "error": "run must be 1-8"}
+    _au.skip_today(run, undo)
+    return {"ok": True, **_au.status()}
+
+@app.on_event("startup")
+def _sa_auto_startup():
+    try:
+        from core import sa_auto as _au
+        _au.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  Short Allocation Auto Run timer not started: {type(_e).__name__}: {_e}")
+
 
 @app.on_event("startup")
 def _mcx_cash_startup():
@@ -1741,8 +1784,8 @@ def sa_mark_run_done(run: int = 0, password: str = ""):
     from core.short_allocation import check_password as _smr_pw, _record as _smr_rec
     if not _smr_pw(password):
         return {"ok": False, "error": "Wrong password"}
-    if run not in (1, 2, 3, 4):
-        return {"ok": False, "error": "run must be 1, 2, 3 or 4"}
+    if run not in (1, 2, 3, 4, 5, 6, 7, 8):
+        return {"ok": False, "error": "run must be 1 to 8"}
     tag = f"SA-0{run}"
     rec = _smr_rec(tag, overall="done", code2="done")
     return {"ok": True, "tag": tag, "record": rec}

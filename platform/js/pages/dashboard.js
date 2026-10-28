@@ -71,7 +71,9 @@
       '<div class="dash-cols sys">' +
       '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("activity") + " Services &amp; connections</div>" +
       '<div style="display:flex;gap:8px;align-items:center"><span class="card-sub" id="hpSub"></span><button class="btn sm ghost" id="hpRefresh">' + RMS.icon("refresh") + "</button></div></div>" +
-      '<div class="hp-grid hp-4" id="hpGrid"></div></div>' +
+      '<div class="hp-grid hp-4" id="hpGrid"></div>' +
+      '<div class="cm-head">' + RMS.icon("clock") + ' Coming up next <span class="card-sub" id="cmSub"></span></div>' +
+      '<div class="cm-list" id="cmList"><div class="bm-empty">Loading…</div></div></div>' +
       '<div class="d-side">' +
       '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("gauge") + ' Server resources</div></div><div class="res-strip res-col" id="resStrip"></div></div>' +
       '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("sparkles") + " Insights</div>" +
@@ -225,6 +227,26 @@
     if (now && list.dataset.scrolled !== tlFilter) { list.scrollTop = Math.max(0, now.offsetTop - list.clientHeight / 2); list.dataset.scrolled = tlFilter; }
     if (lastSum) { renderBanner(lastSum); renderAttnKpi(lastSum); renderAttention(); }
     renderNext();
+    renderComing();
+  }
+
+  function renderComing() {
+    const box = $("#cmList"); if (!box || !lastOv) return;
+    const now = lastOv.now_min, items = lastOv.items || [];
+    const due = items.filter((i) => i.status === "due");
+    const up = items.filter((i) => i.status === "upcoming" && i.start_min != null && i.start_min >= now)
+      .sort((a, b) => a.start_min - b.start_min);
+    const list = due.concat(up).slice(0, 7);
+    const left = due.length + up.length;
+    $("#cmSub").textContent = left ? left + " left today" : "";
+    if (!list.length) { box.innerHTML = '<div class="d-allgood">' + RMS.icon("check") + "<b>Nothing more today</b><small>Every scheduled run for today is finished.</small></div>"; return; }
+    box.innerHTML = list.map((i) => {
+      const d = i.start_min - now, isDue = i.status === "due";
+      const eta = isDue ? "ready now" : d < 60 ? "in " + Math.max(d, 0) + " min" : "in " + Math.floor(d / 60) + "h " + (d % 60) + "m";
+      return '<div class="cm-row"><span class="cm-t">' + hhmm(i.start_min) + "</span>" +
+        '<div class="cm-main"><b>' + esc(i.pipe_name) + "</b><small>" + esc(i.id || "") + "</small></div>" +
+        '<span class="badge ' + (isDue ? "warn" : "dim") + '">' + eta + "</span></div>";
+    }).join("");
   }
 
   function meterClass(p) { return p == null ? "" : p > 88 ? "err" : p > 72 ? "warn" : ""; }

@@ -259,10 +259,11 @@
   /* ── core apply ─────────────────────────────────────────────────────── */
   function apply() {
     var wanted = {};   // boxTarget -> lock
+    var MINE = {};     // boxTarget -> lock of a run THIS tab started (live steps only)
     LOCKS.forEach(function (lock) {
       (lock.affects || []).forEach(function (t) {
         var subsys = t === "sa" ? "sa" : "px";
-        if (localBusy(subsys, t)) return;
+        if (localBusy(subsys, t)) { if (lock.kind !== "action") MINE[t] = lock; return; }   // my own run: the box is left alone, but the live steps are still shown
         // A real whole-box lock (a full Run, Short Allocation, etc.) always
         // wins the slot for this target. A single-button "action" lock (a
         // colleague's standalone download) only fills the slot if nothing
@@ -304,6 +305,11 @@
         // only rewrite it busy for a real whole-box lock.
         if (lock.kind === "action") banFree(t); else banBusy(t, lock);
         if (t === "sa" && lock.kind !== "action") markSaTile(lock);
+      } else if (MINE[t]) {
+        // this tab started the run: keep its own buttons/spinner, but show the same live "what is it doing now" steps
+        var anc = box.querySelector(".lm-anchor");
+        if (!anc) { anc = document.createElement("div"); anc.className = "lm-anchor"; anc.style.cssText = "height:0;margin:0;padding:0"; box.insertBefore(anc, box.firstChild); }
+        watchSteps(t, box, anc);
       } else {
         if (t === "sa") unmarkSaTile();
         if (strip) strip.remove();
