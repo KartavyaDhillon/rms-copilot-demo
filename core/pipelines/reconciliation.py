@@ -885,6 +885,15 @@ _SEARCH_OVERRIDES = '''
 # ───── console overrides (desktop windows replaced by the dashboard's RSA-token pop-up) ─────
 def get_token_popup(attempt, max_attempts, error_msg=None):
     import json as _tj, os as _tos, time as _tt
+    try:
+        from core import mcx_soft_token as _mst
+        if _mst.auto_mode():
+            global _AUTO_TOK
+            if globals().get("_AUTO_TOK") is None:
+                _AUTO_TOK = _mst.load_token()
+            return _mst.next_code(_AUTO_TOK, attempt, log=print)
+    except Exception as _e:
+        print("Automatic RSA code not used (%s) - asking in the dashboard instead." % _e, flush=True)
     _dir = _tos.getenv("SA_OUTPUT_DIR", r"C:\\SHORT ALLOCATION")
     _tos.makedirs(_dir, exist_ok=True)
     _sf = _tos.path.join(_dir, ".token_state")

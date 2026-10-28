@@ -84,7 +84,7 @@
   function setKpi(id, valueHTML, foot, accent) {
     const el = $("#" + id); if (!el) return;
     el.querySelector(".k-value").innerHTML = valueHTML;
-    el.querySelector(".k-foot").textContent = foot || "";
+    const kf = el.querySelector(".k-foot"); kf.textContent = foot || ""; kf.style.whiteSpace = "pre-line";
     el.className = "card kpi hover" + (accent ? " accent-" + accent : "");
   }
 
@@ -140,7 +140,7 @@
     renderBanner(s);
     const b = s.boxes || {}, sc = s.sched || {};
     setKpi("kRuns", s.runs_completed + '<small> / ' + s.runs_total + "</small>",
-      "Process Center " + (b.done || 0) + "/" + (b.total || 0) + " \u00b7 Scheduler " + (sc.done || 0) + "/" + (sc.total || 0), s.runs_completed ? "ok" : "");
+      "Process Center " + (b.done || 0) + "/" + (b.total || 0) + "\nScheduler " + (sc.done || 0) + "/" + (sc.total || 0), s.runs_completed ? "ok" : "");
     if (s.running && s.running.length) {
       const r = s.running[0];
       setKpi("kRunning", '<span style="display:inline-flex;align-items:center;gap:8px"><span class="spinner"></span>' + esc(r.label) + "</span>",
@@ -184,7 +184,7 @@
     const rows = [];
     attnItems().forEach((i) => rows.push({ st: i.status, title: i.pipe_name, sub: (i.source === "scheduler" ? "Scheduler \u00b7 " : "Process Center \u00b7 ") + i.id + " \u00b7 planned " + (i.window || "").split("-")[0] }));
     ((lastSum && lastSum.failed_open) || []).forEach((e) =>
-      rows.push({ st: "failed", title: e.pipe_name + " \u2014 " + e.label, sub: "Failed at " + (e.start || "").slice(11, 16) + " \u00b7 not run again successfully \u00b7 click to open the log", entry: e }));
+      rows.push({ st: "failed", title: e.pipe_name + " \u2014 " + e.label, sub: "Failed at " + (e.start || "").slice(11, 16) + " \u00b7 not run again successfully" + (e.why ? " \u00b7 why: " + e.why : "") + " \u00b7 click to open the log", entry: e }));
     $("#attnSub").textContent = rows.length ? rows.length + " item" + (rows.length > 1 ? "s" : "") : "";
     if (!rows.length) { box.innerHTML = '<div class="d-allgood">' + RMS.icon("check") + "<b>All clear</b><small>Nothing failed or was missed today.</small></div>"; return; }
     box.innerHTML = rows.map((r, k) =>

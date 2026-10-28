@@ -86,14 +86,16 @@ def fetch_balance(client=None) -> float:
         raise RuntimeError(c.scrub(f"{type(e).__name__}: {e}")) from None
 
 
-def send_alert(balance: float, to_list, cc_list, sender=None) -> None:
+def send_alert(balance: float, to_list, cc_list, sender=None, test: bool = False) -> None:
     host, port = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in"), int(os.getenv("SMTP_PORT", "587"))
     user, pwd = os.getenv("SENDER_EMAIL"), os.getenv("SENDER_PASSWORD")
     if not to_list:
         raise RuntimeError("no 'To' address set for the balance alert")
     if not (user and pwd):
         raise RuntimeError("SENDER_EMAIL / SENDER_PASSWORD are not set in .env")
-    body = (f"<html><body><p>Dear Sir,</p><p>The <b>2Captcha</b> balance is down to <b>${balance:.2f}</b> "
+    banner = ("<p style='background:#fff3cd;padding:8px;border:1px solid #e0c36a'><b>THIS IS A TEST E-MAIL.</b> "
+              "The balance below is the real current balance; the real alert looks exactly like this.</p>") if test else ""
+    body = (f"<html><body>{banner}<p>Dear Sir,</p><p>The <b>2Captcha</b> balance is down to <b>${balance:.2f}</b> "
             f"(alert limit ${limit():.2f}). When it reaches zero the automatic NMASS / NCDEX captcha filling stops and "
             f"people have to type every captcha by hand.</p><p>Please add balance to the 2Captcha account "
             f"(2captcha.com &rarr; Add funds) so the work stays smooth.</p>"
@@ -101,7 +103,7 @@ def send_alert(balance: float, to_list, cc_list, sender=None) -> None:
             f"is sent every {repeat_hours():g} hours.</p><p>Regards,<br>Risk Management System</p></body></html>")
     msg = MIMEMultipart()
     msg["From"], msg["To"], msg["Cc"] = user, ", ".join(to_list), ", ".join(cc_list)
-    msg["Subject"] = f"2Captcha balance low (${balance:.2f}) - please recharge"
+    msg["Subject"] = ("[TEST] " if test else "") + f"2Captcha balance low (${balance:.2f}) - please recharge"
     msg.attach(MIMEText(body, "html"))
     srv = (sender or smtplib.SMTP)(host, port, timeout=30)
     try:
@@ -113,6 +115,14 @@ def send_alert(balance: float, to_list, cc_list, sender=None) -> None:
             srv.quit()
         except Exception:
             pass
+
+
+def send_test(client=None, mailer=None) -> dict:
+    """Send the alert mail right now, marked [TEST], to the saved To / CC - so you can see what it looks like. Uses the real balance."""
+    to, cc = split_addrs(os.getenv("CAPTCHA_ALERT_TO", "")), split_addrs(os.getenv("CAPTCHA_ALERT_CC", ""))
+    bal = fetch_balance(client)
+    (mailer or (lambda b, t, c: send_alert(b, t, c, test=True)))(bal, to, cc)
+    return {"ok": True, "balance": round(bal, 2), "to": to, "cc": cc}
 
 
 def check(now: datetime = None, client=None, mailer=None, log=print) -> dict:

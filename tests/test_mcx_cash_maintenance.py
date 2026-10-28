@@ -409,3 +409,17 @@ class PairDownloader(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LockLeftovers(Base):
+    def test_lock_of_a_dead_server_or_of_the_same_card_is_taken_over(self):
+        import json
+        p = LK._path()
+        p.write_text(json.dumps({"owner": "liveallocation", "pid": 99999999, "since": "15:10:00"}), encoding="utf-8")
+        self.assertTrue(LK.acquire("liveallocation", wait_s=0))          # holder process does not exist (server was restarted)
+        LK.release("liveallocation")
+        p.write_text(json.dumps({"owner": "liveallocation", "pid": os.getpid(), "since": "15:10:00"}), encoding="utf-8")
+        self.assertTrue(LK.acquire("liveallocation", wait_s=0))          # the card's own leftover (it never runs twice at once)
+        LK.release("liveallocation")
+        p.write_text(json.dumps({"owner": "mcxcash", "pid": os.getpid(), "since": "15:10:00"}), encoding="utf-8")
+        self.assertFalse(LK.acquire("liveallocation", wait_s=0))         # a really running other card is respected

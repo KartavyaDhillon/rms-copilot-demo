@@ -206,6 +206,7 @@
     var steps = '';
     ['nmass_ncdex', 'mcx'].forEach(function (k) {
       var r = (s.steps || {})[k]; if (!r) return;
+      if (st === 'done') r = { ok: true, msg: r.ok ? r.msg : 'Files added by hand - all files are there.' };
       steps += '<span title="' + esc(r.msg) + '" style="font-size:10px;color:' + (r.ok ? 'var(--green)' : 'var(--red)') + '">' + (r.ok ? '✓' : '✗') + ' ' + (k === 'mcx' ? 'MCX' : 'NMASS+NCDEX') + '</span> ';
     });
     return '<div class="la-run ' + cls + '"><div class="la-id">Folder ' + s.slot + '</div><div class="la-time">' + esc(s.time) + (s.override ? ' · override' : '') + '</div>' +
@@ -446,6 +447,26 @@
   var ACCEPT = [/^CM_ClientLevelCollaterals_.*\.(csv|xlsx)$/i, /^FO_ClientLevelCollaterals_.*\.(csv|xlsx)$/i, /^CO_ClientLevelCollaterals_.*\.(csv|xlsx)$/i,
                 /^ClientNetEffectiveDeposits.*\.(csv|xlsx)$/i, /^MCX_Web_Allocation_\d+\.xlsx$/i];
   function accepted(n) { return ACCEPT.some(function (r) { return r.test(n); }); }
+
+  // a clear "done" popup after an upload: big green tick, one OK button (amber warning if something was not accepted)
+  function donePopup(ok, title, lines) {
+    var old = document.getElementById('laDone'); if (old) old.remove();
+    var o = document.createElement('div'); o.id = 'laDone';
+    o.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center';
+    var col = ok ? '#34d399' : '#fbbf24';
+    o.innerHTML = '<div style="background:var(--panel,#10151d);border:1px solid ' + col + ';border-radius:18px;padding:28px 34px;min-width:320px;max-width:460px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.6)">' +
+      '<div style="width:72px;height:72px;border-radius:50%;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;font-size:42px;font-weight:800;color:#06140d;background:' + col + '">' + (ok ? '\u2713' : '!') + '</div>' +
+      '<div style="font-size:20px;font-weight:750;margin-bottom:8px;color:var(--ink,#e9eef6)">' + esc(title) + '</div>' +
+      '<div style="font-size:13px;line-height:1.6;color:var(--muted,#93a0b4);margin-bottom:18px">' + (lines || []).map(esc).join('<br>') + '</div>' +
+      '<button id="laDoneOk" style="min-width:120px;padding:10px 22px;border:0;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer;background:' + col + ';color:#06140d">OK</button></div>';
+    document.body.appendChild(o);
+    var close = function () { o.remove(); document.removeEventListener('keydown', onKey); };
+    var onKey = function (e) { if (e.key === 'Enter' || e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    document.getElementById('laDoneOk').onclick = close;
+    document.getElementById('laDoneOk').focus();
+  }
+
   window.laUpPick = function (isDir) {
     var old = $('laUpInput'); if (old) old.remove();
     var inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.id = 'laUpInput'; inp.style.display = 'none';
@@ -479,6 +500,7 @@
         (j.ok || []).forEach(function (m) { h += '<div class="sa-ev ok"><span class="ic">✓</span><span>' + esc(m) + '</span><span class="what">saved</span></div>'; });
         (j.rejected || []).forEach(function (m) { h += '<div class="sa-ev bad"><span class="ic">✕</span><span>' + esc(m) + '</span><span class="what">not accepted</span></div>'; });
         res.innerHTML = h;
+        donePopup(good, good ? 'Upload done' : (nok ? 'Uploaded with problems' : 'Nothing was uploaded'), [nok + ' file' + (nok === 1 ? '' : 's') + ' saved into ' + (typeof tlabel === 'function' ? tlabel(j.slot) : 'folder ' + j.slot)].concat(nbad ? [nbad + ' not accepted - see the list'] : []));
         var body = $('saModalBody'); if (body) body.scrollTop = body.scrollHeight;
         reload();
       }).catch(function (e) { if (res) res.innerHTML = '<div style="color:var(--red)">Upload failed: ' + esc(e.message || e) + '</div>'; });

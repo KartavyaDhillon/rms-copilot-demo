@@ -24,6 +24,41 @@ def _path() -> Path:
     return p / "rms_tcs_session.lock"
 
 
+def _pid_alive(pid) -> bool:
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        import psutil                                        # type: ignore
+        return psutil.pid_exists(pid)
+    except ImportError:
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(0x1000, False, pid)             # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return False
+            code = ctypes.c_ulong()
+            ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+            k.CloseHandle(h)
+            return bool(ok) and code.value == 259             # STILL_ACTIVE
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+NAMES = {"liveallocation": "LIVE ALLOCATION CAPTURE", "mcxcash": "MCX CASH MAINTENANCE"}
+
+
 def holder():
     """-> {'owner','since'} of the current holder, or None."""
     p = _path()
@@ -31,6 +66,13 @@ def holder():
         age = time.time() - p.stat().st_mtime
         if age > STALE_SEC:
             return None
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def holder_raw(p):
+    try:
         return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
@@ -49,8 +91,12 @@ def acquire(owner: str, wait_s: int = 900, cancel=lambda: False, log=print, slee
             return True
         except FileExistsError:
             try:
-                if time.time() - p.stat().st_mtime > STALE_SEC:
-                    p.unlink()                              # abandoned
+                h = holder_raw(p)
+                if time.time() - p.stat().st_mtime > STALE_SEC or (h and not _pid_alive(h.get("pid"))):
+                    p.unlink()                              # abandoned: too old, or the server that made it is gone (restart)
+                    continue
+                if h and h.get("owner") == owner and h.get("pid") == os.getpid():
+                    p.unlink()                              # left over from an earlier run of this same card (it can only run once at a time)
                     continue
             except OSError:
                 continue
@@ -60,7 +106,8 @@ def acquire(owner: str, wait_s: int = 900, cancel=lambda: False, log=print, slee
             return False
         if time.time() - noted > 60:
             h = holder() or {}
-            log(f"MCX eclear login is in use by '{h.get('owner', 'another download')}' - waiting for it to finish...")
+            who = NAMES.get(h.get("owner"), "another download")
+            log(f"Waiting: the MCX login is being used by {who} right now (started {h.get('since', '?')}). This run continues by itself when that one finishes.")
             noted = time.time()
         sleep(3)
 

@@ -13,6 +13,9 @@ import tempfile
 import time
 import zipfile
 
+import json
+from pathlib import Path
+
 MAX_TOKEN_TRIES = 2
 RELOGIN_WAIT_SEC = int(os.getenv("MCX_RELOGIN_WAIT_SEC", "240"))
 
@@ -70,3 +73,50 @@ def relogin_wait(cancelled=lambda: False, sleep=time.sleep, log=print, seconds=N
         if left > 0 and left % 60 < 5:
             log(f"  ...{left // 60 + (1 if left % 60 else 0)} min to go")
     return True
+
+
+# ── the dashboard switch "Token auto-fill" (Process Center > Auto-fill CAPTCHA / TOKEN), same idea as the captcha switch ──
+def _switch_path() -> Path:
+    v = os.getenv("MCX_TOKEN_SWITCH_FILE", "").strip()
+    if v:
+        return Path(v)
+    try:
+        from core.scheduler import paths
+        base = Path(paths.data_root())
+    except Exception:
+        base = Path(__file__).resolve().parent.parent / "data"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "mcx_token_auto.json"
+
+
+def switch_state() -> dict:
+    """{'enabled': bool, 'by', 'at'} - default ON (the unattended cards need it)."""
+    try:
+        d = json.loads(_switch_path().read_text(encoding="utf-8"))
+        return {"enabled": bool(d.get("enabled", True)), "by": str(d.get("by", "")), "at": str(d.get("at", ""))}
+    except Exception:
+        return {"enabled": True, "by": "", "at": ""}
+
+
+def set_switch(enabled: bool, who: str = "") -> dict:
+    st = {"enabled": bool(enabled), "by": who, "at": dt.datetime.now().isoformat(timespec="seconds")}
+    _switch_path().write_text(json.dumps(st), encoding="utf-8")
+    return st
+
+
+def seed_ok() -> bool:
+    try:
+        load_token()
+        return True
+    except Exception:
+        return False
+
+
+def auto_mode() -> bool:
+    """True = the RSA code is generated, not typed. Needs the switch ON, and either an unattended caller
+    (MCX_TOKEN_MODE=auto) or a seed that can be loaded."""
+    if not switch_state()["enabled"]:
+        return False
+    if os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto":
+        return True
+    return seed_ok()

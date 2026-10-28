@@ -347,13 +347,13 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=4"></script>'
+                            '<script src="/platform/js/process-locks.js?v=5"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=2"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
-                            '<script src="/platform/js/process-liveallocation.js?v=4"></script>'
-                            '<script src="/platform/js/process-mcxcash.js?v=2"></script></body>', 1)
+                            '<script src="/platform/js/process-liveallocation.js?v=6"></script>'
+                            '<script src="/platform/js/process-mcxcash.js?v=4"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -3354,6 +3354,32 @@ def captcha_balance_get():
     from core import captcha_balance as _cb
     st = _cb.read_state()
     return {**st, "limit": _cb.limit(), "to": os.getenv("CAPTCHA_ALERT_TO", ""), "cc": os.getenv("CAPTCHA_ALERT_CC", "")}
+
+@app.post("/captcha/balance/test")
+def captcha_balance_test():
+    """Send a [TEST] copy of the low-balance mail to the saved To / CC."""
+    from core import captcha_balance as _cb
+    try:
+        return _cb.send_test()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.get("/captcha/token-auto")
+def captcha_token_get():
+    from core import mcx_soft_token as _mt
+    st = _mt.switch_state()
+    return {**st, "seed_ok": _mt.seed_ok()}
+
+@app.post("/captcha/token-auto")
+async def captcha_token_set(request: Request):
+    """Turn the generated MCX RSA code on or off for everybody."""
+    from core import mcx_soft_token as _mt
+    body = await request.json()
+    try:
+        st = _mt.set_switch(bool(body.get("enabled")), (_actor(request)[0] or ""))
+    except OSError as e:
+        return {"ok": False, "error": f"Could not save the switch: {e}"}
+    return {"ok": True, **st}
 
 @app.post("/captcha/balance/check")
 def captcha_balance_check():

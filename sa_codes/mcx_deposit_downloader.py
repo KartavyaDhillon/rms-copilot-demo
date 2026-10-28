@@ -95,6 +95,15 @@ def _is_expired(text):
 _AUTO_TOK = None
 
 
+def _auto_mode():
+    """Generated RSA code instead of a popup: the dashboard switch must be ON, and the caller unattended or the seed present."""
+    try:
+        from core import mcx_soft_token as _m
+        return _m.auto_mode()
+    except Exception:
+        return os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto"
+
+
 def _token_popup(attempt, max_attempts, error_msg=None):
     """RSA SecurID token entry — web-based (dashboard UI, no tkinter).
     Writes .token_state to SA_OUTPUT_DIR, polls until dashboard POSTs answer.
@@ -110,7 +119,7 @@ def _token_popup(attempt, max_attempts, error_msg=None):
     correctly, purely for display — routing (which endpoint to POST the
     answer to) is unaffected, since the file location itself never changes."""
     import json as _tj, os as _tos
-    if _tos.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto":
+    if _auto_mode():
         # unattended (LIVE ALLOCATION): the code comes from the seed, never from a popup - always the NEXT code
         try:
             from core import mcx_soft_token as _mst
@@ -477,7 +486,7 @@ def _download_mcx_deposit_once(output_dir=None):
         entity = entity_codes = None
         err_msg = initial_err_msg
         # unattended mode: at most 2 wrong codes, then stop (a 3rd could lock the account)
-        MAX_RETRY = 2 if os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto" else 3
+        MAX_RETRY = 2 if _auto_mode() else 3
         for attempt in range(1, MAX_RETRY + 1):
             token = _token_popup(attempt, MAX_RETRY, err_msg)
             t_enc, t_ign = _encrypt_value(token)
@@ -559,7 +568,7 @@ def _download_mcx_deposit_once(output_dir=None):
         login does, and hand the poll loop the tabId THAT call returns."""
         print("\n🚨 SESSION EXPIRED — RE-LOGIN")
         _session_expired_popup()
-        if os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto":
+        if _auto_mode():
             from core import mcx_soft_token as _mst
             _mst.relogin_wait(log=print)           # unattended: do NOT fill a code instantly - wait (default 4 min)
         new_sess = requests.Session()

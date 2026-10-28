@@ -219,7 +219,7 @@ class DownloaderAutoMode(unittest.TestCase):
             code = mod._token_popup(1, 2, None)
             self.assertTrue(code.startswith("CODE@"))
             src = open(spec.origin, encoding="utf-8").read()
-            self.assertIn('MAX_RETRY = 2 if os.getenv("MCX_TOKEN_MODE"', src)
+            self.assertIn('MAX_RETRY = 2 if _auto_mode() else 3', src)
             self.assertIn("relogin_wait", src)
         finally:
             os.environ.pop("MCX_TOKEN_MODE", None)

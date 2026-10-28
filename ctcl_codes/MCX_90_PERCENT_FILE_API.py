@@ -97,6 +97,17 @@ def get_token_popup(attempt, max_attempts, error_msg=None, label="MCX 90%"):
     """Write a .token_state file in CTCL_NMASS_FOLDER, then poll until dashboard answers.
     Dashboard polls GET /ctcl/token/pending and POSTs to /ctcl/token/answer."""
     import json as _tj, os as _os
+    if "Password" not in (label or ""):
+        # Auto-fill CAPTCHA / TOKEN switch (Process Center): ON -> the next RSA code is generated, no typing needed.
+        try:
+            from core import mcx_soft_token as _mst
+            if _mst.auto_mode():
+                global _AUTO_TOK
+                if globals().get("_AUTO_TOK") is None:
+                    _AUTO_TOK = _mst.load_token()
+                return _mst.next_code(_AUTO_TOK, attempt, log=print)
+        except Exception as _e:
+            print(f"⚠️ Automatic RSA code not used ({_e}) - asking in the dashboard instead.")
     _dir = _os.getenv("MCX90_SAVE_DIR", _os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS"))
     _os.makedirs(_dir, exist_ok=True)
     _sf  = _os.path.join(_dir, ".token_state")

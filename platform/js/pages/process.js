@@ -38,9 +38,8 @@
       el.innerHTML =
         '<div class="pc-bar"><div class="l"></div>' +
         '<div style="display:flex;gap:8px">' +
-        '<button class="btn sm ghost" id="pcCaptchaAuto" title="Automatic NMASS / NCDEX captcha filling (2Captcha)">⚡ Captcha auto-fill: <b id="pcCaptchaAutoState">…</b></button>' +
-        '<button class="btn sm ghost" id="pcCaptchaBal" title="Who gets the e-mail when the 2Captcha balance is low (checked every hour)">\u2709 Balance alert</button>' +
-                '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
+        '<button class="btn sm ghost" id="pcAuto" title="Automatic captcha and RSA-token filling, and the low-balance e-mail">\u26a1 Auto-fill CAPTCHA / TOKEN: <b id="pcAutoState">\u2026</b></button>' +
+        '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
         '<a class="btn sm ghost" href="/legacy" target="_blank" title="Original console with sidebar and internal views, in a new tab">' + RMS.icon("external") + " Standalone</a></div></div>" +
         '<iframe class="pc-frame" id="pcFrame" src="/legacy?embed=1"></iframe>';
@@ -51,47 +50,94 @@
         }
       };
       $("#pcCommon").onclick = openCommon;
-      $("#pcCaptchaBal").onclick = () => {
-        const w = $("#pcFrame").contentWindow;
-        if (w && typeof w.pxConfig === "function") w.pxConfig("captchabal"); else popup("Balance alert", "The console is still loading - try again in a moment.", false);
-      };
       captchaAutoInit();
       booted = true;
     },
   };
 
-  /* ── Captcha auto-fill switch: one server-side switch (/captcha/auto) shared by everybody ── */
-  let captchaAuto = { enabled: false, key_configured: false };
+  /* ── Auto-fill CAPTCHA / TOKEN: one button, a small window with the two on/off switches + the balance alert.
+        All switches live on the server (/captcha/auto, /captcha/token-auto) and apply to everybody. ── */
+  let captchaAuto = { enabled: false, key_configured: false }, tokenAuto = { enabled: true, seed_ok: false };
 
-  function captchaAutoPaint() {
-    const btn = $("#pcCaptchaAuto"), st = $("#pcCaptchaAutoState");
-    if (!btn || !st) return;
-    const on = captchaAuto.enabled && captchaAuto.key_configured;
-    st.textContent = !captchaAuto.key_configured ? "No key" : (captchaAuto.enabled ? "On" : "Off");
-    st.style.color = on ? "#4ade80" : (captchaAuto.key_configured ? "" : "#fbbf24");
-    const t = captchaAuto.today, bal = captchaAuto.balance || {};
-    const balTxt = bal.balance != null ? " Balance: $" + Number(bal.balance).toFixed(2) + (bal.low ? " (LOW)" : "") + ", checked " + (bal.checked_at || "").slice(11, 16) + "." : "";
-    btn.title = captchaAuto.key_configured
-      ? "Fills NMASS / NCDEX captchas automatically (up to " + (captchaAuto.max_tries || 5) + " tries of " + (captchaAuto.timeout_s || 45) +
-        " s each), then the normal captcha popup appears. Applies to everybody." + (t ? " Today: " + t.accepted + " accepted, " + t.rejected + " wrong." : "") + balTxt
-      : "No 2Captcha key found. Add APIKEY_2CAPTCHA=... to the .env file and restart the server.";
+  function autoPaintBtn() {
+    const st = $("#pcAutoState"); if (!st) return;
+    const c = captchaAuto.key_configured && captchaAuto.enabled, t = tokenAuto.enabled;
+    st.innerHTML = 'Captcha <span style="color:' + (c ? "#4ade80" : "#fbbf24") + '">' + (!captchaAuto.key_configured ? "No key" : c ? "On" : "Off") + "</span> \u00b7 Token <span style=\"color:" + (t ? "#4ade80" : "#fbbf24") + '">' + (t ? "On" : "Off") + "</span>";
   }
-
-  async function captchaAutoRefresh() {
-    try { captchaAuto = await (await fetch("/captcha/auto")).json(); captchaAutoPaint(); } catch (e) { /* server not updated yet */ }
+  async function autoRefresh() {
+    try { captchaAuto = await (await fetch("/captcha/auto")).json(); } catch (e) { /* server not updated yet */ }
+    try { tokenAuto = await (await fetch("/captcha/token-auto")).json(); } catch (e) { /* server not updated yet */ }
+    autoPaintBtn();
+    if ($("#pcAutoWin")) autoWinPaint();
   }
-
-  function captchaAutoInit() {
-    $("#pcCaptchaAuto").onclick = async () => {
-      if (!captchaAuto.key_configured) { popup("Captcha auto-fill", "No 2Captcha key found.\nAdd APIKEY_2CAPTCHA=... to the .env file and restart the server.", false); return; }
-      try {
-        const d = await (await fetch("/captcha/auto", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: !captchaAuto.enabled }) })).json();
-        if (d.ok === false) popup("Captcha auto-fill", d.error || "Could not change the switch", false);
-      } catch (e) { popup("Captcha auto-fill", "Could not reach the server: " + e.message, false); }
-      captchaAutoRefresh();
+  async function autoPost(url, body) {
+    try {
+      const d = await (await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })).json();
+      if (d.ok === false) popup("Auto-fill", d.error || "Could not change it", false);
+      return d;
+    } catch (e) { popup("Auto-fill", "Could not reach the server: " + e.message, false); }
+  }
+  function sw(id, label, on, hint) {
+    const b = (v, txt) => '<button class="btn sm ' + (on === v ? "primary" : "ghost") + '" data-sw="' + id + '" data-v="' + (v ? 1 : 0) + '" style="min-width:64px;justify-content:center">' + txt + "</button>";
+    return '<div style="border:1px solid var(--line,#2a3342);border-radius:12px;padding:12px 14px;margin-bottom:10px">' +
+      '<div style="display:flex;align-items:center;gap:10px"><b style="flex:1">' + label + '</b><span id="' + id + 'St" style="font-size:12px"></span>' + b(true, "On") + b(false, "Off") + "</div>" +
+      '<div style="font-size:11.5px;color:var(--text-3,#93a0b4);margin-top:6px;line-height:1.5">' + hint + "</div></div>";
+  }
+  function autoWinHtml() {
+    return '<div id="pcAutoWin">' +
+      sw("swCap", "\u26a1 Captcha auto-fill (2Captcha)", captchaAuto.enabled, "<b>On:</b> NMASS and NCDEX captchas are typed in for you by the 2Captcha service (it costs a little money per captcha). <b>Off:</b> a popup asks a person to type every captcha.") +
+      sw("swTok", "\ud83d\udd11 Token auto-fill (MCX RSA code)", tokenAuto.enabled, "<b>On:</b> the MCX RSA code is generated by the console from the saved token seed - nobody types it. <b>Off:</b> a popup asks a person for the code (runs with nobody watching, like Live Allocation, will fail while this is Off).") +
+      '<div style="border:1px solid var(--line,#2a3342);border-radius:12px;padding:12px 14px">' +
+      '<div style="font-weight:650;margin-bottom:4px">\u2709 Low balance e-mail alert</div>' +
+      '<div id="balInfo" style="font-size:12px;color:var(--text-3,#93a0b4);line-height:1.6;margin-bottom:10px">Checking the 2Captcha balance\u2026</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm ghost" id="balCfg">\u2709 Email To / CC</button><button class="btn sm ghost" id="balCheck">\u21bb Check balance now</button><button class="btn sm primary" id="balTest">\ud83d\udce8 Send me a test e-mail</button></div>' +
+      '<div id="balMsg" style="font-size:12px;margin-top:8px"></div></div></div>';
+  }
+  function autoWinPaint() {
+    const set = (id, txt, col) => { const e = $("#" + id); if (e) { e.textContent = txt; e.style.color = col || ""; } };
+    set("swCapSt", !captchaAuto.key_configured ? "no key in .env" : captchaAuto.enabled ? "is ON" : "is OFF", captchaAuto.key_configured && captchaAuto.enabled ? "#4ade80" : "#fbbf24");
+    set("swTokSt", tokenAuto.enabled ? (tokenAuto.seed_ok ? "is ON" : "ON - seed missing") : "is OFF", tokenAuto.enabled && tokenAuto.seed_ok ? "#4ade80" : "#fbbf24");
+    document.querySelectorAll("#pcAutoWin [data-sw]").forEach((b) => {
+      const cur = b.dataset.sw === "swCap" ? !!captchaAuto.enabled : !!tokenAuto.enabled, mine = b.dataset.v === "1";
+      b.className = "btn sm " + (cur === mine ? "primary" : "ghost");
+    });
+  }
+  async function balLoad() {
+    try {
+      const b = await (await fetch("/captcha/balance")).json();
+      const el = $("#balInfo"); if (!el) return;
+      el.innerHTML = (b.balance != null ? "Balance now: <b style=\"color:" + (b.low ? "#f87171" : "#4ade80") + "\">$" + Number(b.balance).toFixed(2) + "</b> (checked " + esc((b.checked_at || "").slice(11, 16)) + ")" : "Not checked yet") +
+        " \u00b7 alert at or below <b>$" + Number(b.limit).toFixed(2) + "</b> \u00b7 checked every hour<br>To: " + esc(b.to || "\u2014 not set") + " \u00b7 CC: " + esc(b.cc || "\u2014") +
+        (b.error ? '<br><span style="color:#f87171">Could not read the balance: ' + esc(b.error) + "</span>" : "") + (b.alert_error ? '<br><span style="color:#f87171">Last alert mail failed: ' + esc(b.alert_error) + "</span>" : "");
+    } catch (e) { /* ignore */ }
+  }
+  function autoOpen() {
+    RMS.modal("Auto-fill CAPTCHA / TOKEN", autoWinHtml(), { width: 560, icon: "zap" });
+    autoRefresh(); balLoad();
+    document.querySelectorAll("#pcAutoWin [data-sw]").forEach((b) => {
+      b.onclick = async () => {
+        const on = b.dataset.v === "1";
+        if (b.dataset.sw === "swCap" && !captchaAuto.key_configured) { popup("Captcha auto-fill", "No 2Captcha key found.\nAdd APIKEY_2CAPTCHA=... to the .env file and restart the server.", false); return; }
+        await autoPost(b.dataset.sw === "swCap" ? "/captcha/auto" : "/captcha/token-auto", { enabled: on });
+        autoRefresh();
+      };
+    });
+    $("#balCfg").onclick = () => {
+      const w = $("#pcFrame").contentWindow;
+      if (w && typeof w.pxConfig === "function") w.pxConfig("captchabal"); else popup("Balance alert", "The console is still loading - try again in a moment.", false);
     };
-    captchaAutoRefresh();
-    setInterval(captchaAutoRefresh, 30000);
+    $("#balCheck").onclick = async () => { $("#balMsg").textContent = "Checking\u2026"; const d = await autoPost("/captcha/balance/check"); $("#balMsg").textContent = d && d.error ? "Could not read: " + d.error : d && d.balance != null ? "Balance is $" + Number(d.balance).toFixed(2) + (d.low ? " - LOW, alert mail sent if one was due." : " - fine.") : ""; balLoad(); };
+    $("#balTest").onclick = async () => {
+      $("#balMsg").textContent = "Sending\u2026";
+      const d = await autoPost("/captcha/balance/test");
+      $("#balMsg").style.color = d && d.ok ? "#4ade80" : "#f87171";
+      $("#balMsg").textContent = d && d.ok ? "Test e-mail sent to " + d.to.join(", ") + (d.cc.length ? " (cc " + d.cc.join(", ") + ")" : "") + ". It is marked [TEST] and shows the real wording." : (d && d.error) || "Could not send";
+    };
+  }
+  function captchaAutoInit() {
+    $("#pcAuto").onclick = autoOpen;
+    autoRefresh();
+    setInterval(autoRefresh, 30000);
   }
 
   /* ── Upload Common Files: strictly today's HOLDING + RISK_REPORT ── */

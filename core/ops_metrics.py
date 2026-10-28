@@ -173,7 +173,7 @@ def _classify_tail(tail):
     """Best-effort verdict from the last few KB of a finished log."""
     if "⛔" in tail or "Stopped by user" in tail:
         return "stopped"
-    last_ok  = max(tail.rfind("✅"), tail.rfind("Completed successfully"))
+    last_ok  = max(tail.rfind("✅"), tail.rfind("Completed successfully"), tail.rfind("Backup & cleanup completed"))
     m_fail   = None
     for m in _FAILISH_RE.finditer(tail):
         m_fail = m
@@ -183,6 +183,15 @@ def _classify_tail(tail):
     if last_ok >= 0:
         return "ok"
     return "unknown"
+
+
+def _why_failed(tail):
+    """The last line of the log that made it count as failed (shown in 'Needs your attention')."""
+    bad = None
+    for ln in tail.splitlines():
+        if "\u274c" in ln or _FAILISH_RE.search(ln):
+            bad = ln.strip()
+    return (bad or "")[:160]
 
 
 def _scan_log(path, fname, logdir):
@@ -235,6 +244,7 @@ def _scan_log(path, fname, logdir):
         "date": start.strftime("%Y-%m-%d"),
         "duration_s": dur,
         "status": _classify_tail(tail),
+        "why": _why_failed(tail) if _classify_tail(tail) == "failed" else "",
         "emails": emails, "whatsapp": wa,
         "emails_failed": emails_failed, "wa_failed": wa_failed,
         "size": st.st_size,

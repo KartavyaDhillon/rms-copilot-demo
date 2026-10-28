@@ -92,7 +92,7 @@ class _Session:
             print("[MCX_DEPOSIT_AUTH_FAIL] wrong password - update SA_MCX_DEPOSIT_PASSWORD in Credentials")
             raise PairError("MCX login failed - wrong password")
         entity = codes = None
-        max_try = 2 if os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto" else 3
+        max_try = 2 if B._auto_mode() else 3
         for attempt in range(1, max_try + 1):
             token = B._token_popup(attempt, max_try, None)
             t_enc, t_ign = B._encrypt_value(token)
