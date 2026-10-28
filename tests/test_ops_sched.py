@@ -24,6 +24,23 @@ class OpsSched(unittest.TestCase):
         self.addCleanup(catalog.unregister, "t.dash")
         from core import live_allocation as _la
         _la.save_settings(auto=False)                                    # most tests here are about schedules only
+        os.environ["MCX_CASH_DIR"] = os.path.join(tmp, "mc")             # MCX CASH MAINTENANCE likewise
+        self.addCleanup(os.environ.pop, "MCX_CASH_DIR", None)
+        from core import mcx_cash_maintenance as _mc
+        _mc.save_settings(auto=False)
+
+    def test_mcx_cash_times_are_counted_when_its_timer_is_on(self):
+        from core import mcx_cash_maintenance as mc
+        mc.save_settings(auto=True)
+        old = mc._trading_day
+        mc._trading_day = lambda d: True
+        self.addCleanup(setattr, mc, "_trading_day", old)
+        r = ops_sched.today(ist(11, 0))
+        items = [i for i in r["items"] if i["pipe_name"] == "MCX CASH MAINTENANCE"]
+        self.assertEqual([i["window"] for i in items], ["09:30", "10:30", "11:30", "12:30", "13:30", "14:30", "15:30", "16:30"])
+        self.assertEqual([i["status"] for i in items][:2], ["missed", "missed"])
+        self.assertEqual(items[2]["status"], "upcoming")                 # 11:30 is not yet here at 11:00
+
 
     def test_live_allocation_folders_are_counted_when_its_timer_is_on(self):
         from core import live_allocation as la

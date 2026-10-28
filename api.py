@@ -352,7 +352,8 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
-                            '<script src="/platform/js/process-liveallocation.js?v=2"></script></body>', 1)
+                            '<script src="/platform/js/process-liveallocation.js?v=3"></script>'
+                            '<script src="/platform/js/process-mcxcash.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -778,6 +779,183 @@ def la_zip_range(from_date: str = "", to_date: str = "", slots: str = ""):
     except FileNotFoundError:
         raise HTTPException(404, "no files in that range")
     nm = f"LIVE_ALLOCATION_{_la.dstr(d1)}" + (f"_to_{_la.dstr(d2)}" if d1 != d2 else "") + ".zip"
+    return FileResponse(str(z), filename=nm, media_type="application/zip")
+
+# ── MCX CASH MAINTENANCE card (core/mcx_cash_maintenance.py) - same shape as /live-alloc/* ──
+# `slot` here is the time folder name, e.g. "09-30".
+def _mc_key(s):
+    from core import mcx_cash_maintenance as _mc
+    try:
+        return _mc.check_key(s)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/mcx-cash/status")
+def mc_status(date: str = ""):
+    from core import mcx_cash_maintenance as _mc
+    try:
+        return _mc.status(_la_date(date))
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": str(e), "slots": []}
+
+@app.get("/mcx-cash/files")
+def mc_files(date: str = ""):
+    from core import mcx_cash_maintenance as _mc
+    d = _la_date(date)
+    st = _mc.status(d)
+    return {"date": _mc.dstr(d), "dates": st.get("dates", []),
+            "slots": [{"slot": s["slot"], "time": s["time"], "state": s["state"], "files": _mc.list_files(d, s["slot"])}
+                      for s in st["slots"]]}
+
+@app.get("/mcx-cash/file")
+def mc_file(slot: str, name: str, date: str = ""):
+    from core import mcx_cash_maintenance as _mc
+    try:
+        p = _mc.file_path(_la_date(date), _mc_key(slot), name)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(404, "file not found")
+    return FileResponse(str(p), filename=p.name)
+
+@app.get("/mcx-cash/zip")
+def mc_zip(date: str = "", slot: str = ""):
+    from core import mcx_cash_maintenance as _mc
+    d = _la_date(date)
+    try:
+        z = _mc.zip_folder(d, _mc_key(slot) if slot else None)
+    except FileNotFoundError:
+        raise HTTPException(404, "no folder for that date")
+    nm = f"MCX_CASH_MAINTENANCE_{_mc.dstr(d)}" + (f"_{slot}" if slot else "") + ".zip"
+    return FileResponse(str(z), filename=nm, media_type="application/zip")
+
+@app.post("/mcx-cash/run")
+async def mc_run(request: Request):
+    """Start one time by hand (the timer does the same by itself). {slot:'09-30', force}"""
+    import threading as _th
+    from core import mcx_cash_maintenance as _mc
+    body = await request.json()
+    slot = _mc_key(body.get("slot"))
+    force = bool(body.get("force"))
+    by = (_actor(request)[0] or "")
+    if _mc.is_running():
+        return JSONResponse({"ok": False, "error": "Another run is going - wait for it, or press Skip / Stop on it."}, status_code=409)
+    def _go():
+        try:
+            _mc.run_slot(slot, trigger="manual", by=by, force=force)
+        except Exception as e:
+            print(f"[mcx-cash] manual run of {slot} failed: {e}", flush=True)
+    _th.Thread(target=_go, name=f"mcx-cash-{slot}", daemon=True).start()
+    return {"ok": True}
+
+@app.post("/mcx-cash/skip")
+async def mc_skip(request: Request):
+    from core import mcx_cash_maintenance as _mc
+    body = await request.json()
+    slot = _mc_key(body.get("slot"))
+    by = (_actor(request)[0] or "")
+    rec = _mc.unskip_slot(slot) if body.get("undo") else _mc.skip_slot(slot, by=by)
+    return {"ok": True, "state": rec.get("status", "")}
+
+@app.post("/mcx-cash/stop")
+def mc_stop():
+    from core import mcx_cash_maintenance as _mc
+    return {"ok": True, "stopped": _mc.stop_running()}
+
+@app.on_event("startup")
+def _mcx_cash_startup():
+    """The built-in timer: produces and mails the reports at each time, by itself."""
+    try:
+        from core import mcx_cash_report as _mr
+        _mr.apply_defaults()
+        from core import mcx_cash_maintenance as _mc
+        _mc.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  MCX CASH MAINTENANCE timer not started: {type(_e).__name__}: {_e}")
+
+@app.get("/mcx-cash/settings")
+def mc_settings_get():
+    from core import mcx_cash_maintenance as _mc
+    s = _mc.get_settings()
+    st = _mc.status()
+    return {"times": ",".join(_mc.hhmm(m) for m in _mc.slot_times()), "auto": s["auto"], "custom": bool(s["times"]),
+            "default": _mc.DEFAULT_TIMES, "grace_min": _mc._grace_min(), "retries": _mc._retry_cfg()[0],
+            "retry_gap_min": _mc._retry_cfg()[1],
+            "slots": [{"slot": x["slot"], "time": x["time"], "mode": x["mode"], "ms15_run": x["ms15_run"]} for x in st["slots"]],
+            "ms15_runs": st["ms15_runs"], "ms15_override": s["ms15_runs"]}
+
+@app.post("/mcx-cash/settings")
+async def mc_settings_set(request: Request):
+    """Timings / auto switch / where each time takes its files from (password-gated). Applies within ~20 seconds."""
+    from core import mcx_cash_maintenance as _mc
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return JSONResponse({"ok": False, "error": "Wrong password"}, status_code=200)
+    try:
+        s = _mc.save_settings(times=body.get("times") if "times" in body else None,
+                              auto=body.get("auto") if "auto" in body else None,
+                              modes=body.get("modes") if "modes" in body else None,
+                              ms15_runs=body.get("ms15_runs") if "ms15_runs" in body else None,
+                              by=(_actor(request)[0] or ""))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "times": ",".join(_mc.hhmm(m) for m in _mc.slot_times()), "auto": s["auto"]}
+
+@app.post("/mcx-cash/override")
+async def mc_override(request: Request):
+    """Manual override of one time today: {slot, mode: 'undone' | 'done'}."""
+    from core import mcx_cash_maintenance as _mc
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return {"ok": False, "error": "Wrong password"}
+    slot = _mc_key(body.get("slot"))
+    by = (_actor(request)[0] or "")
+    if _mc.is_running() and (_mc.status().get("running") == slot):
+        return JSONResponse({"ok": False, "error": "That time is running now - Stop or Skip it first."}, status_code=409)
+    rec = _mc.mark_undone(slot, by) if body.get("mode") == "undone" else _mc.mark_done(slot, by)
+    return {"ok": True, "state": rec.get("status", "")}
+
+@app.post("/mcx-cash/upload")
+async def mc_upload(request: Request, slot: str = "", files: _LA_List[_LA_UploadFile] = _LA_File(...)):
+    """Add files you got by hand to one of TODAY's time folders (the 4 inputs, recognised by their content)."""
+    from core import mcx_cash_maintenance as _mc
+    import datetime as _dt
+    key = _mc_key(slot)
+    if _mc.is_running() and _mc.status().get("running") == key:
+        return JSONResponse({"ok": False, "error": "That time is running right now - Stop it first."}, status_code=409)
+    by = (_actor(request)[0] or "")
+    d = _dt.date.today()
+    ok, rejected = [], []
+    for f in files:
+        try:
+            r = _mc.accept_upload(d, key, f.filename or "", await f.read(), by=by)
+            ok.append(f"{r['name']} ({r['label']})")
+        except ValueError as e:
+            rejected.append(str(e))
+    res = _mc.finish_upload(d, key, by=by) if ok else {"inputs_complete": False, "missing": [], "found": {}}
+    return {"ok": ok, "rejected": rejected, "slot": key, "folder": str(_mc.slot_dir(d, key)), **res}
+
+@app.get("/mcx-cash/range")
+def mc_range(from_date: str = "", to_date: str = ""):
+    from core import mcx_cash_maintenance as _mc
+    d1, d2 = _la_date(from_date), _la_date(to_date or from_date)
+    return {"from": _mc.dstr(d1), "to": _mc.dstr(d2), "days": _mc.range_listing(d1, d2),
+            "all_dates": [_mc.dstr(x) for x in _mc.list_dates()[:120]]}
+
+@app.get("/mcx-cash/zip-range")
+def mc_zip_range(from_date: str = "", to_date: str = "", slots: str = ""):
+    from core import mcx_cash_maintenance as _mc
+    d1, d2 = _la_date(from_date), _la_date(to_date or from_date)
+    want = [x.strip() for x in slots.split(",") if x.strip()] or None
+    try:
+        z = _mc.zip_range(d1, d2, want)
+    except ValueError:
+        raise HTTPException(400, "bad time folder in slots")
+    except FileNotFoundError:
+        raise HTTPException(404, "no files in that range")
+    nm = f"MCX_CASH_MAINTENANCE_{_mc.dstr(d1)}" + (f"_to_{_mc.dstr(d2)}" if d1 != d2 else "") + ".zip"
     return FileResponse(str(z), filename=nm, media_type="application/zip")
 
 @app.get("/ops/history")

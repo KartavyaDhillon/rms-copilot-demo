@@ -90,7 +90,7 @@
       '<div class="tile-name">LIVE ALLOCATION CAPTURE <span class="st" id="laChip">idle</span></div>' +
       '<div class="tile-desc">Downloads the NMASS, NCDEX and MCX allocation files 8 times a day into folders 1 to 8. Starts by itself at each timing - nothing to click.</div>' +
       '<div class="tile-desc" id="laMini" style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">Checking…</div>' +
-      '<div class="tile-actions"><button class="tbtn" style="background:var(--violet);color:#fff" onclick="event.stopPropagation();laOpen()" data-tip="Open LIVE ALLOCATION CAPTURE: folders 1-8, timings, override, credentials, backup files, logs.">Open</button></div>';
+      '<div class="tile-actions"><button class="tbtn" style="background:var(--violet);color:var(--violet-d,#1a0d33)" onclick="event.stopPropagation();laOpen()" data-tip="Open LIVE ALLOCATION CAPTURE: folders 1-8, timings, override, credentials, backup files, logs.">Open</button></div>';
     grid.appendChild(tile);
     return true;
   }
@@ -438,32 +438,49 @@
       '<div class="la-lbl">Folder (today)</div><select id="laUpSlot" class="la-in" style="width:100%;margin-bottom:12px">' + opts + '</select>' +
       '<div style="padding:10px 14px;border:1px dashed var(--line-2);border-radius:10px;font-size:11.5px;line-height:1.9;margin-bottom:12px"><b style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase">Accepted names</b><br>' +
       '<span style="font-family:var(--mono);color:var(--teal)">CM_ClientLevelCollaterals_*.csv<br>FO_ClientLevelCollaterals_*.csv<br>CO_ClientLevelCollaterals_*.csv<br>ClientNetEffectiveDeposits*.csv<br>MCX_Web_Allocation_&lt;number&gt;.xlsx</span></div>' +
-      '<button class="sa-save" data-no-busy="1" style="width:100%" onclick="laUpPick()">📁 Choose files…</button><div id="laUpRes" style="margin-top:12px"></div>');
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button class="sa-save" data-no-busy="1" onclick="laUpPick()">📄 Choose files…</button>' +
+      '<button class="sa-save" data-no-busy="1" style="background:var(--blue);color:var(--blue-d)" onclick="laUpPick(true)">📁 Choose a whole folder…</button></div>' +
+      '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">Whole folder: pick the folder you captured - every file in it that this capture makes is uploaded into the folder number chosen above; other files are ignored.</div>' +
+      '<div id="laUpRes" style="margin-top:12px"></div>');
   };
-  window.laUpPick = function () {
-    var inp = $('laUpInput');
-    if (!inp) {
-      inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.id = 'laUpInput'; inp.style.display = 'none';
-      inp.onchange = function () { var l = [].slice.call(inp.files); inp.value = ''; if (l.length) laUpSend(l); };
-      document.body.appendChild(inp);
-    }
+  var ACCEPT = [/^CM_ClientLevelCollaterals_.*\.(csv|xlsx)$/i, /^FO_ClientLevelCollaterals_.*\.(csv|xlsx)$/i, /^CO_ClientLevelCollaterals_.*\.(csv|xlsx)$/i,
+                /^ClientNetEffectiveDeposits.*\.(csv|xlsx)$/i, /^MCX_Web_Allocation_\d+\.xlsx$/i];
+  function accepted(n) { return ACCEPT.some(function (r) { return r.test(n); }); }
+  window.laUpPick = function (isDir) {
+    var old = $('laUpInput'); if (old) old.remove();
+    var inp = document.createElement('input'); inp.type = 'file'; inp.multiple = true; inp.id = 'laUpInput'; inp.style.display = 'none';
+    if (isDir) { inp.setAttribute('webkitdirectory', ''); inp.setAttribute('directory', ''); }
+    inp.onchange = function () {
+      var all = [].slice.call(inp.files), ok = all, skipped = 0;
+      if (isDir) { ok = all.filter(function (f) { return accepted(f.name); }); skipped = all.length - ok.length; }
+      inp.remove();
+      if (!ok.length) { var r = $('laUpRes'); if (r) r.innerHTML = '<div style="color:var(--red)">No file this capture makes was found in that selection.</div>'; return; }
+      laUpSend(ok, skipped);
+    };
+    document.body.appendChild(inp);
     inp.click();
   };
-  function laUpSend(files) {
+  function laUpSend(files, skipped) {
     var slot = ($('laUpSlot') || {}).value || '1', res = $('laUpRes');
-    if (res) res.innerHTML = '<div style="color:var(--muted);font-size:12.5px">Uploading ' + files.length + ' file(s) into folder ' + esc(slot) + '…</div>';
+    if (res) res.innerHTML = '<div style="color:var(--muted);font-size:12.5px"><span class="la-spin"></span>Uploading ' + files.length + ' file(s) into folder ' + esc(slot) + '…</div>';
     var fd = new FormData(); files.forEach(function (f) { fd.append('files', f); });
     fetch(API + '/live-alloc/upload?slot=' + encodeURIComponent(slot), { method: 'POST', body: fd })
       .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); })
       .then(function (j) {
         if (!res) return;
         if (j.error || j.detail) { res.innerHTML = '<div style="color:var(--red)">' + esc(j.error || j.detail) + '</div>'; return; }
-        var h = '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Folder: <span style="font-family:var(--mono);color:var(--ink)">' + esc(j.folder) + '</span></div>';
+        var nok = (j.ok || []).length, nbad = (j.rejected || []).length;
+        var good = nok && !nbad;
+        var h = '<div style="padding:12px 14px;border-radius:10px;margin-bottom:10px;border:1px solid ' + (good ? 'rgba(52,211,153,.5)' : 'rgba(251,191,36,.5)') + ';background:' + (good ? 'rgba(52,211,153,.10)' : 'rgba(251,191,36,.10)') + ';color:' + (good ? 'var(--green)' : 'var(--amber)') + ';font-size:13px;font-weight:650">' +
+          (good ? '✓ Success - ' : '') + nok + ' file' + (nok === 1 ? '' : 's') + ' saved into folder ' + esc(j.slot) + (nbad ? ' · ' + nbad + ' not accepted' : '') + (skipped ? ' · ' + skipped + ' other file(s) in the folder ignored' : '') +
+          (nok ? '<div style="font-weight:400;margin-top:4px">' + (j.complete ? 'All 5 files are there - folder ' + esc(j.slot) + ' is now green and copied to PostgreSQL.' : 'Still missing: ' + esc((j.missing || []).join(', ')) + '. Add them, or use Override → Mark done.') + '</div>' : '') + '</div>' +
+          '<button class="sa-save" data-no-busy="1" style="width:100%;margin-bottom:12px" onclick="saCloseModal()">✓ Done</button>' +
+          '<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Folder: <span style="font-family:var(--mono);color:var(--ink)">' + esc(j.folder) + '</span></div>';
         (j.ok || []).forEach(function (m) { h += '<div class="sa-ev ok"><span class="ic">✓</span><span>' + esc(m) + '</span><span class="what">saved</span></div>'; });
         (j.rejected || []).forEach(function (m) { h += '<div class="sa-ev bad"><span class="ic">✕</span><span>' + esc(m) + '</span><span class="what">not accepted</span></div>'; });
-        if ((j.ok || []).length) h += '<div style="margin-top:10px;font-size:12.5px;color:' + (j.complete ? 'var(--green)' : 'var(--amber)') + '">' +
-          (j.complete ? '✓ All 5 files are there - folder ' + esc(j.slot) + ' is now green.' : 'Still missing: ' + esc((j.missing || []).join(', ')) + '. Add them, or use Override → Mark done.') + '</div>';
-        res.innerHTML = h; reload();
+        res.innerHTML = h;
+        var body = $('saModalBody'); if (body) body.scrollTop = body.scrollHeight;
+        reload();
       }).catch(function (e) { if (res) res.innerHTML = '<div style="color:var(--red)">Upload failed: ' + esc(e.message || e) + '</div>'; });
   }
 

@@ -537,6 +537,30 @@ PIPELINES["liveallocation"] = {
                                   "note": "eclear.mcxccl.com web allocation login - shared with Short Allocation. "
                                           "The RSA code comes from the seed (Scheduler > Connections > MCX eclear)."}},
 }
+# MCX CASH MAINTENANCE - own timer (core/mcx_cash_maintenance.py), like LIVE ALLOCATION CAPTURE. Run logs:
+# logs/mcxcash/mcxcash_t<HHMM>__<date>_<time>.log
+PIPELINES["mcxcash"] = {
+    "name": "MCX CASH MAINTENANCE", "module": "core.mcx_cash_maintenance", "func": "run_slot",
+    "logdir": "mcxcash", "runs": 0, "state_dir_env": "MCX_CASH_DIR",
+    "state_default": r"D:\CONSOLE\data\MCX CASH MAINTENANCE", "state_file": "run_counter.txt",
+    "email_default": "",
+    "email_keys": {"Full file report": ["MCXCASH_FULL_TO", "MCXCASH_FULL_CC"],
+                   "Summary report": ["MCXCASH_SUMMARY_TO", "MCXCASH_SUMMARY_CC"]},
+    "cred": {"NSCCL / NMASS login": {"user_key": "CTCL_NMASS_USER", "pass_key": "CTCL_NMASS_PASSWORD",
+                                    "note": "connect2nsccl.com login for the CM / FO collaterals - shared with CTCL vs NMASS and the 15-minute download"},
+             "NMASS member code": {"single_key": "CTCL_NMASS_CONSCODE",
+                                   "note": "consCode sent with every NSCCL request - shared"},
+             "MCX eclear login (RSK383 + RSK335)": {"user_key": "SA_MCX_DEPOSIT_USER", "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
+                                                    "note": "eclear.mcxccl.com - MCX 90% and MCX deposit, one login. Shared with Short Allocation and "
+                                                            "Live Allocation. The RSA code comes from the seed (Scheduler > Connections > MCX eclear)."},
+             "Report file password": {"single_key": "MCX_CASH_FILE_PASSWORD",
+                                      "note": "opens the two Excel reports that are e-mailed (the recipients already know it)"}},
+}
+try:
+    from core import mcx_cash_report as _mcr
+    _mcr.apply_defaults()              # To / CC defaults of the hand-run script (only fills what .env lacks)
+except Exception:
+    pass
 try:                                   # PHYSICAL DELIVERY folder / e-mail / WhatsApp defaults (only fills what .env lacks)
     from core.pipelines import physdel_cfg as _pd_cfg
     _pd_cfg.apply_defaults()
@@ -1436,6 +1460,10 @@ def _log_friendly_label(key, filename):
     for prefix, label in _LOG_LABELS.get(key, []):
         if filename.startswith(prefix + "__"):
             return label
+    if key == "mcxcash":                         # mcxcash_t0930__20261028_093001.log -> "09:30"
+        m = re.match(r"mcxcash_t(\d{2})(\d{2})__", filename)
+        if m:
+            return "🕘 %s:%s" % (m.group(1), m.group(2))
     return None
 
 def _log_probably_failed(text):

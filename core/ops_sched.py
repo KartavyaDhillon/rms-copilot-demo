@@ -103,6 +103,21 @@ def today(now=None):
                                       "schedule_id": "live-allocation"})
             except Exception:
                 pass
+        try:                                                 # MCX CASH MAINTENANCE: one item per time, from its card
+            from core import mcx_cash_maintenance as _mc
+            if _mc.auto_enabled():
+                st = _mc.status(local.date(), local.replace(tzinfo=None))
+                if st.get("trading_day"):
+                    cmap = {"done": "done", "skipped": "done", "failed": "failed", "partial": "failed", "missed": "missed",
+                            "running": "running", "due": "due", "upcoming": "upcoming"}
+                    for sl in st.get("slots", []):
+                        h, m = sl["time"].split(":")
+                        items.append({"id": f"MCX CASH MAINTENANCE - {sl['time']}", "pipe": "sched",
+                                      "pipe_name": "MCX CASH MAINTENANCE", "source": "scheduler", "window": sl["time"],
+                                      "start_min": int(h) * 60 + int(m), "status": cmap.get(sl["state"], "upcoming"),
+                                      "schedule_id": "mcx-cash"})
+        except Exception:
+            pass
         items.sort(key=lambda x: (x["start_min"], x["id"]))
         c = {k: sum(1 for i in items if i["status"] == k) for k in ("done", "failed", "running", "missed", "due")}
         return {"items": items, "done": c["done"], "total": len(items), "failed": c["failed"],

@@ -459,9 +459,15 @@ def step_mcx(folder: Path, slot: int, log, cancel) -> dict:
     env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1", "MCX_TOKEN_MODE": "auto",
                 "MCX_DEPOSIT_CALLER": "liveallocation", "PYTHONPATH": str(REPO) + os.pathsep + env.get("PYTHONPATH", "")})
     cli = str(REPO / "core" / "live_allocation_mcx_cli.py")
+    from core import tcs_session_lock as _L                  # the same eclear account is used by MCX CASH MAINTENANCE
+    if not _L.acquire("liveallocation", wait_s=int(os.getenv("LIVE_ALLOC_TCS_WAIT_MIN", "20")) * 60, cancel=cancel, log=log):
+        return {"ok": False, "msg": "The MCX eclear login stayed busy (MCX CASH MAINTENANCE) - try again."}
     log(f"MCX web allocation download into folder {slot} ...")
-    rc, tail = _run_child([_python(), cli, "--out", str(folder), "--slot", str(int(slot))], env, log,
-                          int(os.getenv("LIVE_ALLOC_MCX_TIMEOUT_MIN", "30")) * 60, cancel)
+    try:
+        rc, tail = _run_child([_python(), cli, "--out", str(folder), "--slot", str(int(slot))], env, log,
+                              int(os.getenv("LIVE_ALLOC_MCX_TIMEOUT_MIN", "30")) * 60, cancel)
+    finally:
+        _L.release("liveallocation")
     chk = check_files(dt.date.today(), slot)
     if "MCX web allocation" not in chk["missing"]:
         return {"ok": True, "msg": "MCX web allocation downloaded."}
