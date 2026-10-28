@@ -93,17 +93,24 @@ def send_alert(balance: float, to_list, cc_list, sender=None, test: bool = False
         raise RuntimeError("no 'To' address set for the balance alert")
     if not (user and pwd):
         raise RuntimeError("SENDER_EMAIL / SENDER_PASSWORD are not set in .env")
-    banner = ("<p style='background:#fff3cd;padding:8px;border:1px solid #e0c36a'><b>THIS IS A TEST E-MAIL.</b> "
+    banner = ("<p style='background:#e8f0fe;padding:8px;border:1px solid #9db7e8'><b>THIS IS A TEST E-MAIL.</b> "
               "The balance below is the real current balance; the real alert looks exactly like this.</p>") if test else ""
-    body = (f"<html><body>{banner}<p>Dear Sir,</p><p>The <b>2Captcha</b> balance is down to <b>${balance:.2f}</b> "
-            f"(alert limit ${limit():.2f}). When it reaches zero the automatic NMASS / NCDEX captcha filling stops and "
-            f"people have to type every captcha by hand.</p><p>Please add balance to the 2Captcha account "
-            f"(2captcha.com &rarr; Add funds) so the work stays smooth.</p>"
-            f"<p>Checked at {datetime.now():%d-%m-%Y %H:%M}. This check runs every hour; while the balance stays low a reminder "
-            f"is sent every {repeat_hours():g} hours.</p><p>Regards,<br>Risk Management System</p></body></html>")
+    body = (f"<html><body style='font-family:Segoe UI,Arial,sans-serif;font-size:14px'>{banner}"
+            f"<div style='background:#fdecea;border:2px solid #d93025;padding:12px 16px;margin-bottom:12px'>"
+            f"<span style='color:#d93025;font-size:18px;font-weight:bold'>&#9888; WARNING: 2CAPTCHA BALANCE IS LOW - REFILL IMMEDIATELY</span><br>"
+            f"<span style='font-size:15px'>Current balance: <b>${balance:.2f}</b> &nbsp;(alert limit ${limit():.2f})</span></div>"
+            f"<p>Dear Team,</p>"
+            f"<p><b>Please refill the 2Captcha account immediately</b> (2captcha.com &rarr; Add funds) so that all automated "
+            f"processes keep running smoothly.</p>"
+            f"<p>If the balance reaches zero, automatic captcha filling for NMASS / NCDEX stops and the dependent processes "
+            f"(Live Allocation, MCX Cash Maintenance, downloads, etc.) will fail or wait for manual captcha entry.</p>"
+            f"<p style='color:#666;font-size:12px'>Checked at {datetime.now():%d-%m-%Y %H:%M}. The balance is checked every hour; "
+            f"while it stays low a reminder is sent every {repeat_hours():g} hours.</p>"
+            f"<p>Regards,<br><b>RMS COPILOT</b><br><span style='color:#666;font-size:12px'>(Automated message - please do not reply)</span></p>"
+            f"</body></html>")
     msg = MIMEMultipart()
     msg["From"], msg["To"], msg["Cc"] = user, ", ".join(to_list), ", ".join(cc_list)
-    msg["Subject"] = ("[TEST] " if test else "") + f"2Captcha balance low (${balance:.2f}) - please recharge"
+    msg["Subject"] = ("[TEST] " if test else "") + f"WARNING: 2Captcha balance low (${balance:.2f}) - refill immediately"
     msg.attach(MIMEText(body, "html"))
     srv = (sender or smtplib.SMTP)(host, port, timeout=30)
     try:
