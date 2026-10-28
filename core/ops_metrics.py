@@ -344,6 +344,19 @@ def timeline():
 
 
 # ── summary / KPIs ────────────────────────────────────────────────────────────
+def _unresolved_failures(logs):
+    """Failed runs of today that are still failed: a failure is dropped as soon as a LATER run of the same step
+    (same pipeline + same log label) finished OK - e.g. Margin Shortage fails at 13:30, re-run at 13:32 succeeds.
+    Newest first."""
+    last_ok = {}
+    for e in logs:
+        if e["status"] == "ok":
+            k = (e["pipe"], e["label"])
+            if e["start"] > last_ok.get(k, ""):
+                last_ok[k] = e["start"]
+    return [e for e in logs if e["status"] == "failed" and last_ok.get((e["pipe"], e["label"]), "") <= e["start"]]
+
+
 def _summary_inner():
     tl = timeline()
     items = tl["items"]
@@ -355,6 +368,7 @@ def _summary_inner():
     due       = [i for i in items if i["status"] in ("due", "overdue")]
     upcoming  = sum(1 for i in items if i["status"] == "upcoming")
     failed    = sum(1 for e in todays_logs if e["status"] == "failed")
+    failed_open = _unresolved_failures(todays_logs)
     ok_logs   = [e for e in todays_logs if e["status"] == "ok"]
     durs      = [e["duration_s"] for e in ok_logs if e.get("duration_s")]
     running   = _running_now()
@@ -370,7 +384,9 @@ def _summary_inner():
         "due_now": [{"id": i["id"], "pipe_name": i["pipe_name"], "window": i["window"],
                      "overdue": i["status"] == "overdue"} for i in due],
         "upcoming": upcoming,
-        "failed_today": failed,
+        "failed_today": len(failed_open),          # only failures that were NOT followed by a success of the same step
+        "failed_open": failed_open,
+        "failed_all_today": failed,
         "executions_today": len(todays_logs),
         "success_rate": round(100 * len(ok_logs) / finished_runs) if finished_runs else None,
         "avg_runtime_s": int(sum(durs) / len(durs)) if durs else None,

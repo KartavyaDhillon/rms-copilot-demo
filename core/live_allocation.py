@@ -670,7 +670,7 @@ def run_slot(slot: int, trigger="schedule", by="", log=print, cancelled=lambda: 
         else:
             bad = [f"{STEP_LABEL[k]}: {v.get('msg')}" for k, v in steps.items() if not v.get("ok")]
             status, msg = "failed", " | ".join(bad) or ("Missing: " + ", ".join(chk["missing"]))
-        log(f"=== Folder {slot}: {status.upper()} - {msg}")
+        log(f"{'✅' if status in ('done', 'skipped') else '❌' if status == 'failed' else '⛔'} === Folder {slot}: {status.upper()} - {msg}")
         try:
             archive_slot(d, slot, log)
         except Exception:                                        # noqa: BLE001

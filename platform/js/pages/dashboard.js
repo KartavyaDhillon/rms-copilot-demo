@@ -42,7 +42,6 @@
       kpiCard("kRunning", "activity", "Running now", "var(--info)") +
       kpiCard("kFail", "alert", "Needs attention", "var(--err)") +
       kpiCard("kNext", "clock", "Next up", "var(--warn)") +
-      kpiCard("kFiles", "download", "Files downloaded") +
       kpiCard("kMail", "mail", "Emails sent") +
       "</div>" +
 
@@ -112,7 +111,7 @@
   }
 
   function renderAttnKpi(s) {
-    const attn = attnItems().length + (s.failed_today || 0);
+    const attn = attnItems().length + (s.failed_today || 0);          // failed_today = failures NOT followed by a successful re-run
     setKpi("kFail", String(attn), attn ? "failed or missed \u2014 see list below" : "no problems today", attn ? "err" : "ok");
   }
 
@@ -151,7 +150,6 @@
       $("#navRunDot").hidden = false;
     } else { setKpi("kRunning", "0", "nothing running right now"); $("#navRunDot").hidden = true; }
     renderAttnKpi(s);
-    setKpi("kFiles", String(s.files_today ?? "\u2014"), "across all download folders");
     setKpi("kMail", String(s.emails_today ?? 0) + (s.whatsapp_today ? '<small> +' + s.whatsapp_today + " WA</small>" : ""), "detected in today's run logs");
     renderNext();
 
@@ -185,11 +183,11 @@
     const box = $("#attnList"); if (!box) return;
     const rows = [];
     attnItems().forEach((i) => rows.push({ st: i.status, title: i.pipe_name, sub: (i.source === "scheduler" ? "Scheduler \u00b7 " : "Process Center \u00b7 ") + i.id + " \u00b7 planned " + (i.window || "").split("-")[0] }));
-    ((lastSum && lastSum.recent) || []).filter((e) => e.status === "failed").forEach((e) =>
-      rows.push({ st: "failed", title: e.pipe_name + " \u2014 " + e.label, sub: "Failed at " + (e.start || "").slice(11, 16) + " \u00b7 click to open the log", entry: e }));
+    ((lastSum && lastSum.failed_open) || []).forEach((e) =>
+      rows.push({ st: "failed", title: e.pipe_name + " \u2014 " + e.label, sub: "Failed at " + (e.start || "").slice(11, 16) + " \u00b7 not run again successfully \u00b7 click to open the log", entry: e }));
     $("#attnSub").textContent = rows.length ? rows.length + " item" + (rows.length > 1 ? "s" : "") : "";
     if (!rows.length) { box.innerHTML = '<div class="d-allgood">' + RMS.icon("check") + "<b>All clear</b><small>Nothing failed or was missed today.</small></div>"; return; }
-    box.innerHTML = rows.slice(0, 8).map((r, k) =>
+    box.innerHTML = rows.map((r, k) =>
       '<div class="feed-item" data-k="' + k + '" style="' + (r.entry ? "" : "cursor:default") + '"><span class="feed-ic failed">' + RMS.icon("alert") + "</span>" +
       '<div class="feed-main"><b>' + esc(r.title) + "</b><small>" + esc(r.sub) + "</small></div>" +
       '<span class="badge err">' + (ST[r.st] || ST.failed)[1] + "</span><span></span></div>").join("");
@@ -295,7 +293,7 @@
         RMS.mountIcons(el);
         $("#dgGo").onclick = () => RMS.go("process");
         $("#dgHist").onclick = () => RMS.go("history");
-        $("#kFail").onclick = () => RMS.go("history");
+        $("#kFail").onclick = () => { const c = $("#attnList").closest(".card"); if (c) { c.scrollIntoView({ behavior: "smooth", block: "center" }); c.style.transition = "box-shadow .4s"; c.style.boxShadow = "0 0 0 2px var(--err)"; setTimeout(() => { c.style.boxShadow = ""; }, 1600); } };
         $("#tlChips").querySelectorAll("button").forEach((b) => {
           b.onclick = () => {
             tlFilter = b.dataset.f;
