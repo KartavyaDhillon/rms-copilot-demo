@@ -168,8 +168,7 @@ class ProcessWrapper(unittest.TestCase):
                 with mock.patch.object(P.L, "run_once", lambda: res):
                     return P._run.__wrapped__({}, Ctx()) if hasattr(P._run, "__wrapped__") else P._run({}, Ctx())
             idle = {"rc": 0, "stats": {"emailed": 0, "replies": 0, "submitted": 0, "reminders": 0, "alerts": 0, "blocked": False}}
-            with self.assertRaises(P.H.Skipped):
-                go(idle)
+            self.assertIn("nothing new", go(idle))          # a healthy empty run is a SUCCESS
             busy = {"rc": 0, "stats": dict(idle["stats"], emailed=2, submitted=1)}
             self.assertIn("2 employee(s) e-mailed", go(busy))
             with self.assertRaises(RuntimeError):

@@ -62,7 +62,8 @@ def _run(params, ctx):
                                                  ("submitted", "Act form(s) submitted"), ("reminders", "reminder(s) sent"),
                                                  ("alerts", "overdue alert(s) sent")) if st.get(k)]
     if not parts:
-        raise H.Skipped("Nothing new: no new task, no new reply, nothing to submit.")
+        # a normal, healthy run with nothing to do is a SUCCESS (shown green), not "skipped"
+        return "Checked - nothing new (no new task, no new reply, nothing to submit)"
     return ", ".join(parts)
 
 
