@@ -349,7 +349,7 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=6"></script>'
+                            '<script src="/platform/js/process-locks.js?v=7"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=3"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
@@ -3588,7 +3588,8 @@ def sa_las_checkpoint():
     """Return the last LAS checkpoint (step + status). Used by dashboard resume banner."""
     try:
         import sys as _ck_sys
-        _ck_sys.path.insert(0, _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes"))
+        _p_ = _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ck_sys.path: _ck_sys.path.insert(0, _p_)
         import importlib
         ckpt_mod = importlib.import_module("_checkpoint")
         data = ckpt_mod.read_las()
@@ -3603,7 +3604,8 @@ def sa_sa_checkpoint():
     """Return the last SA Code-2 checkpoint. Used by dashboard resume banner."""
     try:
         import sys as _ck_sys
-        _ck_sys.path.insert(0, _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes"))
+        _p_ = _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ck_sys.path: _ck_sys.path.insert(0, _p_)
         import importlib
         ckpt_mod = importlib.import_module("_checkpoint")
         data = ckpt_mod.read_sa()
@@ -4933,7 +4935,7 @@ def pd_percent(value: str = ""):
 
 
 @app.get("/ops/progress")
-def ops_progress(pipe: str = ""):
+def ops_progress(pipe: str = "", kind: str = "", since: float = 0):
     """What the CURRENT (or latest) run of ANY process box is doing, read from its log - so every open window shows the live
     steps even when somebody else started the run (generic version of /pd/progress)."""
     import glob as _g, os as _os, re as _re
@@ -4944,8 +4946,13 @@ def ops_progress(pipe: str = ""):
     if not sub:
         return {"ok": False, "steps": []}
     d = _os.path.join(LOG_BASE, sub)
-    files = [f for f in _g.glob(_os.path.join(d, "*.log"))
-             if not _os.path.basename(f).upper().startswith("UPLOAD") and "_download__" not in _os.path.basename(f)]
+    if kind == "action":      # a single button action (downloader etc.): the newest download/upload log since it began
+        files = [f for f in _g.glob(_os.path.join(d, "*.log"))
+                 if ("_download__" in _os.path.basename(f) or _os.path.basename(f).upper().startswith("UPLOAD"))
+                 and _os.path.getmtime(f) >= float(since or 0) - 5]
+    else:
+        files = [f for f in _g.glob(_os.path.join(d, "*.log"))
+                 if not _os.path.basename(f).upper().startswith("UPLOAD") and "_download__" not in _os.path.basename(f)]
     if not files:
         return {"ok": True, "steps": [], "latest": ""}
     f = max(files, key=_os.path.getmtime)
@@ -5099,7 +5106,8 @@ def probable_mcx_lock_status():
     instruction they now run independently — this only ever reports PROBABLE."""
     try:
         import sys as _ls, os as _lo
-        _ls.path.insert(0, _lo.path.join(_lo.path.dirname(__file__), "sa_codes"))
+        _p_ = _lo.path.join(_lo.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ls.path: _ls.path.insert(0, _p_)
         import importlib as _limp
         _lmdd = _limp.import_module("mcx_deposit_downloader")
         return _lmdd.mcx_lock_status("probable")
@@ -5351,7 +5359,8 @@ def r1r2_stop(request: Request):
         # THIS box was the one actually holding them.
         try:
             import sys as _cs
-            _cs.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+            _p_ = os.path.join(os.path.dirname(__file__), "sa_codes")
+            if _p_ not in _cs.path: _cs.path.insert(0, _p_)
             import importlib as _cimp
             _mdd = _cimp.import_module("mcx_deposit_downloader")
             _mdd.force_release_mcx_lock_if_owner("r1r2")
@@ -6216,7 +6225,8 @@ def cli_stop(request: Request):
         # legitimately still holds).
         try:
             import sys as _cs
-            _cs.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+            _p_ = os.path.join(os.path.dirname(__file__), "sa_codes")
+            if _p_ not in _cs.path: _cs.path.insert(0, _p_)
             import importlib as _cimp
             _mdd = _cimp.import_module("mcx_deposit_downloader")
             _mdd.force_release_mcx_lock_if_owner("cli")
@@ -6353,7 +6363,8 @@ def sa_mcx_deposit_stop():
     # — only if it's actually still recorded as owned by "sa".
     try:
         import sys as _ss
-        _ss.path.insert(0, _kos.path.join(_kos.path.dirname(__file__), "sa_codes"))
+        _p_ = _kos.path.join(_kos.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ss.path: _ss.path.insert(0, _p_)
         import importlib as _simp
         _smdd = _simp.import_module("mcx_deposit_downloader")
         _smdd.force_release_mcx_lock_if_owner("sa")
@@ -6382,7 +6393,8 @@ def sa_mcx_deposit_lock_status():
     """
     try:
         import sys as _ls
-        _ls.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+        _p_ = os.path.join(os.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ls.path: _ls.path.insert(0, _p_)
         import importlib as _limp
         _lmdd = _limp.import_module("mcx_deposit_downloader")
         boxes = {o: _lmdd.mcx_lock_status(o) for o in _lmdd._MCX_OWNERS}
