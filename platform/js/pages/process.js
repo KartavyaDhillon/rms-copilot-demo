@@ -111,8 +111,9 @@
         (b.error ? '<br><span style="color:#f87171">Could not read the balance: ' + esc(b.error) + "</span>" : "") + (b.alert_error ? '<br><span style="color:#f87171">Last alert mail failed: ' + esc(b.alert_error) + "</span>" : "");
     } catch (e) { /* ignore */ }
   }
+  let autoWinClose = null;
   function autoOpen() {
-    RMS.modal("Auto-fill CAPTCHA / TOKEN", autoWinHtml(), { width: 560, icon: "zap" });
+    autoWinClose = RMS.modal("Auto-fill CAPTCHA / TOKEN", autoWinHtml(), { width: 560, icon: "zap" });
     autoRefresh(); balLoad();
     document.querySelectorAll("#pcAutoWin [data-sw]").forEach((b) => {
       b.onclick = async () => {
@@ -124,7 +125,9 @@
     });
     $("#balCfg").onclick = () => {
       const w = $("#pcFrame").contentWindow;
-      if (w && typeof w.pxConfig === "function") w.pxConfig("captchabal"); else popup("Balance alert", "The console is still loading - try again in a moment.", false);
+      // The recipients window belongs to the console inside the page, so it opened UNDER this window and could not be
+      // seen. Close this window first - the recipients window then shows on top.
+      if (w && typeof w.pxConfig === "function") { try { if (autoWinClose) autoWinClose(); } catch (e) { /* already closed */ } w.pxConfig("captchabal"); } else popup("Balance alert", "The console is still loading - try again in a moment.", false);
     };
     $("#balCheck").onclick = async () => {
       const btn = $("#balCheck"), msg = $("#balMsg");
