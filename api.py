@@ -1965,7 +1965,7 @@ def sa_run_stream(request: Request, run: str = "01", date: str = "", force: bool
             pass
         _sa_outcome = "finished"
         try:
-            for ev in _sa_stream(run, override_date=override, force=force, skip_las=skip_las, las_only=las_only, download_only=download_only):
+            for ev in _sa_stream(run, override_date=override, force=force, skip_las=skip_las, las_only=las_only, download_only=download_only, by=(_by or _ip or None)):
                 if isinstance(ev, dict):
                     if ev.get("type") == "stopped":
                         _sa_outcome = "stopped"

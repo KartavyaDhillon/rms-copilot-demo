@@ -415,6 +415,12 @@ def get_run_suffix():
         run_no = 1
         retry = 0
 
+    # The console tells us exactly which run this is (SA_RUN_NO). Use it, so this
+    # run always downloads ITS OWN files whatever the counter file says.
+    _forced = _sa_os.getenv("SA_RUN_NO", "").strip()
+    if _forced.isdigit():
+        run_no = int(_forced)
+
     # 🛑 MAX 8 RUNS PER DAY (runs 5-8: Short Allocation only, no LAS Funding)
     if run_no > 8:
         print("🛑 All 8 runs already completed for today.")

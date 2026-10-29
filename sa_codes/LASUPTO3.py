@@ -53,6 +53,8 @@ state_run = int(state.get("RUN", 1))
 
 # Completed run is always RUN - 1
 COMPLETED_RUN = state_run - 1
+if os.getenv("SA_RUN_NO", "").strip().isdigit():      # console says which run this is
+    COMPLETED_RUN = int(os.getenv("SA_RUN_NO"))
 
 # ---------------- SAFETY CHECKS ----------------
 

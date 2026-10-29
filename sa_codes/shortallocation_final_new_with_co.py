@@ -34,18 +34,24 @@ BASE_FOLDER = _SAENV("SA_OUTPUT_DIR", r"C:\KARTAVYA\SHORT ALLOCATION")
 STATE_FILE = _SAENV("SA_STATE_FILE", r"C:\KARTAVYA\SHORT ALLOCATION\run_state.txt")
 
 def get_current_run_suffix():
-    if not os.path.exists(STATE_FILE):
+    if not os.path.exists(STATE_FILE) and not os.getenv("SA_RUN_NO", "").strip().isdigit():
         raise SystemExit("❌ run_state.txt not found. Run downloader  first.")
 
     data = {}
-    with open(STATE_FILE) as f:
-        for line in f:
-            if "=" in line:
-                k, v = line.strip().split("=", 1)
-                data[k] = v
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            for line in f:
+                if "=" in line:
+                    k, v = line.strip().split("=", 1)
+                    data[k] = v
 
-    # Code-2 increments RUN after completion
-    run_no = int(data.get("RUN", 1)) - 1
+    # Code-2 increments RUN after completion. The console now passes the run it is
+    # processing (SA_RUN_NO) so we no longer depend on the counter file being right.
+    _forced = os.getenv("SA_RUN_NO", "").strip()
+    if _forced.isdigit():
+        run_no = int(_forced)
+    else:
+        run_no = int(data.get("RUN", 1)) - 1
 
     if not 1 <= run_no <= 8:
         raise SystemExit("❌ Invalid RUN state. Cannot determine processing slot.")

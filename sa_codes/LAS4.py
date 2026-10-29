@@ -56,6 +56,8 @@ state_date = state.get("DATE")
 state_run  = int(state.get("RUN", 1))
 
 completed_run = state_run - 1
+if os.getenv("SA_RUN_NO", "").strip().isdigit():      # console says which run this is
+    completed_run = int(os.getenv("SA_RUN_NO"))
 
 # ---------------- HARD BLOCKS ----------------
 

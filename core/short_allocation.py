@@ -512,7 +512,9 @@ def _run_one(c, script, tag, put):
     _tail_buf = []                 # last ~20 lines — fed to the AI fallback if this step fails unexpectedly
     try:
         with open(logp, "w", encoding="utf-8", errors="replace") as lf:
+            _who = "automatic timer (no person)" if _SA.get("auto") else (_SA.get("by") or "unknown")
             lf.write(f"# {script}  tag={tag}  start={ts}\n")
+            lf.write(f"# started by: {_who}  |  mode: {'auto' if _SA.get('auto') else 'manual'}\n")
             # PYTHONUNBUFFERED + "-u": without these, the CHILD process's own stdout
             # is block-buffered (not line-buffered) because it's writing to a pipe,
             # not a real terminal. print() calls sit in the child's internal buffer
@@ -528,6 +530,9 @@ def _run_one(c, script, tag, put):
             override = _SA.get("override_date")
             if override:
                 env["SA_OVERRIDE_DATE"] = override
+            _m = re.search(r"(\d+)$", str(tag))
+            if _m:
+                env["SA_RUN_NO"] = str(int(_m.group(1)))    # this step works on THIS run only, never on the shared counter
             if _SA.get("auto"):
                 env["SA_AUTO_RUN"] = "1"        # fully automatic run: the downloader never opens a pop-up or waits for a person
             # CREATE_NEW_PROCESS_GROUP (Windows only): without this, this subprocess
@@ -591,7 +596,7 @@ def _run_one(c, script, tag, put):
     return rc, logp
 
 
-def stream_short_allocation(run_no, override_date=None, force=False, skip_las=False, las_only=False, download_only=False, auto=False):
+def stream_short_allocation(run_no, override_date=None, force=False, skip_las=False, las_only=False, download_only=False, auto=False, by=None):
     """Generator of SSE events. Mirrors SHORT & LAS.bat. run_no = '01'..'04'.
     override_date: optional YYYY-MM-DD string to run for a past date.
     force:       if True, re-run all steps even if code1/code2 were done today.
@@ -625,6 +630,7 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
     _SA["override_date"] = override_date or None
     _SA["peak_missing"] = None
     _SA["auto"] = bool(auto)
+    _SA["by"] = by
     try:
         no_las = int(run_no) > LAS_RUNS   # runs 5-8: Download + SA Processing only - LAS Funding is never run
     except (TypeError, ValueError):
