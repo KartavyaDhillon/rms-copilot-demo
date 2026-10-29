@@ -360,7 +360,7 @@ def serve_dashboard(embed: int = 0):
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
                             '<script src="/platform/js/process-locks.js?v=9"></script>'
-                            '<script src="/platform/js/process-probable-box.js?v=3"></script>'
+                            '<script src="/platform/js/process-probable-box.js?v=4"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'

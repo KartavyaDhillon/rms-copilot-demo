@@ -1579,11 +1579,10 @@
     var st = document.createElement('style');
     st.id = 'probableToolbarStyle';
     st.textContent =
-      '#pxBox-probable .sa-tools{flex-wrap:nowrap;overflow-x:auto;gap:6px;' +
-        'scrollbar-width:none;-ms-overflow-style:none}' +
-      '#pxBox-probable .sa-tools::-webkit-scrollbar{height:0;display:none}' +
-      '#pxBox-probable .sa-tools .sa-tool{flex:0 0 auto;white-space:nowrap;' +
-        'padding-left:9px;padding-right:9px;font-size:11.5px}';
+      // One row, always fully inside the box: buttons are a little smaller and may shrink (never cut in half).
+      '#pxBox-probable .sa-tools{flex-wrap:nowrap;overflow:hidden;gap:4px}' +
+      '#pxBox-probable .sa-tools .sa-tool{flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;' +
+        'text-overflow:ellipsis;padding-left:7px;padding-right:7px;font-size:11px}';
     document.head.appendChild(st);
   }
 
@@ -1757,19 +1756,29 @@
   };
 
   // ── readiness badge (missing-file warning), same idea as ctcl/ms15 ───────
+  var _probMissing = null;      // last answer of /probable/readiness (keys of the files not there yet)
+  function probableApplyReady() {
+    var el = document.getElementById('probableReady');
+    if (!el || _probMissing === null) return;
+    // Already finished today (tile is green / Done): the files were used, so nothing is "needed" any more.
+    var _box = document.getElementById('pxBox-probable') || el.parentNode;
+    var _tiles = _box ? _box.querySelectorAll('.sa-run') : [];
+    var _allDone = _tiles.length > 0 && Array.prototype.every.call(_tiles, function (t) { return t.classList.contains('done'); });
+    if (!_probMissing.length || _allDone) { el.style.display = 'none'; return; }
+    el.style.display = 'block';
+    el.innerHTML = '<b>Files needed before running:</b> ' + _probMissing.join(', ');
+  }
   function probableLoadReady() {
     fetch(API + '/probable/readiness').then(function (r) { return r.json(); }).then(function (d) {
-      var el = document.getElementById('probableReady');
-      if (!el) return;
-      var missing = (d.items || []).filter(function (it) { return !it.ok; });
-      // Already finished today (tile is green / Done): the files were used, so nothing is "needed" any more.
-      var _box = document.getElementById('pxBox-probable') || el.parentNode;
-      var _tiles = _box ? _box.querySelectorAll('.sa-run') : [];
-      var _allDone = _tiles.length > 0 && Array.prototype.every.call(_tiles, function (t) { return t.classList.contains('done'); });
-      if (!missing.length || _allDone) { el.style.display = 'none'; return; }
-      el.style.display = 'block';
-      el.innerHTML = '<b>Files needed before running:</b> ' +
-        missing.map(function (m) { return m.key; }).join(', ');
+      _probMissing = (d.items || []).filter(function (it) { return !it.ok; }).map(function (m) { return m.key; });
+      probableApplyReady();
+      // The run tiles are drawn after this box is built and redrawn on every status refresh: look again whenever they change,
+      // so the list disappears as soon as the run shows Done (not up to 20 seconds later).
+      var runs = document.getElementById('pxRuns-probable');
+      if (runs && !runs._readyWatch && window.MutationObserver) {
+        runs._readyWatch = new MutationObserver(function () { probableApplyReady(); });
+        runs._readyWatch.observe(runs, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+      }
     }).catch(function () {});
   }
 
