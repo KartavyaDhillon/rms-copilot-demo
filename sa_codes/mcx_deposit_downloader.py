@@ -619,7 +619,7 @@ def _download_mcx_deposit_once(output_dir=None):
                 st = _mcx_json.load(open(_STATE_PATH, encoding="utf-8"))
                 age_h = (time.time() - float(st.get("saved_at", 0))) / 3600.0
                 if (st.get("date") == datetime.now().strftime("%Y%m%d") and not st.get("done")
-                        and st.get("stamp") and age_h < 4):
+                        and st.get("stamp") and age_h * 60 < float(os.getenv("MCX_EXPORT_RESUME_MAX_MIN", "240") or 240)):
                     return st
             except Exception:
                 pass
@@ -669,6 +669,10 @@ def _download_mcx_deposit_once(output_dir=None):
             POLL_BUDGET = int(os.getenv("MCX_EXPORT_POLL_SEC", "600"))
         except ValueError:
             AFTER_EXPORT_WAIT, POLL_BUDGET = 600, 600
+        try:
+            MAX_KICKS = max(1, int(os.getenv("MCX_EXPORT_MAX_KICKS", "3")))      # Short Allocation auto run: 2 (5 + 5 minutes)
+        except ValueError:
+            MAX_KICKS = 3
         INTERVAL = 15
 
         def relogin(wait_s):
@@ -1052,10 +1056,10 @@ def _download_mcx_deposit_once(output_dir=None):
                 res = wait_for_file(POLL_BUDGET)
             except _Kicked:
                 kicks += 1
-                if kicks > 3:
+                if kicks > MAX_KICKS:
                     raise RuntimeError(f"session kept expiring after {kicks - 1} re-logins — our export "
                                        f"({_Exp.stamp}) is still on MCX; the next try will look for it again")
-                print(f"🚨 Session ended AFTER the export (kick {kicks}/3) — the file we exported ({_Exp.stamp}) stays on MCX. "
+                print(f"🚨 Session ended AFTER the export (kick {kicks}/{MAX_KICKS}) — the file we exported ({_Exp.stamp}) stays on MCX. "
                       f"Waiting, then logging in again to fetch THAT file (no new export).")
                 relogin(AFTER_EXPORT_WAIT)
                 continue
@@ -1074,9 +1078,9 @@ def _download_mcx_deposit_once(output_dir=None):
                 break
             except _Kicked:
                 dl_try += 1
-                if dl_try > 3:
+                if dl_try > MAX_KICKS:
                     raise RuntimeError("session kept expiring while downloading — the file is still on MCX; the next try will fetch it")
-                print(f"🚨 Session ended while downloading (try {dl_try}/3) — waiting, then logging in again")
+                print(f"🚨 Session ended while downloading (try {dl_try}/{MAX_KICKS}) — waiting, then logging in again")
                 relogin(AFTER_EXPORT_WAIT)
 
         _state_write(done=True)

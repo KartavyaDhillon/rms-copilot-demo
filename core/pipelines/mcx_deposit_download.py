@@ -95,6 +95,13 @@ def stream_mcx_deposit_download(output_dir=None, caller="sa", extra_env=None):
                                     # a slow TCS BANCS login/export-poll loop with low print
                                     # volume can then look completely hung with a near-empty
                                     # log for minutes (this is what happened to SA-03/SA-04).
+    try:   # the MCX Deposit button of Short Allocation also remembers its export, so a retry fetches the SAME file
+        if caller in (None, "", "sa") and "MCX_EXPORT_STATE_FILE" not in (extra_env or {}) and not env.get("MCX_EXPORT_STATE_FILE"):
+            from core import sa_auto as _saa
+            env["MCX_EXPORT_STATE_FILE"] = _saa.deposit_state_file()
+            env.setdefault("MCX_EXPORT_RESUME_MAX_MIN", "60")
+    except Exception:
+        pass
     env.update(extra_env or {})        # e.g. MCX_TOKEN_MODE=auto for the unattended Short Allocation auto run
     env["MCX_DEPOSIT_CALLER"] = caller  # "sa" = SA's OWN button (the default); "ctcl" = CTCL's MCX file download — this is SA's OWN
                                         # "MCX Deposit" button; CLI's "MCX Web Allocation"

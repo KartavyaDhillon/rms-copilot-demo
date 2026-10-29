@@ -214,11 +214,25 @@ def deposit_is_fresh(st=None, now=None, folder=None):
     return age is not None and age < st["fresh_min"], age
 
 
+def deposit_state_file(folder=None):
+    """Where the pending MCX export of today is remembered, so every retry fetches the SAME file instead of exporting a new one."""
+    return os.path.join(folder or SA.cfg()["output"], ".mcx_export_state_sa.json")
+
+
 def _download_deposit():
-    """Runs the same downloader as the MCX Deposit button. -> (ok, message)."""
+    """Runs the same downloader as the MCX Deposit button. -> (ok, message).
+    If somebody else logs in after our export, it waits 5 minutes, logs in again and looks for the SAME file; that happens at
+    most twice (5 + 5 minutes), then it gives up. The export is remembered in a state file, so a later try (the run, or the
+    MCX Deposit button) picks up that same file."""
     from core.pipelines.mcx_deposit_download import stream_mcx_deposit_download
     ok, msg = False, "no result"
-    for ev in stream_mcx_deposit_download(extra_env={"MCX_TOKEN_MODE": "auto"}):
+    extra = {"MCX_TOKEN_MODE": "auto", "MCX_EXPORT_RELOGIN_WAIT_SEC": "300", "MCX_EXPORT_MAX_KICKS": "2",
+             "MCX_EXPORT_RESUME_MAX_MIN": "60"}          # an export older than an hour is not picked up again (too old to use)
+    try:
+        extra["MCX_EXPORT_STATE_FILE"] = deposit_state_file()
+    except Exception:
+        pass
+    for ev in stream_mcx_deposit_download(extra_env=extra):
         if not isinstance(ev, dict):
             continue
         if ev.get("type") == "done":
@@ -241,24 +255,22 @@ def step_deposit(n, st=None, now_fn=time.time, sleep=time.sleep, download=None, 
         if age is not None else "No MCX deposit file in the base folder - downloading it now.")
     from core import tcs_session_lock
     last = ""
-    for attempt in (1, 2):
-        if cancel():
-            break
+    # ONE go: the downloader itself handles being logged out (waits 5 min, logs in again, same file, at most 2 times). A second
+    # go here would start another export - exactly what must not happen.
+    if not cancel():
         if not tcs_session_lock.acquire("sadeposit", wait_s=900, cancel=cancel, log=log):
             last = "the MCX login stayed busy (another download was using it)"
-            continue
-        try:
-            ok, last = download()
-        except Exception as e:                                  # noqa: BLE001
-            ok, last = False, f"{type(e).__name__}: {e}"
-        finally:
-            tcs_session_lock.release("sadeposit")
-        if ok:
-            log("MCX deposit downloaded.")
-            return {"status": "done", "msg": "MCX deposit downloaded."}
-        log(f"MCX deposit try {attempt} failed: {last}")
-        if attempt == 1:
-            sleep(180)                                           # 3 minutes, then one more try
+        else:
+            try:
+                ok, last = download()
+            except Exception as e:                              # noqa: BLE001
+                ok, last = False, f"{type(e).__name__}: {e}"
+            finally:
+                tcs_session_lock.release("sadeposit")
+            if ok:
+                log("MCX deposit downloaded.")
+                return {"status": "done", "msg": "MCX deposit downloaded."}
+            log(f"MCX deposit failed: {last}")
     return {"status": "failed", "msg": last or "MCX deposit could not be downloaded"}
 
 
@@ -466,8 +478,8 @@ def tick(now=None, **kw):
         r = step_deposit(n, st, **{k: v for k, v in kw.items() if k in ("download", "sleep", "now_fn")})
         _upd(n, deposit=r["status"], deposit_msg=r["msg"][:200])
         if r["status"] == "failed":
-            send_alert(n, "The MCX Deposit file could not be downloaded.",
-                       f"{r['msg'][:180]} - SA-{n:02d} will still try at its time; please upload the file by hand if it fails.")
+            # No alert here on purpose: the run itself checks for this file first and, if it is missing, fails and sends its own alert.
+            log(f"SA-{n:02d}: the MCX deposit file is still not there - the run will fail its file check and send the alert.")
     elif kind == "run":
         run_slot(n, st, **{k: v for k, v in kw.items() if k in ("run", "sleep", "alert")})
     return act

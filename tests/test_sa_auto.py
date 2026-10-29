@@ -173,7 +173,7 @@ class Deposit(Base):
             self.assertEqual(r["status"], "skipped")
             self.assertEqual(calls, [])
 
-    def test_step_deposit_downloads_and_retries_once(self):
+    def test_step_deposit_makes_one_go_and_never_exports_twice(self):
         with tempfile.TemporaryDirectory() as d:
             os.environ["TCS_SESSION_LOCK_DIR"] = d
             old = SA.cfg
@@ -184,8 +184,8 @@ class Deposit(Base):
             finally:
                 SA.cfg = old
                 os.environ.pop("TCS_SESSION_LOCK_DIR", None)
-            self.assertEqual(r["status"], "done")
-            self.assertEqual(seq, [])
+            self.assertEqual(r["status"], "failed")          # the downloader already did its own 5 + 5 minute re-logins
+            self.assertEqual(len(seq), 1)                     # and no second download (= no second export) was started
 
 
 class RunSlot(Base):
