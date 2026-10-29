@@ -72,7 +72,7 @@
       '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("activity") + " Services &amp; connections</div>" +
       '<div style="display:flex;gap:8px;align-items:center"><span class="card-sub" id="hpSub"></span><button class="btn sm ghost" id="hpRefresh">' + RMS.icon("refresh") + "</button></div></div>" +
       '<div class="hp-grid hp-4" id="hpGrid"></div>' +
-      '<div class="cm-head">' + RMS.icon("clock") + ' Coming up next <span class="card-sub" id="cmSub"></span></div>' +
+      '<div class="cm-head">Coming up next <span class="card-sub" id="cmSub"></span></div>' +
       '<div class="cm-list" id="cmList"><div class="bm-empty">Loading…</div></div></div>' +
       '<div class="d-side">' +
       '<div class="card"><div class="card-head"><div class="card-title">' + RMS.icon("gauge") + ' Server resources</div></div><div class="res-strip res-col" id="resStrip"></div></div>' +

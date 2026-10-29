@@ -4948,7 +4948,7 @@ def pd_percent(value: str = ""):
 
 
 @app.get("/ops/progress")
-def ops_progress(pipe: str = ""):
+def ops_progress(pipe: str = "", kind: str = "", since: float = 0):
     """What the CURRENT (or latest) run of ANY process box is doing, read from its log - so every open window shows the live
     steps even when somebody else started the run (generic version of /pd/progress)."""
     import glob as _g, os as _os, re as _re
@@ -4959,8 +4959,13 @@ def ops_progress(pipe: str = ""):
     if not sub:
         return {"ok": False, "steps": []}
     d = _os.path.join(LOG_BASE, sub)
-    files = [f for f in _g.glob(_os.path.join(d, "*.log"))
-             if not _os.path.basename(f).upper().startswith("UPLOAD") and "_download__" not in _os.path.basename(f)]
+    if kind == "action":      # a single button action (downloader etc.): the newest download/upload log since it began
+        files = [f for f in _g.glob(_os.path.join(d, "*.log"))
+                 if ("_download__" in _os.path.basename(f) or _os.path.basename(f).upper().startswith("UPLOAD"))
+                 and _os.path.getmtime(f) >= float(since or 0) - 5]
+    else:
+        files = [f for f in _g.glob(_os.path.join(d, "*.log"))
+                 if not _os.path.basename(f).upper().startswith("UPLOAD") and "_download__" not in _os.path.basename(f)]
     if not files:
         return {"ok": True, "steps": [], "latest": ""}
     f = max(files, key=_os.path.getmtime)

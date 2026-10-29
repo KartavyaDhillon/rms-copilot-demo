@@ -36,6 +36,9 @@
     ".lm-badge{font-size:9px;font-weight:800;letter-spacing:.08em;padding:2px 8px;border-radius:12px;" +
     "background:rgba(96,165,250,.18);color:#8fc2ff;border:1px solid rgba(96,165,250,.35)}" +
     "button[data-lm-dis='1']{opacity:.45!important;cursor:not-allowed!important}" +
+    /* a button/tile that IS the running thing (someone else's run): full colour + spinner, clearly "busy", not just greyed */
+    "button.lm-busybtn{opacity:1!important;cursor:not-allowed!important}" +
+    ".lm-sp{display:inline-block;width:13px;height:13px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:lmSp .8s linear infinite;vertical-align:-2px;margin-right:6px}" +
     /* The console's green "ready — please run it now" call-to-action banner
        (.sa-banner) restyled to a neutral blue "someone else is running this"
        notice. Applied by class, so removing the class restores the original
@@ -104,6 +107,35 @@
       b.disabled = false;
       delete b.dataset.lmDis;
     });
+    unmarkBusy(box);
+  }
+
+  /* ── make "someone else is running this" visible: the running tile / button shows a spinner + "Running…" ── */
+  function spinBtn(b, text) {
+    if (!b) return;
+    if (b.dataset.lmOrig === undefined) b.dataset.lmOrig = b.innerHTML;
+    var html = '<span class="lm-sp"></span>' + text;
+    if (b.innerHTML !== html) b.innerHTML = html;
+    b.classList.add("lm-busybtn");
+    b.disabled = true;
+  }
+  function markPxTile(box, target) {
+    // the tile that is "ready - run" is the one being run
+    var wrap = box.querySelector("#pxRuns-" + target) || box;
+    wrap.querySelectorAll(".sa-run.active-win:not(.done)").forEach(function (tile) {
+      var stt = tile.querySelector(".sa-run-state");
+      if (stt && stt.dataset.lmOrig === undefined) { stt.dataset.lmOrig = stt.innerHTML; stt.innerHTML = "\u25cf Running\u2026"; }
+      tile.querySelectorAll(".sa-run-btn").forEach(function (b, i) { if (i === 0) spinBtn(b, "Running\u2026"); });
+      tile.classList.add("lm-tile-busy");
+    });
+  }
+  function unmarkBusy(box) {
+    box.querySelectorAll("button.lm-busybtn").forEach(function (b) {
+      if (b.dataset.lmOrig !== undefined) { b.innerHTML = b.dataset.lmOrig; delete b.dataset.lmOrig; }
+      b.classList.remove("lm-busybtn");
+    });
+    box.querySelectorAll(".sa-run-state[data-lm-orig]").forEach(function (e) { e.innerHTML = e.dataset.lmOrig; delete e.dataset.lmOrig; });
+    box.querySelectorAll(".lm-tile-busy").forEach(function (t) { t.classList.remove("lm-tile-busy"); });
   }
 
   // A standalone download-button action (kind:"action", e.g. someone else's
@@ -113,10 +145,11 @@
   function disableButtonOnly(box, btnId) {
     var b = btnId && document.getElementById(btnId);
     if (!b) { disableBox(box); return; }
-    if (b.dataset.lmDis) return;
+    if (b.dataset.lmDis) { spinBtn(b, "Running\u2026"); return; }
     if (b.disabled) return;
     b.disabled = true;
     b.dataset.lmDis = "1";
+    spinBtn(b, "Running\u2026");
   }
 
   function fmtElapsed(startedIso) {
@@ -198,17 +231,18 @@
     "@keyframes lmSp{to{transform:rotate(360deg)}}";
   document.head.appendChild(st2);
   function esc(x) { return String(x).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
-  function watchSteps(target, box, strip) {
+  function watchSteps(target, box, strip, kind, since) {
     if (STEP_TIMER[target]) return;
+    var isAct = kind === "action";
     var tick = function () {
-      var stillLocked = LOCKS.some(function (l) { return (l.affects || []).indexOf(target) >= 0 && l.kind !== "action"; });
+      var stillLocked = LOCKS.some(function (l) { return (l.affects || []).indexOf(target) >= 0 && (isAct ? l.kind === "action" : l.kind !== "action"); });
       var el = box.querySelector(".lm-steps");
       if (!stillLocked || !document.contains(box)) {
         // the run is over: say so right here (no refresh needed), then it disappears after 20 seconds
         if (el) { el.innerHTML = '<div class="ok" style="font-weight:700">✓ The run has finished.</div>' + el.innerHTML.replace(/<span class="lm-spin"><\/span>/g, '<span class="ok">✓</span> '); setTimeout(function () { if (el.parentNode) el.remove(); }, 20000); }
         clearInterval(STEP_TIMER[target]); delete STEP_TIMER[target]; delete STEP_SIG[target]; return;
       }
-      fetch("/ops/progress?pipe=" + encodeURIComponent(target), { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (d) {
+      fetch("/ops/progress?pipe=" + encodeURIComponent(target) + (isAct ? "&kind=action&since=" + (since || 0) : ""), { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (d) {
         if (!d || !d.ok) return;
         var steps = d.steps || [];
         if (!steps.length && d.latest) steps = [d.latest];
@@ -244,8 +278,7 @@
     if (stt && stt.dataset.lmRun !== "1") { stt.innerHTML = "\u25cf Running\u2026"; stt.dataset.lmRun = "1"; }
     var b = tile.querySelector(".sa-run-btn");
     if (b) {
-      if (b.textContent !== "\u23f3 Running\u2026") b.textContent = "\u23f3 Running\u2026";
-      b.disabled = true;
+      spinBtn(b, "Running\u2026");
       b.removeAttribute("onclick");
     }
     SA_TILE_MARKED = true;
@@ -284,6 +317,7 @@
       var lock = wanted[t];
       if (lock) {
         if (lock.kind === "action") {
+          var sinceEpoch = lock.started_at ? Math.floor(new Date(lock.started_at).getTime() / 1000) : 0;
           // Single button only — e.g. someone else's NMASS/NCDEX download.
           // Everything else in the box (Run, TCS BANCS, Upload, Credentials…)
           // stays clickable, since these standalone downloads don't share a
@@ -299,7 +333,8 @@
           box.insertBefore(strip, box.firstChild);
         }
         if (strip.dataset.sig !== html) { strip.innerHTML = html; strip.dataset.sig = html; }
-        if (lock.kind !== "action") watchSteps(t, box, strip);
+        if (lock.kind !== "action") { watchSteps(t, box, strip); if (t !== "sa") markPxTile(box, t); }
+        else watchSteps(t, box, strip, "action", sinceEpoch);
         // The green "ready — run it now" banner is specifically about the Run
         // button, which a standalone-download action lock never touches — so
         // only rewrite it busy for a real whole-box lock.

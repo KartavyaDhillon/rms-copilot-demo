@@ -324,6 +324,25 @@ def notify_execution(eid: str, kind: str) -> dict:
         return {"sent": False, "reason": f"{type(e).__name__}: {e}"}
 
 
+def append_to_log_file(pdef, line: str, max_age_s: int = 900) -> bool:
+    """Also write the alert outcome into the process's own .log file (data/scheduler/<folder>/logs/<time>_FAILED.log),
+    so the file you download shows the WhatsApp line too. Only the newest FAILED log, only if it is fresh. Never raises."""
+    try:
+        from core.scheduler import paths
+        folder = getattr(pdef, "folder", "") or ""
+        if not folder:
+            return False
+        files = sorted(paths.proc_dir(folder, "logs", create=False).glob("*_FAILED.log"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        if not files or time.time() - files[0].stat().st_mtime > max_age_s:
+            return False
+        with open(files[0], "a", encoding="utf-8") as f:
+            f.write(line.rstrip("\n") + "\n")
+        return True
+    except Exception:
+        return False
+
+
 def outcome_line(rec: dict) -> str:
     """One readable line for the run's log: was the WhatsApp failure alert sent, and if not, why."""
     stamp = dt.datetime.now().strftime("%H:%M:%S")

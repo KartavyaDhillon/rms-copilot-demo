@@ -126,7 +126,24 @@
       const w = $("#pcFrame").contentWindow;
       if (w && typeof w.pxConfig === "function") w.pxConfig("captchabal"); else popup("Balance alert", "The console is still loading - try again in a moment.", false);
     };
-    $("#balCheck").onclick = async () => { $("#balMsg").textContent = "Checking\u2026"; const d = await autoPost("/captcha/balance/check"); $("#balMsg").textContent = d && d.error ? "Could not read: " + d.error : d && d.balance != null ? "Balance is $" + Number(d.balance).toFixed(2) + (d.low ? " - LOW, alert mail sent if one was due." : " - fine.") : ""; balLoad(); };
+    $("#balCheck").onclick = async () => {
+      const btn = $("#balCheck"), msg = $("#balMsg");
+      btn.disabled = true;
+      msg.innerHTML = '<span style="display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:6px"></span>Asking 2Captcha for the balance - this can take up to 30 seconds\u2026';
+      let d = null;
+      try {
+        const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 45000);
+        d = await (await fetch("/captcha/balance/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: ac.signal })).json();
+        clearTimeout(tm);
+      } catch (e) {
+        msg.textContent = e.name === "AbortError" ? "2Captcha did not answer within 45 seconds - please try again." : "Could not reach the server: " + e.message;
+        btn.disabled = false; return;
+      }
+      btn.disabled = false;
+      msg.textContent = d && d.error ? "Could not read the balance: " + d.error
+        : d && d.balance != null ? "Balance is $" + Number(d.balance).toFixed(2) + (d.low ? " - LOW, alert mail sent if one was due." : " - fine.") : "No answer - please try again.";
+      balLoad();
+    };
     $("#balTest").onclick = async () => {
       $("#balMsg").textContent = "Sending\u2026";
       const d = await autoPost("/captcha/balance/test");

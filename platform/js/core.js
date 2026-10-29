@@ -81,6 +81,22 @@
     if (!document.hidden) document.dispatchEvent(new CustomEvent("rms:wake"));
   });
 
+  /* Sidebar "Server" light: pages like Process Center use plain fetch(), so nothing ever flipped a stale
+     "unreachable" back. A tiny /health check every 10 s (and when the tab wakes) keeps it truthful on every page. */
+  (function () {
+    function beat() {
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 8000);
+      fetch("/health", { signal: ctl.signal, cache: "no-store" })
+        .then((r) => RMS.setOnline(!!r.ok))
+        .catch(() => RMS.setOnline(false))
+        .finally(() => clearTimeout(t));
+    }
+    setTimeout(beat, 1500);
+    setInterval(() => { if (!document.hidden) beat(); }, 10000);
+    document.addEventListener("rms:wake", beat);
+  })();
+
   /* ── toasts ──────────────────────────────────────────────────────────── */
   RMS.toast = function (kind, title, sub, opts) {
     const root = $("#toasts");
