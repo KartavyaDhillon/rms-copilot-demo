@@ -61,6 +61,16 @@ except Exception as _e:
 
 
 @app.on_event("startup")
+async def _more_worker_threads():
+    """Long downloads/streams each hold a worker thread; 40 (the default) can run out with 3 PCs open. 100 keeps pages responsive."""
+    try:
+        import anyio.to_thread as _att
+        _att.current_default_thread_limiter().total_tokens = 100
+    except Exception as _e:
+        print(f"[threads] could not raise worker limit: {_e}", flush=True)
+
+
+@app.on_event("startup")
 def _scheduler_startup():
     try:
         from core.scheduler import engine as _sched_engine
@@ -349,7 +359,7 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=6"></script>'
+                            '<script src="/platform/js/process-locks.js?v=9"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=3"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
@@ -458,7 +468,8 @@ async def auth_login(request: Request):
         body = await request.json()
     except Exception:
         body = {}
-    res = _a.authenticate(body.get("employee_id", ""), body.get("password", ""))
+    from starlette.concurrency import run_in_threadpool as _au_rtp
+    res = await _au_rtp(_a.authenticate, body.get("employee_id", ""), body.get("password", ""))
     if not res.get("ok"):
         return JSONResponse(res, status_code=401)
     token = _a.make_session(res["employee_id"], res["display_name"], res.get("is_admin", False))
@@ -1186,7 +1197,8 @@ async def ops_locks_stream():
         while True:
             try:
                 from core import lock_manager
-                snap = lock_manager.snapshot()
+                from starlette.concurrency import run_in_threadpool as _lk_rtp
+                snap = await _lk_rtp(lock_manager.snapshot)
                 # elapsed_s changes every second; compare only the identity part
                 sig = json.dumps([{k: l.get(k) for k in ("key", "state", "pipe", "by", "started_at")}
                                    for l in snap["locks"]], sort_keys=True)
@@ -1515,7 +1527,7 @@ def files_downloader_70_stream(trade_date: str = ""):
 
 
 @app.get("/query-file")
-async def query_file(pipeline: str, group_by: str = "", filter_col: str = "", filter_contains: str = "",
+def query_file(pipeline: str, group_by: str = "", filter_col: str = "", filter_contains: str = "",
                      sort_by: str = "", sort_order: str = "desc", top_n: int = 0,
                      lookup_col: str = "", lookup_value: str = ""):
     """
@@ -1631,7 +1643,7 @@ async def query_file(pipeline: str, group_by: str = "", filter_col: str = "", fi
 
 
 @app.get("/ask-data")
-async def ask_data_endpoint(pipeline: str, question: str):
+def ask_data_endpoint(pipeline: str, question: str):
     """
     Plain-English data question -> exact pandas answer (text-to-query).
     The LLM only translates the question into a query spec; pandas computes.
@@ -1660,7 +1672,7 @@ async def ask_data_endpoint(pipeline: str, question: str):
 
 
 @app.get("/indexed-code")
-async def indexed_code():
+def indexed_code():
     """List every script the agent can read — for verifying code coverage."""
     try:
         from core.code_index import list_indexed_code
@@ -1670,7 +1682,7 @@ async def indexed_code():
 
 
 @app.post("/rebuild-code-index")
-async def rebuild_code_index():
+def rebuild_code_index():
     """Force re-scan of CODE_FOLDERS (after adding/editing scripts)."""
     try:
         from core.code_index import rebuild_index
@@ -1680,7 +1692,7 @@ async def rebuild_code_index():
 
 
 @app.get("/daily-summary")
-async def daily_summary():
+def daily_summary():
     """RMS daily summary — counts from today's real output files (no LLM, no guessing)."""
     try:
         from core.daily_summary import generate_daily_summary
@@ -1690,7 +1702,7 @@ async def daily_summary():
 
 
 @app.get("/folder-readiness")
-async def folder_readiness():
+def folder_readiness():
     """Which pipelines can run RIGHT NOW — required input files present today?
     Pure filesystem checks, no LLM. Powers the dashboard readiness card."""
     try:
@@ -1701,7 +1713,7 @@ async def folder_readiness():
 
 
 @app.get("/agent-log")
-async def agent_log(n: int = 50):
+def agent_log(n: int = 50):
     """Last n agent Q&A entries from logs/agent_log.jsonl (newest first)."""
     import json as _j
     log_path = os.path.join(
@@ -1723,7 +1735,7 @@ async def agent_log(n: int = 50):
 
 
 @app.post("/upload-file")
-async def upload_file(file: UploadFile = File(...)):
+def upload_file(file: UploadFile = File(...)):
     """Receive a file from the browser and save it to the uploads folder."""
     import shutil
     uploads = os.getenv("UPLOADS_FOLDER", r"D:\\CLAUDE\\rms-copilot\\uploads")
@@ -2866,7 +2878,7 @@ from core.pipeline_box import (pb_upload as _pbup, pb_backup_types as _pbbt,
                                pb_list_backups as _pblb, pb_copy_backups as _pbcb)
 
 @app.post("/px/upload")
-async def px_upload(pipe: str = "", target: str = "main", password: str = "",
+def px_upload(pipe: str = "", target: str = "main", password: str = "",
                     files: _SA_List[_SA_UploadFile] = _SA_File(...),
                     password_form: str = _SA_Form("", alias="password")):
     # Password arrives in the multipart body from the dashboard (see sa_upload) — accept it from there or the URL.
@@ -2984,7 +2996,8 @@ async def px_backup_download_merged(request: Request):
         return {"error": "client_code required"}
     if not items:
         return {"error": "items required"}
-    got = _pbbdm(pipe, items, codes)
+    from starlette.concurrency import run_in_threadpool as _px_rtp
+    got = await _px_rtp(_pbbdm, pipe, items, codes)   # heavy Excel merge: off the main loop so the server stays responsive
     if not got:
         return {"error": "no_filterable_column", "message": "This file type has no recognizable account column."}
     fname, content, media_type = got
@@ -3588,7 +3601,8 @@ def sa_las_checkpoint():
     """Return the last LAS checkpoint (step + status). Used by dashboard resume banner."""
     try:
         import sys as _ck_sys
-        _ck_sys.path.insert(0, _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes"))
+        _p_ = _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ck_sys.path: _ck_sys.path.insert(0, _p_)
         import importlib
         ckpt_mod = importlib.import_module("_checkpoint")
         data = ckpt_mod.read_las()
@@ -3603,7 +3617,8 @@ def sa_sa_checkpoint():
     """Return the last SA Code-2 checkpoint. Used by dashboard resume banner."""
     try:
         import sys as _ck_sys
-        _ck_sys.path.insert(0, _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes"))
+        _p_ = _sa_os.path.join(_sa_os.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ck_sys.path: _ck_sys.path.insert(0, _p_)
         import importlib
         ckpt_mod = importlib.import_module("_checkpoint")
         data = ckpt_mod.read_sa()
@@ -5099,7 +5114,8 @@ def probable_mcx_lock_status():
     instruction they now run independently — this only ever reports PROBABLE."""
     try:
         import sys as _ls, os as _lo
-        _ls.path.insert(0, _lo.path.join(_lo.path.dirname(__file__), "sa_codes"))
+        _p_ = _lo.path.join(_lo.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ls.path: _ls.path.insert(0, _p_)
         import importlib as _limp
         _lmdd = _limp.import_module("mcx_deposit_downloader")
         return _lmdd.mcx_lock_status("probable")
@@ -5351,7 +5367,8 @@ def r1r2_stop(request: Request):
         # THIS box was the one actually holding them.
         try:
             import sys as _cs
-            _cs.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+            _p_ = os.path.join(os.path.dirname(__file__), "sa_codes")
+            if _p_ not in _cs.path: _cs.path.insert(0, _p_)
             import importlib as _cimp
             _mdd = _cimp.import_module("mcx_deposit_downloader")
             _mdd.force_release_mcx_lock_if_owner("r1r2")
@@ -5498,7 +5515,7 @@ def reco_today_status():
 
 
 @app.post("/reco/upload")
-async def reco_upload(target: str = "", files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+def reco_upload(target: str = "", files: _SA_List[_SA_UploadFile] = _SA_File(...)):
     """ONE upload button for everything: HOLDING_/RISK_REPORT_ → COMMON FILES (the previous
     day's copy is archived automatically), EXCEPTION → its permanent folder (replacing archives
     the old file), PositionBook / SearchResults → today's drop folder."""
@@ -5739,7 +5756,7 @@ def common_download(name: str):
 
 
 @app.post("/common/upload")
-async def common_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+def common_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_File(...)):
     """Process Center 'Upload common files'. STRICT: only today's HOLDING_<DDMMYYYY>.csv and
     RISK_REPORT_<DDMMYYYY>.csv are accepted — nothing else, and no other date. Same-day file is
     replaced; older HOLDING/RISK_REPORT files are archived by the existing COMMON FILES housekeeping."""
@@ -5961,7 +5978,7 @@ def mtfic_download_stream(date: str = ""):
 
 
 @app.post("/mtfic/upload")
-async def mtfic_upload(files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+def mtfic_upload(files: _SA_List[_SA_UploadFile] = _SA_File(...)):
     """TradeBook_<DDMMYYYY> and C_CATG_<MON><YYYY>.T01 → the single MTF Impact Cost folder."""
     import shutil as _sh
     from core.pipelines import mtf_impact_cost as _m
@@ -6216,7 +6233,8 @@ def cli_stop(request: Request):
         # legitimately still holds).
         try:
             import sys as _cs
-            _cs.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+            _p_ = os.path.join(os.path.dirname(__file__), "sa_codes")
+            if _p_ not in _cs.path: _cs.path.insert(0, _p_)
             import importlib as _cimp
             _mdd = _cimp.import_module("mcx_deposit_downloader")
             _mdd.force_release_mcx_lock_if_owner("cli")
@@ -6353,7 +6371,8 @@ def sa_mcx_deposit_stop():
     # — only if it's actually still recorded as owned by "sa".
     try:
         import sys as _ss
-        _ss.path.insert(0, _kos.path.join(_kos.path.dirname(__file__), "sa_codes"))
+        _p_ = _kos.path.join(_kos.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ss.path: _ss.path.insert(0, _p_)
         import importlib as _simp
         _smdd = _simp.import_module("mcx_deposit_downloader")
         _smdd.force_release_mcx_lock_if_owner("sa")
@@ -6382,7 +6401,8 @@ def sa_mcx_deposit_lock_status():
     """
     try:
         import sys as _ls
-        _ls.path.insert(0, os.path.join(os.path.dirname(__file__), "sa_codes"))
+        _p_ = os.path.join(os.path.dirname(__file__), "sa_codes")
+        if _p_ not in _ls.path: _ls.path.insert(0, _p_)
         import importlib as _limp
         _lmdd = _limp.import_module("mcx_deposit_downloader")
         boxes = {o: _lmdd.mcx_lock_status(o) for o in _lmdd._MCX_OWNERS}
