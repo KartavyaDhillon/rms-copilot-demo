@@ -575,7 +575,36 @@ def login_page():
 # Imported lazily inside each route so a bug there can degrade gracefully to an
 # error payload instead of ever preventing the whole server from booting.
 
+def _ttl_cached(seconds):
+    """Answer a polled status route from a copy up to `seconds` old, so five open screens polling every few
+    seconds cost ONE real computation, not twenty. If a refresh is already running, other callers get the
+    previous answer straight away instead of piling up behind it (the first caller ever waits for the real one)."""
+    import functools as _ft, threading as _th, time as _tm
+
+    def deco(fn):
+        st = {"t": 0.0, "v": None, "has": False}
+        lock = _th.Lock()
+
+        @_ft.wraps(fn)
+        def wrapper(*a, **k):
+            if st["has"] and _tm.monotonic() - st["t"] < seconds:
+                return st["v"]
+            if not lock.acquire(blocking=not st["has"]):
+                return st["v"]                      # somebody is refreshing: serve the previous answer now
+            try:
+                if st["has"] and _tm.monotonic() - st["t"] < seconds:
+                    return st["v"]
+                v = fn(*a, **k)
+                st["v"], st["t"], st["has"] = v, _tm.monotonic(), True
+                return v
+            finally:
+                lock.release()
+        return wrapper
+    return deco
+
+
 @app.get("/ops/summary")
+@_ttl_cached(5)
 def ops_summary():
     try:
         from core import ops_metrics
@@ -3035,6 +3064,255 @@ async def px_backup_download_merged(request: Request):
     return _PX_Resp3(content=content, media_type=media_type,
                      headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
+
+# ── FAST "Get files" client search (core/bk_merge.py) ────────────────────────────────────────────────────────────
+# Every search is its OWN low-priority worker process, so one person's search never slows the console for
+# anybody else and nobody waits for anybody else's search. Big first-time Excel reads share a few machine-wide
+# memory "slots" (see bk_merge.cold_slots); files already read once are cached and answer in a second or two.
+# Replaces the old /px/backup/download-merged, which parsed the Excel inside the web server.
+import sys as _bkm_sys
+import subprocess as _bkm_sp
+import threading as _bkm_thr
+import uuid as _bkm_uuid
+import json as _bkm_json
+import shutil as _bkm_shutil
+
+_BKM_JOBS = {}                         # job id -> {"proc": Popen, "dir": path, "user": key, "who": name}
+_BKM_JOBS_LOCK = _bkm_thr.Lock()
+_BKM_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", ".merge_jobs")
+_BKM_ID_RE = __import__("re").compile(r"^[0-9]{8}_[0-9]{6}_[0-9a-f]{6}$")
+
+
+def _bkm_who(request: Request):
+    """(stable key, display name) of the person asking - signed-in user if there is one, else the machine's address."""
+    try:
+        from core.auth import current_user as _cu
+        u = _cu(request)
+        if u and (u.get("sub") or u.get("name")):
+            return str(u.get("sub") or u.get("name")), str(u.get("name") or u.get("sub"))
+    except Exception:
+        pass
+    ip = (request.client.host if request.client else "") or "unknown"
+    return ip, ip
+
+
+def _bkm_read(path):
+    for _ in range(4):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return _bkm_json.load(f)
+        except FileNotFoundError:
+            return None
+        except Exception:
+            __import__("time").sleep(0.05)
+    return None
+
+
+def _bkm_job_dir(job):
+    if not _BKM_ID_RE.match(job or ""):
+        return None
+    d = os.path.join(_BKM_ROOT, job)
+    return d if os.path.isdir(d) else None
+
+
+def _bkm_alive(job):
+    j = _BKM_JOBS.get(job)
+    return bool(j) and j["proc"].poll() is None
+
+
+def _bkm_cleanup_old():
+    """Throw away finished jobs older than a day (their merged files were downloaded long ago)."""
+    import time as _t
+    try:
+        for n in os.listdir(_BKM_ROOT):
+            p = os.path.join(_BKM_ROOT, n)
+            if _BKM_ID_RE.match(n) and not _bkm_alive(n) and _t.time() - os.path.getmtime(p) > 86400:
+                _bkm_shutil.rmtree(p, ignore_errors=True)
+                _BKM_JOBS.pop(n, None)
+    except OSError:
+        pass
+
+
+def _bkm_start(body, ukey, uname):
+    import time as _t
+    from core import bk_merge as _bk
+    from core.pipeline_box import pb_backup_file as _pbf, pb_backup_db_file as _pbdb, _PB_ACCOUNT_COL_CANDIDATES
+    pipe = (body.get("pipe") or "").strip()
+    client_code = (body.get("client_code") or "").strip()
+    codes = [c.strip() for c in client_code.replace(";", ",").split(",") if c.strip()]
+    groups_in = body.get("groups") or {}
+    if not codes:
+        return {"ok": False, "error": "client_code required"}
+    if not groups_in:
+        return {"ok": False, "error": "nothing to search"}
+
+    with _BKM_JOBS_LOCK:
+        for jid, j in list(_BKM_JOBS.items()):         # one running search per person: re-attach, don't start a second
+            if j["user"] == ukey and j["proc"].poll() is None:
+                return {"ok": True, "job": jid, "reattached": True}
+        try:
+            max_jobs = int(os.environ.get("RMS_MERGE_MAX_JOBS", "8") or 8)
+        except ValueError:
+            max_jobs = 8
+        running = sum(1 for j in _BKM_JOBS.values() if j["proc"].poll() is None)
+        if running >= max_jobs:
+            return {"ok": False, "busy": True,
+                    "error": f"{running} searches are running right now - please try again in a minute."}
+        _bkm_cleanup_old()
+        jid = _t.strftime("%Y%m%d_%H%M%S") + "_" + _bkm_uuid.uuid4().hex[:6]
+        jd = os.path.join(_BKM_ROOT, jid)
+        os.makedirs(os.path.join(jd, "in"), exist_ok=True)
+
+        cands = list(_PB_ACCOUNT_COL_CANDIDATES) + ["Entity"]
+        groups, all_paths, n_in = [], [], 0
+        for label, items in groups_in.items():
+            g_items, missing = [], 0
+            for it in (items or []):
+                path = (it or {}).get("path", "")
+                if not path:
+                    continue
+                if str(path).startswith("db:"):           # stored in Postgres: write it out for the worker (not cached)
+                    got = _pbdb(path)
+                    if not got:
+                        missing += 1
+                        continue
+                    n_in += 1
+                    fn, content = got
+                    ap = os.path.join(jd, "in", f"{n_in}_{os.path.basename(fn)}")
+                    with open(ap, "wb") as f:
+                        f.write(content)
+                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": fn, "nocache": True})
+                else:
+                    ap = _pbf(pipe, path)
+                    if not ap:
+                        missing += 1
+                        continue
+                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": it.get("name", "")})
+                    all_paths.append(ap)
+            groups.append({"label": str(label), "items": g_items, "missing": missing})
+        total = sum(len(g["items"]) for g in groups)
+        if total == 0:
+            _bkm_shutil.rmtree(jd, ignore_errors=True)
+            return {"ok": False, "error": "none of the selected files could be found"}
+
+        pl = _bk.plan(all_paths, cands)
+        job = {"codes": codes, "cands": cands, "groups": groups, "workers": pl["workers"], "cold": pl["cold"],
+               "user": uname, "pipe": pipe, "created": _t.time()}
+        with open(os.path.join(jd, "job.json"), "w", encoding="utf-8") as f:
+            _bkm_json.dump(job, f)
+        flags = 0
+        if os.name == "nt":
+            flags = 0x00004000 | 0x08000000            # BELOW_NORMAL priority + no console window
+        with open(os.path.join(jd, "worker.log"), "ab") as lf:
+            proc = _bkm_sp.Popen([_bkm_sys.executable, "-u", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                     "core", "bk_merge.py"), jd],
+                                 cwd=os.path.dirname(os.path.abspath(__file__)), stdin=_bkm_sp.DEVNULL,
+                                 stdout=lf, stderr=_bkm_sp.STDOUT, creationflags=flags)
+        _BKM_JOBS[jid] = {"proc": proc, "dir": jd, "user": ukey, "who": uname}
+    print(f"[merge] job {jid} started by {uname}: {total} file(s), {pl['cold']} first-time read(s), "
+          f"{pl['workers']} worker(s)", flush=True)
+    return {"ok": True, "job": jid, "total": total, "cold": pl["cold"], "workers": pl["workers"]}
+
+
+@app.post("/px/backup/merge-start")
+async def px_backup_merge_start(request: Request):
+    """Starts a client search over many backup files as a background worker process.
+    Body: {"pipe": "ctcl", "client_code": "SN120", "groups": {"<type label>": [{"path","date","name"}, ...]}}
+    Returns {"ok": true, "job": "<id>"} - poll /px/backup/merge-status?job=<id>."""
+    from starlette.concurrency import run_in_threadpool as _rtp
+    body = await request.json()
+    ukey, uname = _bkm_who(request)
+    return await _rtp(_bkm_start, body, ukey, uname)
+
+
+@app.get("/px/backup/merge-status")
+def px_backup_merge_status(job: str = ""):
+    import time as _t
+    jd = _bkm_job_dir(job)
+    if not jd:
+        return {"ok": False, "state": "unknown", "error": "that search is no longer available (the server may have restarted)"}
+    prog = _bkm_read(os.path.join(jd, "progress.json")) or {"state": "starting", "done": 0, "total": 0,
+                                                            "started": _t.time(), "cold_total": 0}
+    state = prog.get("state", "starting")
+    err = prog.get("error", "")
+    if state in ("running", "starting"):
+        j = _BKM_JOBS.get(job)
+        if j and j["proc"].poll() is not None:                  # process ended without finishing = it died
+            state = "failed"
+            try:
+                with open(os.path.join(jd, "worker.log"), "r", encoding="utf-8", errors="replace") as f:
+                    tail = f.read()[-400:]
+            except OSError:
+                tail = ""
+            err = "The search stopped unexpectedly. " + tail.strip()
+        elif not j and _t.time() - float(prog.get("updated", prog.get("started", _t.time()))) > 180:
+            state = "failed"
+            err = "The search was interrupted (the server was restarted). Please start it again."
+    now = _t.time()
+    done, total = int(prog.get("done", 0)), int(prog.get("total", 0))
+    elapsed = max(0.0, now - float(prog.get("started", now)))
+    eta = None
+    if 0 < done < total:
+        eta = elapsed / done * (total - done)
+    out = {"ok": True, "state": state, "done": done, "total": total, "elapsed": round(elapsed),
+           "eta": (round(eta) if eta is not None else None), "current": prog.get("current", ""),
+           "cold_total": prog.get("cold_total", 0), "cold_done": prog.get("cold_done", 0),
+           "hits": prog.get("hits", 0), "workers": prog.get("workers", 0), "error": err,
+           "who": (_BKM_JOBS.get(job) or {}).get("who", "")}
+    if state == "done":
+        res = _bkm_read(os.path.join(jd, "result.json")) or {}
+        out["groups"] = res.get("groups", [])
+    return out
+
+
+@app.get("/px/backup/merge-file")
+def px_backup_merge_file(job: str = "", idx: int = 0):
+    jd = _bkm_job_dir(job)
+    res = (_bkm_read(os.path.join(jd, "result.json")) if jd else None) or {}
+    for g in res.get("groups", []):
+        if g.get("idx") == idx and g.get("state") == "ok":
+            p = os.path.join(jd, g["file"])
+            if os.path.isfile(p):
+                return FileResponse(p, media_type="text/csv", filename=g.get("fname") or "merged.csv")
+    return JSONResponse({"error": "file not found"}, status_code=404)
+
+
+@app.post("/px/backup/merge-cancel")
+def px_backup_merge_cancel(job: str = ""):
+    jd = _bkm_job_dir(job)
+    if not jd:
+        return {"ok": False}
+    try:
+        with open(os.path.join(jd, "cancel.flag"), "w") as f:
+            f.write("")
+    except OSError:
+        pass
+    j = _BKM_JOBS.get(job)
+    if j and j["proc"].poll() is None:
+        try:
+            import psutil
+            parent = psutil.Process(j["proc"].pid)
+            for c in parent.children(recursive=True):
+                try:
+                    c.kill()
+                except Exception:
+                    pass
+            parent.kill()
+        except Exception:
+            try:
+                j["proc"].kill()
+            except Exception:
+                pass
+        prog = _bkm_read(os.path.join(jd, "progress.json")) or {}
+        prog["state"] = "cancelled"
+        try:
+            with open(os.path.join(jd, "progress.json"), "w", encoding="utf-8") as f:
+                _bkm_json.dump(prog, f)
+        except OSError:
+            pass
+    return {"ok": True}
+
+
 @app.get("/px/client-lookup")
 def px_client_lookup(pipe: str = "", client_codes: str = "",
                      from_date: str = "", to_date: str = "",
@@ -4957,6 +5235,7 @@ _PD_WA_LISTS = {"DELHI": "Delhi", "LUDHIANA": "Ludhiana", "CHANDIGARH": "Chandig
 
 
 @app.get("/pd/status")
+@_ttl_cached(4)
 def pd_status():
     from core.pipelines import physdel_cfg as _pd
     _pd.apply_defaults()
@@ -5499,6 +5778,7 @@ def reco_dl_status():
 
 
 @app.get("/reco/readiness")
+@_ttl_cached(4)
 def reco_readiness():
     """Every file the four processes need (strict — all must be ok to run) + EXCEPTION info."""
     from core.pipelines import reconciliation as _rc
@@ -6417,6 +6697,7 @@ def sa_mcx_deposit_stop():
 
 
 @app.get("/sa/mcx-deposit/lock-status")
+@_ttl_cached(1.5)
 def sa_mcx_deposit_lock_status():
     """Live PER-BOX status of the MCX-deposit locks (see
     sa_codes/mcx_deposit_downloader.py's _acquire_mcx_lock/mcx_lock_status) —

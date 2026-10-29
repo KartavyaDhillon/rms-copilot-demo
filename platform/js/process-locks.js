@@ -435,5 +435,5 @@
     }).catch(function () {});
   }
   _mcxSessionLockTick();
-  setInterval(_mcxSessionLockTick, 1500);
+  setInterval(_mcxSessionLockTick, 3000);
 })();

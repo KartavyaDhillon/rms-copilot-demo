@@ -2657,6 +2657,33 @@ _PB_ACCOUNT_COL_CANDIDATES = (
 )
 
 
+def _bk_fast_filtered_xlsx(ap, fname, client_codes):
+    """Fast path for ONE .xlsx backup (same return contract as pb_backup_file_filtered).
+    Returns (handled, result). handled=False means 'could not do it the fast way - use the old code'."""
+    try:
+        from core import bk_merge as _bk
+        import io
+        codes = [c for c in (client_codes or []) if c and c.strip()]
+        if not codes:
+            return False, None
+        cands = list(_PB_ACCOUNT_COL_CANDIDATES) + ["Entity"]
+        _f, df, status, _how = _bk.filter_one(ap, codes, cands, use_cache=True)
+        xmime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if status == "error":
+            return False, None
+        if status == "no_column":
+            return True, None            # same answer the old code gave: no recognisable account column
+        if status == "no_data" or df is None or df.height == 0:
+            return True, (fname, None, xmime)
+        import pandas as pd
+        pdf = pd.DataFrame(df.to_dict(as_series=False))
+        bio = io.BytesIO()
+        pdf.to_excel(bio, index=False)
+        return True, (fname, bio.getvalue(), xmime)
+    except Exception:
+        return False, None
+
+
 def pb_backup_file_filtered(pipe, path, client_codes):
     """Like pb_backup_file, but returns only the rows belonging to
     `client_codes` (case-insensitive), in the file's ORIGINAL column layout —
@@ -2696,6 +2723,11 @@ def pb_backup_file_filtered(pipe, path, client_codes):
         if not ap:
             return None
         fname = os.path.basename(ap)
+        if fname.lower().endswith(".xlsx"):
+            # big Excel backups: fast reader + cached copy (core/bk_merge.py) instead of parsing it again and again here
+            handled, fast = _bk_fast_filtered_xlsx(ap, fname, client_codes)
+            if handled:
+                return fast
         try:
             with open(ap, "rb") as f:
                 content = f.read()
