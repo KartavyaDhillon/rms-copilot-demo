@@ -6348,9 +6348,25 @@ function _pxBkToggle(globs){
   pxBackup(window._pxBkPipe,'files');
 }
 function _pxBkClearAll(){ window._pxBkSel=new Set(); pxBackup(window._pxBkPipe,'files'); }
+// Running / finished-but-unsaved search of this person: show it instead of letting them search again.
+function pxBkShowRunning(a){
+  const done=a.state==='done';
+  saShowModal('📦 Your backup search',
+    `<div style="font-size:12.5px;color:var(--ink);margin-bottom:6px">${done?'Your search has finished.':'Your search is still running.'}</div>
+<div style="font-size:11.5px;color:var(--muted);margin-bottom:12px">Client <b style="color:var(--teal)">${a.client_code||''}</b> · ${(a.labels||[]).join(', ')}. A new search can be started once this one is finished or cancelled.</div>
+<div id="pxBkDlMsg" style="min-height:40px;font-size:12px"></div>
+${done?`<button class="sa-save" style="width:100%;margin-top:8px" onclick="pxBkDownloadMerged('${a.pipe}',{},'${(a.client_code||'').replace(/'/g,'')}',document.getElementById('pxBkDlMsg'),'${a.job}',true)">⬇ Save the finished file(s) to my PC</button>`:''}`);
+  if(!done) pxBkDownloadMerged(a.pipe,{},a.client_code||'',document.getElementById('pxBkDlMsg'),a.job,false);
+}
 async function pxBackup(pipe, tab){
   window._pxBkPipe=pipe;
   tab=tab||'files';
+  if(tab!=='wacheck'){
+    try{
+      const _a=await (await fetch(API+'/px/backup/merge-active')).json();
+      if(_a && _a.active){ pxBkShowRunning(_a); return; }
+    }catch(e){}
+  }
   // Margin Shortage (ms15) reuses the same "Client data" lookup as CTCL vs
   // NMASS (own input files + own Shortage_vs_CC_Deposit output, 9 runs/day
   // instead of 5), plus its own extra "WhatsApp check" tab.
@@ -6680,7 +6696,7 @@ async function pxBkDownloadSelected(){
   }
   _bkDownloadResultModal(ok2, fail2, 'Check your browser\'s Downloads folder.', skipped2);
 }
-async function pxBkDownloadMerged(pipe, groups, clientCode, msg){
+async function pxBkDownloadMerged(pipe, groups, clientCode, msg, resumeJob, canPick){
   // `groups`: {label: [{path,date,name}, ...], ...} — one POST to
   // /px/backup/download-merged per group, one saved file per group,
   // regardless of how many dates are in that group.
@@ -6699,14 +6715,16 @@ async function pxBkDownloadMerged(pipe, groups, clientCode, msg){
   const fmt=(s)=>{ s=Math.max(0,Math.round(s||0)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
   const eta=(s)=>{ if(s==null) return ''; if(s<45) return ' · less than a minute left'; return ' · about '+Math.ceil(s/60)+' min left'; };
   const say=(html)=>{ if(msg) msg.innerHTML=html; };
-  const dirHandle = ('showDirectoryPicker' in window) ? await (async()=>{
+  const dirHandle = ('showDirectoryPicker' in window && (!resumeJob || canPick)) ? await (async()=>{
     try{ return await window.showDirectoryPicker({mode:'readwrite'}); }
     catch(e){ return null; }
   })() : null;
   lock(true);
-  say(`<span class="bk-spin"></span><span style="color:var(--muted)">Starting the search…</span>`);
+  say(`<span class="bk-spin"></span><span style="color:var(--muted)">${resumeJob?'Reconnecting to your search…':'Starting the search…'}</span>`);
   let job='';
-  try{
+  const _ack=()=>{ try{ fetch(API+'/px/backup/merge-ack?job='+encodeURIComponent(job),{method:'POST'}); }catch(e){} };
+  if(resumeJob){ job=resumeJob; }
+  else try{
     const r=await fetch(API+'/px/backup/merge-start',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({pipe, client_code:clientCode, groups})});
     const j=await r.json().catch(()=>null);
@@ -6737,6 +6755,7 @@ async function pxBkDownloadMerged(pipe, groups, clientCode, msg){
         say(st.state==='cancelled'
           ? `<span style="color:var(--amber)">Search cancelled.</span>`
           : `<span style="color:var(--red)">${st.error||'The search did not finish.'}</span>`);
+        _ack();
         return;
       }
       const pct=st.total? Math.round(100*st.done/st.total):0;
@@ -6781,6 +6800,7 @@ ${cold}<div style="font-size:10.5px;color:var(--dim,var(--muted));margin-top:3px
   }
   lock(false);
   say('');
+  _ack();
   const note=(dirHandle?'Saved to the folder you chose':'Check your browser\'s Downloads folder')+' — one file per type, all matching dates merged in with a Date column.'
     +(missing?` (${missing} selected file${missing===1?' was':'s were'} no longer on disk and left out.)`:'');
   _bkDownloadResultModal(ok, fail, note, skipped);

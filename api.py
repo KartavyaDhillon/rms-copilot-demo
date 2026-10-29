@@ -3208,7 +3208,9 @@ def _bkm_start(body, ukey, uname):
                                                                      "core", "bk_merge.py"), jd],
                                  cwd=os.path.dirname(os.path.abspath(__file__)), stdin=_bkm_sp.DEVNULL,
                                  stdout=lf, stderr=_bkm_sp.STDOUT, creationflags=flags)
-        _BKM_JOBS[jid] = {"proc": proc, "dir": jd, "user": ukey, "who": uname}
+        _BKM_JOBS[jid] = {"proc": proc, "dir": jd, "user": ukey, "who": uname, "pipe": pipe,
+                      "client_code": ", ".join(codes), "labels": [g["label"] for g in groups],
+                      "acked": False, "created": _t.time()}
     print(f"[merge] job {jid} started by {uname}: {total} file(s), {pl['cold']} first-time read(s), "
           f"{pl['workers']} worker(s)", flush=True)
     return {"ok": True, "job": jid, "total": total, "cold": pl["cold"], "workers": pl["workers"]}
@@ -3263,6 +3265,37 @@ def px_backup_merge_status(job: str = ""):
         res = _bkm_read(os.path.join(jd, "result.json")) or {}
         out["groups"] = res.get("groups", [])
     return out
+
+
+@app.get("/px/backup/merge-active")
+def px_backup_merge_active(request: Request):
+    """This person's search that still needs attention: running, or finished but not yet saved to their PC.
+    The Backup popup asks this when it opens, so going back in shows the running progress instead of a new search."""
+    ukey, _ = _bkm_who(request)
+    best = None
+    for jid, j in list(_BKM_JOBS.items()):
+        if j.get("user") != ukey or j.get("acked"):
+            continue
+        running = j["proc"].poll() is None
+        prog = _bkm_read(os.path.join(j["dir"], "progress.json")) or {}
+        st = prog.get("state", "starting")
+        if not running and st not in ("done",):
+            continue                                   # failed / cancelled / gone: nothing to resume
+        if best is None or j.get("created", 0) > best[1].get("created", 0):
+            best = (jid, j, st)
+    if not best:
+        return {"active": False}
+    jid, j, st = best
+    return {"active": True, "job": jid, "state": st, "pipe": j.get("pipe", ""),
+            "client_code": j.get("client_code", ""), "labels": j.get("labels", [])}
+
+
+@app.post("/px/backup/merge-ack")
+def px_backup_merge_ack(job: str = ""):
+    j = _BKM_JOBS.get(job)
+    if j:
+        j["acked"] = True
+    return {"ok": True}
 
 
 @app.get("/px/backup/merge-file")
