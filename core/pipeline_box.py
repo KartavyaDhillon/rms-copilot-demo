@@ -425,7 +425,7 @@ PIPELINES = {
                  "common_globs": [], "common_label": "PROBABLE",
                  "backup_root_env": "PROBABLE_FOLDER", "backup_subdir": "BACKUPFILES AUTOMATED",
                  "file_types": [
-                     ["Probable Fullfile (manual daily upload)", "Probable_Fullfile_*.xlsx", "Probable_Fullfile_<DDMMYYYY>.xlsx"],
+                     ["Probable Fullfile (manual daily upload)", "Probable_Fullfile_[0-9]*.xlsx", "Probable_Fullfile_<DDMMYYYY>.xlsx"],
                      ["CM Client Collaterals", "CM_ClientLevelCollaterals_*.csv,CM_ClientLevelCollaterals_*.xlsx", "CM_ClientLevelCollaterals_<date>.csv"],
                      ["FO Client Collaterals", "FO_ClientLevelCollaterals_*.csv,FO_ClientLevelCollaterals_*.xlsx", "FO_ClientLevelCollaterals_<date>.csv"],
                      ["CO Client Collaterals", "CO_ClientLevelCollaterals_*.csv,CO_ClientLevelCollaterals_*.xlsx", "CO_ClientLevelCollaterals_<date>.csv"],
@@ -433,7 +433,7 @@ PIPELINES = {
                      ["MCX RSK383 (xlsx)", "*.xlsx", "MCX_DEPOSIT_<HH.MM>.xlsx"],
                      ["MCX RSK335 / 90% file", "Clientwise_mcx_margin*.xlsx", "Clientwise_mcx_margin.xlsx"],
                      ["Delivery Margin", "F_DLMG02_06436*.csv", "F_DLMG02_06436_<DDMMYYYY>.csv"],
-                     ["Reconciled output", "Probable_Fullfile_K_*.xlsx", "Probable_Fullfile_K_<DDMMYYYY>.xlsx"],
+                     ["Probable Fullfile K (reconciled output we create)", "Probable_Fullfile_K_*.xlsx", "Probable_Fullfile_K_<DDMMYYYY>.xlsx"],
                      ["Margin comparison output", "All_Exchange_Margin_Comparison_*.xlsx", "All_Exchange_Margin_Comparison_<DDMMYYYY>.xlsx"],
                      ["WhatsApp log", "WhatsApp_Log.xlsx", "WhatsApp_Log.xlsx"],
                      # Zone shortage files + branch/region mail-list working files
@@ -441,10 +441,9 @@ PIPELINES = {
                      # _step_11_validation) — previously missing from this list entirely,
                      # so they were never selectable/labeled in the Backup Files type filter
                      # even though they were always physically present in the SHORTAGE backup.
-                     ["Zone shortage — Mumbai", "ZOMUMB_ZONE DATA.xlsx", "ZOMUMB_ZONE DATA.xlsx"],
-                     ["Zone shortage — Chandigarh", "ZOCHND_ZONE DATA.xlsx", "ZOCHND_ZONE DATA.xlsx"],
-                     ["Zone shortage — Delhi", "DELHI_ZONE DATA.xlsx", "DELHI_ZONE DATA.xlsx"],
-                     ["Zone shortage — Ludhiana", "LUDH_ZONE DATA.xlsx", "LUDH_ZONE DATA.xlsx"],
+                     ["Zone shortage files (all 4 zones)",
+                      "ZOMUMB_ZONE DATA.xlsx,ZOCHND_ZONE DATA.xlsx,DELHI_ZONE DATA.xlsx,LUDH_ZONE DATA.xlsx",
+                      "ZOMUMB_ZONE DATA.xlsx"],
                      ["Branch/region mail-list working files",
                       "Filtered_Zone_ID.xlsx,Branch_Region_ID_Extracted.xlsx,Mismatched_Branch_And_Region_IDs.xlsx",
                       "Filtered_Zone_ID.xlsx"],

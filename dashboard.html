@@ -6340,6 +6340,13 @@ function _pxBkRowMeta(name){
   if(n.startsWith('risk_report'))                return {icon:'⚠', label:'Risk Report',   col:'var(--violet)'};
   if(n.startsWith('full_file_ctcl_vs_nmass'))    return {icon:'📊', label:'CTCL Output',   col:'var(--teal)'};
   if(n.startsWith('shortage_vs_cc_deposit'))     return {icon:'📊', label:'MS15 Output',   col:'var(--teal)'};
+  if(n.startsWith('probable_fullfile_k'))        return {icon:'📊', label:'Probable Fullfile K (output)', col:'var(--teal)'};
+  if(n.startsWith('probable_fullfile'))          return {icon:'📋', label:'Probable Fullfile', col:'var(--violet)'};
+  if(n.endsWith('_zone data.xlsx'))              return {icon:'🗺', label:'Zone shortage files', col:'var(--amber)'};
+  if(n.startsWith('all_exchange_margin_comparison')) return {icon:'📊', label:'Margin comparison', col:'var(--teal)'};
+  if(n.startsWith('f_dlmg02'))                   return {icon:'📄', label:'Delivery Margin', col:'var(--dim)'};
+  if(n.startsWith('clientwise_mcx_margin'))      return {icon:'💵', label:'MCX 90% / RSK335', col:'var(--violet)'};
+  if(n.startsWith('mcx_deposit'))                return {icon:'💵', label:'MCX Deposit / RSK383', col:'var(--violet)'};
   if(n.endsWith('.xlsx'))                        return {icon:'💵', label:'MCX / xlsx',    col:'var(--violet)'};
   return {icon:'📄', label:'file', col:'var(--dim)'};
 }
