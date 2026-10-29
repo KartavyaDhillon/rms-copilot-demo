@@ -93,6 +93,7 @@ def _is_expired(text):
 
 
 _AUTO_TOK = None
+_LAST_CODE = None
 
 
 def _auto_mode():
@@ -131,7 +132,13 @@ def _token_popup(attempt, max_attempts, error_msg=None):
             global _AUTO_TOK
             if _AUTO_TOK is None:
                 _AUTO_TOK = _mst.load_token()
-            return _mst.next_code(_AUTO_TOK, attempt, log=print)
+            global _LAST_CODE
+            code = _mst.next_code(_AUTO_TOK, attempt, log=print)
+            if code == _LAST_CODE:                  # an instant re-login would send the same code again: let that window pass
+                print("[token] that code was already used a moment ago - taking the code of the window after it.", flush=True)
+                code = _mst.next_code(_AUTO_TOK, 2, log=print)
+            _LAST_CODE = code
+            return code
         except Exception as _e:
             print(f"[MCX_TOKEN_FAIL] could not generate the RSA code: {_e}")
             raise RuntimeError(f"RSA code could not be generated: {_e}")
@@ -559,7 +566,7 @@ def _download_mcx_deposit_once(output_dir=None):
         print(f"📥 ARCH INIT: {resp.status_code}")
         return resp
 
-    def _do_relogin(sess, rndaak_ref):
+    def _do_relogin(sess, rndaak_ref, wait_s=None):
         """Re-login when session expires. Returns (new_sess, new_rndaak, new_tab_id).
 
         Was: only re-did login + post_login_flow, then handed the OLD tab_id
@@ -577,7 +584,8 @@ def _download_mcx_deposit_once(output_dir=None):
             # UNATTENDED run only (Short Allocation auto run, Live Allocation, MCX Cash): somebody else logged in and kicked
             # this session out - do NOT fill a code instantly, wait (default 4 min). A run started by hand fills the next code at once.
             from core import mcx_soft_token as _mst
-            _mst.relogin_wait(log=print)
+            if wait_s is None or wait_s > 0:       # wait_s=0: kicked out BEFORE the export - log in again at once with the next code
+                _mst.relogin_wait(log=print, seconds=wait_s)
         new_sess = requests.Session()
         new_rndaak = _do_login(
             new_sess,
@@ -601,113 +609,53 @@ def _download_mcx_deposit_once(output_dir=None):
         return new_sess, new_rndaak, new_tab_id
 
     try:
-        sess = requests.Session()
-        rndaak = _do_login(sess)
-        _post_login_flow(sess, rndaak)
+        # ── state: which export is ours (so a retry NEVER presses Export again for the same capture) ──
+        _STATE_PATH = os.getenv("MCX_EXPORT_STATE_FILE", "").strip()
 
-        # ── Open RSK383 ──────────────────────────────────────────────────────
-        print("\n🌐 Opening RSK383...")
+        def _state_read():
+            if not _STATE_PATH:
+                return None
+            try:
+                st = _mcx_json.load(open(_STATE_PATH, encoding="utf-8"))
+                age_h = (time.time() - float(st.get("saved_at", 0))) / 3600.0
+                if (st.get("date") == datetime.now().strftime("%Y%m%d") and not st.get("done")
+                        and st.get("stamp") and age_h < 4):
+                    return st
+            except Exception:
+                pass
+            return None
+
+        def _state_write(**kw):
+            if not _STATE_PATH:
+                return
+            try:
+                st = {}
+                try:
+                    st = _mcx_json.load(open(_STATE_PATH, encoding="utf-8"))
+                except Exception:
+                    st = {}
+                st.update(kw)
+                st["saved_at"] = time.time()
+                st.setdefault("date", datetime.now().strftime("%Y%m%d"))
+                os.makedirs(os.path.dirname(_STATE_PATH) or ".", exist_ok=True)
+                with open(_STATE_PATH, "w", encoding="utf-8") as _f:
+                    _mcx_json.dump(st, _f)
+            except Exception:
+                pass
+
+        S = {"sess": None, "rndaak": None, "tab": None}
+        S["sess"] = requests.Session()
+        S["rndaak"] = _do_login(S["sess"])
+        _post_login_flow(S["sess"], S["rndaak"])
+
         RSK_URL = BASE_URL + "/Bancs/RSK/RSK383.do"
-        today_api    = datetime.now().strftime("%Y%m%d")
-        today_ui     = datetime.now().strftime("%d/%m/%Y")
-        today_encoded = today_ui.replace("/", "%2F")
-
-        sess.post(RSK_URL, headers={
-            "User-Agent": "Mozilla/5.0",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": BASE_URL,
-            "Referer": BASE_URL + "/Bancs/common/PageLoader.html",
-        }, data={
-            "app": "bancsapp?prefix=/RSK", "page": "/RSK383.do",
-            "confViewSize": "50", "reqType": "0", "mode": "DEF_MODE",
-            "parentName": "blank", "browserType": "IE55",
-            "GuiWinName": "RSK383", "compname": "RSK",
-            "over_ride_button": "Cancel", "AvlHt": "744", "AvlWd": "1481",
-            "tblWd": "1465", "GuiBrowserInst": "0", "theme": "black",
-            "pageId": "RSK383", "wintitle": "Query Detailed Limit",
-            "availHeight": "816", "availWidth": "1536", "tabId": "panel2",
-            "rndaak": rndaak, "reqtoken": "", "parentToChildData": "",
-        })
-
+        EXPORT_SEARCH_URL = BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do"
         FETCH_H = {
             "User-Agent": "Mozilla/5.0", "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "X-Requested-With": "XMLHttpRequest",
             "Origin": BASE_URL, "Referer": RSK_URL,
         }
-
-        # ── Search ───────────────────────────────────────────────────────────
-        search_base = {
-            "MCB_SearchWC_wca_clearingMemberCode": "",
-            "propertyMap(MCB_SearchWC_wca_clearingMemberCode_op)": "=",
-            "MCB_SearchWC_wca_tradingMemberCode": "",
-            "propertyMap(MCB_SearchWC_wca_tradingMemberCode_op)": "=",
-            "MCB_SearchWC_wca_uCCcode": "",
-            "propertyMap(MCB_SearchWC_wca_uCCcode_op)": "=",
-            "MCB_SearchWC_wca_clientName": "",
-            "propertyMap(MCB_SearchWC_wca_clientName_op)": "=",
-            "MCB_SearchWC_wca_fromDate": today_api,
-            "propertyMap(MCB_SearchWC_wca_fromDate_op)": "=",
-            "MCB_SearchWC_wca_toDate": today_api,
-            "propertyMap(MCB_SearchWC_wca_toDate_op)": "=",
-            "MCB_SearchWC_wca_clearingMemberName": "",
-            "propertyMap(MCB_SearchWC_wca_clearingMemberName_op)": "=",
-            "MCB_SearchWC_wca_tradingMemberName": "",
-            "propertyMap(MCB_SearchWC_wca_tradingMemberName_op)": "=",
-            "MCB_SearchWC_wca_currency": "",
-            "propertyMap(MCB_SearchWC_wca_currency_op)": "=",
-            "GRID_RESPONSE": "RSK383_Table", "operationType": "ET",
-            "searchClicked": "true", "PageNum": "0",
-            "service": "queryCashCollDetLimit", "windowName": "RSK383",
-            "MODE": "DEF_MODE", "compName": "RSK",
-            "lgbinst": "0", "WRITE_APP": "true",
-            "REQ_TYPE": "0", "reqType": "1", "butvalue": "50",
-            "browserType": "IE55", "GuiWinName": "ar_w_DataExport",
-            "compname": "ARCHGUI",
-            "sQuery": (
-                f"Transaction From Date  Equals  {today_encoded}"
-                f" AND Transaction To Date  Equals  {today_encoded}"
-            ),
-            "MCBrowserEventInformation":
-                "sourceElementName~|~Search#*#eventType~|~click#*#butId~|~null",
-            "IXHRts": str(int(time.time() * 1000)), "XHR": "true",
-            "rndaak": rndaak, "theme": "black", "tabId": "panel2",
-            "mode": "DEF_MODE", "GuiBrowserInst": "0",
-            "parentName": "blank", "confViewSize": "50",
-        }
-
-        print("🔍 Running search...")
-        sr = sess.post(RSK_URL, headers=FETCH_H, data=search_base)
-        if "RSK383_Table" not in sr.text:
-            raise RuntimeError("Search failed — RSK383_Table not in response")
-        print("✅ Search successful")
-
-        # ── Trigger export ───────────────────────────────────────────────────
-        export_trigger_time = datetime.now()
-        export_payload = {**search_base}
-        export_payload.update({
-            "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "100",
-            "dateStamp": export_trigger_time.strftime("%Y%m%d"),
-            "timeStamp": export_trigger_time.strftime("%H:%M:%S"),
-            "PageNum": "1", "undefined": "",
-            "MCBrowserEventInformation":
-                "sourceElementName~|~undefined#*#eventType~|~callListExport#*#butId~|~null",
-            "IXHRts": str(int(time.time() * 1000)), "XHR": "true",
-        })
-        er = sess.post(RSK_URL, headers=FETCH_H, data=export_payload)
-        if "ExportBatchSuccess" not in er.text:
-            raise RuntimeError("Export trigger failed — ExportBatchSuccess not in response")
-        print("✅ Export triggered")
-
-        # ── Init ARCH download page ──────────────────────────────────────────
-        resp_arch = _init_arch(sess, rndaak)
-        tab_m = re.search(r'id="tabId"[^>]*value="([^"]+)"', resp_arch.text)
-        if not tab_m:
-            raise RuntimeError("tabId not found in ARCH response")
-        tab_id = tab_m.group(1)
-        print(f"✅ TAB ID: {tab_id}")
-
-        EXPORT_SEARCH_URL = BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do"
         DL_HEADERS = {
             "User-Agent": "Mozilla/5.0", "Accept": "*/*",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -715,23 +663,130 @@ def _download_mcx_deposit_once(output_dir=None):
             "Origin": BASE_URL,
             "Referer": BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do?app=bancsapp?prefix=/ARCHGUI",
         }
+        auto_wait = os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto"
+        try:
+            AFTER_EXPORT_WAIT = int(os.getenv("MCX_EXPORT_RELOGIN_WAIT_SEC", "600"))
+            POLL_BUDGET = int(os.getenv("MCX_EXPORT_POLL_SEC", "600"))
+        except ValueError:
+            AFTER_EXPORT_WAIT, POLL_BUDGET = 600, 600
+        INTERVAL = 15
 
-        # ── Poll until file is ready ─────────────────────────────────────────
-        target_file = None
-        ready = False
-        max_wait, interval, elapsed = 600, 15, 0
-        relogin_attempts = 0
+        def relogin(wait_s):
+            ns, nr, nt = _do_relogin(S["sess"], S["rndaak"], wait_s=wait_s)
+            S["sess"], S["rndaak"] = ns, nr
+            if nt:
+                S["tab"] = nt
 
-        while elapsed < max_wait:
-            print(f"\n🔄 Checking export queue... (elapsed: {elapsed}s)")
-            poll = {
+        class _Kicked(Exception):
+            """Our session was ended (someone else logged in with this account)."""
+
+        class _Exp:                       # what we know about OUR export
+            trigger = None                # datetime the Export button was pressed
+            stamp = ""                    # YYYYMMDDHHMMSS - the last part of OUR file's name
+            target = None                 # file name, once seen in the list
+
+        # ── step 1: search + press Export. Kicked out BEFORE the export is made: log in again AT ONCE (next code), redo it ──
+        def search_and_export():
+            for attempt in range(1, 4):
+                try:
+                    print("\n🌐 Opening RSK383...")
+                    today_api = datetime.now().strftime("%Y%m%d")
+                    today_ui = datetime.now().strftime("%d/%m/%Y")
+                    today_encoded = today_ui.replace("/", "%2F")
+                    r0 = S["sess"].post(RSK_URL, headers={
+                        "User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded",
+                        "Origin": BASE_URL, "Referer": BASE_URL + "/Bancs/common/PageLoader.html",
+                    }, data={
+                        "app": "bancsapp?prefix=/RSK", "page": "/RSK383.do",
+                        "confViewSize": "50", "reqType": "0", "mode": "DEF_MODE",
+                        "parentName": "blank", "browserType": "IE55",
+                        "GuiWinName": "RSK383", "compname": "RSK",
+                        "over_ride_button": "Cancel", "AvlHt": "744", "AvlWd": "1481",
+                        "tblWd": "1465", "GuiBrowserInst": "0", "theme": "black",
+                        "pageId": "RSK383", "wintitle": "Query Detailed Limit",
+                        "availHeight": "816", "availWidth": "1536", "tabId": "panel2",
+                        "rndaak": S["rndaak"], "reqtoken": "", "parentToChildData": "",
+                    })
+                    search_base = {
+                        "MCB_SearchWC_wca_clearingMemberCode": "",
+                        "propertyMap(MCB_SearchWC_wca_clearingMemberCode_op)": "=",
+                        "MCB_SearchWC_wca_tradingMemberCode": "",
+                        "propertyMap(MCB_SearchWC_wca_tradingMemberCode_op)": "=",
+                        "MCB_SearchWC_wca_uCCcode": "",
+                        "propertyMap(MCB_SearchWC_wca_uCCcode_op)": "=",
+                        "MCB_SearchWC_wca_clientName": "",
+                        "propertyMap(MCB_SearchWC_wca_clientName_op)": "=",
+                        "MCB_SearchWC_wca_fromDate": today_api,
+                        "propertyMap(MCB_SearchWC_wca_fromDate_op)": "=",
+                        "MCB_SearchWC_wca_toDate": today_api,
+                        "propertyMap(MCB_SearchWC_wca_toDate_op)": "=",
+                        "MCB_SearchWC_wca_clearingMemberName": "",
+                        "propertyMap(MCB_SearchWC_wca_clearingMemberName_op)": "=",
+                        "MCB_SearchWC_wca_tradingMemberName": "",
+                        "propertyMap(MCB_SearchWC_wca_tradingMemberName_op)": "=",
+                        "MCB_SearchWC_wca_currency": "",
+                        "propertyMap(MCB_SearchWC_wca_currency_op)": "=",
+                        "GRID_RESPONSE": "RSK383_Table", "operationType": "ET",
+                        "searchClicked": "true", "PageNum": "0",
+                        "service": "queryCashCollDetLimit", "windowName": "RSK383",
+                        "MODE": "DEF_MODE", "compName": "RSK",
+                        "lgbinst": "0", "WRITE_APP": "true",
+                        "REQ_TYPE": "0", "reqType": "1", "butvalue": "50",
+                        "browserType": "IE55", "GuiWinName": "ar_w_DataExport",
+                        "compname": "ARCHGUI",
+                        "sQuery": (f"Transaction From Date  Equals  {today_encoded}"
+                                   f" AND Transaction To Date  Equals  {today_encoded}"),
+                        "MCBrowserEventInformation":
+                            "sourceElementName~|~Search#*#eventType~|~click#*#butId~|~null",
+                        "IXHRts": str(int(time.time() * 1000)), "XHR": "true",
+                        "rndaak": S["rndaak"], "theme": "black", "tabId": "panel2",
+                        "mode": "DEF_MODE", "GuiBrowserInst": "0",
+                        "parentName": "blank", "confViewSize": "50",
+                    }
+                    print("🔍 Running search...")
+                    sr = S["sess"].post(RSK_URL, headers=FETCH_H, data=search_base)
+                    if _is_expired(sr.text):
+                        raise _Kicked()
+                    if "RSK383_Table" not in sr.text:
+                        raise RuntimeError("Search failed — RSK383_Table not in response")
+                    print("✅ Search successful")
+                    trig = datetime.now()
+                    export_payload = {**search_base}
+                    export_payload.update({
+                        "Export": "Excel", "enableBatchForExport": "yes", "noPgsToExport": "100",
+                        "dateStamp": trig.strftime("%Y%m%d"),
+                        "timeStamp": trig.strftime("%H:%M:%S"),
+                        "PageNum": "1", "undefined": "",
+                        "MCBrowserEventInformation":
+                            "sourceElementName~|~undefined#*#eventType~|~callListExport#*#butId~|~null",
+                        "IXHRts": str(int(time.time() * 1000)), "XHR": "true",
+                    })
+                    er = S["sess"].post(RSK_URL, headers=FETCH_H, data=export_payload)
+                    if _is_expired(er.text):
+                        raise _Kicked()
+                    if "ExportBatchSuccess" not in er.text:
+                        raise RuntimeError("Export trigger failed — ExportBatchSuccess not in response")
+                    _Exp.trigger = trig
+                    _Exp.stamp = trig.strftime("%Y%m%d%H%M%S")
+                    _Exp.target = None
+                    _state_write(stamp=_Exp.stamp, target="", done=False, date=trig.strftime("%Y%m%d"))
+                    print(f"✅ Export triggered [MCX_EXPORT] time {_Exp.stamp} - this is the file we will wait for")
+                    return
+                except _Kicked:
+                    print(f"🚨 Session ended BEFORE the export was made (try {attempt}/3) — logging in again at once with the next code")
+                    relogin(0)
+            raise RuntimeError("Session kept ending before the export could be made (3 tries)")
+
+        # ── step 2: the list of exported files - EVERY page, not only the first ──
+        def _poll_payload(tab_id):
+            d = _Exp.trigger or datetime.now()
+            return {
                 "MCB_SearchWC_wca_EXPORT_WINDOW_NAME": "",
                 "propertyMap(MCB_SearchWC_wca_EXPORT_WINDOW_NAME_op)": "=",
                 "MCB_SearchWC_wca_EXPORT_TABLE_NAME": "",
                 "propertyMap(MCB_SearchWC_wca_EXPORT_TABLE_NAME_op)": "=",
                 "MCB_SearchWC_wca_EXPORT_DATE_FROM": "",
-                "propertyMap(MCB_SearchWC_wca_EXPORT_DATE_FROM_From)":
-                    export_trigger_time.strftime("%d/%m/%Y"),
+                "propertyMap(MCB_SearchWC_wca_EXPORT_DATE_FROM_From)": d.strftime("%d/%m/%Y"),
                 "propertyMap(MCB_SearchWC_wca_EXPORT_DATE_FROM_To)": "",
                 "propertyMap(MCB_SearchWC_wca_EXPORT_DATE_FROM_op)": "=",
                 "MCB_SearchWC_wca_EXPORT_TIME_FROM": "",
@@ -762,100 +817,255 @@ def _download_mcx_deposit_once(output_dir=None):
                 "MODE": "DEF_MODE", "compName": "ARCHGUI",
                 "lgbinst": "0", "WRITE_APP": "true",
                 "REQ_TYPE": "0", "reqType": "1",
-                "sQuery": "  Equals  " + export_trigger_time.strftime("%Y%m%d"),
+                "sQuery": "  Equals  " + d.strftime("%Y%m%d"),
                 "AvlWd": "1280", "tblWd": "1280",
                 "MCBrowserEventInformation":
                     "sourceElementName~|~Search#*#eventType~|~click#*#butId~|~null",
                 "IXHRts": str(int(time.time() * 1000)), "XHR": "true",
-                "rndaak": rndaak, "theme": "black", "tabId": tab_id,
+                "rndaak": S["rndaak"], "theme": "black", "tabId": tab_id,
                 "mode": "DEF_MODE", "GuiBrowserInst": "0", "parentName": "blank",
                 "confViewSize": "50", "browserType": "IE55",
                 "GuiWinName": "ar_w_DataExport", "compname": "ARCHGUI",
                 "over_override_button": "Cancel",
             }
 
-            res_poll = sess.post(EXPORT_SEARCH_URL, headers=DL_HEADERS, data=poll)
-            if _is_expired(res_poll.text):
-                relogin_attempts += 1
-                if relogin_attempts > 3:
-                    raise RuntimeError(
-                        f"RSK383 session kept expiring after {relogin_attempts - 1} "
-                        f"re-login attempts (at {elapsed}s) — aborting"
-                    )
-                print(f"🚨 Session expired during poll — re-logging in "
-                      f"(attempt {relogin_attempts}/3)")
-                sess, rndaak, _new_tab_id = _do_relogin(sess, rndaak)
-                if _new_tab_id:
-                    tab_id = _new_tab_id   # was the bug: kept polling with the pre-relogin
-                                            # tabId, which always came back with 0 rows
-                time.sleep(interval)
-                elapsed += interval
-                continue
+        def _next_payload(tab_id, page):
+            d = _Exp.trigger or datetime.now()
+            return {
+                "tabId": tab_id, "GuiBrowserInst": "0", "GuiWinName": "ar_w_DataExport", "compname": "ARCHGUI",
+                "xmlReq": "YES", "reqType": "1", "confViewSize": "50", "PageNum": "0",
+                "butvalue": "8", "selectedRow_ar_w_DataExport": str(49 + 50 * (page - 1)),
+                "tblurl": "ar_w_DataExport_Table",
+                "MCBrowserEventInformation": "sourceElementName~|~next#*#eventType~|~click#*#butId~|~8",
+                "rndaak": S["rndaak"], "theme": "black",
+                "sQuery": "  Equals  " + d.strftime("%Y%m%d"),
+                "AvlWd": "1208", "tblWd": "1186",
+                "RowNumKeyForPrevNxt": str(page), "PrevOrNext": "N",
+            }
 
-            soup = BeautifulSoup(res_poll.text, "html.parser")
-            for row in soup.select("table tbody tr"):
-                cols = row.find_all("td")
-                if len(cols) < 7:
+        def _parse_rows(html):
+            out = []
+            for tr in BeautifulSoup(html, "html.parser").select("table tbody tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 7:
                     continue
-                status        = cols[4].text.strip()
-                timestamp_str = cols[5].text.strip()
-                file_name     = cols[6].text.strip()
-                print(f"  🧾 {timestamp_str} | {status} | {file_name}")
+                out.append({"query": tds[2].text.strip().replace("%2F", "/"), "status": tds[4].text.strip(),
+                            "ts": tds[5].text.strip(), "name": tds[6].text.strip()})
+            return out
+
+        def fetch_all_rows():
+            """Every row of the export list (page 1, 2, 3 ... until a page brings nothing new). Raises _Kicked if the session ended."""
+            r1 = S["sess"].post(EXPORT_SEARCH_URL, headers=DL_HEADERS, data=_poll_payload(S["tab"]))
+            if _is_expired(r1.text):
+                raise _Kicked()
+            rows = _parse_rows(r1.text)
+            seen = {(r["ts"], r["name"]) for r in rows}
+            pages = [len(rows)]
+            page = 1
+            while page < 20:
+                rn = S["sess"].post(EXPORT_SEARCH_URL, headers=DL_HEADERS, data=_next_payload(S["tab"], page))
+                if "YOUR SESSION HAS EXPIRED" in rn.text or "sessionExpired" in rn.text:
+                    raise _Kicked()
+                new = [r for r in _parse_rows(rn.text) if (r["ts"], r["name"]) not in seen]
+                if not new:
+                    break
+                for r in new:
+                    seen.add((r["ts"], r["name"]))
+                rows.extend(new)
+                pages.append(len(new))
+                page += 1
+            return rows, pages
+
+        def find_ours(rows):
+            """OUR file: its name ends with the time we pressed Export. Falls back to the time column (+-15 s)."""
+            if _Exp.target:
+                for r in rows:
+                    if r["name"] == _Exp.target:
+                        return r
+            cands = [r for r in rows if _Exp.stamp and _Exp.stamp in r["name"]]
+            good = [r for r in cands if "Transaction From Date" in r["query"]]
+            if good:
+                return good[0]
+            if len(cands) == 1:
+                return cands[0]
+            for r in rows:                                   # older rule (time column), same as before
                 try:
-                    ft = datetime.strptime(timestamp_str, "%d/%m/%Y %H:%M:%S")
-                    if abs((ft - export_trigger_time).total_seconds()) <= 15:
-                        if not target_file:
-                            target_file = file_name
-                            print(f"  🎯 LOCKED: {target_file}")
-                        if file_name == target_file and "Generated" in status:
-                            ready = True
+                    ft = datetime.strptime(r["ts"], "%d/%m/%Y %H:%M:%S")
+                    if abs((ft - _Exp.trigger).total_seconds()) <= 15 and "Transaction From Date" in r["query"]:
+                        return r
                 except Exception:
                     continue
+            return None
 
-            if ready:
-                print("🎉 FILE READY")
+        def wait_for_file(budget_s):
+            """Look every 15 s (all pages) until OUR file says Generated. Returns 'ready' | 'timeout'; raises _Kicked."""
+            elapsed, last_msg = 0, ""
+            while elapsed <= budget_s:
+                print(f"\n🔄 Checking export queue... (elapsed: {elapsed}s)")
+                rows, pages = fetch_all_rows()
+                ours = find_ours(rows)
+                if ours:
+                    if not _Exp.target:
+                        _Exp.target = ours["name"]
+                        _state_write(target=_Exp.target)
+                        print(f"  🎯 LOCKED: {_Exp.target}")
+                    msg = f"[MCX_LIST] {len(rows)} files on {len(pages)} page(s) {pages} - our file {ours['name']}: {ours['status']}"
+                    if "Generated" in ours["status"]:
+                        print(msg)
+                        print("🎉 FILE READY")
+                        return "ready"
+                else:
+                    msg = f"[MCX_LIST] {len(rows)} files on {len(pages)} page(s) {pages} - our file (export {_Exp.stamp}) is not in the list yet"
+                if msg != last_msg or elapsed % 60 == 0:
+                    print(msg)
+                    last_msg = msg
+                time.sleep(INTERVAL)
+                elapsed += INTERVAL
+            return "timeout"
+
+        def open_download_page():
+            resp = _init_arch(S["sess"], S["rndaak"])
+            tm = re.search(r'id="tabId"[^>]*value="([^"]+)"', resp.text)
+            if not tm:
+                raise RuntimeError("tabId not found in ARCH response")
+            S["tab"] = tm.group(1)
+            print(f"✅ TAB ID: {S['tab']}")
+
+        def download_to(file_name, dest):
+            """checkForFile (up to 10 x 5 s) then download `file_name` to `dest`. Raises _Kicked if the session ended."""
+            check_url = (f"{BASE_URL}/Bancs/DownloadFileAction1.do"
+                         f"?fileName={file_name}&action=checkForFile")
+            file_ready = False
+            for i in range(10):
+                print(f"🔍 Checking download availability ({i+1}/10)...")
+                rc = S["sess"].post(check_url, headers=DL_HEADERS, data={"rndaak": S["rndaak"]})
+                if _is_expired(rc.text):
+                    raise _Kicked()
+                if "FileExists" in rc.text:
+                    file_ready = True
+                    break
+                time.sleep(5)
+            if not file_ready:
+                raise RuntimeError("File not available for download after 10 checks")
+            dl_url = (f"{BASE_URL}/Bancs/DownloadFileAction1.do"
+                      f"?fileName={file_name}&action=downloadFile")
+            print("⬇️ Downloading...")
+            dr = S["sess"].post(dl_url, headers=DL_HEADERS, data={"rndaak": S["rndaak"]}, stream=True)
+            if dr.status_code != 200:
+                raise RuntimeError(f"Download HTTP {dr.status_code}")
+            tmp = dest + ".part"
+            with open(tmp, "wb") as f:
+                for chunk in dr.iter_content(8192):
+                    if chunk:
+                        f.write(chunk)
+            if os.path.exists(dest):
+                os.remove(dest)
+            os.replace(tmp, dest)
+
+        def catch_up_earlier_exports():
+            """Files exported by EARLIER captures of today that were still 'In Queue' when they gave up: if they are Generated now,
+            download them into their own folder (the caller passes MCX_PENDING_JSON). One look, no waiting."""
+            raw = os.getenv("MCX_PENDING_JSON", "").strip()
+            if not raw:
+                return
+            try:
+                pend = _mcx_json.loads(raw)
+            except Exception:
+                return
+            pend = [p for p in pend if p.get("stamp") and p.get("out") and not os.path.exists(p["out"])]
+            if not pend:
+                return
+            try:
+                open_download_page()
+                rows, pages = fetch_all_rows()
+            except _Kicked:
+                print("[MCX_CATCHUP] session ended while looking for earlier files - they stay pending")
+                return
+            for p in pend:
+                stamp, out = p["stamp"], p["out"]
+                cands = [r for r in rows if stamp in r["name"] and "Transaction From Date" in r["query"]] \
+                    or [r for r in rows if stamp in r["name"]]
+                if len(cands) != 1 and not any("Transaction From Date" in r["query"] for r in cands):
+                    print(f"[MCX_CATCHUP] folder {p.get('slot')}: its earlier export ({stamp}) is not in the list")
+                    continue
+                r = cands[0]
+                if "Generated" not in r["status"]:
+                    print(f"[MCX_CATCHUP] folder {p.get('slot')}: earlier file {r['name']} is still '{r['status']}' - will look again next time")
+                    continue
+                try:
+                    download_to(r["name"], out)
+                    print(f"[MCX_CATCHUP] folder {p.get('slot')}: earlier file {r['name']} is ready - saved to {out}")
+                    try:
+                        sp = os.path.join(os.path.dirname(out), ".mcx_export_state.json")
+                        st = _mcx_json.load(open(sp, encoding="utf-8"))
+                        st["done"] = True
+                        st["target"] = r["name"]
+                        _mcx_json.dump(st, open(sp, "w", encoding="utf-8"))
+                    except Exception:
+                        pass
+                except _Kicked:
+                    print("[MCX_CATCHUP] session ended while downloading an earlier file - it stays pending")
+                    return
+                except Exception as e:
+                    print(f"[MCX_CATCHUP] folder {p.get('slot')}: could not download {r['name']}: {e}")
+
+        # ── step 3: get our export made (or pick up the one an earlier try already made) ──
+        catch_up_earlier_exports()
+        resume = _state_read()
+        if resume:
+            _Exp.stamp = resume["stamp"]
+            _Exp.target = resume.get("target") or None
+            _Exp.trigger = datetime.strptime(_Exp.stamp, "%Y%m%d%H%M%S")
+            print(f"♻️ [MCX_EXPORT] an earlier try already exported this capture (export time {_Exp.stamp}) - NOT exporting again, looking for that file")
+            open_download_page()
+            try:
+                rows0, pages0 = fetch_all_rows()
+            except _Kicked:
+                rows0, pages0 = [], []
+            if rows0 and find_ours(rows0) is None:
+                print("⚠️ [MCX_EXPORT] that earlier export is not in the list any more - making a new one")
+                _state_write(done=True)
+                resume = None
+                _Exp.target = None
+        if not resume:
+            search_and_export()
+            open_download_page()
+
+        # ── step 4: wait for it. Kicked out AFTER the export: wait, log in again (next code), look for the SAME file ──
+        kicks = 0
+        while True:
+            try:
+                res = wait_for_file(POLL_BUDGET)
+            except _Kicked:
+                kicks += 1
+                if kicks > 3:
+                    raise RuntimeError(f"session kept expiring after {kicks - 1} re-logins — our export "
+                                       f"({_Exp.stamp}) is still on MCX; the next try will look for it again")
+                print(f"🚨 Session ended AFTER the export (kick {kicks}/3) — the file we exported ({_Exp.stamp}) stays on MCX. "
+                      f"Waiting, then logging in again to fetch THAT file (no new export).")
+                relogin(AFTER_EXPORT_WAIT)
+                continue
+            if res == "ready":
                 break
+            if not _Exp.target:
+                raise RuntimeError(f"RSK383 file never appeared in export list (export {_Exp.stamp}, after {POLL_BUDGET}s, all pages checked)")
+            raise RuntimeError(f"RSK383 not generated within {POLL_BUDGET}s (file {_Exp.target})")
+        target_file = _Exp.target
 
-            time.sleep(interval)
-            elapsed += interval
-
-        if not target_file:
-            raise RuntimeError(
-                f"RSK383 file never appeared in export list (after {elapsed}s)"
-            )
-        if not ready:
-            raise RuntimeError(
-                f"RSK383 not generated within {max_wait}s (waited {elapsed}s)"
-            )
-
-        # ── Download ─────────────────────────────────────────────────────────
-        check_url = (f"{BASE_URL}/Bancs/DownloadFileAction1.do"
-                     f"?fileName={target_file}&action=checkForFile")
-        file_ready = False
-        for i in range(10):
-            print(f"🔍 Checking download availability ({i+1}/10)...")
-            rc = sess.post(check_url, headers=DL_HEADERS, data={"rndaak": rndaak})
-            if "FileExists" in rc.text:
-                file_ready = True
+        # ── step 5: download that exact file (if the session ends here too: wait, log in, try again) ──
+        dl_try = 0
+        while True:
+            try:
+                download_to(target_file, out_path)
                 break
-            time.sleep(5)
-        if not file_ready:
-            raise RuntimeError("File not available for download after 10 checks")
+            except _Kicked:
+                dl_try += 1
+                if dl_try > 3:
+                    raise RuntimeError("session kept expiring while downloading — the file is still on MCX; the next try will fetch it")
+                print(f"🚨 Session ended while downloading (try {dl_try}/3) — waiting, then logging in again")
+                relogin(AFTER_EXPORT_WAIT)
 
-        dl_url = (f"{BASE_URL}/Bancs/DownloadFileAction1.do"
-                  f"?fileName={target_file}&action=downloadFile")
-        print("⬇️ Downloading...")
-        dr = sess.post(dl_url, headers=DL_HEADERS, data={"rndaak": rndaak}, stream=True)
-        if dr.status_code != 200:
-            raise RuntimeError(f"Download HTTP {dr.status_code}")
-
-        if os.path.exists(out_path):
-            os.remove(out_path)
-        with open(out_path, "wb") as f:
-            for chunk in dr.iter_content(8192):
-                if chunk:
-                    f.write(chunk)
-
+        _state_write(done=True)
         print(f"🎉 MCX DEPOSIT DOWNLOADED: {out_path}")
         _release_mcx_lock()
         return out_path

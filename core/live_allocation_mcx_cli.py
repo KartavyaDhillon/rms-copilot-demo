@@ -23,6 +23,8 @@ def main():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     os.makedirs(a.out, exist_ok=True)
+    # remember which export is ours, per day + folder: a retry then FETCHES that file instead of pressing Export again
+    os.environ.setdefault("MCX_EXPORT_STATE_FILE", os.path.join(a.out, ".mcx_export_state.json"))
     try:
         path = mod.download_mcx_deposit(a.out)
     except mod.MCXDepositBusyError as e:

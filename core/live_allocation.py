@@ -452,6 +452,47 @@ def step_nmass_ncdex(folder: Path, slot: int, log, cancel) -> dict:
     return {"ok": False, "msg": why}
 
 
+def _pending_mcx_exports(d, current_slot: int, log) -> list:
+    """Earlier folders of today whose MCX export was made but never downloaded (still 'In Queue' when they gave up).
+    A folder whose MCX file is already there (captured, or uploaded by hand) is NOT looked for any more."""
+    out = []
+    try:
+        for s2 in range(1, max(len(slot_times()), 8) + 1):
+            if s2 == int(current_slot):
+                continue
+            fdir = slot_dir(d, s2)
+            sp = Path(fdir) / ".mcx_export_state.json"
+            if not sp.is_file():
+                continue
+            try:
+                st = json.loads(sp.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if st.get("done") or not st.get("stamp"):
+                continue
+            if "MCX web allocation" not in check_files(d, s2)["missing"]:       # file is there already: stop watching it
+                st["done"] = True
+                sp.write_text(json.dumps(st), encoding="utf-8")
+                continue
+            out.append({"slot": s2, "stamp": st["stamp"], "out": str(Path(fdir) / f"MCX_Web_Allocation_{s2:02d}.xlsx")})
+        if out:
+            log("Earlier folder(s) " + ", ".join(str(o["slot"]) for o in out) + " still wait for their MCX file - checking them too.")
+    except Exception as e:
+        log(f"(could not list earlier MCX exports: {e})")
+    return out
+
+
+def _finish_caught_up(d, pend, log) -> None:
+    for o in pend or []:
+        try:
+            if os.path.isfile(o["out"]):
+                res = finish_upload(d, int(o["slot"]), by="auto catch-up")
+                log(f"Folder {o['slot']}: its MCX file was ready now and is saved"
+                    + (" - folder complete." if res.get("complete") else f" - still missing: {', '.join(res.get('missing') or [])}."))
+        except Exception as e:
+            log(f"Folder {o.get('slot')}: saved its MCX file but could not finish the folder: {e}")
+
+
 def step_mcx(folder: Path, slot: int, log, cancel) -> dict:
     """MCX eclear RSK383 -> MCX_Web_Allocation_<NN>.xlsx, RSA code from the seed (always the next code, 4-min wait after
     a session expiry, stop after 2 wrong codes)."""
@@ -463,11 +504,15 @@ def step_mcx(folder: Path, slot: int, log, cancel) -> dict:
     if not _L.acquire("liveallocation", wait_s=int(os.getenv("LIVE_ALLOC_TCS_WAIT_MIN", "20")) * 60, cancel=cancel, log=log):
         return {"ok": False, "msg": "The MCX eclear login stayed busy (MCX CASH MAINTENANCE) - try again."}
     log(f"MCX web allocation download into folder {slot} ...")
+    pend = _pending_mcx_exports(dt.date.today(), slot, log)
+    if pend:
+        env["MCX_PENDING_JSON"] = json.dumps(pend)
     try:
         rc, tail = _run_child([_python(), cli, "--out", str(folder), "--slot", str(int(slot))], env, log,
-                              int(os.getenv("LIVE_ALLOC_MCX_TIMEOUT_MIN", "30")) * 60, cancel)
+                              int(os.getenv("LIVE_ALLOC_MCX_TIMEOUT_MIN", "75")) * 60, cancel)
     finally:
         _L.release("liveallocation")
+    _finish_caught_up(dt.date.today(), pend, log)
     chk = check_files(dt.date.today(), slot)
     if "MCX web allocation" not in chk["missing"]:
         return {"ok": True, "msg": "MCX web allocation downloaded."}
