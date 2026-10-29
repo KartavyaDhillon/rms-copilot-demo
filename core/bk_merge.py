@@ -219,6 +219,30 @@ def _tidy_value(v):
     return v
 
 
+_TIME_PATTERNS = (
+    re.compile(r"\d{8}[_-]?(\d{2})(\d{2})(?:\d{2})?$"),       # ...01102026_0935  /  ...-20260729145211
+    re.compile(r"[_\- ](\d{2})[.:](\d{2})(?:[.:]\d{2})?$"),   # ..._12.38
+)
+
+
+def file_time(name, hint="", ap="", use_mtime=True):
+    """HH:MM for a file: from its name (…_0935, …145211, …_12.38); else the time the backup list gave us
+    (modified / run time); else the file's modified time."""
+    stem = re.sub(r"\.[A-Za-z0-9]{2,5}$", "", os.path.basename(str(name or "")))
+    for rx in _TIME_PATTERNS:
+        m = rx.search(stem)
+        if m and int(m.group(1)) < 24 and int(m.group(2)) < 60:
+            return f"{m.group(1)}:{m.group(2)}"
+    if hint:
+        return str(hint)
+    if use_mtime and ap:
+        try:
+            return time.strftime("%H:%M", time.localtime(os.path.getmtime(ap)))
+        except OSError:
+            pass
+    return ""
+
+
 def tidy_numbers(df):
     """Excel stores 92612705.43 as 92612705.430000007 in the file XML; show it the way Excel does."""
     import polars as pl
@@ -546,8 +570,12 @@ def run_job(job_dir):
                 continue
             if not any(_norm(c) == "date" for c in df.columns):
                 d = it.get("date") or ""
-                df = df.with_columns(pl.lit(f'="{d}"' if d else "").alias("Date")).select(
-                    ["Date"] + [c for c in df.columns])
+                tcol = "Backup Time" if any(_norm(c) == "time" for c in df.columns) else "Time"
+                t = file_time(it.get("name") or os.path.basename(it.get("ap", "")), it.get("time", ""),
+                              it.get("ap", ""), use_mtime=not it.get("nocache"))
+                df = df.with_columns(pl.lit(f'="{d}"' if d else "").alias("Date"),
+                                     pl.lit(t).alias(tcol)).select(
+                    ["Date", tcol] + [c for c in df.columns if c != tcol])
             frames.append(df)
         entry = {"idx": gi, "label": g["label"], "files_total": len(g["items"]), "files_with_rows": len(frames),
                  "missing": g.get("missing", 0), "errors": errs, "rows": 0, "file": "", "fname": ""}

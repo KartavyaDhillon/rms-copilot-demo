@@ -6631,7 +6631,7 @@ async function pxBkDownloadSelected(){
     gchks.forEach(c=>{
       const label=c.dataset.label;
       const g=(window._pxBkGroups||{})[label]||[];
-      groupsToDownload[label]=g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file'}));
+      groupsToDownload[label]=g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file', time:f.time||''}));
     });
     return pxBkDownloadMerged(pipe, groupsToDownload, clientCode, msg);
   }
@@ -6814,7 +6814,7 @@ async function pxBkDownloadOneGroup(label){
   const g=(window._pxBkGroups||{})[label]||[];
   if(!g.length) return;
   const msg=document.getElementById('pxBkDlMsg');
-  return pxBkDownloadMerged(pipe, {[label]: g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file'}))}, clientCode, msg);
+  return pxBkDownloadMerged(pipe, {[label]: g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file', time:f.time||''}))}, clientCode, msg);
 }
 // ── Run-filter chip helpers ─────────────────────────────────────────────────
 function _pxRunCount(pipe){ return pipe==='ms15'?17:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=17 runs/day

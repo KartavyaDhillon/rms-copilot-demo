@@ -3181,13 +3181,13 @@ def _bkm_start(body, ukey, uname):
                     ap = os.path.join(jd, "in", f"{n_in}_{os.path.basename(fn)}")
                     with open(ap, "wb") as f:
                         f.write(content)
-                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": fn, "nocache": True})
+                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": fn, "nocache": True, "time": it.get("time", "")})
                 else:
                     ap = _pbf(pipe, path)
                     if not ap:
                         missing += 1
                         continue
-                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": it.get("name", "")})
+                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": it.get("name", ""), "time": it.get("time", "")})
                     all_paths.append(ap)
             groups.append({"label": str(label), "items": g_items, "missing": missing})
         total = sum(len(g["items"]) for g in groups)
@@ -4391,7 +4391,8 @@ def _readiness_for(_dir, pipe="ctcl"):
     _r = _ff.check(_mcx, kind="mcx90") if _mcx else {
         "ok": False, "age_min": None, "name": "", "why": "not present"}
     items.append({"key": "MCX_90_PERCENT", "ok": _r["ok"],
-                  "example": "MCX 90% (random filename, .xlsx)",
+                  "example": ("MCX Deposit / MCX 90% — using Deposit (.xlsx)" if _want == "deposit"
+                              else "MCX Deposit / MCX 90% — using MCX 90% (.xlsx)"),
                   "age_min": _r.get("age_min"), "why": _r.get("why"),
                   "file": _r.get("name")})
 
@@ -4736,7 +4737,11 @@ def ms15_readiness():
             for it in items:
                 if it["key"] == "MCX_90_PERCENT":
                     it["key"] = "MCX_DEPOSIT_FILE"
-                    it["example"] = "MCX Deposit (.xlsx)"
+                    it["example"] = "MCX Deposit / MCX 90% — using Deposit (.xlsx)"
+        else:
+            for it in items:
+                if it["key"] == "MCX_90_PERCENT":
+                    it["example"] = "MCX Deposit / MCX 90% — using MCX 90% (.xlsx)"
     except Exception:
         pass
     return {"items": items, "folder": _dir, "max_age_min": _base["max_age_min"]}

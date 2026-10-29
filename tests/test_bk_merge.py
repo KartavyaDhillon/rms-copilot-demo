@@ -97,6 +97,14 @@ class BkMergeTests(unittest.TestCase):
         self.assertEqual(out[4], "007.5")
         self.assertIsNone(out[5])
 
+    def test_file_time(self):
+        ft = bk.file_time
+        self.assertEqual(ft("Update Limits01102026_0935.xlsx"), "09:35")
+        self.assertEqual(ft("abc-20260729145211.xlsx"), "14:52")
+        self.assertEqual(ft("MCX_DEPOSIT_12.38.xlsx"), "12:38")
+        self.assertEqual(ft("Update Limits.xlsx", "13:07"), "13:07")
+        self.assertEqual(ft("plain.xlsx", "", "", True), "")
+
     def test_stale_lock_is_taken_over(self):
         lk = os.path.join(self.d, "some.lock")
         open(lk, "w").write("99999999")                   # a pid that does not exist
@@ -136,7 +144,7 @@ class BkMergeTests(unittest.TestCase):
         self.assertTrue(g0["fname"].endswith("_MERGED.csv"))
         self.assertEqual(g1["state"], "no_data")
         txt = open(os.path.join(jd, g0["file"]), encoding="utf-8").read().splitlines()
-        self.assertTrue(txt[0].startswith("Date,Entity"))
+        self.assertTrue(txt[0].startswith("Date,Time,Entity"))
         self.assertIn('""27-10-2026""', txt[1])           # ="27-10-2026" kept as text for Excel
         # second run: everything comes from the cache
         jd2, r2 = self._run_job(groups, ["SN120"])
