@@ -3055,6 +3055,20 @@ def _pb_sum_collateral_pl(df_pl, code_col, val_cols, codes):
         result[code] = round(tot, 2)
     return result
 
+# Optional progress hook for the client-data lookups. core/lookup_job.py (the separate worker process that runs a
+# lookup) sets this; in the normal web server it stays None and nothing changes.
+_PB_PROGRESS = None
+
+
+def _pb_prog(i, n, label=""):
+    cb = _PB_PROGRESS
+    if cb:
+        try:
+            cb(i, n, str(label))
+        except Exception:
+            pass
+
+
 def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
     """Scan this pipeline's backup folders for a client's values per date × run.
 
@@ -3125,7 +3139,8 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
     # Limit to 200 (date, run) combinations to avoid timeout
     sorted_keys = sorted_keys[:200]
 
-    for (cdate, run_n) in sorted_keys:
+    for _pi, (cdate, run_n) in enumerate(sorted_keys):
+        _pb_prog(_pi, len(sorted_keys), f"{cdate.strftime('%d-%m-%Y')}" + (f" · run {run_n}" if run_n else ""))
         if runs and run_n is not None and run_n not in runs: continue
         dl = cdate.strftime("%d-%m-%Y")
         group = by_dir[(cdate, run_n)]   # list of (fn, fpp)
@@ -3484,7 +3499,8 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
     sorted_keys.sort(key=lambda k: k[0], reverse=True)
     sorted_keys = sorted_keys[:200]
 
-    for (cdate, slot) in sorted_keys:
+    for _pi, (cdate, slot) in enumerate(sorted_keys):
+        _pb_prog(_pi, len(sorted_keys), f"{cdate.strftime('%d-%m-%Y')}" + (f" · {slot}" if slot else ""))
         if slot_filter and slot is not None and slot not in slot_filter: continue
         dl = cdate.strftime("%d-%m-%Y")
         group = by_dir[(cdate, slot)]

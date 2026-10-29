@@ -3346,6 +3346,125 @@ def px_backup_merge_cancel(job: str = ""):
     return {"ok": True}
 
 
+# ── Client-data lookups as background workers (same idea as the backup merge) ───────────────────────────────
+_LKP_JOBS = {}
+_LKP_LOCK = _bkm_thr.Lock()
+_LKP_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", ".lookup_jobs")
+
+
+def _lkp_dir(job):
+    if not _BKM_ID_RE.match(job or ""):
+        return None
+    d = os.path.join(_LKP_ROOT, job)
+    return d if os.path.isdir(d) else None
+
+
+def _lkp_kill(j):
+    try:
+        import psutil
+        parent = psutil.Process(j["proc"].pid)
+        for c in parent.children(recursive=True):
+            try:
+                c.kill()
+            except Exception:
+                pass
+        parent.kill()
+    except Exception:
+        try:
+            j["proc"].kill()
+        except Exception:
+            pass
+
+
+def _lkp_start(body, ukey, uname):
+    import time as _t
+    codes = [c.strip().upper() for c in str(body.get("client_codes") or "").replace(";", ",").split(",") if c.strip()]
+    if not codes:
+        return {"ok": False, "error": "Enter at least one client code."}
+    kind = "slot" if body.get("kind") == "slot" else "run"
+    with _LKP_LOCK:
+        for jid, j in list(_LKP_JOBS.items()):
+            if j["user"] == ukey and j["proc"].poll() is None:
+                return {"ok": True, "job": jid, "reattached": True}
+        try:
+            os.makedirs(_LKP_ROOT, exist_ok=True)
+            for n in os.listdir(_LKP_ROOT):                       # tidy old finished jobs
+                pth = os.path.join(_LKP_ROOT, n)
+                if _BKM_ID_RE.match(n) and _t.time() - os.path.getmtime(pth) > 86400:
+                    _bkm_shutil.rmtree(pth, ignore_errors=True)
+                    _LKP_JOBS.pop(n, None)
+        except OSError:
+            pass
+        jid = _t.strftime("%Y%m%d_%H%M%S") + "_" + _bkm_uuid.uuid4().hex[:6]
+        jd = os.path.join(_LKP_ROOT, jid)
+        os.makedirs(jd, exist_ok=True)
+        runs = []
+        for x in str(body.get("runs") or "").split(","):
+            x = x.strip()
+            if x.isdigit():
+                runs.append(int(x))
+        slots = [s.strip() for s in str(body.get("slots") or "").split(",") if s.strip()]
+        job = {"kind": kind, "pipe": (body.get("pipe") or "").strip(), "codes": codes,
+               "from_date": body.get("from_date") or "", "to_date": body.get("to_date") or "",
+               "runs": runs or None, "slots": slots or None}
+        with open(os.path.join(jd, "job.json"), "w", encoding="utf-8") as f:
+            _bkm_json.dump(job, f)
+        flags = 0x08000000 if os.name == "nt" else 0            # no console window (priority is lowered by the worker itself)
+        with open(os.path.join(jd, "worker.log"), "ab") as lf:
+            proc = _bkm_sp.Popen([_bkm_sys.executable, "-u", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                                     "core", "lookup_job.py"), jd],
+                                 cwd=os.path.dirname(os.path.abspath(__file__)), stdin=_bkm_sp.DEVNULL,
+                                 stdout=lf, stderr=_bkm_sp.STDOUT, creationflags=flags)
+        _LKP_JOBS[jid] = {"proc": proc, "dir": jd, "user": ukey, "who": uname, "started": _t.time()}
+    print(f"[lookup] job {jid} started by {uname}: {kind} {codes}", flush=True)
+    return {"ok": True, "job": jid}
+
+
+@app.post("/px/lookup/start")
+async def px_lookup_start(request: Request):
+    from starlette.concurrency import run_in_threadpool as _rtp
+    body = await request.json()
+    ukey, uname = _bkm_who(request)
+    return await _rtp(_lkp_start, body, ukey, uname)
+
+
+@app.get("/px/lookup/status")
+def px_lookup_status(job: str = ""):
+    import time as _t
+    jd = _lkp_dir(job)
+    j = _LKP_JOBS.get(job)
+    if not jd or not j:
+        return {"ok": False, "state": "unknown", "error": "that lookup is no longer available (the server may have restarted)"}
+    prog = _bkm_read(os.path.join(jd, "progress.json")) or {"state": "running", "done": 0, "total": 0, "label": ""}
+    state = prog.get("state", "running")
+    err = prog.get("error", "")
+    if j["proc"].poll() is not None and state == "running":
+        state, err = "failed", "The lookup stopped unexpectedly."
+    if j.get("cancelled"):
+        state = "cancelled"
+    return {"ok": True, "state": state, "done": prog.get("done", 0), "total": prog.get("total", 0),
+            "label": prog.get("label", ""), "elapsed": round(_t.time() - j["started"]), "error": err}
+
+
+@app.get("/px/lookup/result")
+def px_lookup_result(job: str = ""):
+    jd = _lkp_dir(job)
+    res = _bkm_read(os.path.join(jd, "result.json")) if jd else None
+    if res is None:
+        return {"ok": False, "error": "result not available"}
+    return res
+
+
+@app.post("/px/lookup/cancel")
+def px_lookup_cancel(job: str = ""):
+    j = _LKP_JOBS.get(job)
+    if j:
+        j["cancelled"] = True
+        if j["proc"].poll() is None:
+            _lkp_kill(j)
+    return {"ok": True}
+
+
 @app.get("/px/client-lookup")
 def px_client_lookup(pipe: str = "", client_codes: str = "",
                      from_date: str = "", to_date: str = "",

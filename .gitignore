@@ -69,3 +69,4 @@ captcha_auto_log.csv
 # Backup merge: parquet cache + per-search job folders (per-machine)
 .bkcache/
 logs/.merge_jobs/
+logs/.lookup_jobs/
