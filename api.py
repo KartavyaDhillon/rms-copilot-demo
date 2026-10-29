@@ -1134,6 +1134,31 @@ def ops_ask(a: _OpsAsk):
 # broadcast every connected browser subscribes to.
 
 @app.middleware("http")
+async def _slow_request_log(request, call_next):
+    """Prints [SLOW] for any request over 3 s (see core/stall_watch.py) - the first thing to look at when the console feels stuck."""
+    import time as _t
+    t0 = _t.perf_counter()
+    try:
+        return await call_next(request)
+    finally:
+        try:
+            from core import stall_watch as _sw
+            _sw.log_slow(request.method, request.url.path, request.url.query or "", _t.perf_counter() - t0)
+        except Exception:
+            pass
+
+
+@app.on_event("startup")
+async def _stall_watch_startup():
+    try:
+        import asyncio as _aio
+        from core import stall_watch as _sw
+        _sw.start(_aio.get_running_loop())
+    except Exception as _e:
+        print(f"[watch] stall watch not started: {_e}", flush=True)
+
+
+@app.middleware("http")
 async def _lock_identity_middleware(request, call_next):
     """Notes WHO and from WHERE issued each run-starting request, so the lock a
     pipeline claims moments later — and the log file it writes — can both be
