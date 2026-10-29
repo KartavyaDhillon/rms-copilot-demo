@@ -4113,6 +4113,11 @@ def sa_post_email_stream():
                    "PYTHONUNBUFFERED": "1"}
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
                 lf.write(f"# run_post_email_LAS4.py  tag={_tag}  start={_ts}\n")
+                try:
+                    from core.pipeline_box import who_started_line as _wsl
+                    lf.write(_wsl())
+                except Exception:
+                    pass
                 lf.flush()
                 proc = _pe_sub.Popen(
                     [_pe_sys.executable, "-u", script],

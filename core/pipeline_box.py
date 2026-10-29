@@ -41,6 +41,17 @@ def _log_identity(explicit_by=None, explicit_ip=None, lock_key=None):
         return "unknown user", "-"
 
 
+def who_started_line(explicit_by=None, explicit_ip=None, lock_key=None):
+    """One '# started by: ...' line for the top of any log file (never raises)."""
+    try:
+        by, ip = _log_identity(explicit_by, explicit_ip, lock_key)
+    except Exception:
+        by, ip = "unknown user", "-"
+    if not by or by == "unknown user":
+        return "# started by: nobody recorded (automatic run / timer, or started outside the dashboard)\n"
+    return f"# started by: {by}  (from {ip or '-'})\n"
+
+
 def _log_header(title, started_dt, by=None, ip=None, trigger="manual (dashboard)"):
     import socket
     try:

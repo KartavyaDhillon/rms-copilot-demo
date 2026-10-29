@@ -899,10 +899,24 @@ def _download_mcx_deposit_once(output_dir=None):
 
         def wait_for_file(budget_s):
             """Look every 15 s (all pages) until OUR file says Generated. Returns 'ready' | 'timeout'; raises _Kicked."""
-            elapsed, last_msg = 0, ""
+            elapsed, last_msg, net_errs = 0, "", 0
             while elapsed <= budget_s:
                 print(f"\n🔄 Checking export queue... (elapsed: {elapsed}s)")
-                rows, pages = fetch_all_rows()
+                try:
+                    rows, pages = fetch_all_rows()
+                    net_errs = 0
+                except _Kicked:
+                    raise
+                except (requests.exceptions.RequestException, OSError) as _ne:
+                    # One dropped connection (e.g. WinError 10054) must not abandon the wait: our export is safe on MCX.
+                    net_errs += 1
+                    print(f"⚠️ [MCX_LIST] connection problem while looking at the export list ({net_errs}/5): "
+                          f"{type(_ne).__name__} - trying again shortly")
+                    if net_errs >= 5:
+                        raise
+                    time.sleep(INTERVAL)
+                    elapsed += INTERVAL
+                    continue
                 ours = find_ours(rows)
                 if ours:
                     if not _Exp.target:

@@ -64,6 +64,11 @@ def stream_mcx_deposit_download(output_dir=None, caller="sa", extra_env=None):
         _lf = open(os.path.join(_logdir, (f"{caller}_mcx_deposit__{_ts}.log" if _own else f"MCX_DEPOSIT__{_ts}.log")),
                    "w", encoding="utf-8", errors="replace")
         _lf.write(f"# mcx_deposit_downloader.py  start={_ts}\n")
+        try:
+            from core.pipeline_box import who_started_line as _wsl
+            _lf.write(_wsl())
+        except Exception:
+            pass
         _lf.flush()
     except Exception:
         _lf = None

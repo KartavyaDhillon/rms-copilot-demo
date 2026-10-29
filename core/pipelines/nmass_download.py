@@ -261,6 +261,11 @@ def stream_nmass_download(pipe="ctcl", force=False):
     try:
         with open(_logpath, "w", encoding="utf-8", errors="replace") as _lf0:
             _lf0.write(f"# NMASS Download  start={_ts}\n")
+            try:
+                from core.pipeline_box import who_started_line as _wsl
+                _lf0.write(_wsl())
+            except Exception:
+                pass
             _lf0.write(f"# {_folder_note}\n")
     except Exception:
         pass  # never let a logging problem stop the actual download

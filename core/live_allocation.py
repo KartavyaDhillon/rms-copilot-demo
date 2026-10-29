@@ -595,7 +595,7 @@ def archive_slot(d, slot, log=print) -> int:
     n = 0
     for f in list_files(d, slot):
         key = f"{f['name']}|{f['size']}"
-        if key in done:
+        if f["name"].startswith(".") or key in done:      # hidden bookkeeping files (e.g. .mcx_export_state.json) are not archived
             continue
         try:
             save_run_file(PG_PIPELINE, "backup", f["name"], file_path(d, slot, f["name"]).read_bytes(),

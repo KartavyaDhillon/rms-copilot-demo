@@ -1104,13 +1104,14 @@ class NcdexCaptchaUnavailable(RuntimeError):
 
 # NCFE allows ONE login per user. If a run leaves its session open, the next login is told "user already logged in"
 # and burns an extra captcha + a retry. With NCFE_LOGOUT_AFTER=1 (set by the LIVE ALLOCATION process) the run signs
-# out of NCFE when it is finished - also when the download failed. Off by default so the other boxes behave as before.
+# out of NCFE when it is finished - also when the download failed. ON for every box now (CTCL vs NMASS, Margin
+# Shortage 15-min, CLI, Probable, ...): set NCFE_LOGOUT_AFTER=0 to switch it off.
 _NCFE_HOLD = {}
 
 
 def _ncfe_logout():
     fn = _NCFE_HOLD.pop("fn", None)
-    if fn is None or os.getenv("NCFE_LOGOUT_AFTER", "0").strip() != "1":
+    if fn is None or os.getenv("NCFE_LOGOUT_AFTER", "1").strip() != "1":
         return
     try:
         fn()

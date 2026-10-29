@@ -512,6 +512,27 @@ def _download_ncdex_file_once(trade_date):
         shutil.copy2(file_path, os.path.join(MCX_INTRA_SAR_DIR, file_name))
     else:
         print("❌ NCDEX download failed")
+    _ncfe_signout(ncdex_session, headers)
+
+
+def _ncfe_signout(sess, headers):
+    """Sign out of NCFE when done, so the next login (any box) is not told 'user already logged in'. Never raises."""
+    try:
+        dash = "https://ncfe.ncdex.com/Common/Dashboard.aspx"
+        pg = sess.get(dash, headers=headers)
+        sp = BeautifulSoup(pg.text, "html.parser")
+        data = {i["name"]: i.get("value", "") for i in sp.find_all("input", {"type": "hidden"}) if i.get("name")}
+        data["ctl00$imgBtnLogout.x"] = "17"
+        data["ctl00$imgBtnLogout.y"] = "16"
+        h = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+        r = sess.post(dash, data=data, headers=h, allow_redirects=False)
+        loc = r.headers.get("Location") or ""
+        if r.status_code in (301, 302) and "NCFEMain" in loc:
+            print("✅ NCFE: signed out (the next login will not hit 'user already logged in').")
+        else:
+            print(f"⚠️ NCFE: logout was not confirmed (HTTP {r.status_code}).")
+    except Exception as e:
+        print(f"⚠️ NCFE logout did not complete: {type(e).__name__}: {str(e)[:120]}")
 
 
 def is_epi_file_present():

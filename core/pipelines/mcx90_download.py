@@ -273,7 +273,13 @@ def stream_mcx90_download(pipe="ctcl", both=False):
         _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         _lf = open(os.path.join(_logdir, f"{pipe if pipe in ('ctcl', 'ms15') else 'ctcl'}_{'mcx_both' if both else 'mcx90'}__{_ts}.log"), "w",
                    encoding="utf-8", errors="replace")
-        _lf.write(f"# {'MCX 90% + MCX Deposit' if both else 'MCX 90%'} download  start={_ts}\n"); _lf.flush()
+        _lf.write(f"# {'MCX 90% + MCX Deposit' if both else 'MCX 90%'} download  start={_ts}\n")
+        try:
+            from core.pipeline_box import who_started_line as _wsl
+            _lf.write(_wsl())
+        except Exception:
+            pass
+        _lf.flush()
     except Exception:
         _lf = None
 
