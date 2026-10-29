@@ -65,7 +65,7 @@
     var nums = '';
     var age = d.deposit_age_min == null ? 'no MCX deposit file in the base folder' : 'MCX deposit file in the base folder is ' + d.deposit_age_min + ' min old';
     var html = '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">A run with <b>Auto ON</b> starts by itself at its time - nobody has to click, and no pop-up opens. ' +
-      '10 minutes before (runs 1-6) the <b>MCX Deposit</b> file is downloaded, unless a file newer than ' + s.fresh_min + ' minutes is already in the base folder. ' +
+      s.predl_min + ' minutes before (runs 1-6) the <b>MCX Deposit</b> file is downloaded, unless a file newer than ' + s.fresh_min + ' minutes is already in the base folder. ' +
       'If an exchange peak file has not come, it waits and tries again; after the last try a <b>WhatsApp failure alert</b> goes out.</div>' +
       '<div style="font-size:11.5px;margin-bottom:10px">' + nums + '<br><span style="color:var(--dim)">' + esc(age) + ' · timer ' + (d.timer ? 'running' : '<b style="color:var(--red)">NOT running</b>') + ' · now ' + esc(d.now) + '</span></div>' +
       '<table style="width:100%;border-collapse:collapse;margin-bottom:12px"><thead><tr style="text-align:left;font-size:10.5px;color:var(--dim);text-transform:uppercase"><th style="padding:4px 8px">Run</th><th style="padding:4px 8px">Time</th><th style="padding:4px 8px">Auto</th><th style="padding:4px 8px">Today</th></tr></thead><tbody>' + rows + '</tbody></table>' +

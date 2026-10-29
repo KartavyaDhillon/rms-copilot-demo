@@ -62,7 +62,7 @@ class Settings(Base):
         st = AU.get_settings()
         self.assertEqual([st["runs"][str(n)]["time"] for n in (5, 6, 7, 8)], ["17:45", "19:30", "21:30", "23:30"])
         self.assertEqual([st["runs"][str(n)]["auto"] for n in range(1, 9)], [False] * 4 + [True, True, False, False])
-        self.assertEqual((st["predl_min"], st["fresh_min"], st["wait_min"], st["retries"]), (10, 45, 15, 2))
+        self.assertEqual((st["predl_min"], st["fresh_min"], st["wait_min"], st["retries"]), (15, 45, 15, 2))
         for n in range(1, 9):                            # an automatic run waits the same 15 minutes whichever run it is
             self.assertEqual(AU.wait_minutes(n, st), 15)
 
@@ -86,10 +86,10 @@ class Timer(Base):
     def at(self, hh, mm):
         return dt.datetime(2026, 10, 28, hh, mm)
 
-    def test_deposit_ten_minutes_before_then_the_run(self):
+    def test_deposit_fifteen_minutes_before_then_the_run(self):
         st, state = AU.get_settings(), {"date": "x", "runs": {}}
-        self.assertIsNone(AU.due_action(self.at(17, 34), st, state))
-        self.assertEqual(AU.due_action(self.at(17, 35), st, state), ("deposit", 5))
+        self.assertIsNone(AU.due_action(self.at(17, 29), st, state))
+        self.assertEqual(AU.due_action(self.at(17, 30), st, state), ("deposit", 5))
         state["runs"]["5"] = {"deposit": "done"}
         self.assertIsNone(AU.due_action(self.at(17, 44), st, state))
         self.assertEqual(AU.due_action(self.at(17, 45), st, state), ("run", 5))
@@ -203,6 +203,33 @@ class RunSlot(Base):
         self.assertIn("peak file", alerts[0][1])
         self.assertIn("30 minutes", alerts[0][2])
 
+    def test_no_second_alert_when_the_run_fails_only_because_the_deposit_alert_was_sent(self):
+        alerts = []
+        with tempfile.TemporaryDirectory() as d:
+            old = SA.cfg
+            SA.cfg = lambda: {**old(), "output": d}                     # no MCX_DEPOSIT file in the folder
+            try:
+                AU._upd(5, deposit="failed", deposit_alert_sent=True)
+                rs = AU.run_slot(5, run=lambda n: {"ok": False, "msg": "files missing", "peak_missing": None, "stopped": False},
+                                 sleep=lambda s: None, alert=lambda n, h, dd: alerts.append(h) or {"sent": True})
+            finally:
+                SA.cfg = old
+        self.assertEqual(alerts, [])
+        self.assertEqual(rs["status"], "failed")
+
+    def test_other_errors_still_alert_even_after_a_deposit_alert(self):
+        alerts = []
+        with tempfile.TemporaryDirectory() as d:
+            old = SA.cfg
+            SA.cfg = lambda: {**old(), "output": d}
+            try:
+                AU._upd(5, deposit="failed", deposit_alert_sent=True)
+                AU.run_slot(5, run=lambda n: {"ok": False, "msg": "x", "peak_missing": "MCX_PeakMargin.csv", "stopped": False},
+                            sleep=lambda s: None, alert=lambda n, h, dd: alerts.append(h) or {"sent": True})
+            finally:
+                SA.cfg = old
+        self.assertEqual(len(alerts), 1)                                 # a missing peak file is a different problem: its alert goes
+
     def test_run_1_on_auto_follows_the_same_steps_as_5_and_6(self):
         sleeps = []
         AU.run_slot(1, run=lambda n: {"ok": False, "msg": "x", "peak_missing": "f", "stopped": False}, sleep=sleeps.append,
@@ -214,7 +241,7 @@ class RunSlot(Base):
         st["runs"]["1"]["auto"] = True
         st["runs"]["1"]["time"] = t = "08:30"
         h, m = [int(x) for x in t.split(":")]
-        pre = dt.datetime(2026, 10, 28, h, m) - dt.timedelta(minutes=10)
+        pre = dt.datetime(2026, 10, 28, h, m) - dt.timedelta(minutes=15)
         self.assertEqual(AU.due_action(pre, st, {"date": "x", "runs": {"5": {"status": "done"}, "6": {"status": "done"}}}), ("deposit", 1))
 
     def test_success_on_the_second_try_sends_nothing(self):

@@ -2,7 +2,7 @@
 
 What one automatic run does (for a run whose Auto switch is ON):
 
-  1. PRE-STEP, 10 minutes before the run time (runs 1-6 only): download the MCX Deposit file (the "MCX Deposit" button).
+  1. PRE-STEP, 15 minutes before the run time (runs 1-6 only): download the MCX Deposit file (the "MCX Deposit" button).
      It is SKIPPED when a MCX_DEPOSIT file is already in the base folder and was modified less than 45 minutes ago
      (somebody uploaded it, or an earlier try got it). The RSA code is filled by itself (Auto-fill CAPTCHA / TOKEN).
   2. At the run time: Download -> SA Processing (-> LAS Funding for runs 1-4; runs 5-8 never run LAS Funding).
@@ -77,7 +77,7 @@ def defaults():
         runs[str(n)] = {"time": t, "auto": auto}
     return {
         "runs": runs,
-        "predl_min": _env_int("SA_AUTO_PREDL_MIN", 10),        # MCX deposit starts this long before the run
+        "predl_min": _env_int("SA_AUTO_PREDL_MIN", 15),        # MCX deposit starts this long before the run
         "fresh_min": _env_int("SA_AUTO_FRESH_MIN", 45),        # a deposit file newer than this is not downloaded again
         "wait_min": _env_int("SA_AUTO_WAIT_MIN", 15),          # wait for a missing peak file - EVERY automatic run (the old 5 minutes is only for a run started by hand)
         "retries": _env_int("SA_AUTO_RETRIES", 2),
@@ -408,6 +408,17 @@ def run_slot(n, st=None, run=None, sleep=time.sleep, alert=None, cancel=lambda: 
         break
     pm = last.get("peak_missing")
     waited = wait * st["retries"]
+    # The MCX Deposit alert already said "Short Allocation will not run": do not send a second alert for that same cause.
+    # Only when the deposit alert really went out, the file is still missing and the run did not fail for another visible
+    # reason (a missing peak file etc.).
+    try:
+        if (not pm and run_state(n).get("deposit") == "failed" and run_state(n).get("deposit_alert_sent")
+                and deposit_file_age_min() is None):
+            log(f"SA-{n:02d}: failed because the MCX deposit file is missing - that alert was already sent, not sending another.")
+            return _upd(n, status="failed", ended=dt.datetime.now().strftime("%H:%M:%S"),
+                        msg="MCX deposit file missing (alert already sent)", alert_sent=True, alert_reason="MCX deposit alert already sent")
+    except Exception:
+        pass
     if pm:
         head = f"The exchange peak file has not arrived yet: {pm}."
         detail = f"Waited {waited} minutes over {st['retries']} retries; the file was still missing. Please check the exchange / upload it by hand and run SA-{n:02d}."
@@ -478,8 +489,12 @@ def tick(now=None, **kw):
         r = step_deposit(n, st, **{k: v for k, v in kw.items() if k in ("download", "sleep", "now_fn")})
         _upd(n, deposit=r["status"], deposit_msg=r["msg"][:200])
         if r["status"] == "failed":
-            # No alert here on purpose: the run itself checks for this file first and, if it is missing, fails and sends its own alert.
-            log(f"SA-{n:02d}: the MCX deposit file is still not there - the run will fail its file check and send the alert.")
+            # ONE alert for this: it says the run will not happen. When the run then fails only because this file is missing,
+            # run_slot() does not send a second alert (any other error of the run still sends its own).
+            rec = send_alert(n, "MCX DEPOSIT DOWNLOAD FAILED in Short Allocation",
+                             f"{r['msg'][:150]} - SHORT ALLOCATION SA-{n:02d} WILL NOT RUN NOW.")
+            _upd(n, deposit_alert_sent=bool(rec.get("sent")), deposit_alert_reason=rec.get("reason", ""))
+            log(f"SA-{n:02d}: MCX deposit failed - alert " + ("sent." if rec.get("sent") else "not sent: " + rec.get("reason", "")))
     elif kind == "run":
         run_slot(n, st, **{k: v for k, v in kw.items() if k in ("run", "sleep", "alert")})
     return act
