@@ -2525,6 +2525,8 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None, slots=None):
         except Exception: return None
     df, dt = pd(from_date), pd(to_date)
     res = []
+    seen_disk = set()   # (iso date, lowercase filename, size, modified minute): the very same file copied into two
+                        # backup folders must be listed once, not twice
     seen_keys = set()   # (iso date, lowercase filename, size) — used to skip a
                          # Postgres row when the exact same file was already
                          # found on disk, so a machine that still has BOTH
@@ -2562,6 +2564,9 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None, slots=None):
                 fdate = cdate or datetime.date.fromtimestamp(st.st_mtime)
                 if df and fdate < df: continue
                 if dt and fdate > dt: continue
+                _dk = (fdate.isoformat(), fn.lower(), st.st_size, int(st.st_mtime // 60))
+                if _dk in seen_disk: continue
+                seen_disk.add(_dk)
                 res.append({
                     "path": fpp, "name": fn,
                     "date": fdate.strftime("%d-%m-%Y"),
