@@ -5998,7 +5998,8 @@ async function pxStop(pipe){
     pxEv(pipe,false,'Process terminated by user','stopped');
   }
 }
-function pxEv(pipe,ok,msg,what){ const box=document.getElementById('pxEvents-'+pipe); if(!box) return; const d=document.createElement('div'); d.className='sa-ev '+(ok?'ok':'bad'); d.innerHTML=`<span class="ic">${ok?'✓':'!'}</span><span>${String(msg||'').replace(/[<>]/g,'')}</span><span class="what">${what||''}</span>`; box.appendChild(d); }
+function pxEv(pipe,ok,msg,what){ if(pipe==='ms15' && ok) return;   /* Margin Shortage: the step list above is the one log; only problems get their own red row */
+  const box=document.getElementById('pxEvents-'+pipe); if(!box) return; const d=document.createElement('div'); d.className='sa-ev '+(ok?'ok':'bad'); d.innerHTML=`<span class="ic">${ok?'✓':'!'}</span><span>${String(msg||'').replace(/[<>]/g,'')}</span><span class="what">${what||''}</span>`; box.appendChild(d); }
 // Live stage indicator. A pipeline prints "[FRIENDLY_MSG] <stage>" and
 // pipeline_box._status() turns it into a {type:'note'} event — but pxHandle
 // had no branch for 'note' at all, so those events were silently dropped and
