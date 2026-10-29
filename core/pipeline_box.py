@@ -3139,6 +3139,8 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
     # Limit to 200 (date, run) combinations to avoid timeout
     sorted_keys = sorted_keys[:200]
 
+    # Runs the user did not tick are dropped BEFORE counting, so progress ("day X of N") only counts real work.
+    sorted_keys = [k for k in sorted_keys if not (runs and k[1] is not None and k[1] not in runs)]
     for _pi, (cdate, run_n) in enumerate(sorted_keys):
         _pb_prog(_pi, len(sorted_keys), f"{cdate.strftime('%d-%m-%Y')}" + (f" · run {run_n}" if run_n else ""))
         if runs and run_n is not None and run_n not in runs: continue
@@ -3499,6 +3501,7 @@ def pb_cli_client_lookup(client_codes, from_date="", to_date="", slots=None):
     sorted_keys.sort(key=lambda k: k[0], reverse=True)
     sorted_keys = sorted_keys[:200]
 
+    sorted_keys = [k for k in sorted_keys if not (slot_filter and k[1] is not None and k[1] not in slot_filter)]
     for _pi, (cdate, slot) in enumerate(sorted_keys):
         _pb_prog(_pi, len(sorted_keys), f"{cdate.strftime('%d-%m-%Y')}" + (f" · {slot}" if slot else ""))
         if slot_filter and slot is not None and slot not in slot_filter: continue
