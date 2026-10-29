@@ -66,6 +66,7 @@
     '.la-chip{padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)}' +
     '.la-chip.on{border-color:rgba(59,130,246,.6);background:rgba(59,130,246,.14);color:var(--blue)}' +
     '.la-in{background:transparent;border:1px solid var(--line-2);border-radius:8px;color:var(--ink);padding:7px 9px;font-size:12.5px;font-family:inherit}' +
+    '.la-in{color-scheme:dark}.la-in option{background:#111823;color:#e9eef6}' +
     '.la-lbl{font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);margin:0 0 5px}' +
     '.la-ovr{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:9px 0;border-bottom:1px solid var(--line);font-size:12.5px}';
   document.head.appendChild(css);
@@ -430,18 +431,30 @@
   };
 
   // ───────────────────────── Upload files (captured by hand) ─────────────────────────
+  function upOpts(d, forToday) {
+    var slots = (d && d.slots) || [];
+    var first = (slots.filter(function (s) { return s.state !== 'done' && s.state !== 'upcoming'; })[0] || slots[0] || { slot: 1 }).slot;
+    return slots.map(function (s) { return '<option value="' + s.slot + '"' + (s.slot === first ? ' selected' : '') + '>Folder ' + s.slot + ' · ' + esc(s.time) + ' · ' + esc(plain(STATE_TXT[s.state] || s.state)) + ' · ' + s.files + '/' + s.total + ' files</option>'; }).join('');
+  }
+  function isoToday() { var t = new Date(); return t.getFullYear() + '-' + ('0' + (t.getMonth() + 1)).slice(-2) + '-' + ('0' + t.getDate()).slice(-2); }
+  window.laUpDate = function () {          // another day chosen: show THAT day's folders
+    var dt = ($('laUpDay') || {}).value || isoToday(), sel = $('laUpSlot'); if (!sel) return;
+    sel.innerHTML = '<option>Loading…</option>';
+    fetch(API + '/live-alloc/status?date=' + encodeURIComponent(dt)).then(function (r) { return r.json(); })
+      .then(function (d) { sel.innerHTML = upOpts(d); var h = $('laUpDayHint'); if (h) h.textContent = (dt === isoToday()) ? 'Today' : 'Past day - files will be saved into that day\'s folder'; })
+      .catch(function () { sel.innerHTML = '<option value="1">Could not load folders</option>'; });
+  };
   window.laUpload = function () {
     var d = S.data || { slots: [] };
-    var first = (d.slots.filter(function (s) { return s.state !== 'done' && s.state !== 'upcoming'; })[0] || d.slots[0] || { slot: 1 }).slot;
-    var opts = d.slots.map(function (s) { return '<option value="' + s.slot + '"' + (s.slot === first ? ' selected' : '') + '>Folder ' + s.slot + ' · ' + esc(s.time) + ' · ' + esc(plain(STATE_TXT[s.state] || s.state)) + ' · ' + s.files + '/' + s.total + ' files</option>'; }).join('');
     modal('⬆️ ' + TITLE + ' - upload files',
-      '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">Captured a folder by hand today? Choose its number and add the files here. They are saved in that folder, appear in <b>Backup files</b>, and are copied to PostgreSQL. When all 5 files are there the folder turns green by itself.</div>' +
-      '<div class="la-lbl">Folder (today)</div><select id="laUpSlot" class="la-in" style="width:100%;margin-bottom:12px">' + opts + '</select>' +
+      '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">Captured a folder by hand? Choose the <b>date</b> (today, or an earlier day that failed), then its number, and add the files here. They are saved in that day\'s folder, appear in <b>Backup files</b>, and are copied to PostgreSQL. When all 5 files are there the folder turns green by itself.</div>' +
+      '<div style="display:grid;grid-template-columns:200px 1fr;gap:12px;margin-bottom:12px"><div><div class="la-lbl">Date</div><input type="date" id="laUpDay" class="la-in" style="width:100%" value="' + isoToday() + '" max="' + isoToday() + '" onchange="laUpDate()"></div>' +
+      '<div><div class="la-lbl">Folder <span id="laUpDayHint" style="text-transform:none;letter-spacing:0">Today</span></div><select id="laUpSlot" class="la-in" style="width:100%">' + upOpts(d) + '</select></div></div>' +
       '<div style="padding:10px 14px;border:1px dashed var(--line-2);border-radius:10px;font-size:11.5px;line-height:1.9;margin-bottom:12px"><b style="font-size:10.5px;letter-spacing:.5px;text-transform:uppercase">Accepted names</b><br>' +
       '<span style="font-family:var(--mono);color:var(--teal)">CM_ClientLevelCollaterals_*.csv<br>FO_ClientLevelCollaterals_*.csv<br>CO_ClientLevelCollaterals_*.csv<br>ClientNetEffectiveDeposits*.csv<br>MCX_Web_Allocation_&lt;number&gt;.xlsx</span></div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><button class="sa-save" data-no-busy="1" onclick="laUpPick()">📄 Choose files…</button>' +
       '<button class="sa-save" data-no-busy="1" style="background:var(--blue);color:var(--blue-d)" onclick="laUpPick(true)">📁 Choose a whole folder…</button></div>' +
-      '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">Whole folder: pick the folder you captured - every file in it that this capture makes is uploaded into the folder number chosen above; other files are ignored.</div>' +
+      '<div style="font-size:11.5px;color:var(--dim);margin-top:6px">Whole folder: pick the folder you captured - every file in it that this capture makes is uploaded into the date and folder number chosen above; other files are ignored.</div>' +
       '<div id="laUpRes" style="margin-top:12px"></div>');
   };
   var ACCEPT = [/^CM_ClientLevelCollaterals_.*\.(csv|xlsx)$/i, /^FO_ClientLevelCollaterals_.*\.(csv|xlsx)$/i, /^CO_ClientLevelCollaterals_.*\.(csv|xlsx)$/i,
@@ -482,10 +495,10 @@
     inp.click();
   };
   function laUpSend(files, skipped) {
-    var slot = ($('laUpSlot') || {}).value || '1', res = $('laUpRes');
-    if (res) res.innerHTML = '<div style="color:var(--muted);font-size:12.5px"><span class="la-spin"></span>Uploading ' + files.length + ' file(s) into folder ' + esc(slot) + '…</div>';
+    var slot = ($('laUpSlot') || {}).value || '1', res = $('laUpRes'), day = ($('laUpDay') || {}).value || '';
+    if (res) res.innerHTML = '<div style="color:var(--muted);font-size:12.5px"><span class="la-spin"></span>Uploading ' + files.length + ' file(s) into folder ' + esc(slot) + (day ? ' of ' + esc(day) : '') + '…</div>';
     var fd = new FormData(); files.forEach(function (f) { fd.append('files', f); });
-    fetch(API + '/live-alloc/upload?slot=' + encodeURIComponent(slot), { method: 'POST', body: fd })
+    fetch(API + '/live-alloc/upload?slot=' + encodeURIComponent(slot) + (day ? '&date=' + encodeURIComponent(day) : ''), { method: 'POST', body: fd })
       .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); })
       .then(function (j) {
         if (!res) return;

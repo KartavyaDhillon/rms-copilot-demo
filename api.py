@@ -364,7 +364,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
                             '<script src="/platform/js/process-alloc.js?v=7"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
-                            '<script src="/platform/js/process-liveallocation.js?v=6"></script>'
+                            '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
@@ -752,7 +752,7 @@ from fastapi import File as _LA_File, UploadFile as _LA_UploadFile
 from typing import List as _LA_List
 
 @app.post("/live-alloc/upload")
-async def la_upload(request: Request, slot: int = 0, files: _LA_List[_LA_UploadFile] = _LA_File(...)):
+async def la_upload(request: Request, slot: int = 0, date: str = "", files: _LA_List[_LA_UploadFile] = _LA_File(...)):
     """Add files you captured by hand to one of TODAY's numbered folders (same names as the automatic capture).
     Saved in the folder, shown in Backup files, copied to PostgreSQL, and the folder turns green when all 5 are there."""
     from core import live_allocation as _la
@@ -763,7 +763,11 @@ async def la_upload(request: Request, slot: int = 0, files: _LA_List[_LA_UploadF
     if _la.is_running() and _la.status().get("running") == slot:
         return JSONResponse({"ok": False, "error": "That folder is being captured right now - Stop it first."}, status_code=409)
     by = (_actor(request)[0] or "")
-    d = _dt.date.today()
+    d = _la_date(date)                       # today unless a past day was chosen
+    if d > _dt.date.today():
+        return JSONResponse({"ok": False, "error": "That date is in the future."}, status_code=400)
+    if d != _dt.date.today() and (_dt.date.today() - d).days > 60:
+        return JSONResponse({"ok": False, "error": "That date is more than 60 days ago."}, status_code=400)
     ok, rejected = [], []
     for f in files:
         try:
