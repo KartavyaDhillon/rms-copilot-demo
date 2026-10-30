@@ -394,6 +394,34 @@ _LOG_ENTRY_RE = re.compile(
 
 _RESPONSE_MSGID_RE = re.compile(r"^(\S+)\s+(\{.*\})$", re.DOTALL)
 
+# Order of the 16 fields in a CSV inquiry record. For big requests the exchange
+# sends the same records as a JSON list of objects instead of one CSV string.
+_INQUIRY_JSON_KEYS = ("curDate", "segment", "cmCode", "tmCode", "cpCode", "cliCode",
+                      "accType", "amt", "filler1", "filler2", "filler3", "filler4",
+                      "filler5", "filler6", "action", "errCd")
+
+
+def inquiry_to_str(value):
+    """Return the inquiry reply as the usual 'rec^rec^...' CSV string.
+
+    The exchange answers either with that string, or (large requests) with a
+    list of JSON objects holding the same 16 fields. Anything else gives ''.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        value = [value]
+    if isinstance(value, (list, tuple)):
+        recs = []
+        for item in value:
+            if isinstance(item, dict):
+                recs.append(",".join("" if item.get(k) is None else str(item.get(k))
+                                     for k in _INQUIRY_JSON_KEYS))
+            elif isinstance(item, str) and item:
+                recs.append(item)
+        return "^".join(recs)
+    return ""
+
 def parse_master_log_file(filepath, source_filename, email_received_time, unparsed_lines,
                           shared_rows_by_msgid=None, pending_inquiries=None):
     """
@@ -497,7 +525,7 @@ def parse_master_log_file(filepath, source_filename, email_received_time, unpars
 
         elif kind == "statusInquiry":  # statusInquiry Response
             data = payload.get("data") or {}
-            inquiry_str = data.get("inquiryResponse") or "" if isinstance(data, dict) else ""
+            inquiry_str = inquiry_to_str(data.get("inquiryResponse")) if isinstance(data, dict) else ""
 
             if not inquiry_str:
                 # A successful inquiry with an empty body is normal, not an error.
