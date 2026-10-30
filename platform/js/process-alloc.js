@@ -137,7 +137,7 @@
       '<div id="allocChips"></div>' +
       '<input type="text" id="allocCC" placeholder="Type a code and press Enter, or paste several" ' + INPW + ' onkeydown="allocKey(event)" onpaste="setTimeout(allocAdd,0)">' +
       '<div style="font-size:10.5px;color:var(--dim);margin-top:6px">Applies to every sheet of the report. Codes with no record in the window are listed after the run.</div></div>' +
-      '<div style="font-size:11.5px;color:var(--dim);margin-top:14px">The report is e-mailed to the saved <b style="color:var(--ink)">Email To / CC</b> when it finishes, and can also be downloaded below.</div>' +
+      '<div style="font-size:11.5px;color:var(--dim);margin-top:14px">The report is e-mailed to the saved <b style="color:var(--ink)">Email To / CC</b> when it finishes.</div>' +
       '<div id="allocBtnRow" style="display:flex;gap:8px;margin-top:16px"></div>' +
       '<div id="allocLive" style="font-size:11.5px;min-height:18px;margin-top:10px"></div>' +
       '<div id="allocResult"></div>';
@@ -307,7 +307,7 @@
       // blank is fine: the report then goes to the saved Email To / CC (the server says so if none is saved)
       q += '&mailto=';
     }
-    S.busy = true; setMsg('', '');
+    S.busy = true; S.lastMode = S.mode; setMsg('', '');
     var ctl = new AbortController(); S.ctl = ctl;
     fetch(API + '/alloc/run-stream?' + q, { signal: ctl.signal }).then(function (resp) {
       if (!resp.ok) return resp.json().then(function (j) { throw new Error(j.error || ('Server ' + resp.status)); });
@@ -335,7 +335,14 @@
       setMsg(esc((e && e.message) || 'Connection interrupted — the run continues on the server; reopen this window to follow it.'), 'warn');
     }).then(function () { S.busy = false; S.ctl = null; return load(); }).then(function () {
       var p = (S.data || {}).progress || {};
-      if (p.ok === true && !S.msg) setMsg('&#10003; Report ready — download below.', 'ok'); else paintDynamic();
+      var dd = S.data || {}, was = S.lastMode;
+      var rec = (was === 'reclose') ? (dd.last_close || {}) : (dd.last_manual || {});
+      if (p.ok === true && !S.msg) {
+        var to = rec.delivered ? ' to ' + esc(rec.delivered) : '';
+        if (rec.empty) setMsg(esc(rec.msg || 'Nothing to report for this window.'), 'warn');
+        else if (was === 'reclose') setMsg('&#10003; Scheduler Report sent' + to + '. Nightly marker moved to ' + esc(pretty(dd.marker)) + '.', 'ok');
+        else setMsg('&#10003; Report e-mailed' + to + '.', 'ok');
+      } else paintDynamic();
       tileRefresh();
     });
   };

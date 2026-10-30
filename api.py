@@ -362,7 +362,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-locks.js?v=9"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=4"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
-                            '<script src="/platform/js/process-alloc.js?v=10"></script>'
+                            '<script src="/platform/js/process-alloc.js?v=11"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
