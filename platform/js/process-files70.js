@@ -2,7 +2,7 @@
    MCX CASH MAINTENANCE). "Open" shows the window: date (default = previous trading day), one tile per group of files
    (NSE CM / FO / CO / CD, MCX, NCDEX end file, NCDEX peaks, EPI) with found / total, Download missing, Credentials,
    Backup files (full day folder, chosen groups or chosen files -> one zip), Logs and Stop.
-   Files go ONLY into D:\76 FILES DOWNLOADER\BACKUPFILES AUTOMATED\<date>\ - nothing is copied anywhere else.
+   Files go ONLY into <console data>\76 FILES DOWNLOADER\BACKUPFILES AUTOMATED\<date>\ - nothing is copied anywhere else.
    Backend: /files70/* (api.py) -> core/files70.py. Injected at serve time (see api.py /legacy). */
 (function () {
   'use strict';
@@ -21,7 +21,7 @@
     return fetch(API + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })
       .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
   }
-  function hideTip() { var t = $('globalTip'); if (t) t.style.display = 'none'; }
+  function hideTip() { var t = $('globalTip'); if (t) { t.style.display = 'none'; t.classList.remove('show'); } }
   function modal(t, h) { hideTip(); if (typeof window.saShowModal === 'function') window.saShowModal(t, h); }
   function dmy(iso) { var p = String(iso || '').split('-'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso; }
 
@@ -34,7 +34,7 @@
     '.f7-kpi .v small{font-size:12px;font-weight:600;color:var(--dim)}' +
     '.f7-kpi .f{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
     '.f7-bar{height:5px;border-radius:9px;background:var(--line);margin-top:7px;overflow:hidden}.f7-bar i{display:block;height:100%;background:var(--green);transition:width .6s}' +
-    '.f7-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}' +
+    '.f7-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:stretch}' +
     '@media(max-width:820px){.f7-kpis,.f7-grid{grid-template-columns:repeat(2,1fr)}}' +
     '.f7-g{background:var(--panel-2);border:1px solid var(--line);border-radius:13px;padding:12px 11px 11px;text-align:center;display:flex;flex-direction:column;gap:6px;min-width:0}' +
     '.f7-g.done{border-color:rgba(52,211,153,.4)}.f7-g.part{border-color:rgba(251,191,36,.5)}.f7-g.none{border-color:rgba(248,113,113,.45)}' +
@@ -43,7 +43,7 @@
     '.f7-n{font-size:20px;font-weight:750;font-variant-numeric:tabular-nums}.f7-n small{font-size:12px;color:var(--dim);font-weight:600}' +
     '.f7-st{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim)}' +
     '.f7-g.done .f7-st{color:var(--green)}.f7-g.part .f7-st{color:var(--amber)}.f7-g.none .f7-st{color:var(--red)}.f7-g.running .f7-st{color:var(--amber)}' +
-    '.f7-miss{font-size:10.5px;color:var(--muted);min-height:26px;line-height:1.35;overflow:hidden;word-break:break-all;font-family:var(--mono)}' +
+    '.f7-miss{font-size:10.5px;color:var(--muted);line-height:1.4;overflow:hidden;word-break:break-all;font-family:var(--mono);flex:1;min-height:58px;max-height:58px;display:flex;align-items:center;justify-content:center}.f7-g>.f7-btn,.f7-g>.f7-link{margin-top:auto}.f7-g .f7-link{padding:8px 0;text-align:center}' +
     '.f7-btn{width:100%;font-family:var(--sans);font-weight:650;font-size:12px;border:0;border-radius:9px;padding:8px;cursor:pointer;background:var(--blue);color:var(--blue-d)}' +
     '.f7-btn:disabled{background:var(--panel-3);color:var(--dim);cursor:not-allowed}' +
     '.f7-btn.big{font-size:13.5px;padding:11px}.f7-btn.amber:disabled{background:var(--amber);color:var(--amber-d);cursor:default}' +
@@ -99,7 +99,7 @@
   function tb(label, fn, tip, extra) {
     return '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap' + (extra || '') + '" onclick="' + fn + '"' + (tip ? ' data-tip="' + esc(tip) + '"' : '') + '>' + label + '</button>';
   }
-  window.f7Sub = function (fn) { window._saReturn = f7Open; fn(); };
+  window.f7Sub = function (fn) { window._saReturn = f7Open; hideTip(); fn(); [60, 250, 700].forEach(function (ms) { setTimeout(hideTip, ms); }); };
   window.f7Creds = function () { f7Sub(function () { if (typeof window.pxCredentials === 'function') window.pxCredentials(PIPE); }); };
   window.f7Logs = function () { f7Sub(function () { if (typeof window.pxLogs === 'function') window.pxLogs(PIPE); }); };
 
@@ -249,7 +249,7 @@
     b.date = S.date || b.date;
     modal('📦 ' + TITLE + ' - backup files',
       '<div style="font-size:12.5px;color:var(--muted);line-height:1.55;margin-bottom:12px">Pick a date, then what to put in the zip. The zip keeps the same layout as the day folder ' +
-      '(<span style="font-family:var(--mono)">date / CM, FO, CO, CD, MCX, NCDEX, MCX &amp; NCDEX EODSAR, 1-8 / files</span>), so it can be pasted on the server as it is. Folders 1-8 come from LIVE ALLOCATION CAPTURE.</div>' +
+      '(<span style="font-family:var(--mono)">date / CM, FO, CO, CD, MCX, NCDEX, MCX &amp; NCDEX EODSAR, 1-8 / files</span>), so it can be pasted on the server as it is. Folders 1-8 are the LIVE ALLOCATION CAPTURE slots of that day; a folder with no files is shown as \u2717.</div>' +
       '<div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:12px"><div><div class="f7-lbl">Date</div><input type="date" id="f7BkDate" class="f7-in" value="' + esc(b.date) + '" onchange="f7BkDate(this.value)"></div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
         '<button class="f7-chip' + (b.mode === 'full' ? ' on' : '') + '" id="f7BkM_full" onclick="f7BkMode(\'full\')">Full day folder</button>' +
@@ -271,6 +271,9 @@
     get('/files70/files?date=' + encodeURIComponent(b.date)).then(function (j) { b.data = j; f7BkPaint(); })
       .catch(function () { var l = $('f7BkBody'); if (l) l.innerHTML = '<div style="color:var(--red)">Could not read the folders.</div>'; });
   };
+  var FOLDER_NAMES = { 'CM': 'NSE CM', 'FO': 'NSE FO', 'CO': 'NSE CO', 'CD': 'NSE CD', 'MCX': 'MCX', 'NCDEX': 'NCDEX', 'MCX & NCDEX EODSAR': 'MCX & NCDEX EODSAR', '(day folder)': 'Day folder (EPI.xlsx)' };
+  function folderLabel(k) { return /^\d+$/.test(k) ? 'Live Allocation Capture \u00b7 folder ' + k : (FOLDER_NAMES[k] || k); }
+  var ALL_FOLDERS = ['CM', 'FO', 'CO', 'CD', 'MCX', 'NCDEX', 'MCX & NCDEX EODSAR', '(day folder)', '1', '2', '3', '4', '5', '6', '7', '8'];
   var FOLDER_ORDER = ['CM', 'FO', 'CO', 'CD', 'MCX', 'NCDEX', 'MCX & NCDEX EODSAR', '(day folder)'];
   function folderKeys(obj) {
     return Object.keys(obj).sort(function (a, b) {
@@ -311,7 +314,7 @@
         '<div style="max-height:46vh;overflow:auto">' + folderKeys(byFolder).map(function (folder) {
           var fs = byFolder[folder], on = fs.filter(function (f) { return b.sel[f.rel]; }).length;
           return '<details style="border:1px solid var(--line);border-radius:10px;padding:6px 12px;margin-bottom:6px"' + (q || Object.keys(byFolder).length < 3 ? ' open' : '') + '>' +
-            '<summary style="cursor:pointer;font-size:12.5px;font-weight:650">' + esc(folder) + ' <span style="font-weight:400;color:var(--dim)">· ' + fs.length + ' files' + (on ? ' · ' + on + ' ticked' : '') + '</span>' +
+            '<summary style="cursor:pointer;font-size:12.5px;font-weight:650">' + esc(folderLabel(folder)) + ' <span style="font-weight:400;color:var(--dim)">· ' + fs.length + ' files' + (on ? ' · ' + on + ' ticked' : '') + '</span>' +
             ' <button class="f7-link" onclick="event.preventDefault();f7BkFolder(\'' + esc(folder) + '\')">tick all</button></summary>' +
             fs.map(function (f) {
               var nm = f.rel.split('/').pop();
@@ -323,7 +326,12 @@
     } else {
       var folders = {};
       files.forEach(function (f) { var p = f.rel.split('/'); var k = p.length > 2 ? p[1] : '(day folder)'; folders[k] = (folders[k] || 0) + 1; });
-      html = '<div style="font-size:12.5px;color:var(--muted);line-height:1.8">' + folderKeys(folders).map(function (k) { return '<span style="display:inline-block;margin-right:14px"><b style="color:var(--ink)">' + esc(k) + '</b> ' + folders[k] + '</span>'; }).join('') + '</div>';
+      html = '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">' + ALL_FOLDERS.map(function (k) {
+        var n = folders[k] || 0;
+        return '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px;padding:6px 10px;border:1px solid var(--line);border-radius:9px;opacity:' + (n ? 1 : 0.45) + '">' +
+          '<span style="color:' + (n ? 'var(--green)' : 'var(--red)') + '">' + (n ? '\u2713' : '\u2717') + '</span><span>' + esc(folderLabel(k)) + '</span>' +
+          '<span style="margin-left:auto;color:var(--dim);font-size:11px">' + n + ' file' + (n === 1 ? '' : 's') + '</span></div>';
+      }).join('') + '</div>';
     }
     var p = picked(), size = p.reduce(function (a, f) { return a + (f.size || 0); }, 0);
     l.innerHTML = html + (files.length ? '<div style="font-size:12px;color:var(--muted);margin-top:10px"><b style="color:var(--ink)">' + p.length + '</b> file' + (p.length === 1 ? '' : 's') + ' · ' + kb(size) + ' will be in the zip</div>' : '');
@@ -355,7 +363,7 @@
     fetch(API + '/files70/zip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'No files for that choice.' : 'Server answered ' + r.status); return r.blob(); })
       .then(function (blob) {
-        var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '70_FILES_' + dmy(b.date) + '.zip';
+        var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '76_FILES_' + dmy(b.date) + '.zip';
         document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
         if (m) m.innerHTML = '<span style="color:var(--green)">✓ Zip downloaded (' + p.length + ' files).</span>';
       })
