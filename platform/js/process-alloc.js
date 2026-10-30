@@ -1,6 +1,6 @@
 /* Allocation Report — tile in "Processing & Reports" + modal (day so far / up to a time / custom range /
-   re-close a day, optional client codes, download or e-mail). Backend: /alloc/* (api.py) → core/pipelines/allocation_report.py.
-   The nightly close runs from the Scheduler; "Re-close a day" repeats it by hand for a failed/missed night. Injected at serve time (see api.py /legacy). */
+   resend scheduler report, optional client codes, download or e-mail). Backend: /alloc/* (api.py) → core/pipelines/allocation_report.py.
+   The nightly close runs from the Scheduler; "Resend Scheduler Report" repeats it by hand for a failed/missed night. Injected at serve time (see api.py /legacy). */
 (function () {
   'use strict';
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
@@ -116,20 +116,20 @@
       'Setup needed: <span style="font-family:var(--mono)">core/pipelines/allocation_report_src.py</span> is missing — pull the latest code.</div>';
     return warn +
       '<div style="font-size:11.5px;color:var(--dim);margin-bottom:12px">Nightly close: window starts <b style="color:var(--ink)">' + esc(pretty(d.marker) || '—') +
-      '</b>. Reports run here never move it — except <b style="color:var(--ink)">Re-close a day</b>.</div>' +
+      '</b>. Reports run here never move it — except <b style="color:var(--ink)">Resend Scheduler Report</b>.</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
       '<button class="sa-tool" onclick="allocSub(\'cfg\')">&#9993; Email To / CC</button>' +
       '<button class="sa-tool" onclick="allocSub(\'cred\')">&#128273; Credentials</button>' +
       '<button class="sa-tool" onclick="allocSub(\'logs\')">&#128220; Logs</button></div>' +
-      lbl('Time range') + seg('allocSeg', [['sofar', 'Day so far'], ['until', 'Up to a time'], ['custom', 'Custom range'], ['reclose', 'Re-close a day']], S.mode, 'allocMode') +
+      lbl('Time range') + seg('allocSeg', [['sofar', 'Day so far'], ['until', 'Up to a time'], ['custom', 'Custom range'], ['reclose', 'Resend Scheduler Report']], S.mode, 'allocMode') +
       '<div id="allocUntil" style="display:none;margin-top:10px">' + lbl('Up to (today)') + '<input type="time" id="allocUntilIn" value="' + esc(S.until) + '" ' + INP + ' oninput="allocSet(\'until\',this.value)"></div>' +
       '<div id="allocCustom" style="display:none;margin-top:10px"><div style="display:flex;gap:14px;flex-wrap:wrap">' +
       '<div>' + lbl('From') + '<input type="date" value="' + esc(S.fd) + '" ' + INP + ' oninput="allocSet(\'fd\',this.value)"> <input type="time" value="' + esc(S.ft) + '" ' + INP + ' oninput="allocSet(\'ft\',this.value)"></div>' +
       '<div>' + lbl('To') + '<input type="date" value="' + esc(S.td) + '" ' + INP + ' oninput="allocSet(\'td\',this.value)"> <input type="time" value="' + esc(S.tt) + '" ' + INP + ' oninput="allocSet(\'tt\',this.value)"></div></div>' +
       '<div style="font-size:10.5px;color:var(--dim);margin-top:8px">Ranges from the last 5 days are read from the mailbox first; if nothing is found there (or the range is older) they are rebuilt from the log files backed up by earlier runs.</div></div>' +
-      '<div id="allocReclose" style="display:none;margin-top:10px">' + lbl('Close the day up to') +
+      '<div id="allocReclose" style="display:none;margin-top:10px">' + lbl('Send the report up to') +
       '<input type="date" value="' + esc(S.rd) + '" ' + INP + ' oninput="allocSet(\'rd\',this.value)"> <input type="time" value="' + esc(S.rt) + '" ' + INP + ' oninput="allocSet(\'rt\',this.value)">' +
-      '<div style="font-size:10.5px;color:var(--dim);margin-top:8px">Use this when a nightly close failed or was missed. It does exactly what the nightly close does: reads the mailbox from the marker up to this time, e-mails the official report to the saved Email To / CC, backs up the logs and <b>moves the nightly marker</b> to this time. All clients — the client-code box is ignored. Mailbox keeps only about 2 days, so do it soon.</div></div>' +
+      '<div style="font-size:10.5px;color:var(--dim);margin-top:8px"><b style="color:var(--ink)">Use when the nightly report failed or didn\'t come.</b> It does exactly what the nightly (scheduler) report does: reads the mailbox from the marker up to this time, e-mails the official report to the saved Email To / CC, backs up the logs and <b>moves the nightly marker</b> to this time. All clients — the client-code box is ignored. Mailbox keeps only about 2 days, so do it soon.</div></div>' +
       '<div id="allocWin" style="font-size:12px;color:var(--muted);margin:10px 0 14px;font-family:var(--mono)"></div>' +
       '<div id="allocClientBox" style="border-top:1px solid var(--line);padding-top:12px">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline">' + lbl('Client codes', ' <span style="text-transform:none;letter-spacing:0;color:var(--dim)">(optional — blank means everyone)</span>') +
@@ -223,7 +223,7 @@
     saShowModal(TITLE + ' — logs', '<div style="color:var(--muted);font-size:12px">Loading…</div>');
     fetch(API + '/alloc/logs', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
       var runs = d.runs || [];
-      var modeName = { close: 'Nightly close / re-close', sofar: 'Day so far', until: 'Up to a time', custom: 'Custom range' };
+      var modeName = { close: 'Nightly report / resend', sofar: 'Day so far', until: 'Up to a time', custom: 'Custom range' };
       var body = runs.length
         ? '<div style="font-size:11px;color:var(--dim);margin-bottom:8px">One log per run, newest first (the last 300 are kept).</div>' +
           '<div style="max-height:56vh;overflow:auto;display:flex;flex-direction:column;gap:6px">' +
@@ -270,10 +270,10 @@
     if (!d.script_ok) { setMsg('Setup needed: the allocation script has not been copied to the console yet.', 'bad'); return; }
     window.allocAdd();
     if (S.mode === 'reclose') {
-      if (!S.rd || !S.rt) { setMsg('Choose the date and time to close up to.', 'bad'); return; }
+      if (!S.rd || !S.rt) { setMsg('Choose the date and time to send the report up to.', 'bad'); return; }
       var mk = String((d.marker || '')).slice(0, 16).replace('T', ' ');
-      if (mk && (S.rd + ' ' + S.rt) <= mk && !confirm('The marker (' + pretty(d.marker) + ') is already at or past this time.\n\nThis re-closes ' + dmy(S.rd) + ' from 00:00 and moves the marker back to ' + dmy(S.rd) + ' ' + S.rt + '.\n\nContinue?')) return;
-      if (!confirm('Re-close ' + dmy(S.rd) + ' up to ' + S.rt + '?\n\nThis e-mails the OFFICIAL nightly report to the saved Email To / CC and moves the nightly marker to that time.')) return;
+      if (mk && (S.rd + ' ' + S.rt) <= mk && !confirm('The marker (' + pretty(d.marker) + ') is already at or past this time.\n\nThis resends the report for ' + dmy(S.rd) + ' from 00:00 and moves the marker back to ' + dmy(S.rd) + ' ' + S.rt + '.\n\nContinue?')) return;
+      if (!confirm('Resend the Scheduler Report for ' + dmy(S.rd) + ' up to ' + S.rt + '?\n\nThis e-mails the OFFICIAL nightly report to the saved Email To / CC and moves the nightly marker to that time.')) return;
     }
     var q = 'mode=' + S.mode + '&clients=' + encodeURIComponent(S.clients.join(',')) + '&deliver=' + S.deliver;
     if (S.mode === 'until') {
