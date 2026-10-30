@@ -34,7 +34,6 @@ from core.pipelines.cnc_f11_run import stream_cnc_f11
 from core.pipelines.mtf_order_run import stream_mtf_order
 from core.pipelines.ftp_download_run import stream_ftp_download
 from core.pipelines.payout_inspection_run import stream_daily, stream_client
-from core.pipelines.files_downloader_70_run import stream_files_downloader_70
 from core.agent_run import stream_agent
 from core.pipelines.peak_margin import FOLDER
 from core.notify import send_peak_margin_report
@@ -366,6 +365,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
+                            '<script src="/platform/js/process-files70.js?v=1"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
@@ -908,6 +908,80 @@ async def mc_skip(request: Request):
 def mc_stop():
     from core import mcx_cash_maintenance as _mc
     return {"ok": True, "stopped": _mc.stop_running()}
+
+# ── 76 FILES DOWNLOADER (one day folder, no copies elsewhere; see core/files70.py) ───────────────────────────────
+def _f70_date(s: str = ""):
+    from core import files70 as _f7
+    try:
+        return _f7.parse_date(s)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/files70/status")
+def f70_status(date: str = ""):
+    from core import files70 as _f7
+    try:
+        return _f7.status(_f70_date(date))
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "groups": []}
+
+@app.post("/files70/run")
+async def f70_run(request: Request):
+    """Start a download: {date: 'YYYY-MM-DD' (empty = previous trading day), groups: [...] (empty = all)}."""
+    from core import files70 as _f7
+    body = await request.json()
+    d = _f70_date(body.get("date") or "")
+    groups = [g for g in (body.get("groups") or []) if g in _f7.GROUP_KEYS] or None
+    try:
+        by = _actor(request)[0] or ""
+    except Exception:
+        by = ""
+    ip = request.client.host if request.client else ""
+    res = _f7.start(d, by=by, groups=groups, ip=ip)
+    return JSONResponse(res, status_code=200 if res.get("ok") else 409)
+
+@app.post("/files70/stop")
+def f70_stop():
+    from core import files70 as _f7
+    return {"ok": True, "stopped": _f7.stop()}
+
+@app.get("/files70/files")
+def f70_files(date: str = ""):
+    """Everything that can go into a backup zip of that day (70-files folder + Live Allocation slots 1-8)."""
+    from core import files70 as _f7
+    d = _f70_date(date)
+    files = _f7.backup_files(d)
+    return {"date": _f7.dstr(d), "groups": [{"key": k, "label": l} for k, l in _f7.BACKUP_GROUPS],
+            "files": [{"rel": f["rel"], "size": f["size"], "group": f["group"]} for f in files]}
+
+@app.get("/files70/file")
+def f70_file(rel: str, date: str = ""):
+    from core import files70 as _f7
+    try:
+        p = _f7.file_path(_f70_date(date), rel)
+    except FileNotFoundError:
+        raise HTTPException(404, "file not found")
+    return FileResponse(str(p), filename=p.name)
+
+@app.post("/files70/zip")
+async def f70_zip(request: Request):
+    """{date, mode: 'full' | 'groups' | 'files', groups: [...], files: [rel, ...]} -> one zip (same layout as on disk)."""
+    from core import files70 as _f7
+    body = await request.json()
+    d = _f70_date(body.get("date") or "")
+    mode = body.get("mode") or "full"
+    try:
+        if mode == "files":
+            z = _f7.make_zip(d, rels=[str(x) for x in (body.get("files") or [])][:2000] or ["-"])
+        elif mode == "groups":
+            z = _f7.make_zip(d, groups=[str(x) for x in (body.get("groups") or [])] or ["-"])
+        else:
+            z = _f7.make_zip(d)
+    except FileNotFoundError:
+        raise HTTPException(404, "no files for that choice")
+    return FileResponse(str(z), filename=f"70_FILES_{_f7.dstr(d)}.zip", media_type="application/zip")
 
 # ── SHORT ALLOCATION AUTO RUN (runs start by themselves; see core/sa_auto.py) ──────────────────────────────
 @app.get("/sa/auto/status")
@@ -1571,17 +1645,7 @@ def payout_inspection_client_stream(clients: str = "", fy: str = ""):
                              headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
 
 
-@app.get("/files-downloader-70-stream")
-def files_downloader_70_stream(trade_date: str = ""):
-    from datetime import datetime as _dt
-    if not trade_date:
-        trade_date = _dt.today().strftime("%Y-%m-%d")
-    def gen():
-        for ev in stream_files_downloader_70(trade_date):
-            yield f"data: {json.dumps(ev)}\n\n"
-        yield "data: {\"type\": \"end\"}\n\n"
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no","Connection":"keep-alive"})
+# (the old "70 Files" download stream was replaced by the 76 FILES DOWNLOADER card: /files70/* above)
 
 
 @app.get("/query-file")

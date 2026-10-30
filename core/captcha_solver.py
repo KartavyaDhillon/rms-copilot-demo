@@ -84,6 +84,8 @@ PROFILES = {
                      "as drawn. Look carefully at similar shapes: 0/O, 1/l/I, 2/z/Z, x/X, s/S, v/V, c/C, w/W."),
     # NCDEX: plain upper-case letters and digits (e.g. 637FCF).
     "ncdex": Profile("ncdex", 5, 6, False, "5 or 6 characters: capital letters and digits.", upper=True),
+    # NCDEX web extranet (webextranet.ncdex.com, Captcha2.aspx): letters and digits; the length is not fixed there.
+    "ncdex_web": Profile("ncdex_web", 4, 8, False, "Letters and digits exactly as shown (capital letters).", upper=True),
 }
 
 

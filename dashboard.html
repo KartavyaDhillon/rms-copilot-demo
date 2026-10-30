@@ -825,15 +825,6 @@ body {
           </div>
         </div>
 
-        <div class="tile" id="task-files70" style="--tile-accent:var(--amber)">
-          <div class="tile-icon">📁</div>
-          <div class="tile-name">70 Files <span class="st" id="st-files70">idle</span></div>
-          <div class="tile-desc">NSE (CM/FO/CO/CD) + MCX + NCDEX + EPI files. Select trade date:</div>
-          <div class="tile-actions">
-            <input type="date" id="files70date" class="date-input">
-            <button class="tbtn" style="background:var(--amber);color:#1a0d00" onclick="runFiles70()" data-tip="NSE (CM/FO/CO/CD) + MCX + NCDEX + EPI files. Select trade date:">Download</button>
-          </div>
-        </div>
 
       </div>
     </div><!-- /view-downloads -->
@@ -1378,45 +1369,7 @@ async function approve() {
   window._pendingToken=null;
 }
 
-// ── 70 Files ───────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded',()=>{
-  const inp=document.getElementById('files70date');
-  if(inp){ const t=new Date(); inp.value=t.toISOString().slice(0,10); }
-});
-function runFiles70() {
-  if(busy){ cline('⚠ Another job is running. Stop it first (Ctrl+C).','warn'); showConsole('Busy'); return; }
-  const d=document.getElementById('files70date').value;
-  if(!d){ alert('Pick a trade date first.'); return; }
-  busy=true;
-  const stEl=document.getElementById('st-files70'); const taskEl=document.getElementById('task-files70');
-  showConsole('70 Files — '+d); setRunning(stEl,taskEl);
-  cline(`▶️ Downloading all files for ${d}…`,'head');
-  let _ac70 = new AbortController();
-  _es = { close: () => _ac70.abort() };
-  fetch(API+'/files-downloader-70-stream?trade_date='+d, { signal: _ac70.signal })
-    .then(resp => {
-      const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf='';
-      function pump(){
-        reader.read().then(({done,value})=>{
-          if(done){busy=false;_es=null;return;}
-          buf+=dec.decode(value,{stream:true});
-          const parts=buf.split('\n\n'); buf=parts.pop();
-          for(const part of parts){
-            if(!part.startsWith('data: ')) continue;
-            try{
-              const ev=JSON.parse(part.slice(6));
-              if(ev.type==='log') cline(ev.msg, classify(ev.msg));
-              else if(ev.type==='error'){ cline(ev.msg,'warn'); setDone('error',true); }
-              else if(ev.type==='done'){ cline('🎉 All files downloaded.','ok'); setDone('done',false); }
-              else if(ev.type==='end'){ busy=false;_es=null; document.getElementById('consoleStop').disabled=true; return; }
-            }catch(ignore){}
-          }
-          pump();
-        }).catch(err=>{ if(err.name!=='AbortError'){ cline('⚠️ Stream error.','warn'); setDone('error',true); } busy=false;_es=null; });
-      }
-      pump();
-    }).catch(err=>{ if(err.name!=='AbortError'){ cline('⚠️ Cannot reach backend.','warn'); setDone('error',true); } busy=false;_es=null; });
-}
+// (the old "70 Files" tile was replaced by the 76 FILES DOWNLOADER card - platform/js/process-files70.js)
 
 // ── Compliance ─────────────────────────────────────────────────────────────
 function _compStream(url, feedId, stId, startMsg) {
@@ -1761,9 +1714,6 @@ function runClientInspection() {
       ta.style.height = 'auto';
       ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
     });
-    // Also set files70 default date
-    const inp = document.getElementById('files70date');
-    if(inp){ const t=new Date(); inp.value=t.toISOString().slice(0,10); }
     // Start checkpoint poller — shows resume banner if LAS/SA crashed mid-run
     ckptStartPoller();
   });

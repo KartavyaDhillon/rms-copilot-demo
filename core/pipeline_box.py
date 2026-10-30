@@ -577,6 +577,21 @@ PIPELINES["captchabal"] = {
     "cred": {"Alert limit in US dollars": {"single_key": "CAPTCHA_LOW_BALANCE",
                                            "note": "A mail goes out when the 2Captcha balance is at or below this amount (default 0.80). Checked every hour."}},
 }
+# 76 FILES DOWNLOADER - its own card and child-process runner (core/files70.py); registered for the shared Credentials
+# and Logs windows. Run logs: logs/files70/files70__<dd-mm-yyyy>__<time>.log
+PIPELINES["files70"] = {
+    "name": "76 FILES DOWNLOADER", "module": "core.files70", "func": "run", "logdir": "files70", "runs": 0,
+    "state_dir_env": "FILES76_DIR", "state_default": r"D:\CONSOLE\data\76 FILES DOWNLOADER", "state_file": "run_counter.txt",
+    "email_keys": {},
+    "cred": {"NCDEX / NCFE login": {"user_key": "CTCL_NCDEX_USER", "pass_key": "CTCL_NCDEX_PASSWORD",
+                                    "note": "ncfe.ncdex.com - the 01292_MGN end file. Shared with CTCL vs NMASS and Live "
+                                            "Allocation; this card logs out after the download"},
+             "NCDEX web extranet login": {"user_key": "F70_NCDEX_WEB_USER", "pass_key": "F70_NCDEX_WEB_PASSWORD",
+                                          "note": "webextranet.ncdex.com - the NCCL_MARGIN_REP 01-08 files. Leave empty to "
+                                                  "use the NCFE login above"},
+             "NCDEX security answer": {"single_key": "NCDEX_SEC_ANSWER",
+                                       "note": "answer to the NCDEX security question (both sites). Default: a"}},
+}
 try:
     from core import mcx_cash_report as _mcr
     _mcr.apply_defaults()              # To / CC defaults of the hand-run script (only fills what .env lacks)
