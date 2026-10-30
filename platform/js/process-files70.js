@@ -11,7 +11,7 @@
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var TITLE = '76 FILES DOWNLOADER';
   var PIPE = 'files70';
-  var S = { data: null, date: '', sig: '', timer: null, lastRunAt: 0, logTimer: null, bk: null, msgTimer: null };
+  var S = { data: null, date: '', sig: '', timer: null, lastRunAt: 0, logTimer: null, bk: null, msgTimer: null, open: {} };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"']/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function $(id) { return document.getElementById(id); }
@@ -43,10 +43,10 @@
     '.f7-n{font-size:20px;font-weight:750;font-variant-numeric:tabular-nums}.f7-n small{font-size:12px;color:var(--dim);font-weight:600}' +
     '.f7-st{font-family:var(--mono);font-size:9.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--dim)}' +
     '.f7-g.done .f7-st{color:var(--green)}.f7-g.part .f7-st{color:var(--amber)}.f7-g.none .f7-st{color:var(--red)}.f7-g.running .f7-st{color:var(--amber)}' +
-    '.f7-miss{font-size:10.5px;color:var(--muted);line-height:1.4;overflow:hidden;word-break:break-all;font-family:var(--mono);flex:1;min-height:58px;max-height:58px;display:flex;align-items:center;justify-content:center}.f7-g>.f7-btn,.f7-g>.f7-link{margin-top:auto}.f7-g .f7-link{padding:8px 0;text-align:center}' +
+    '.f7-miss{font-size:10.5px;color:var(--muted);line-height:1.4;overflow:hidden;word-break:break-all;font-family:var(--mono);display:flex;align-items:center;justify-content:center;min-height:18px}.f7-g>.f7-btn,.f7-g>.f7-link{margin-top:auto}.f7-g .f7-link{padding:8px 0;text-align:center}' +
     '.f7-btn{width:100%;font-family:var(--sans);font-weight:650;font-size:12px;border:0;border-radius:9px;padding:8px;cursor:pointer;background:var(--blue);color:var(--blue-d)}' +
     '.f7-btn:disabled{background:var(--panel-3);color:var(--dim);cursor:not-allowed}' +
-    '.f7-btn.big{font-size:13.5px;padding:11px}.f7-btn.amber:disabled{background:var(--amber);color:var(--amber-d);cursor:default}' +
+    '.f7-btn.big{width:auto;font-size:12.5px;padding:8px 18px;border-radius:20px}.f7-misslist{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-align:left;max-height:110px;overflow:auto;word-break:break-all;line-height:1.5;border-top:1px solid var(--line);padding-top:6px}.f7-btn.amber:disabled{background:var(--amber);color:var(--amber-d);cursor:default}' +
     '@keyframes f7Spin{to{transform:rotate(360deg)}}.f7-spin{display:inline-block;width:14px;height:14px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:f7Spin .8s linear infinite;vertical-align:-2px;margin-right:8px}' +
     '.f7-logbox{font-family:var(--mono);font-size:10.5px;line-height:1.65;margin:0 0 12px;padding:9px 12px;border:1px solid var(--line-2);border-radius:9px;background:rgba(255,255,255,.02);max-height:170px;overflow:auto;white-space:pre-wrap;word-break:break-word}' +
     '.f7-msg{font-size:12px;margin:0 0 10px;padding:8px 12px;border-radius:9px;border:1px solid var(--line-2)}' +
@@ -133,13 +133,18 @@
     var cls = running ? 'running' : g.found >= g.total ? 'done' : g.found ? 'part' : 'none';
     var st = running ? '<span class="f7-spin" style="width:10px;height:10px;margin-right:5px"></span>downloading' : g.found >= g.total ? '✓ complete' : g.found ? '◐ part missing' : '✗ not downloaded';
     var miss = (g.files || []).filter(function (f) { return !f.present; }).map(function (f) { return f.name; });
-    var note = miss.length ? 'missing: ' + miss.slice(0, 3).join(', ') + (miss.length > 3 ? ' +' + (miss.length - 3) + ' more' : '') : 'folder ' + g.folder;
+    var open = !!S.open[g.key];
+    var note = miss.length
+      ? '<button class="f7-link" onclick="f7ToggleMiss(\'' + g.key + '\')">' + (open ? 'hide' : 'show') + ' missing files (' + miss.length + ')</button>'
+      : '<span style="font-family:var(--sans)">' + esc(g.folder ? 'folder ' + g.folder : 'EPI.xlsx') + '</span>';
     var btn = g.found >= g.total
       ? '<button class="f7-link" ' + (job.running ? 'disabled' : '') + ' onclick="f7Run([\'' + g.key + '\'])" title="Everything is there - nothing would be downloaded">✓ all there</button>'
       : '<button class="f7-btn" ' + (job.running ? 'disabled' : '') + ' onclick="f7Run([\'' + g.key + '\'])">⬇ Get missing (' + miss.length + ')</button>';
     return '<div class="f7-g ' + cls + '"><div class="f7-id">' + esc(g.label) + '</div><div class="f7-n">' + g.found + '<small> / ' + g.total + '</small></div>' +
-      '<div class="f7-st">' + st + '</div><div class="f7-miss" title="' + esc(miss.join('\n')) + '">' + esc(note) + '</div>' + btn + '</div>';
+      '<div class="f7-st">' + st + '</div><div class="f7-miss">' + note + '</div>' + (open && miss.length ? '<div class="f7-misslist">' + miss.map(esc).join('<br>') + '</div>' : '') + btn + '</div>';
   }
+
+  window.f7ToggleMiss = function (k) { S.open[k] = !S.open[k]; paint(true); };
 
   function logBox(job) {
     var lines = job.lines || [];
@@ -172,13 +177,14 @@
     var missing = d.total - d.found;
     var runBtn = job.running
       ? '<button class="f7-btn big amber" disabled style="opacity:1"><span class="f7-spin"></span>Downloading ' + esc(job.date || '') + '…' + (job.msg ? ' ' + esc(job.msg) : '') + '</button>'
-      : '<button class="f7-btn big" onclick="f7Run()">' + (missing ? '⬇ Download all missing files (' + missing + ')' : '↻ Check again - everything is there') + '</button>';
+      : '<button class="f7-btn big" onclick="f7Run()" data-tip="Downloads only what is not already in the day folder - files that are there are skipped.">' + (missing ? '⬇ Download missing (' + missing + ')' : '↻ Check again') + '</button>';
     el.innerHTML =
       '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:0 0 12px">' +
         '<div><div class="f7-lbl">Trade date</div><input type="date" id="f7Date" class="f7-in" value="' + esc(d.iso) + '" onchange="f7SetDate(this.value)"></div>' +
         (d.iso !== d.default_iso ? '<button class="f7-link" style="margin-bottom:9px" onclick="f7SetDate(\'' + esc(d.default_iso) + '\')">↺ back to the previous trading day (' + esc(dmy(d.default_iso)) + ')</button>'
           : '<span style="font-size:11.5px;color:var(--dim);margin-bottom:9px">previous trading day</span>') +
-        '<div style="flex:1;min-width:240px">' + runBtn + '</div>' +
+        '<div style="margin-bottom:2px">' + runBtn + '</div>' +
+        '<span style="font-size:11.5px;color:var(--dim);margin:0 0 9px auto" title="Change it under Credentials">' + esc(autoText(d)) + '</span>' +
       '</div>' +
       (other ? '<div class="f7-msg" style="color:var(--amber)">A download for ' + esc(job.date) + ' is running - its progress shows when you pick that date.</div>' : '') +
       '<div class="f7-kpis">' +
@@ -192,8 +198,13 @@
       d.groups.map(function (g) { return groupTile(g, job); }).join('') + '</div>' +
       lastBox(d) +
       '<div style="font-size:11px;color:var(--dim);margin-top:12px;line-height:1.6">Files are saved only in <span style="font-family:var(--mono)">' + esc(d.folder) + '</span> - nothing is copied to other folders. ' +
-      'Downloading again only fetches what is missing. Both NCDEX captchas are answered by the auto-solver. All logins (NSE, MCX, back office, NCDEX, 2Captcha) are under 🔑 Credentials.</div>';
+      'Files already in the folder are skipped - a run only fetches what is missing. Both NCDEX captchas are answered by the auto-solver. All logins (NSE, MCX, back office, NCDEX, 2Captcha) are under 🔑 Credentials.</div>';
     var nb = $('f7LogBox'); if (nb) nb.scrollTop = stick ? nb.scrollHeight : keep;
+  }
+
+  function autoText(d) {
+    var a = d.auto || {};
+    return a.on ? 'Auto run: every trading day at ' + a.time + ' (files already there are skipped)' : 'Auto run is off';
   }
 
   function paintTile(d) {

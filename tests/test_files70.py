@@ -79,6 +79,58 @@ class Plan(Base):
         self.assertEqual(len(os.listdir(self.base / F.EODSAR)), 6)
 
 
+class Auto(Base):
+    def setUp(self):
+        super().setUp()
+        self.p5 = mock.patch.object(F, "AUTO_FILE", self.tmp / "_logs" / ".auto.json")
+        self.p5.start()
+        self.env2 = mock.patch.dict(os.environ, {"F76_AUTO": "on", "F76_AUTO_TIME": "09:00", "F76_AUTO_RETRIES": "1", "F76_AUTO_RETRY_MIN": "15"})
+        self.env2.start()
+        self.calls = []
+        self.starter = lambda d, by="", trigger="": self.calls.append(d) or {"ok": True}
+        self.tdays = mock.patch.object(F, "_trading_day", return_value=True)
+        self.tdays.start()
+        self.dd = mock.patch.object(F, "default_date", return_value=D)
+        self.dd.start()
+
+    def at(self, h, m=0, day=dt.date(2026, 10, 30)):
+        return dt.datetime(day.year, day.month, day.day, h, m)
+
+    def test_waits_for_the_set_time_then_starts_once(self):
+        self.assertIsNone(F.auto_tick(self.at(8, 59), self.starter))
+        self.assertTrue(F.auto_tick(self.at(9, 0), self.starter))
+        self.assertEqual(self.calls, [D])
+        self.assertIsNone(F.auto_tick(self.at(9, 5), self.starter))                 # too soon for a retry
+
+    def test_retries_only_the_set_number_of_times(self):
+        F.auto_tick(self.at(9, 0), self.starter)
+        self.assertTrue(F.auto_tick(self.at(9, 16), self.starter))                  # 1 retry
+        self.assertIsNone(F.auto_tick(self.at(9, 40), self.starter))                # no more
+        self.assertEqual(len(self.calls), 2)
+
+    def test_nothing_when_everything_is_there_or_holiday_or_off(self):
+        for it in F.plan(D):
+            self.put((it["sub"] + "/" if it["sub"] else "") + (it.get("name") or "01292_MGN_29102026091451.CSV"))
+        self.assertIsNone(F.auto_tick(self.at(9, 30), self.starter))
+        self.assertEqual(self.calls, [])
+
+    def test_holiday_and_off_and_after_cutoff(self):
+        self.tdays.stop()
+        with mock.patch.object(F, "_trading_day", return_value=False):
+            self.assertIsNone(F.auto_tick(self.at(9, 30), self.starter))
+        self.tdays.start()
+        with mock.patch.dict(os.environ, {"F76_AUTO": "off"}):
+            self.assertIsNone(F.auto_tick(self.at(9, 30), self.starter))
+        self.assertIsNone(F.auto_tick(self.at(18, 30), self.starter))
+        self.assertEqual(self.calls, [])
+
+    def test_time_can_be_changed_and_bad_text_falls_back(self):
+        with mock.patch.dict(os.environ, {"F76_AUTO_TIME": "07:45"}):
+            self.assertEqual(F.auto_time(), "07:45")
+        with mock.patch.dict(os.environ, {"F76_AUTO_TIME": "abc"}):
+            self.assertEqual(F.auto_time(), "09:00")
+
+
 class Nse(Base):
     def _it(self):
         return [i for i in F.plan(D) if i["group"] == "nse_cd"]

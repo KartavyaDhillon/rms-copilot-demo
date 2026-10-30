@@ -259,7 +259,7 @@ def status(d: Optional[dt.date] = None) -> dict:
     job = job_status()
     return {"date": dstr(d), "iso": d.isoformat(), "default_iso": default_date().isoformat(), "folder": str(base),
             "exists": base.is_dir(), "groups": groups, "found": found_all, "total": total_all,
-            "eodsar": {"found": len(eod), "total": 6, "files": eod}, "job": job, "last": _last_result(d)}
+            "eodsar": {"found": len(eod), "total": 6, "files": eod}, "job": job, "last": _last_result(d), "auto": auto_info()}
 
 
 def _last_result(d: dt.date) -> dict:
@@ -1161,6 +1161,117 @@ def list_logs(limit: int = 60) -> list:
         return [{"name": p.name, "size": p.stat().st_size} for p in names[:limit]]
     except OSError:
         return []
+
+
+# ───────────────────────────── auto run (the card's own timer - NOT the scheduler) ─────────────────────────────
+# Every trading day (holidays and weekends are skipped, same calendar as the scheduler) at the set time the previous trading
+# day's files are fetched. Files already in the day folder are skipped. When something is still missing after a run, the
+# timer tries again (F76_AUTO_RETRIES times, F76_AUTO_RETRY_MIN minutes apart) and stops at F76_AUTO_UNTIL (default 18:00).
+# Settings (card > Credentials): F76_AUTO = on / off,  F76_AUTO_TIME = HH:MM (default 09:00).
+AUTO_FILE = LOG_DIR / ".auto.json"
+_TICK = {"thread": None, "stop": threading.Event()}
+
+
+def auto_on() -> bool:
+    return (os.getenv("F76_AUTO", "on").strip().lower() or "on") not in ("off", "no", "0", "false")
+
+
+def _hhmm(v: str, default: str) -> int:
+    m = re.match(r"^\s*(\d{1,2})[:.](\d{2})\s*$", v or "")
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        m = re.match(r"^(\d{2}):(\d{2})$", default)
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def auto_time() -> str:
+    mins = _hhmm(os.getenv("F76_AUTO_TIME", ""), "09:00")
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
+def _auto_state() -> dict:
+    try:
+        return json.loads(AUTO_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _auto_save(st: dict):
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    AUTO_FILE.write_text(json.dumps(st), encoding="utf-8")
+
+
+def _trading_day(d: dt.date) -> bool:
+    try:
+        from core.scheduler import helpers as H
+        return bool(H.is_trading_day(d))
+    except Exception:
+        return d.weekday() < 5
+
+
+def auto_info() -> dict:
+    return {"on": auto_on(), "time": auto_time()}
+
+
+def auto_tick(now: Optional[dt.datetime] = None, starter=None) -> Optional[str]:
+    """Called every 30 s. Starts a run when it is time. -> a short reason string when it started one, else None."""
+    if not auto_on() or is_running():
+        return None
+    now = now or dt.datetime.now()
+    today = now.date()
+    if not _trading_day(today):
+        return None
+    cur = now.hour * 60 + now.minute
+    if cur < _hhmm(os.getenv("F76_AUTO_TIME", ""), "09:00") or cur >= _hhmm(os.getenv("F76_AUTO_UNTIL", ""), "18:00"):
+        return None
+    d = default_date(today)
+    st = _auto_state()
+    if st.get("today") != today.isoformat():
+        st = {"today": today.isoformat(), "attempts": 0, "last": None, "done": False}
+    if st.get("done"):
+        return None
+    stt = status(d)
+    if stt["found"] >= stt["total"]:
+        st["done"] = True
+        _auto_save(st)
+        return None
+    try:
+        retries = max(0, int(os.getenv("F76_AUTO_RETRIES", "3")))
+        gap = max(1, int(os.getenv("F76_AUTO_RETRY_MIN", "15")))
+    except ValueError:
+        retries, gap = 3, 15
+    if st["attempts"] > retries:
+        return None
+    if st.get("last"):
+        try:
+            if (now - dt.datetime.fromisoformat(st["last"])).total_seconds() < gap * 60:
+                return None
+        except ValueError:
+            pass
+    st["attempts"] += 1
+    st["last"] = now.isoformat(timespec="seconds")
+    _auto_save(st)
+    res = (starter or start)(d, by="auto run (timer)", trigger="auto")
+    if not res.get("ok"):
+        return None
+    return f"{dstr(d)} attempt {st['attempts']}"
+
+
+def start_ticker(interval_s: int = 30):
+    if _TICK["thread"] and _TICK["thread"].is_alive():
+        return False
+    _TICK["stop"].clear()
+
+    def loop():
+        print("[76-files] auto run timer started.", flush=True)
+        while not _TICK["stop"].wait(interval_s):
+            try:
+                auto_tick()
+            except Exception as e:                                    # noqa: BLE001
+                print(f"[76-files] timer error: {type(e).__name__}: {e}", flush=True)
+    th = threading.Thread(target=loop, name="files76-timer", daemon=True)
+    _TICK["thread"] = th
+    th.start()
+    return True
 
 
 # ───────────────────────────── backup: zips of a day ─────────────────────────────

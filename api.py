@@ -1049,6 +1049,16 @@ def _sa_auto_startup():
 
 
 @app.on_event("startup")
+def _files76_startup():
+    """76 FILES DOWNLOADER's own daily timer (not the scheduler): runs at the time set in its Credentials."""
+    try:
+        from core import files70 as _f7t
+        _f7t.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  76 FILES DOWNLOADER timer not started: {type(_e).__name__}: {_e}")
+
+
+@app.on_event("startup")
 def _mcx_cash_startup():
     """The built-in timer: produces and mails the reports at each time, by itself."""
     try:

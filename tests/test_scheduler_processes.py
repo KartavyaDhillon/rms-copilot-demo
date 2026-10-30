@@ -203,7 +203,7 @@ class Registration(Base):
         for n in ALL_NAMES:
             self.assertIn(n, {d.name for d in catalog.all_defs()}, n)
         for d in catalog.all_defs():
-            if d.key in ("live_allocation_capture", "files_70_downloader"):   # downloads only: a retry fetches just what is still missing
+            if d.key in ("live_allocation_capture",):   # downloads only: a retry fetches just what is still missing
                 self.assertTrue(d.retry_safe)
             else:
                 self.assertFalse(d.retry_safe)              # sends are never auto-retried by the scheduler

@@ -615,6 +615,11 @@ PIPELINES["files70"] = {
                                              "use the NCFE login above"},
         "NCDEX security answer": {"single_key": "NCDEX_SEC_ANSWER", "default": "a",
                                   "note": "answer to the NCDEX security question (both sites). Default: a"},
+        "Auto run (on / off)": {"single_key": "F76_AUTO", "default": "on",
+                                "note": "the card runs by itself every trading day (holidays and weekends are skipped). Type off to stop it"},
+        "Auto run time (HH:MM)": {"single_key": "F76_AUTO_TIME", "default": "09:00",
+                                  "note": "when the daily run starts, e.g. 09:00. Files already in the day folder are skipped; "
+                                          "if something is still missing it tries again every 15 minutes (3 times)"},
         "2Captcha API key": {"single_key": "APIKEY_2CAPTCHA", "secret": True,
                              "note": "solves both NCDEX captchas automatically. Blank = keep the saved one"},
     },
