@@ -365,7 +365,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
-                            '<script src="/platform/js/process-files70.js?v=1"></script>'
+                            '<script src="/platform/js/process-files70.js?v=2"></script><script src="/platform/js/process-daycards.js?v=1"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
@@ -981,7 +981,102 @@ async def f70_zip(request: Request):
             z = _f7.make_zip(d)
     except FileNotFoundError:
         raise HTTPException(404, "no files for that choice")
-    return FileResponse(str(z), filename=f"70_FILES_{_f7.dstr(d)}.zip", media_type="application/zip")
+    return FileResponse(str(z), filename=f"76_FILES_{_f7.dstr(d)}.zip", media_type="application/zip")
+
+# ── MASTER FILE / SA / EODSAR cards (the hand-run scripts of a trading day; see core/daycards.py) ──────────────────
+def _dc(card: str):
+    from core import daycards as _dc_
+    if card not in _dc_.CARDS:
+        raise HTTPException(404, "unknown card")
+    return _dc_
+
+@app.get("/daycards/meta")
+def dc_meta():
+    from core import daycards as _dc_
+    return {"cards": [{"key": k, "title": c["title"], "icon": c["icon"], "accent": c["accent"], "desc": c["desc"], "manual": c["manual"],
+                       "procs": [{"key": p, "label": _dc_.PROCS[p].label, "note": _dc_.PROCS[p].note} for p in c["procs"]]}
+                      for k, c in _dc_.CARDS.items()]}
+
+@app.get("/daycards/status")
+def dc_status(card: str, date: str = ""):
+    _d = _dc(card)
+    try:
+        return _d.status(card, _d.parse_date(date))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "procs": []}
+
+@app.post("/daycards/run")
+async def dc_run(request: Request):
+    """{card, date ('' = previous trading day), procs: [keys]} - several keys run one after the other, stopping at the first failure."""
+    body = await request.json()
+    _d = _dc(str(body.get("card") or ""))
+    try:
+        d = _d.parse_date(body.get("date") or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        by = _actor(request)[0] or ""
+    except Exception:
+        by = ""
+    res = _d.start(str(body["card"]), [str(x) for x in (body.get("procs") or [])], d, by=by, ip=request.client.host if request.client else "")
+    return JSONResponse(res, status_code=200 if res.get("ok") else 409)
+
+@app.post("/daycards/stop")
+async def dc_stop(request: Request):
+    body = await request.json()
+    return {"ok": True, "stopped": _dc(str(body.get("card") or "")).stop(str(body["card"]))}
+
+@app.post("/daycards/manual")
+async def dc_manual(request: Request, card: str, date: str, slot: str, name: str):
+    """Upload one manual file (raw body). The name and the date are checked before anything is saved."""
+    _d = _dc(card)
+    try:
+        return _d.save_manual(_d.parse_date(date), slot, name, await request.body())
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+@app.get("/daycards/files")
+def dc_files(card: str, date: str = "", procs: str = ""):
+    """Everything a backup zip of the chosen processes can hold (inputs + outputs) and what is missing."""
+    _d = _dc(card)
+    d = _d.parse_date(date)
+    plist = [x for x in procs.split(",") if x] or None
+    files = _d.backup_files(card, d, plist)
+    return {"date": _d.dstr(d), "files": [{"rel": f["rel"], "size": f["size"], "proc": f["proc"], "io": f["io"], "kind": f["kind"]} for f in files],
+            "missing": _d.missing_for_backup(card, d, plist or _d.CARDS[card]["procs"])}
+
+@app.get("/daycards/output")
+def dc_output(card: str, proc: str, name: str, date: str = ""):
+    _d = _dc(card)
+    p = _d.output_path(card, proc, _d.parse_date(date), name)
+    if not p:
+        raise HTTPException(404, "file not found")
+    return FileResponse(str(p), filename=p.name)
+
+@app.post("/daycards/zip")
+async def dc_zip(request: Request):
+    """{card, date, procs: [..], io: 'both'|'in'|'out', files: [rel] (optional)} -> one zip laid out like the day folder."""
+    body = await request.json()
+    _d = _dc(str(body.get("card") or ""))
+    d = _d.parse_date(body.get("date") or "")
+    try:
+        z = _d.make_zip(str(body["card"]), d, [str(x) for x in (body.get("procs") or [])] or None,
+                        str(body.get("io") or "both"), [str(x) for x in body["files"]][:3000] if body.get("files") is not None else None)
+    except FileNotFoundError:
+        raise HTTPException(404, "no files for that choice")
+    return FileResponse(str(z), filename=f"{_d.CARDS[body['card']]['title'].replace(' ', '_')}_{_d.dstr(d)}.zip", media_type="application/zip")
+
+@app.on_event("startup")
+def _daycards_startup():
+    try:
+        from core import daycards as _dc_
+        _dc_.apply_defaults()
+    except Exception as _e:
+        print(f"⚠️  MASTER FILE / SA / EODSAR defaults not applied: {type(_e).__name__}: {_e}")
 
 # ── SHORT ALLOCATION AUTO RUN (runs start by themselves; see core/sa_auto.py) ──────────────────────────────
 @app.get("/sa/auto/status")

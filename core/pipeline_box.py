@@ -624,6 +624,24 @@ PIPELINES["files70"] = {
                              "note": "solves both NCDEX captchas automatically. Blank = keep the saved one"},
     },
 }
+# MASTER FILE / SA / EODSAR - the hand-run scripts of a trading day (core/daycards.py). Registered for the shared
+# "Email To / CC", "Credentials" and "Logs" windows. Run logs: logs/daycard_<card>/<process>__<dd-mm-yyyy>__<time>.log
+try:
+    from core import daycards as _dcm
+    _dcm.apply_defaults()
+    for _ck, _cv in _dcm.CARDS.items():
+        _su, _sp = _dcm.sender_env(_ck)
+        PIPELINES["dc_" + _ck] = {
+            "name": _cv["title"], "module": "core.daycards", "func": "run_proc", "logdir": "daycard_" + _ck, "runs": 0,
+            "state_dir_env": "DAYCARDS_DIR", "state_default": "D:\\CONSOLE\\data\\" + _cv["folder"], "state_file": "run_counter.txt",
+            "email_keys": {_dcm.PROCS[_k].label: _dcm.email_env(_k) for _k in _cv["procs"]},
+            "cred": {"E-mail sender (SMTP login) of this card": {
+                "user_key": _su, "pass_key": _sp,
+                "note": "The login these reports are e-mailed from. Leave empty to use the shared login of Scheduler > Connections > "
+                        "E-mail sending. If you change the e-mail address, type its password as well."}},
+        }
+except Exception as _e:                                  # noqa: BLE001
+    print(f"⚠️  MASTER FILE / SA / EODSAR cards not registered: {type(_e).__name__}: {_e}")
 try:
     from core import mcx_cash_report as _mcr
     _mcr.apply_defaults()              # To / CC defaults of the hand-run script (only fills what .env lacks)

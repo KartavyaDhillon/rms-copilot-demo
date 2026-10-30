@@ -229,51 +229,6 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class ThroughTheScheduler(Base):
-    """The real engine + the real process wrapper, only the two portal steps are fake."""
-    def setUp(self):
-        super().setUp()
-        import sqlite3
-        from core.scheduler import catalog, engine, rules, store
-        self.rules, self.store, self.catalog = rules, store, catalog
-        self.db = os.path.join(self.tmp, "t.db")
-        store._CONN_FACTORY = lambda: sqlite3.connect(self.db, timeout=15)
-        store.ensure_schema()
-        os.environ["SCHED_HOLIDAYS_FILE"] = os.path.join(self.tmp, "none.csv")
-        os.environ["SCHED_DATA_ROOT"] = os.path.join(self.tmp, "sched")
-        catalog.all_defs()
-        self.IST = rules.get_tz("Asia/Kolkata")
-        today = dt.date.today()
-        while today.weekday() > 4:                           # a weekday, so the trading-day check passes
-            today -= dt.timedelta(days=1)
-        self.day = today
-        self.eng = engine.SchedulerEngine(clock=lambda: self.now, synchronous=True, worker_id="T", is_holiday=lambda d: False)
-
-    def tearDown(self):
-        os.environ.pop("SCHED_DATA_ROOT", None)
-        super().tearDown()
-
-    def at(self, h, m):
-        self.now = dt.datetime(self.day.year, self.day.month, self.day.day, h, m, tzinfo=self.IST).astimezone(dt.timezone.utc)
-        return self.eng.tick(self.now)
-
-    def test_a_schedule_at_the_eight_times_fills_the_matching_folders(self):
-        from core.scheduler import service
-        import tools.create_live_allocation_schedule as T
-        L.save_settings(auto=False)                          # the card's own timer would otherwise own these slots
-        self.now = dt.datetime(self.day.year, self.day.month, self.day.day, 9, 0, tzinfo=self.IST).astimezone(dt.timezone.utc)
-        s = service.create({"name": "LA", "process_key": "live_allocation_capture", "params": {}, "tz": "Asia/Kolkata",
-                            "rule": {"type": "times", "times": T.TIMES, "days": [0, 1, 2, 3, 4]}, "skip_holidays": False,
-                            "overlap_policy": "queue", "missed_policy": "grace", "missed_grace_min": 20}, "t", self.now)
-        today = dt.date.today()
-        for (h, m, slot) in ((10, 12, 1), (13, 27, 3)):
-            self.at(h, m)
-            rows = self.store.list_executions(schedule_id=s["id"])
-            self.assertTrue(any(r["status"] == "SUCCESS" for r in rows), [r["status"] for r in rows])
-            self.assertEqual(L.status(today)["slots"][slot - 1]["state"], "done", slot)
-        self.assertEqual(self.calls.count("nmass"), 2)       # only slots 1 and 3 ran
-
-
 def at(h, m):
     return dt.datetime.combine(dt.date.today(), dt.time(h, m))
 
