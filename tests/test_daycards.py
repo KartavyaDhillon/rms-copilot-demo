@@ -93,6 +93,19 @@ class ManualSlots(Base):
         self.assertEqual(sorted(keys("eodsar")), ["alloc", "response"])
 
 
+class Risk(Base):
+    def test_risk_report_found_in_dated_backup_and_not_in_zips(self):
+        bk = self.common / "BACKUP FILES AUTOMATED" / "29-10-2026"
+        bk.mkdir(parents=True)
+        (bk / f"RISK_REPORT_{S}.csv").write_text("x")
+        self.assertEqual([x.path.parent for x in D.risk_sources(DAY)], [bk])
+        (self.common / f"RISK_REPORT_{S}.csv").write_text("y")                 # today's file in COMMON FILES is found too
+        self.assertEqual(len(D.risk_sources(DAY)), 2)
+        files = D.backup_files("sa", DAY, ["sa_cm"])
+        self.assertFalse([f for f in files if "RISK" in f["rel"]])
+        self.assertFalse([m for m in D.missing_for_backup("sa", DAY, ["sa_cm"]) if "Risk" in m["label"]])
+
+
 class Upload(Base):
     def test_routes_by_name(self):
         (self.live / "8").mkdir(parents=True)

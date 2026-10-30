@@ -354,13 +354,18 @@ def live_sources(d: dt.date) -> List[tuple]:
 
 
 def risk_sources(d: dt.date) -> List[Src]:
+    """RISK_REPORT of the day: COMMON FILES itself (today's file) or its dated backup folder
+    COMMON FILES\\BACKUP FILES AUTOMATED\\<dd-mm-yyyy> (every earlier day)."""
     try:
         from core import common_ftp
         folder = Path(common_ftp.common_dir())
     except Exception:
         folder = Path(os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES"))
     rx = re.compile(rf"^RISK_REPORT_{_dmy(d)}\.csv$", re.I)
-    return [Src(x.name, x, "risk", f"{dstr(d)}/RISK REPORT/{x.name}") for x in _files(folder) if rx.match(x.name)]
+    out: List[Src] = []
+    for f in (folder, folder / "BACKUP FILES AUTOMATED" / dstr(d)):
+        out += [Src(x.name, x, "risk", f"{dstr(d)}/RISK REPORT/{x.name}") for x in _files(f) if rx.match(x.name) and x.stat().st_size > 0]
+    return out
 
 
 def manual_sources(d: dt.date) -> List[Src]:
@@ -418,7 +423,7 @@ def _where(rx: str) -> str:
         return f"LIVE ALLOCATION CAPTURE, folder {rx[0]}"
     low = rx.lower()
     if low.startswith("risk_report"):
-        return "COMMON FILES (RISK_REPORT of that day)"
+        return "COMMON FILES, or its BACKUP FILES AUTOMATED\\<date> folder"
     if low.startswith(("response_2", "allocation_detail")):
         return "upload it with 'Manual files' on this card"
     if "_master" in low:
@@ -969,6 +974,8 @@ def backup_files(card: str, d: dt.date, procs: Optional[List[str]] = None) -> Li
             continue
         lab = PROCS[key].label
         for s in stage_plan(key, d):
+            if s.kind == "risk":                    # the risk report belongs to COMMON FILES - never put into these backups
+                continue
             out.append({"rel": s.zip_rel, "path": s.path, "size": s.path.stat().st_size, "proc": key, "io": "in", "kind": s.kind})
         for f in outputs_of(key, d):
             out.append({"rel": f"{dstr(d)}/OUTPUT/{lab}/{f.name}", "path": f, "size": f.stat().st_size, "proc": key, "io": "out", "kind": "out"})
@@ -984,7 +991,7 @@ def missing_for_backup(card: str, d: dt.date, procs: List[str]) -> List[dict]:
     out = []
     for key in procs:
         for n in check_needs(key, d):
-            if not n["present"] and not n["optional"]:
+            if not n["present"] and not n["optional"] and not re.match(r"risk_report", n["expect"], re.I):
                 out.append({"proc": key, "label": n["label"], "group": n["group"]})
     return out
 
