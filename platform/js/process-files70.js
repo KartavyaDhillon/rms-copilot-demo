@@ -107,7 +107,7 @@
     window._saReturn = null;
     modal(TITLE,
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 14px">' +
-        tb('🔑 Credentials', 'f7Creds()', 'NCDEX logins (NCFE and web extranet) and the security answer. NSE, MCX and the back office use Scheduler > Connections.') +
+        tb('🔑 Credentials', 'f7Creds()', 'Every login this card uses: NSE, MCX, back office (EPI), NCDEX (both sites), security answer and the 2Captcha key.') +
         tb('📦 Backup files', 'f7Sub(f7Backup)', 'Pick a date and download the whole day folder, some groups, or only the files you tick - one zip.') +
         tb('🗂️ Logs', 'f7Logs()', 'The full log of every run.') +
         tb('⛔ Stop', 'f7Stop()', 'Stops the download that is running now.', ';border-color:rgba(248,113,113,.45);color:var(--red)') +
@@ -192,7 +192,7 @@
       d.groups.map(function (g) { return groupTile(g, job); }).join('') + '</div>' +
       lastBox(d) +
       '<div style="font-size:11px;color:var(--dim);margin-top:12px;line-height:1.6">Files are saved only in <span style="font-family:var(--mono)">' + esc(d.folder) + '</span> - nothing is copied to other folders. ' +
-      'Downloading again only fetches what is missing. Both NCDEX captchas are answered by the auto-solver. Logins: NSE, MCX and the back office (EPI) in Scheduler &gt; Connections; NCDEX under 🔑 Credentials.</div>';
+      'Downloading again only fetches what is missing. Both NCDEX captchas are answered by the auto-solver. All logins (NSE, MCX, back office, NCDEX, 2Captcha) are under 🔑 Credentials.</div>';
     var nb = $('f7LogBox'); if (nb) nb.scrollTop = stick ? nb.scrollHeight : keep;
   }
 

@@ -583,14 +583,41 @@ PIPELINES["files70"] = {
     "name": "76 FILES DOWNLOADER", "module": "core.files70", "func": "run", "logdir": "files70", "runs": 0,
     "state_dir_env": "FILES76_DIR", "state_default": r"D:\CONSOLE\data\76 FILES DOWNLOADER", "state_file": "run_counter.txt",
     "email_keys": {},
-    "cred": {"NCDEX / NCFE login": {"user_key": "CTCL_NCDEX_USER", "pass_key": "CTCL_NCDEX_PASSWORD",
-                                    "note": "ncfe.ncdex.com - the 01292_MGN end file. Shared with CTCL vs NMASS and Live "
-                                            "Allocation; this card logs out after the download"},
-             "NCDEX web extranet login": {"user_key": "F70_NCDEX_WEB_USER", "pass_key": "F70_NCDEX_WEB_PASSWORD",
-                                          "note": "webextranet.ncdex.com - the NCCL_MARGIN_REP 01-08 files. Leave empty to "
-                                                  "use the NCFE login above"},
-             "NCDEX security answer": {"single_key": "NCDEX_SEC_ANSWER",
-                                       "note": "answer to the NCDEX security question (both sites). Default: a"}},
+    # Every login this card needs, in one window. The NSE / MCX / back-office ones are the SAME settings as
+    # Scheduler > Connections (saved through core.scheduler.connections, see pb_update), so they stay in step.
+    "cred": {
+        "NSE Extranet login (member portal)": {"user_key": "SCHED_NSE_LOGIN_ID", "pass_key": "SCHED_NSE_PASSWORD",
+                                               "note": "connect2nse.com - NSE CM / FO / CO / CD files. User = Login ID, password = plain password "
+                                                       "(or fill the AES key / encrypted password below instead)."},
+        "NSE member code": {"single_key": "SCHED_NSE_MEMBER_CODE", "default": "06436",
+                            "note": "used in the NSE file names (e.g. C_CC02_<member>_<date>.csv)"},
+        "NSE AES key (base64)": {"single_key": "SCHED_NSE_AES_KEY", "secret": True,
+                                 "note": "needed to encrypt the NSE password. Blank = keep the saved one"},
+        "NSE already-encrypted password (optional)": {"single_key": "SCHED_NSE_ENCRYPTED_PASSWORD", "secret": True,
+                                                      "note": "only if you have the encrypted password instead of the plain one"},
+        "MCX file portal login": {"user_key": "SCHED_MCX_SFTP_USER", "pass_key": "SCHED_MCX_SFTP_PASSWORD",
+                                  "note": "sftp.mcxindia.com - MCX peak margin / margin / EODSAR files. User = MCX user id (also used in the file names)"},
+        "MCX second password to try (optional)": {"single_key": "SCHED_MCX_SFTP_PASSWORD2", "secret": True,
+                                                  "note": "tried when the first password is refused (e.g. just after a password change)"},
+        "MCX MFA (TOTP) secret": {"single_key": "SCHED_MCX_SFTP_TOTP_SECRET", "secret": True,
+                                  "note": "the secret behind the 6-digit code of the MCX portal. Blank = keep the saved one"},
+        "Back-office API login (EPI)": {"user_key": "SCHED_BACKOFFICE_USERNAME", "pass_key": "SCHED_BACKOFFICE_PASSWORD",
+                                        "note": "the EPI.xlsx early pay-in margin file"},
+        "Back-office API address": {"single_key": "SCHED_BACKOFFICE_BASE_URL", "default": "https://boapi.mastertrust.co.in",
+                                    "note": "address of the back-office API"},
+        "Back-office client IP": {"single_key": "SCHED_BACKOFFICE_CLIENT_IP", "note": "sent with the back-office login"},
+        "Back-office client MAC": {"single_key": "SCHED_BACKOFFICE_CLIENT_MAC", "note": "sent with the back-office login"},
+        "NCDEX / NCFE login": {"user_key": "CTCL_NCDEX_USER", "pass_key": "CTCL_NCDEX_PASSWORD",
+                               "note": "ncfe.ncdex.com - the 01292_MGN end file. Shared with CTCL vs NMASS and Live "
+                                       "Allocation; this card logs out after the download"},
+        "NCDEX web extranet login": {"user_key": "F70_NCDEX_WEB_USER", "pass_key": "F70_NCDEX_WEB_PASSWORD",
+                                     "note": "webextranet.ncdex.com - the NCCL_MARGIN_REP 01-08 files. Leave empty to "
+                                             "use the NCFE login above"},
+        "NCDEX security answer": {"single_key": "NCDEX_SEC_ANSWER", "default": "a",
+                                  "note": "answer to the NCDEX security question (both sites). Default: a"},
+        "2Captcha API key": {"single_key": "APIKEY_2CAPTCHA", "secret": True,
+                             "note": "solves both NCDEX captchas automatically. Blank = keep the saved one"},
+    },
 }
 try:
     from core import mcx_cash_report as _mcr
@@ -1785,8 +1812,9 @@ def pb_get_config(pipe):
     creds = {}
     for lbl, c in p.get("cred", {}).items():
         if "single_key" in c:
-            creds[lbl] = {"single_key": c["single_key"], "value": g(c["single_key"], ""),
-                           "note": c.get("note", "")}
+            _v = g(c["single_key"], "") or c.get("default", "")
+            creds[lbl] = {"single_key": c["single_key"], "value": _pb_mask(_v) if c.get("secret") else _v,
+                           "secret": bool(c.get("secret")), "note": c.get("note", "")}
         else:
             creds[lbl] = {"user": g(c["user_key"], ""), "pass": _pb_mask(g(c["pass_key"], "")),
                           "user_key": c["user_key"], "pass_key": c["pass_key"], "note": c.get("note", "")}
@@ -1818,6 +1846,25 @@ def pb_update(pipe, password, updates):
         else: allowed.add(c["user_key"]); allowed.add(c["pass_key"])
     for i in range(1, p.get("runs", 0) + 1): allowed.add(f"{pipe.upper()}_RUN{i}_WINDOW")
     upd = {k: v for k, v in (updates or {}).items() if k in allowed}
+    # Settings that belong to Scheduler > Connections (SCHED_<GROUP>_<FIELD>) are saved THROUGH the connections store, so the
+    # secret ones go to .env.local like everywhere else and the two screens never disagree.
+    _conn = {}
+    try:
+        from core.scheduler import connections as _cn
+        for _g, _spec in _cn.GROUPS.items():
+            for _f, _l, _s, _d in _spec["fields"]:
+                _conn[_cn._key(_g, _f)] = (_g, _f)
+        _by_group = {}
+        for _k, _v in list(upd.items()):
+            if _k in _conn and str(_v).strip() != "":
+                _by_group.setdefault(_conn[_k][0], {})[_conn[_k][1]] = str(_v).strip()
+                upd.pop(_k)
+        for _g, _vals in _by_group.items():
+            _cn.update(_g, _vals, "console: 76 FILES DOWNLOADER")
+            for _f, _v in _vals.items():
+                os.environ[_cn._key(_g, _f)] = _v
+    except Exception as _e:
+        print(f"[pb_update] connections save skipped: {_e}", flush=True)
     _write_env(upd)
     # Also update the running server's environment: run subprocesses inherit it,
     # and load_dotenv() never overrides an already-set variable — so without this
