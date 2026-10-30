@@ -362,7 +362,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-locks.js?v=9"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=4"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=9"></script>'
-                            '<script src="/platform/js/process-alloc.js?v=7"></script>'
+                            '<script src="/platform/js/process-alloc.js?v=8"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
@@ -6517,21 +6517,26 @@ def alloc_status():
 
 @app.get("/alloc/run-stream")
 def alloc_run_stream(request: Request, mode: str = "sofar", until: str = "", frm: str = "", to: str = "",
-                     clients: str = "", deliver: str = "download", mailto: str = ""):
+                     clients: str = "", deliver: str = "download", mailto: str = "", asof: str = ""):
     import json as _aj, re as _ar_re
-    if mode not in ("sofar", "until", "custom"):
+    if mode not in ("sofar", "until", "custom", "reclose"):
         return JSONResponse({"ok": False, "error": "unknown mode"}, status_code=400)
     if mode == "until" and not _ar_re.fullmatch(r"\d{1,2}:\d{2}", until or ""):
         return JSONResponse({"ok": False, "error": "time must look like 15:00"}, status_code=400)
     if mode == "custom" and not (_ar_re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", frm or "")
                                  and _ar_re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", to or "")):
         return JSONResponse({"ok": False, "error": "from / to must look like 2026-10-12 10:00"}, status_code=400)
+    if mode == "reclose" and not _ar_re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", asof or ""):
+        return JSONResponse({"ok": False, "error": "close-up-to must look like 2026-10-29 23:59"}, status_code=400)
     try:
         by = _actor(request)[0] or ""
     except Exception:
         by = ""
     opts = {"mode": mode, "until": until, "from": frm, "range_to": to, "clients": clients,
             "deliver": "mail" if deliver == "mail" else "download", "mail_to": mailto, "by": by}
+    if mode == "reclose":
+        # same as the nightly close, started by hand: official e-mail to the saved To/CC, backup, marker moves
+        opts.update({"mode": "close", "as_of": asof, "clients": ""})
     code = ("from core.pipelines.allocation_report import run_cli as _f; _f(" + repr(_aj.dumps(opts)) + ")")
     return _alloc_sse(code, "alloc_run")
 
