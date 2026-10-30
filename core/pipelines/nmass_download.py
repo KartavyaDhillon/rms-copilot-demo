@@ -23,6 +23,7 @@ import queue
 import re
 import subprocess
 import threading
+import time
 from core.pipeline_box import _PB, act_slot, clear_if_stale_act
 from core.error_translator import translate_error
 from core import dl_lock
@@ -270,7 +271,16 @@ def stream_nmass_download(pipe="ctcl", force=False):
     except Exception:
         pass  # never let a logging problem stop the actual download
 
+    def _wl(text):
+        """Append one line to this run's log file at once, so the Logs window shows progress while it runs."""
+        try:
+            with open(_logpath, "a", encoding="utf-8", errors="replace") as _f:
+                _f.write(str(text) + "\n")
+        except Exception:
+            pass
+
     if not os.path.isfile(script):
+        _wl(f"NMASS script not found: {script}")
         yield {"type": "log",   "msg": f"NMASS script not found: {script}"}
         yield {"type": "error", "msg": f"Script not found: {script}"}
         yield {"type": "end"}
@@ -283,8 +293,10 @@ def stream_nmass_download(pipe="ctcl", force=False):
     if not force:
         _fresh = check_nmass_files_fresh(_own_dir, max_age_min=_PIPE_MAX_AGE_MIN.get(pipe))
         for _d in _fresh["detail"]:
+            _wl("  " + _d)
             yield {"type": "log", "msg": "  " + _d}
         if _fresh["fresh"]:
+            _wl(f"All 4 files already present and under {_fresh['max_age_min']:.0f} min old - skipping the NMASS/NCDEX login (no captcha needed).")
             yield {"type": "log",
                    "msg": f"All 4 files already present and under "
                           f"{_fresh['max_age_min']:.0f} min old — skipping the NMASS/NCDEX "
@@ -294,8 +306,11 @@ def stream_nmass_download(pipe="ctcl", force=False):
                           f"(all 4 within {_fresh['max_age_min']:.0f} min)", "log": ""}
             yield {"type": "end"}
             return
+        _wl("Files missing or too old - a fresh download is needed.")
         yield {"type": "log", "msg": "Files missing or too old — a fresh download is needed."}
 
+    _wl(f"Starting NMASS download: {os.path.basename(script)}")
+    _wl("Downloading CM / FO / CO / ClientNetEffectiveDeposits...")
     yield {"type": "log", "msg": f"Starting NMASS download: {os.path.basename(script)}"}
     yield {"type": "log", "msg": "Downloading CM / FO / CO / ClientNetEffectiveDeposits..."}
 
@@ -307,6 +322,7 @@ def stream_nmass_download(pipe="ctcl", force=False):
     try:
         dl_lock.acquire(pipe)
     except dl_lock.NmassLoginBusyError as e:
+        _wl(f"NMASS/NCDEX login is in use by '{e.owner}' right now - try again shortly.")
         yield {"type": "log", "msg": f"NMASS/NCDEX login is in use by '{e.owner}' right now — waiting is "
                                       f"usually under a minute; try again shortly."}
         yield {"type": "error", "msg": f"⚠ NMASS/NCDEX login already in progress (started by {e.owner}). "
@@ -322,6 +338,7 @@ def stream_nmass_download(pipe="ctcl", force=False):
     with _pb_lock:
         clear_if_stale_act(pipe, "nmass")
         if _pb.get("running"):
+            _wl("An NMASS/NCDEX download is already running for this box.")
             yield {"type": "log", "msg": "An NMASS/NCDEX download is already running for this box."}
             yield {"type": "error", "msg": "⚠ This box's NMASS/NCDEX download is already in progress — "
                                             "wait for it to finish, or press Stop."}
@@ -348,6 +365,7 @@ def stream_nmass_download(pipe="ctcl", force=False):
     except Exception as e:
         dl_lock.release()
         _pb["running"] = False; _pb["proc"] = None; _pb["started_at"] = None
+        _wl(f"Failed to start NMASS script: {e}")
         yield {"type": "log",   "msg": f"Failed to start NMASS script: {e}"}
         yield {"type": "error", "msg": str(e)}
         yield {"type": "end"}
@@ -369,6 +387,7 @@ def stream_nmass_download(pipe="ctcl", force=False):
         # already written above, before we even knew whether this run would
         # get this far (freshness-skip / script-not-found return earlier).
         with open(_logpath, "a", encoding="utf-8", errors="replace") as _lf:
+            _t_run, _t_last = time.time(), time.time()
             while True:
                 try:
                     kind, val = q.get(timeout=2)
@@ -376,11 +395,15 @@ def stream_nmass_download(pipe="ctcl", force=False):
                     if _pb.get("cancel"):
                         try: proc.terminate()
                         except Exception: pass
+                    if time.time() - _t_last >= 30:            # a line in the saved log every 30 s of silence, so a stuck step is visible
+                        _t_last = time.time()
+                        _lf.write(f"[still running {int(time.time() - _t_run)} s - no new output from the download yet]\n"); _lf.flush()
                     yield {"type": "log", "msg": "Waiting for NMASS download..."}
                     continue
+                _t_last = time.time()
                 if kind == "log":
                     _pb["last_event_at"] = datetime.datetime.now().isoformat()
-                    _lf.write(val + "\n")
+                    _lf.write(val + "\n"); _lf.flush()
                     yield {"type": "log", "msg": val}
                     _log_buffer.append(val)
                     m = _AUTH_BAD.search(val)
@@ -397,15 +420,19 @@ def stream_nmass_download(pipe="ctcl", force=False):
                              # for the rest of this pipe's own compute/email phase
 
     if _pb.get("cancel"):
+        _wl("# RESULT: stopped by user.")
         yield {"type": "stopped", "msg": "Stopped by user.", "log": _logname}
         yield {"type": "end"}
         return
 
     if rc == 0:
+        _wl("# RESULT: NMASS files downloaded successfully - 4 files ready")
         yield {"type": "done", "ok": True,  "msg": "NMASS files downloaded successfully - 4 files ready", "log": _logname}
     elif _auth_fail:
+        _m = _friendly_auth_msg(_auth_fail["server"], _auth_fail["reason"])
+        _wl("# RESULT: FAILED - " + str(_m))
         yield {"type": "done", "ok": False,
-               "msg": _friendly_auth_msg(_auth_fail["server"], _auth_fail["reason"]),
+               "msg": _m,
                "log": _logname}
     else:
         # No known tag matched - this is a NEW kind of failure we've never seen before.
@@ -414,5 +441,6 @@ def stream_nmass_download(pipe="ctcl", force=False):
         # to the old fixed message instead of ever showing a raw exit code.
         _ai_msg = translate_error("NCDEX/NMASS download", _log_buffer)
         _msg = _ai_msg or f"NMASS download did not complete (exit code {rc}) - check Logs or contact tech support."
+        _wl("# RESULT: FAILED - " + str(_msg))
         yield {"type": "done", "ok": False, "msg": _msg, "log": _logname}
     yield {"type": "end"}
