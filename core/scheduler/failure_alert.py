@@ -75,6 +75,7 @@ def _switch_on(value: str) -> bool:
 
 # ───────────────────────── the reason, in plain words ─────────────────────────
 _REASONS = [
+    (r"have not been uploaded to the console", "Required files have NOT been uploaded to the console. Please upload them fast."),
     (r"server stopped or restarted", "The console was stopped or restarted while this was running."),
     (r"scheduler was not running|Missed", "The console / scheduler was not running at the scheduled time."),
     (r"No Allocation_Logs|decoded to 0 bytes|0 bytes", "No allocation data could be built - the e-mails arrived empty or are missing."),

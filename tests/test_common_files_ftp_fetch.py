@@ -38,13 +38,24 @@ class Retry(unittest.TestCase):
         ok = {"ok": True, "message": "ok", "files": {"HOLDING": {"status": "downloaded"}}}
         out, err, al, ctx = self._call([miss, ok])
         self.assertIsNone(err); self.assertIn("HOLDING", out); al.assert_not_called()
-        self.assertTrue(any("checking again" in l for l in ctx.lines))
+        self.assertTrue(any("retry 1 of 2" in l for l in ctx.lines))
 
-    def test_gives_up_then_fails_with_alert(self):
-        miss = {"ok": False, "message": "still waiting for: HOLDING", "files": {}}
-        out, err, al, ctx = self._call([miss] * 20)
-        self.assertIsInstance(err, RuntimeError); al.assert_called_once()
+    def test_gives_up_after_two_retries_no_email(self):
+        miss = {"ok": False, "message": "still waiting for: HOLDING_30102026.csv, RISK_REPORT_30102026.csv",
+                "files": {"HOLDING_30102026.csv": {"status": "not on ftp"}, "RISK_REPORT_30102026.csv": {"status": "not on ftp"}}}
+        out, err, al, ctx = self._call([miss] * 10)
+        self.assertIsInstance(err, RuntimeError)
         self.assertNotIsInstance(err, H.Skipped)
+        self.assertIn("have not been uploaded to the console", str(err))
+        self.assertIn("HOLDING and RISK REPORT", str(err))
+        self.assertIn("checked 3 times", str(err))
+        al.assert_not_called()                      # no e-mail alert any more
+        self.assertEqual(sum("retry" in l for l in ctx.lines), 2)
+
+    def test_headline_in_whatsapp_alert(self):
+        from core.scheduler import failure_alert as FA
+        head, _ = FA.friendly_reason("RuntimeError", "HOLDING and RISK REPORT have not been uploaded to the console - please upload them fast.")
+        self.assertIn("upload them fast", head)
 
 
 if __name__ == "__main__":
