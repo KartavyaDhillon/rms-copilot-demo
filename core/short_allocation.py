@@ -212,6 +212,61 @@ def _archive_to_db(tag, kind, filepath, max_retries=3, retry_delay=2):
     return False
 
 
+def cl_runs():
+    """Runs whose CM / FO deposit comes from the client-level collateral files (check mode). SA_CL_RUNS, default '5,6';
+    empty / 'off' = none. Used by the downloader step here and by shortallocation_final_new_with_co.py."""
+    v = os.getenv("SA_CL_RUNS")
+    v = "5,6" if v is None else v
+    return {int(x) for x in re.findall(r"\d+", v)}
+
+
+def _download_client_collaterals(out_dir, tag, put):
+    """Check mode (runs 5-6): fetch today's CM_ and FO_ClientLevelCollaterals into the SA output folder just before SA
+    Processing, with the same NMASS downloader CTCL VS NMASS uses (captcha auto-solver included). -> (ok, message).
+    The downloader also fetches the CO and deposit files; they are not needed here and are removed again."""
+    from core.pipelines.nmass_download import stream_nmass_download
+    from core.pipeline_box import act_slot
+    os.makedirs(LOG_DIR, exist_ok=True)
+    logp = os.path.join(LOG_DIR, f"{tag}__client_collateral__{datetime.datetime.now():%Y%m%d_%H%M%S}.log")
+    os.environ["SA_OUTPUT_DIR"] = out_dir
+    put({"type": "log", "msg": f"📥 Check mode: downloading CM / FO client-level collateral files into {out_dir} ..."})
+    ok, msg = False, "The collateral download did not finish."
+    with open(logp, "w", encoding="utf-8", errors="replace") as lf:
+        lf.write(f"# client-level collateral download for {tag} -> {out_dir}\n")
+        for ev in stream_nmass_download(pipe="sa", force=True):
+            t = ev.get("type")
+            if _SA.get("cancel"):
+                act_slot("sa", "nmass")[0]["cancel"] = True
+            if t == "log":
+                lf.write(str(ev.get("msg")) + "\n")
+                lf.flush()
+                put({"type": "log", "msg": "[collateral] " + str(ev.get("msg"))})
+            elif t == "login_failed":
+                put({"type": "login_failed", "server": ev.get("server")})
+            elif t == "done":
+                ok, msg = bool(ev.get("ok")), str(ev.get("msg") or "")
+            elif t == "error":
+                ok, msg = False, str(ev.get("msg") or "")
+            elif t == "stopped":
+                ok, msg = False, "Stopped by user."
+        lf.write(f"# RESULT: {'OK' if ok else 'FAILED'} - {msg}\n")
+    _archive_to_db(tag, "log", logp)
+    if ok:
+        today = datetime.datetime.now().strftime("%d%m%Y")
+        have = {seg: sorted(glob.glob(os.path.join(out_dir, f"{seg}_ClientLevelCollaterals_{today}*.csv"))) for seg in ("CM", "FO")}
+        bad = [seg for seg, v in have.items() if not v or os.path.getsize(v[-1]) == 0]
+        if bad:
+            return False, f"{' and '.join(bad)} client-level collateral file not found after the download (today {today})."
+        for extra in ("CO_ClientLevelCollaterals_*", "ClientNetEffectiveDeposits_*"):      # not used by Short Allocation
+            for fp in glob.glob(os.path.join(out_dir, extra)):
+                try:
+                    os.remove(fp)
+                except OSError:
+                    pass
+        put({"type": "log", "msg": f"✅ Client-level collateral files ready: {os.path.basename(have['CM'][-1])}, {os.path.basename(have['FO'][-1])}"})
+    return ok, msg
+
+
 def _archive_input_files(tag, eff, c, put, is_last_run=False):
     """After download (Code1) succeeds, push raw exchange input files into Postgres.
 
@@ -236,6 +291,8 @@ def _archive_input_files(tag, eff, c, put, is_last_run=False):
     ]
     if eff <= 4:
         patterns += [(f"C_SA01_P_06436_*_{cf_i}.lis", "input_c_lis"), (f"F_SA01_P_06436_*_{cf_i}.lis", "input_f_lis")]
+    if eff in cl_runs():                      # check mode: the client-level collateral files this run used
+        patterns += [("CM_ClientLevelCollaterals_*.csv", "input_cm_collateral"), ("FO_ClientLevelCollaterals_*.csv", "input_fo_collateral")]
     # ── Daily files: same content all day — archive once, on the last run only
     if is_last_run:
         patterns += [
@@ -484,6 +541,11 @@ def read_run_state(state_path):
 def stop_short_allocation():
     """Kill the running script and its child tree (selenium/chrome/popups)."""
     _SA["cancel"] = True
+    try:
+        from core.pipeline_box import act_slot
+        act_slot("sa", "nmass")[0]["cancel"] = True          # the check-mode collateral download, if it is the step running
+    except Exception:
+        pass
     p = _SA.get("proc")
     if p and p.poll() is None:
         try:
@@ -530,6 +592,8 @@ def _run_one(c, script, tag, put):
             override = _SA.get("override_date")
             if override:
                 env["SA_OVERRIDE_DATE"] = override
+                if override != datetime.date.today().isoformat():
+                    env["SA_CL_RUNS"] = "off"          # client-level collateral files exist only for today
             _m = re.search(r"(\d+)$", str(tag))
             if _m:
                 env["SA_RUN_NO"] = str(int(_m.group(1)))    # this step works on THIS run only, never on the shared counter
@@ -838,6 +902,23 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
                     raw = _needed_run
                 except Exception as _rce:
                     put({"type": "log", "msg": f"⚠️ Could not correct run_state.txt: {_rce}"})
+            # CHECK MODE (runs in SA_CL_RUNS, default 5 and 6): download the CM / FO client-level collateral files first.
+            # If they cannot be downloaded the run stops here - nothing is processed and nothing is e-mailed.
+            try:
+                _eff_cl = (raw - 1) if raw else None
+            except TypeError:
+                _eff_cl = None
+            _past = bool(override_date) and override_date != datetime.date.today().isoformat()
+            if _eff_cl in cl_runs() and (force or today_status.get("code2") != "done"):
+                if _past:
+                    put({"type": "log", "msg": "ℹ Past-date run: the client-level collateral files are only available for today - this run uses the peak-file collateral as usual."})
+                else:
+                    _ok_cl, _msg_cl = _download_client_collaterals(_out_dir, tag, put)
+                    if stopped(): put({"type": "stopped", "msg": "⛔ Stopped by user."}); return
+                    if not _ok_cl:
+                        _record(tag, code2="error", overall="error", failed_step="client_collateral",
+                                failed_step_label="Client-level collateral download (CM / FO)")
+                        put({"type": "error", "msg": f"Run {_eff_cl} stopped: the CM / FO client-level collateral files could not be downloaded - {_msg_cl}"}); return
             # Archive input files BEFORE Code2 moves them to backup folder.
             # We know eff at this point (raw - 1), so we can match the exact suffix.
             # Daily files (RISK_REPORT, BRM, EXCEPTION) are only archived on run 4.
@@ -984,6 +1065,8 @@ SA_KEYS_MAIL = [
     "SA2_MAIL_MUMB_TO", "SA2_MAIL_MUMB_CC",
     "SA2_MAIL_CHND_TO", "SA2_MAIL_CHND_CC",
     "SA2_MAIL_FULL_TO", "SA2_MAIL_FULL_CC",
+    # Runs 5 & 6 (check mode - CM/FO deposit from the client-level collateral files): ALL their mails go here
+    "SA2_MAIL_CHECK_TO", "SA2_MAIL_CHECK_CC",
     # FILE MISSING EMAIL — sent by sa_codes/newshortallocationfiledownloader.py's
     # send_failure_email()/send_manual_intervention_email() while it waits (in
     # 5-minute cycles) for an expected input file to arrive. Existing dedicated

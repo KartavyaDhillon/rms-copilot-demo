@@ -4,6 +4,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -286,11 +287,21 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CheckModeStops(Base):
+    def test_run_stops_when_the_collateral_files_cannot_be_downloaded(self):
+        self.assertEqual(SA.cl_runs(), {5, 6})
+        with mock.patch.dict(os.environ, {"SA_CL_RUNS": "off"}):
+            self.assertEqual(SA.cl_runs(), set())
+
+
 class OrchestratorRuns5to8(Base):
     """stream_short_allocation with stand-in scripts: runs 5-8 do Download + SA Processing and never LAS Funding."""
 
     def setUp(self):
         super().setUp()
+        self._cl = mock.patch.object(SA, "_download_client_collaterals", lambda out_dir, tag, put: (True, ""))   # check mode: no real NMASS login here
+        self._cl.start()
+        self.addCleanup(self._cl.stop)
         self.d = tempfile.TemporaryDirectory()
         r = self.d.name
         self.codes = os.path.join(r, "codes"); os.makedirs(self.codes)

@@ -138,6 +138,23 @@ patterns = {
     "EXCEPTION_FILE": "EXCEPTION.xlsx"
 }
 
+# ---- CHECK MODE (runs listed in SA_CL_RUNS, default 5 and 6; "off" = never) --------------------------------------
+# For these runs the CM / FO DEPOSIT is taken from the exchange's CM_ and FO_ClientLevelCollaterals files (Cash allocated
+# (b) + Cash-others (c) + Non-cash securities (d), summed per client - the same sum CTCL VS NMASS uses) instead of the
+# collateral column of the peak .lis files. The PEAK (Minimum Margin Required) still comes from the peak files.
+# The console downloads both files into this folder just before this script runs.
+def _cl_runs():
+    v = os.getenv("SA_CL_RUNS")
+    v = "5,6" if v is None else v
+    return {int(x) for x in re.findall(r"\d+", v)}
+
+USE_CL = run_no in _cl_runs()
+if USE_CL:
+    _today_dmy = datetime.today().strftime("%d%m%Y")
+    patterns["CM_CL FILE"] = f"CM_ClientLevelCollaterals_{_today_dmy}*.csv"
+    patterns["FO_CL FILE"] = f"FO_ClientLevelCollaterals_{_today_dmy}*.csv"
+    print(f"ℹ Run {run_no}: CM / FO deposit will come from the client-level collateral files (check mode).")
+
 COMMON_DIR = _SAENV("SA_COMMON_DIR", r"C:\COMMON FILES")
 
 def find_latest(pattern):
@@ -168,6 +185,8 @@ BRM_FILE = files["BRM_LIST_XLSX"] or files["BRM_LIST_CSV"]
 MCX_DEPOSIT_FILE = files["MCX_DEPOSIT_XLSX"] or files["MCX_DEPOSIT_CSV"]
 
 required = ["C_LIS FILE", "F_LIS FILE", "MCX PEAK FILE", "NCCL PEAK FILE", "RISK_REPORT"]
+if USE_CL:
+    required += ["CM_CL FILE", "FO_CL FILE"]
 
 
 missing_files = []
@@ -472,11 +491,35 @@ final["Minimum Margin Required"] = (
 )
 
 # ============================================================
+# CM / FO DEPOSIT  (peak-file collateral, or - in check mode - the client-level collateral files)
+# ============================================================
+cm_deposit = c_df.groupby("CLIENT CODE")["TOTAL VALUE OF COLLATERAL (D)"].sum()
+fo_deposit = f_df.groupby("CLIENT CODE")["TOTAL VALUE OF COLLATERAL (D)"].sum()
+
+def _client_level_sum(path):
+    d = pd.read_csv(path, dtype=str)
+    d.columns = [re.sub(r"\s+", " ", str(x)).strip() for x in d.columns]
+    low = {x.lower(): x for x in d.columns}
+    need = ["client code", "cash allocated (b)", "cash-others (c)", "non-cash securities (d)"]
+    miss = [n for n in need if n not in low]
+    if miss:
+        raise SystemExit(f"❌ {os.path.basename(path)}: column(s) not found: {', '.join(miss)}")
+    d["_client"] = d[low["client code"]].apply(normalize_client_code)
+    d["_sum"] = sum(to_num(d[low[n]]) for n in need[1:])
+    return d.groupby("_client")["_sum"].sum()
+
+if USE_CL:
+    cm_deposit = _client_level_sum(files["CM_CL FILE"])
+    fo_deposit = _client_level_sum(files["FO_CL FILE"])
+    print(f"✅ CM deposit from {os.path.basename(files['CM_CL FILE'])} ({len(cm_deposit)} clients), "
+          f"FO deposit from {os.path.basename(files['FO_CL FILE'])} ({len(fo_deposit)} clients)")
+
+# ============================================================
 # TOTAL VALUE OF COLLATERAL + FUND
 # ============================================================
 final["Total value of Collateral+fund"] = (
-    c_df.groupby("CLIENT CODE")["TOTAL VALUE OF COLLATERAL (D)"].sum()
-    .add(f_df.groupby("CLIENT CODE")["TOTAL VALUE OF COLLATERAL (D)"].sum(), fill_value=0)
+    cm_deposit
+    .add(fo_deposit, fill_value=0)
     .add(co_df.groupby("CLIENT CODE")["TOTAL VALUE OF COLLATERAL (D)"].sum(), fill_value=0)
     .add(
         mcx_df.groupby("CLIENT CODE")["CLIENT MARGIN ALLOCATION"].sum()
@@ -605,6 +648,9 @@ files_used = {
     "MCX_DEPOSIT": MCX_DEPOSIT_FILE,
     "SUMMARY": OUTPUT_EXCEL,
 }
+if USE_CL:
+    files_used["CM_CLIENT_LEVEL"] = files["CM_CL FILE"]
+    files_used["FO_CLIENT_LEVEL"] = files["FO_CL FILE"]
 
 # Include RISK & BRM only in 4th run
 if run_no == 4:
@@ -719,6 +765,21 @@ FULL_FILE_EMAIL = {
     "to": _SALIST("SA2_MAIL_FULL_TO", ["kartavya.dhillon@mastertrust.co.in"]),
     "cc": _SALIST("SA2_MAIL_FULL_CC", [])
 }
+
+# ---------------- CHECK MODE RECIPIENTS ----------------
+# Runs that use the client-level collateral files (SA_CL_RUNS) are for CHECKING: every mail of the run (the four zone files
+# and the full file) goes only to SA2_MAIL_CHECK_TO / SA2_MAIL_CHECK_CC (SHORT ALLOCATION > Email recipients). Until those
+# are set the mails go to the sender only, never to the desks.
+if USE_CL:
+    _chk_to = _SALIST("SA2_MAIL_CHECK_TO", [])
+    _chk_cc = _SALIST("SA2_MAIL_CHECK_CC", [])
+    if not _chk_to:
+        _chk_to, _chk_cc = [SMTP_USER], []
+        print(f"⚠ CHECK MODE: SA2_MAIL_CHECK_TO is not set - the mails go only to the sender ({SMTP_USER}).")
+    for _z in EMAIL_CONFIG.values():
+        _z["to"], _z["cc"] = list(_chk_to), list(_chk_cc)
+    FULL_FILE_EMAIL["to"], FULL_FILE_EMAIL["cc"] = list(_chk_to), list(_chk_cc)
+    print(f"ℹ CHECK MODE mail: to {', '.join(_chk_to)}" + (f"  cc {', '.join(_chk_cc)}" if _chk_cc else ""))
 
 # ---------------- DATE EXTRACTION ----------------
 def extract_trade_date_from_filename(filename):

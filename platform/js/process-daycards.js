@@ -28,7 +28,6 @@
 
   var css = document.createElement('style');
   css.textContent =
-    '#task-mcxcash,#task-files70new,[id^=task-dc-]{min-height:360px}' +
     '.dc-p{border:1px solid var(--line);border-radius:13px;padding:13px 15px;margin:0 0 12px;background:var(--panel-2,rgba(255,255,255,.03))}' +
     '.dc-p.ok{border-color:rgba(52,211,153,.4)}.dc-p.bad{border-color:rgba(248,113,113,.45)}.dc-p.run{border-color:var(--amber)}' +
     '.dc-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dc-t{font-family:var(--display);font-size:15px;font-weight:750}' +
@@ -81,6 +80,7 @@
     var anchor = $('task-files70new') || $('task-mcxcash') || $('task-liveallocation') || $('physdelSlot');
     if (!anchor) return false;
     META.cards.forEach(function (c) { anchor = buildTile(c, anchor); });
+    if (anchor && anchor.parentNode) anchor.parentNode.style.gridAutoRows = '1fr';      // every row as tall as the tallest card
     return true;
   }
   function modalOpen(card) {

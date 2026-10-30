@@ -3464,13 +3464,15 @@ async function saOpenEditor(kind, pw){
     }
   } else {
     window._saListState={};   // mail fields are plain replace-whole-value — no stale list state from a previous WA/creds session
-    const L={SA2_MAIL_LUDH_TO:'LUDH · TO',SA2_MAIL_LUDH_CC:'LUDH · CC',SA2_MAIL_DELH_TO:'DELH · TO',SA2_MAIL_DELH_CC:'DELH · CC',SA2_MAIL_MUMB_TO:'MUMB · TO',SA2_MAIL_MUMB_CC:'MUMB · CC',SA2_MAIL_CHND_TO:'CHND · TO',SA2_MAIL_CHND_CC:'CHND · CC',SA2_MAIL_FULL_TO:'FULL FILE · TO',SA2_MAIL_FULL_CC:'FULL FILE · CC',SA_MAIL_SCENARIO_ALL_TO:'SCENARIO-ALL · TO',SA_MAIL_SCENARIO_ALL_CC:'SCENARIO-ALL · CC',SA_MAIL_DELHI_TO:'DELHI · TO',SA_MAIL_DELHI_CC:'DELHI · CC',SA_MAIL_TENTATIVE_TO:'TENTATIVE · TO',SA_MAIL_TENTATIVE_CC:'TENTATIVE · CC',SA_MAIL_TOP100_TO:'TOP100 · TO',SA_MAIL_TOP100_CC:'TOP100 · CC',SA_MAIL_TOP15_TO:'TOP15 · TO',SA_MAIL_TOP15_CC:'TOP15 · CC'};
+    const L={SA2_MAIL_LUDH_TO:'LUDH · TO',SA2_MAIL_LUDH_CC:'LUDH · CC',SA2_MAIL_DELH_TO:'DELH · TO',SA2_MAIL_DELH_CC:'DELH · CC',SA2_MAIL_MUMB_TO:'MUMB · TO',SA2_MAIL_MUMB_CC:'MUMB · CC',SA2_MAIL_CHND_TO:'CHND · TO',SA2_MAIL_CHND_CC:'CHND · CC',SA2_MAIL_FULL_TO:'FULL FILE · TO',SA2_MAIL_FULL_CC:'FULL FILE · CC',SA2_MAIL_CHECK_TO:'RUNS 5 & 6 (check) · TO',SA2_MAIL_CHECK_CC:'RUNS 5 & 6 (check) · CC',SA_MAIL_SCENARIO_ALL_TO:'SCENARIO-ALL · TO',SA_MAIL_SCENARIO_ALL_CC:'SCENARIO-ALL · CC',SA_MAIL_DELHI_TO:'DELHI · TO',SA_MAIL_DELHI_CC:'DELHI · CC',SA_MAIL_TENTATIVE_TO:'TENTATIVE · TO',SA_MAIL_TENTATIVE_CC:'TENTATIVE · CC',SA_MAIL_TOP100_TO:'TOP100 · TO',SA_MAIL_TOP100_CC:'TOP100 · CC',SA_MAIL_TOP15_TO:'TOP15 · TO',SA_MAIL_TOP15_CC:'TOP15 · CC'};
     const SA2_KEYS=['SA2_MAIL_LUDH_TO','SA2_MAIL_LUDH_CC','SA2_MAIL_DELH_TO','SA2_MAIL_DELH_CC','SA2_MAIL_MUMB_TO','SA2_MAIL_MUMB_CC','SA2_MAIL_CHND_TO','SA2_MAIL_CHND_CC','SA2_MAIL_FULL_TO','SA2_MAIL_FULL_CC'];
     const LAS_SCENE_KEYS=['SA_MAIL_SCENARIO_ALL_TO','SA_MAIL_SCENARIO_ALL_CC','SA_MAIL_DELHI_TO','SA_MAIL_DELHI_CC','SA_MAIL_TENTATIVE_TO','SA_MAIL_TENTATIVE_CC'];
     const LAS_FUND_KEYS=['SA_MAIL_TOP100_TO','SA_MAIL_TOP100_CC','SA_MAIL_TOP15_TO','SA_MAIL_TOP15_CC'];
     const secHdr=(t)=>`<div style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--teal);text-transform:uppercase;padding:10px 0 6px;border-top:1px solid var(--line);margin-top:4px">${t}</div>`;
     rows+=secHdr('SA Processing emails');
     for(const k of SA2_KEYS){ if(!(k in cfg.mail)) continue; window._saListState[k]=(cfg.mail[k]||[]).slice(); rows+=saListFieldCollapsed(k,L[k]||k,'name@mastertrust.co.in','email'); }
+    rows+=secHdr('Runs 5 &amp; 6 — check mode (all their mails go only here)');
+    for(const k of ['SA2_MAIL_CHECK_TO','SA2_MAIL_CHECK_CC']){ if(!(k in cfg.mail)) continue; window._saListState[k]=(cfg.mail[k]||[]).slice(); rows+=saListFieldCollapsed(k,L[k]||k,'name@mastertrust.co.in','email'); }
     rows+=secHdr('Scenario & Report emails (LAS step)');
     for(const k of LAS_SCENE_KEYS){ if(!(k in cfg.mail)) continue; window._saListState[k]=(cfg.mail[k]||[]).slice(); rows+=saListFieldCollapsed(k,L[k]||k,'name@mastertrust.co.in','email'); }
     rows+=secHdr('LAS Funding emails');

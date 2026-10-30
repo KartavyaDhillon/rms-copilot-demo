@@ -62,6 +62,8 @@ _PIPE_FOLDER = {
     "ctcl":     ("CTCL_NMASS_FOLDER",     r"D:\CTCL VS NMASS"),
     "ms15":     ("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes"),
     "probable": ("PROBABLE_FOLDER",        r"D:\PROBABLE"),
+    # Short Allocation runs 5-6 (check mode): the CM / FO client-level collateral files go into the SA output folder.
+    "sa":       ("SA_OUTPUT_DIR",          r"C:\KARTAVYA\SHORT ALLOCATION"),
     # Segment-wise Collateral Movement Report (Live Snapshot's CM/FO/CO/NCDEX
     # leg) - see core/pipelines/r1_r2_comparison.py. Default mirrors that
     # module's own BASE_FOLDER default (repo/data/r1_r2_comparison) so the
@@ -248,7 +250,7 @@ def stream_nmass_download(pipe="ctcl", force=False):
     # for whichever pipe actually called this.
     from core.pipeline_box import PIPELINES as _PIPELINES
     _repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    _logdir_key = _PIPELINES.get(pipe, {}).get("logdir", "ctcl")
+    _logdir_key = _PIPELINES.get(pipe, {}).get("logdir") or {"sa": "short_allocation"}.get(pipe, "ctcl")
     _logdir = os.path.join(_repo, "logs", _logdir_key)
     os.makedirs(_logdir, exist_ok=True)
     _ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
