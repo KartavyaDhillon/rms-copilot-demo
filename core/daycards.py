@@ -705,18 +705,23 @@ def status(card: str, d: Optional[dt.date] = None) -> dict:
                       "last": last_result(card, key, d), "to": os.getenv(email_env(key)[0], p.to_default),
                       "cc": os.getenv(email_env(key)[1], p.cc_default)})
     return {"card": card, "title": c["title"], "date": dstr(d), "iso": d.isoformat(), "default_iso": default_date().isoformat(),
-            "procs": procs, "job": job_status(card), "manual": manual_status(d) if c["manual"] else None,
+            "procs": procs, "job": job_status(card), "manual": manual_status(d, card) if c["manual"] else None,
             "folder": str(card_dir(card) / dstr(d))}
 
 
-def manual_status(d: dt.date) -> dict:
+def manual_status(d: dt.date, card: Optional[str] = None) -> dict:
     files = manual_sources(d)
     resp = next((s for s in files if s.rel.lower() == RESPONSE_NAME.lower()), None)
     alloc = next((s for s in files if re.fullmatch(rf"Allocation_Detail_{_dmy(d)}\.csv", s.rel, re.I)), None)
-    return {"folder": str(manual_dir(d)),
+    out = {"folder": str(manual_dir(d)),
             "slots": [{**MANUAL_SLOTS[0], "present": bool(resp), "name": resp.rel if resp else "", "size": resp.path.stat().st_size if resp else 0},
                       {**MANUAL_SLOTS[1], "label": f"Allocation_Detail_{_dmy(d)}.csv", "present": bool(alloc), "name": alloc.rel if alloc else "",
                        "size": alloc.path.stat().st_size if alloc else 0}]}
+    if card:                                        # only the manual files that THIS card's processes read
+        rxs = _card_rx(card, d)
+        probe = {"response": RESPONSE_NAME, "alloc": f"Allocation_Detail_{_dmy(d)}.csv"}
+        out["slots"] = [x for x in out["slots"] if any(r.fullmatch(probe[x["key"]]) for r in rxs)]
+    return out
 
 
 def save_manual(d: dt.date, slot: str, name: str, data: bytes) -> dict:

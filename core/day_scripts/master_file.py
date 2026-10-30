@@ -542,7 +542,9 @@ def clean_clntid_for_excel(df, col="ClntId"):
     # Only try if the column exists
     if df is not None and col in df.columns:
         # Remove hidden/non-printable chars, keep leading zeros, do NOT convert to int
-        df[col] = df[col].astype(str).str.strip().str.replace(r"[\u200b\u200c\u200d\uFEFF]", "", regex=True)
+        df[col] = df[col].astype(str).str.strip()
+        for _z in ("\u200b", "\u200c", "\u200d", "\ufeff"):          # plain replace: the arrow string type has no \u in its regex
+            df[col] = df[col].str.replace(_z, "", regex=False)
     return df
 
 # --- APPLY ClntId CLEANING TO ALL SHEETS ---

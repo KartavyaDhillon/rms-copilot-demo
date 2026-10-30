@@ -86,6 +86,13 @@ class Manual(Base):
         self.assertTrue(slots["response"]["present"] and slots["alloc"]["present"])
 
 
+class ManualSlots(Base):
+    def test_each_card_shows_only_the_manual_files_it_uses(self):
+        keys = lambda c: [x["key"] for x in D.manual_status(DAY, c)["slots"]]
+        self.assertEqual(keys("sa"), ["response"])
+        self.assertEqual(sorted(keys("eodsar")), ["alloc", "response"])
+
+
 class Upload(Base):
     def test_routes_by_name(self):
         (self.live / "8").mkdir(parents=True)
