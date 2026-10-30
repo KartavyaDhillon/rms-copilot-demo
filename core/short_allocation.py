@@ -1782,6 +1782,27 @@ def _client_peak_lookup_pg(client_code: str, from_date: str = "", to_date: str =
         key = (f["run_date"], f["tag"] or "")
         groups[key][f["kind"]] = (f["content"], f["filename"])
 
+    # NSE CASH / FO peak files exist only up to number SA_PEAK_CAP_CF (4): runs 5-8 USE the 4th file but it is archived only
+    # under run 4 (see _archive_input_files). Without carrying it forward, run 5-8 rows had no CM/FO peak or collateral and
+    # the shortage was only the MCX / NCDEX part - different from the SA output file, which uses the 4th NSE files.
+    try:
+        cap = max(1, int(os.getenv("SA_PEAK_CAP_CF", "4")))
+    except ValueError:
+        cap = 4
+
+    def _run_no(tag):
+        m = re.search(r"(\d+)\s*$", tag or "")
+        return int(m.group(1)) if m else None
+    cf_base = {}                                            # run_date -> {kind: (content, filename)} of run `cap`
+    for (rd, tg), kd in groups.items():
+        if _run_no(tg) == cap:
+            cf_base[rd] = {k: kd[k] for k in ("input_c_lis", "input_f_lis") if k in kd}
+    for (rd, tg), kd in groups.items():
+        n = _run_no(tg)
+        if n is not None and n > cap and rd in cf_base:
+            for k, v in cf_base[rd].items():
+                kd.setdefault(k, v)
+
     results = []
     for (run_date_str, tag), kinds in sorted(groups.items()):
         run_folder = tag.replace("SA-0", "") if tag else "?"

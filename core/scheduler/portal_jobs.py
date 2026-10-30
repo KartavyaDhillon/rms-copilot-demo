@@ -322,6 +322,30 @@ def save_job(raw: dict, job_id: str = "") -> dict:
     return job
 
 
+def recipients_of(job_id: str) -> dict:
+    j = get_job(job_id) or {}
+    em = j.get("email") or {}
+    return {"to": str(em.get("to") or ""), "cc": str(em.get("cc") or "")}
+
+
+def save_recipients(job_id: str, to: str, cc: str) -> dict:
+    """The ✉️ Email To / CC button on the job's process card: changes ONLY the job's e-mail To / Cc (one place - the same
+    boxes as on the Portal Downloads tab). Comma, ';' or new lines between addresses all work."""
+    to, cc = H.normalise_list("emails", to), H.normalise_list("emails", cc)      # raises ValueError naming a bad address
+    if not to:
+        raise ValueError("Add at least one 'To' address.")
+    with _LOCK:
+        jobs = load_jobs()
+        j = next((x for x in jobs if x["id"] == job_id), None)
+        if not j:
+            raise KeyError("Unknown job.")
+        j.setdefault("email", {})["to"], j["email"]["cc"] = to, cc
+        j["updated"] = dt.datetime.now().isoformat(timespec="seconds")
+        _save_jobs(jobs)
+    sync()
+    return {"to": to, "cc": cc}
+
+
 def delete_job(job_id: str):
     with _LOCK:
         jobs = load_jobs()
@@ -573,6 +597,9 @@ def sync():
                 key=KEY_PREFIX + j["id"], name=j["name"],
                 description=(j.get("description") or f"Downloads {j['filename']} from the NSE {j['source']} portal "
                              f"({j['segment']} › {j['folder']})") + (" → " + ", ".join(what) if what else "") + ".",
-                run=_make_run(j["id"]), params=[],
+                run=_make_run(j["id"]),
+                params=([catalog.Param("to", "To", "text", required=True, fmt="emails", scope="process",
+                                       help="E-mail addresses, comma or new-line separated."),
+                         catalog.Param("cc", "Cc", "text", fmt="emails", scope="process")] if j["email"]["enabled"] else []),
                 retry_safe=not (j["email"]["enabled"] or j["kambala"]["enabled"]), parallel_safe=False,
                 category=CATEGORY, folder=j["name"], uses=tuple(uses))

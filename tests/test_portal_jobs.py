@@ -47,6 +47,30 @@ class Placeholders(Base):
         self.assertEqual(pj.file_date({"days_back": 0}, mon), mon)
 
 
+class Recipients(Base):
+    def test_card_button_edits_the_jobs_own_to_and_cc(self):
+        from core.scheduler import catalog, portal_jobs as pj, proc_settings as ps
+        job = pj.save_job(good())
+        d = catalog.get(pj.KEY_PREFIX + job["id"])
+        self.assertEqual([p.name for p in d.params if p.fmt == "emails"], ["to", "cc"])      # the card shows ✉️ Email To / CC
+        self.assertEqual(ps.view(d)["to"], "a@mastertrust.co.in")
+        ps.save(d, {"to": "x@mastertrust.co.in, y@mastertrust.co.in;z@mastertrust.co.in", "cc": "c@mastertrust.co.in\nd@mastertrust.co.in"}, "t")
+        em = pj.get_job(job["id"])["email"]
+        self.assertEqual(em["to"], "x@mastertrust.co.in,y@mastertrust.co.in,z@mastertrust.co.in")      # comma / ; / new line all work
+        self.assertEqual(em["cc"], "c@mastertrust.co.in,d@mastertrust.co.in")
+        with self.assertRaises(ValueError):
+            ps.save(d, {"to": "not-an-email", "cc": ""}, "t")
+        with self.assertRaises(ValueError):
+            ps.save(d, {"to": "", "cc": ""}, "t")
+
+    def test_no_button_when_the_job_does_not_e_mail(self):
+        from core.scheduler import catalog, portal_jobs as pj
+        j = good()
+        j["email"]["enabled"] = False
+        job = pj.save_job(j)
+        self.assertEqual([p.name for p in catalog.get(pj.KEY_PREFIX + job["id"]).params if p.fmt == "emails"], [])
+
+
 class Validation(Base):
     def test_good_job_is_clean(self):
         from core.scheduler import portal_jobs as pj
