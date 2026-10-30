@@ -423,9 +423,12 @@ def inquiry_to_str(value):
     return ""
 
 def parse_master_log_file(filepath, source_filename, email_received_time, unparsed_lines,
-                          shared_rows_by_msgid=None, pending_inquiries=None):
+                          shared_rows_by_msgid=None, pending_inquiries=None, seen_entries=None):
     """
     Parses the timestamp + JSON style log (MASTER-Allocation_Logs).
+
+    seen_entries: optional set shared across the files of one run; a log line
+    already in it is skipped (overlap between the day file and 10-minute files).
 
     A Response line does NOT become its own row. Its status/code/time are
     written onto every row belonging to the Request with the same MsgId.
@@ -465,6 +468,16 @@ def parse_master_log_file(filepath, source_filename, email_received_time, unpars
         if not m:
             unparsed_lines.append(chunk)
             continue
+
+        # The full-day log (sent in the evening) repeats every line already
+        # present in the 10-minute files. The same line (same time + sequence
+        # number + text) read twice would create each request row twice, and
+        # only one copy would get its inquiry confirmation. Read each line once.
+        if seen_entries is not None:
+            _ek = chunk
+            if _ek in seen_entries:
+                continue
+            seen_entries.add(_ek)
 
         log_time = m.group("time")
         seq_no = m.group("seq")
@@ -1583,6 +1596,7 @@ def process_bucket(matches, window_start, window_end, window_label, permanent=Fa
     # the parsing loop below.
     shared_rows_by_msgid = {}
     pending_inquiries = []
+    seen_entries = set()   # log lines already read (day file overlaps the 10-minute files)
 
     for m in matches:
         # Use THIS email's own timestamp for its folder name, not the
@@ -1648,6 +1662,7 @@ def process_bucket(matches, window_start, window_end, window_label, permanent=Fa
                     fp, os.path.basename(fp), m["date_header"], unparsed_lines,
                     shared_rows_by_msgid=shared_rows_by_msgid,
                     pending_inquiries=pending_inquiries,
+                    seen_entries=seen_entries,
                 )
                 master_rows.extend(rows)
                 rows_extracted += len(rows)
@@ -1658,6 +1673,7 @@ def process_bucket(matches, window_start, window_end, window_label, permanent=Fa
                         fp, os.path.basename(fp), m["date_header"], unparsed_lines,
                         shared_rows_by_msgid=shared_rows_by_msgid,
                         pending_inquiries=pending_inquiries,
+                        seen_entries=seen_entries,
                     )
                     master_rows.extend(rows)
                     rows_extracted += len(rows)
