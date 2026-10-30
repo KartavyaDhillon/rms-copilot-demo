@@ -254,6 +254,8 @@ class SchedulerEngine:
     def _execute(self, eid: str, s: dict, pdef, trigger: str, attempt: int):
         ctx = ExecContext(eid, s, trigger)
         status, etype, emsg = "SUCCESS", "", ""
+        from core.scheduler import connections as _conns
+        _tok = _conns.set_process(pdef.key)                 # lets this process use its OWN copy of a connection (own sender ...)
         try:
             result = pdef.run(catalog.effective_params(pdef, s.get("params") or {}), ctx)
             if result:
@@ -266,6 +268,8 @@ class SchedulerEngine:
             emsg = _scrub(str(e))[:2000]
             ctx.log("FAILED — " + _scrub("".join(traceback.format_exception_only(type(e), e)).strip()))
             ctx.log(_scrub(traceback.format_exc())[-6000:])
+        finally:
+            _conns.reset_process(_tok)                      # the failure alert etc. below use the shared settings again
         end = self.clock()
         try:
             store.finish_execution(eid, status, end, etype, emsg, ctx.text())

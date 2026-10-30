@@ -274,7 +274,9 @@ def connections_get(request: Request):
     who, err = _guard(request, False)
     if err:
         return err
-    return {"groups": connections.view(), "can_edit": True, "needs_password": not _who(request)[1]}
+    proc = (request.query_params.get("process") or "").strip()
+    return {"groups": connections.view_for(proc) if proc else connections.view(), "can_edit": True,
+            "needs_password": not _who(request)[1]}
 
 
 @router.post("/verify-password")
@@ -292,13 +294,16 @@ async def connections_put(group: str, request: Request):
     if err:
         return err
 
+    linked: list = []
+
     def go():
         try:
-            return connections.update(group, body, who)
+            proc = str(body.get("_process") or "").strip() or None
+            return connections.update(group, body, who, process=proc, linked_out=linked)
         except ValueError as ex:
             raise service.ValidationFailed([str(ex)])
     out, e = _safe(go)
-    return e or {"ok": True, "changed": out}
+    return e or {"ok": True, "changed": out, "also_updated": linked}
 
 
 # ── RMS LIMITS MAND KAMBALA: "Add client codes" (appends codes, e-mails, uploads to Kambala) ──

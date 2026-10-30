@@ -811,10 +811,12 @@
       b.onclick = async () => {
         const box = b.closest("[data-g]"), body = {};
         box.querySelectorAll("[data-f]").forEach((i) => { body[i.dataset.f] = i.value; });
+        if (box.dataset.proc) body._process = box.dataset.proc;      // saved from a process's Credentials: only that process changes
         if (S.pw) body._password = S.pw;
         try {
           const r = await call("PUT", "/sched/connections/" + b.dataset.save, body);
-          toast("ok", "Saved", r.changed && r.changed.length ? r.changed.length + " field(s) updated" : "nothing changed");
+          const also = (r.also_updated || []).length ? " Same login also updated in: " + r.also_updated.join(", ") + "." : "";
+          toast("ok", "Saved", (r.changed && r.changed.length ? (box.dataset.proc ? "only this process changed." : r.changed.length + " field(s) updated.") : "nothing changed.") + also);
           after();
         } catch (e) { toast("err", "Not saved", e.message); }
       };
@@ -823,15 +825,16 @@
 
   async function openCredentials(key) {
     try {
-      const c = await jget("/sched/connections");
+      const c = await jget("/sched/connections?process=" + encodeURIComponent(key));
       const p = S.procs.find((x) => x.key === key) || { name: key, uses: [] };
       const groups = c.groups.filter((g) => (p.uses || []).includes(g.group));
       const pwd = await unlock(c.needs_password, "Credentials — " + p.name);
       if (pwd === null) return;
       S.pw = pwd;
       const close = RMS.modal("Credentials — " + p.name,
-        '<div class="card-sub" style="margin-bottom:10px">Shared with every process that uses the same connection. Saved in the .env files under “# scheduler connection”; passwords and tokens go to .env.local. Secrets are never shown again — leave blank to keep the current one.</div>' +
+        '<div class="card-sub" style="margin-bottom:10px">What you change here applies to <b>this process only</b> (e.g. a different sender e-mail). When you type a new <b>password</b> for a login, every other process that uses the <b>same login</b> gets the new password too. Saved in the .env files under “# scheduler connection”; passwords and tokens go to .env.local. Secrets are never shown again — leave blank to keep the current one.</div>' +
         groups.map((g) => connGroupHtml(g, true, key)).join(""), { width: 760, icon: "settings" });
+      document.querySelectorAll("[data-g]").forEach((bx) => { bx.dataset.proc = key; });
       bindConnSave(document, () => { S.pw = ""; close(); load(); });
     } catch (e) { toast("err", "Could not open", e.message); }
   }
