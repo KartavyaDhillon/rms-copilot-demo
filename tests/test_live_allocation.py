@@ -407,3 +407,23 @@ class Helper(unittest.TestCase):
         import tools.create_live_allocation_schedule as T
         self.assertEqual(T.TIMES, ["10:12", "12:10", "13:27", "15:10", "16:53", "18:55", "20:55", "22:55"])
         self.assertEqual(L._parse_times(",".join(T.TIMES)), L._parse_times(L.DEFAULT_TIMES))
+
+
+class HiddenFilesNotListed(unittest.TestCase):
+    def test_dot_files_hidden_from_listing_and_zip(self):
+        import tempfile, zipfile, datetime as _dt
+        from pathlib import Path
+        from unittest import mock
+        from core import live_allocation as la
+        tmp = Path(tempfile.mkdtemp())
+        day = tmp / "29-10-2026"; slot = day / "1"; slot.mkdir(parents=True)
+        (slot / ".mcx_export_state.json").write_text("{}")
+        (slot / "MCX_Web_Allocation_01.xlsx").write_text("x")
+        d = _dt.date(2026, 10, 29)
+        with mock.patch.object(la, "slot_dir", lambda _d, _s: slot), mock.patch.object(la, "day_dir", lambda _d: day), \
+             mock.patch.object(la, "_state_dir", lambda: tmp):
+            names = [f["name"] for f in la.list_files(d, 1)]
+            self.assertEqual(names, ["MCX_Web_Allocation_01.xlsx"])
+            z = la.zip_folder(d)
+            with zipfile.ZipFile(z) as zf:
+                self.assertEqual([n.split("/")[-1] for n in zf.namelist()], ["MCX_Web_Allocation_01.xlsx"])

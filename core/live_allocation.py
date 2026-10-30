@@ -266,6 +266,8 @@ def list_files(d: dt.date, slot: int) -> list:
     out = []
     try:
         for f in sorted(os.listdir(folder)):
+            if f.startswith("."):               # hidden bookkeeping (e.g. .mcx_export_state.json) - never shown or downloadable
+                continue
             p = folder / f
             if p.is_file():
                 s = p.stat()
@@ -321,7 +323,7 @@ def zip_folder(d: dt.date, slot: int = None) -> Path:
             if not sd.is_dir():
                 continue
             for f in sorted(os.listdir(sd)):
-                if (sd / f).is_file():
+                if not f.startswith(".") and (sd / f).is_file():
                     z.write(sd / f, f"{dstr(d)}/{s}/{f}")
     return Path(path)
 
@@ -938,7 +940,7 @@ def zip_range(d_from: dt.date, d_to: dt.date, slots=None) -> Path:
                 if want is not None and int(s) not in want:
                     continue
                 for f in sorted(os.listdir(base / s)):
-                    if (base / s / f).is_file():
+                    if not f.startswith(".") and (base / s / f).is_file():
                         z.write(base / s / f, f"{dstr(d)}/{s}/{f}")
                         n += 1
     if not n:
