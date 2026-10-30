@@ -365,7 +365,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
-                            '<script src="/platform/js/process-files70.js?v=2"></script><script src="/platform/js/process-daycards.js?v=1"></script>'
+                            '<script src="/platform/js/process-files70.js?v=2"></script><script src="/platform/js/process-daycards.js?v=2"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
@@ -1036,6 +1036,15 @@ async def dc_manual(request: Request, card: str, date: str, slot: str, name: str
     _d = _dc(card)
     try:
         return _d.save_manual(_d.parse_date(date), slot, name, await request.body())
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+@app.post("/daycards/upload")
+async def dc_upload(request: Request, card: str, date: str, name: str):
+    """Upload ONE file for the card's day (raw body); the name decides the folder (see daycards.save_upload)."""
+    _d = _dc(card)
+    try:
+        return _d.save_upload(card, _d.parse_date(date), name, await request.body())
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 

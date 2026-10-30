@@ -284,7 +284,7 @@ CARDS.update({
     "master": {"title": "MASTER FILE", "folder": "MASTER FILE", "icon": "🧾", "accent": "#10b981",
                "procs": ["master_file", "live_allocation_report", "mcx_intrasar"], "manual": False,
                "desc": "Master file → Live allocation report → MCX intrasar. One click runs them in order."},
-    "sa": {"title": "SA", "folder": "SA", "icon": "📑", "accent": "#6366f1", "procs": ["sa_cm", "sa_fo"], "manual": True,
+    "sa": {"title": "SA04 REPORTING", "folder": "SA04 REPORTING", "icon": "📑", "accent": "#6366f1", "procs": ["sa_cm", "sa_fo"], "manual": True,
            "desc": "SA04 reports for CM and FO (with the MCX end-of-day files)."},
     "eodsar": {"title": "EODSAR", "folder": "EODSAR", "icon": "🌙", "accent": "#ec4899", "procs": ["mcx_eodsar", "ncdex_eodsar"], "manual": True,
                "desc": "MCX and NCDEX end-of-day short-allocation reports."},
@@ -438,8 +438,32 @@ def check_needs(proc: str, d: dt.date, staged: Optional[List[Src]] = None) -> Li
         rx = re.compile(n.rx, re.I)
         hit = next((x for x in names if rx.fullmatch(x)), None)
         out.append({"group": n.group, "label": n.label, "optional": n.optional, "present": bool(hit), "name": hit or "",
-                    "expect": _readable(n.rx), "where": _where(n.rx)})
+                    "expect": _readable(n.rx), "where": _where(n.rx), "upstream": _upstream(proc, n.rx)})
     return out
+
+
+# a file that an EARLIER process of the same card makes (Master file, Live allocation report): it is not "missing" before that
+# process has run - the card counts it as "comes from the earlier step" when that step itself has all its files.
+_UPSTREAM = [(re.compile(r"_MASTER\\\.xlsx$"), "master_file"), (re.compile(r"^Report_Live_Allocation\\\.xlsx$"), "live_allocation_report")]
+
+
+def _upstream(proc: str, rx: str) -> str:
+    for r, key in _UPSTREAM:
+        if r.search(rx) and key in PROCS and key != proc and PROCS[key].card == PROCS[proc].card:
+            return key
+    return ""
+
+
+def would_pass(proc: str, d: dt.date, _seen=()) -> bool:
+    """True when every required file is there, counting the files that an earlier process of the card will make."""
+    if proc in _seen:
+        return False
+    for n in check_needs(proc, d):
+        if n["present"] or n["optional"]:
+            continue
+        if not (n["upstream"] and would_pass(n["upstream"], d, _seen + (proc,))):
+            return False
+    return True
 
 
 # ───────────────────────────── running one process ─────────────────────────────
@@ -666,13 +690,17 @@ def status(card: str, d: Optional[dt.date] = None) -> dict:
         groups: Dict[str, list] = {}
         for n in needs:
             groups.setdefault(n["group"], []).append(n)
+        for n in needs:                              # made by an earlier step of this card -> not "missing"
+            n["later"] = bool(not n["present"] and n["upstream"] and would_pass(n["upstream"], d))
         req = [n for n in needs if not n["optional"]]
+        later = [n for n in req if n["later"]]
         outs = outputs_of(key, d)
         procs.append({"key": key, "label": p.label, "note": p.note,
-                      "found": sum(1 for n in req if n["present"]), "total": len(req),
-                      "missing": [n["label"] + (f"  [{n['group']}]" if n["group"] else "") for n in req if not n["present"]],
+                      "found": sum(1 for n in req if n["present"] or n["later"]), "total": len(req),
+                      "later": [{"label": n["label"], "from": PROCS[n["upstream"]].label} for n in later],
+                      "missing": [n["label"] + (f"  [{n['group']}]" if n["group"] else "") for n in req if not n["present"] and not n["later"]],
                       "groups": [{"name": g, "found": sum(1 for n in v if n["present"]), "total": len(v), "optional": all(n["optional"] for n in v),
-                                  "missing": [n["label"] for n in v if not n["present"]]} for g, v in groups.items()],
+                                  "missing": [n["label"] for n in v if not n["present"] and not n["later"]]} for g, v in groups.items()],
                       "outputs": [{"name": o.name, "size": o.stat().st_size} for o in outs],
                       "last": last_result(card, key, d), "to": os.getenv(email_env(key)[0], p.to_default),
                       "cc": os.getenv(email_env(key)[1], p.cc_default)})
@@ -724,6 +752,64 @@ def save_manual(d: dt.date, slot: str, name: str, data: bytes) -> dict:
     tmp.write_bytes(data)
     tmp.replace(folder / final)
     return {"ok": True, "name": final, "size": len(data)}
+
+
+def _card_rx(card: str, d: dt.date) -> List["re.Pattern"]:
+    out = []
+    for key in CARDS[card]["procs"]:
+        for n in PROCS[key].needs(d):
+            out.append(re.compile(re.sub(r"^\d/", "", n.rx), re.I))
+    return out
+
+
+def save_upload(card: str, d: dt.date, name: str, data: bytes) -> dict:
+    """ONE place for every file you have to bring yourself. The name decides where it goes, so a file can never land in
+    the wrong folder: manual files -> MANUAL FILES; the downloader's files -> the day folder of 76 FILES DOWNLOADER (the
+    downloader then sees it as already there); RISK_REPORT -> COMMON FILES; live-allocation files -> their folder 1-8."""
+    from core import files70 as F
+    name = os.path.basename(name or "")
+    if not data:
+        raise ValueError(f"{name or 'the file'} is empty.")
+    if not any(r.fullmatch(name) for r in _card_rx(card, d)):
+        raise ValueError(f"'{name}' is not a file this card needs for {dstr(d)} (check the name and the date in it).")
+    if name.lower() == RESPONSE_NAME.lower():
+        r = save_manual(d, "response", name, data)
+        return {**r, "where": "MANUAL FILES"}
+    if re.fullmatch(rf"Allocation_Detail_{_dmy(d)}\.csv", name, re.I):
+        r = save_manual(d, "alloc", name, data)
+        return {**r, "where": "MANUAL FILES"}
+    if re.fullmatch(rf"RISK_REPORT_{_dmy(d)}\.csv", name, re.I):
+        try:
+            from core import common_ftp
+            folder = Path(common_ftp.common_dir())
+        except Exception:
+            folder = Path(os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES"))
+        where = "COMMON FILES"
+    else:
+        m = re.fullmatch(r"MCX_Web_Allocation_0?([1-8]).*", name, re.I)
+        n = re.fullmatch(rf"ClientNetEffectiveDeposits_{_dmy(d)}\.csv", name, re.I)
+        if m or n:
+            from core import live_allocation as L
+            slot = int(m.group(1)) if m else 8
+            folder, where = L.day_dir(d) / str(slot), f"LIVE ALLOCATION CAPTURE, folder {slot}"
+        else:
+            hit = None
+            for it in F.plan(d):
+                if it.get("name") and it["name"].lower() == name.lower():
+                    hit = it
+                elif it.get("rx") and re.match(it["rx"], name, re.I):
+                    hit = it
+                if hit:
+                    break
+            if not hit:
+                raise ValueError(f"'{name}' cannot be placed - it is not one of the downloader's files or a live allocation file.")
+            folder = F.day_dir(d) / hit["sub"] if hit["sub"] else F.day_dir(d)
+            where = "76 FILES DOWNLOADER" + (f" / {hit['sub']}" if hit["sub"] else "")
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / (name + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(folder / name)
+    return {"ok": True, "name": name, "size": len(data), "where": where}
 
 
 # ───────────────────────────── job control (server side) ─────────────────────────────

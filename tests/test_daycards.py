@@ -86,6 +86,43 @@ class Manual(Base):
         self.assertTrue(slots["response"]["present"] and slots["alloc"]["present"])
 
 
+class Upload(Base):
+    def test_routes_by_name(self):
+        (self.live / "8").mkdir(parents=True)
+        with mock.patch("core.live_allocation.day_dir", lambda d: self.live):
+            r = D.save_upload("sa", DAY, f"MCX_Web_Allocation_03.xlsx", b"x")
+            self.assertTrue((self.live / "3" / "MCX_Web_Allocation_03.xlsx").is_file())
+            r = D.save_upload("eodsar", DAY, f"ClientNetEffectiveDeposits_{S}.csv", b"x")
+            self.assertIn("folder 8", r["where"])
+        r = D.save_upload("sa", DAY, f"RISK_REPORT_{S}.csv", b"x")
+        self.assertTrue((self.common / f"RISK_REPORT_{S}.csv").is_file())
+        r = D.save_upload("sa", DAY, "EPI.xlsx", b"x")
+        self.assertTrue((self.day / "EPI.xlsx").is_file())
+        r = D.save_upload("sa", DAY, "MCX_MARGIN_56720_20261029.csv", b"x")
+        self.assertTrue((self.day / "MCX" / "MCX_MARGIN_56720_20261029.csv").is_file())
+        D.save_upload("eodsar", DAY, f"Allocation_Detail_{S}.csv", b"a")
+        self.assertTrue((D.manual_dir(DAY) / f"Allocation_Detail_{S}.csv").is_file())
+
+    def test_wrong_files_rejected(self):
+        with self.assertRaises(ValueError):
+            D.save_upload("sa", DAY, "random.csv", b"x")
+        with self.assertRaises(ValueError):
+            D.save_upload("sa", DAY, f"RISK_REPORT_01012026.csv", b"x")
+        with self.assertRaises(ValueError):
+            D.save_upload("sa", DAY, "EPI.xlsx", b"")
+
+
+class Upstream(Base):
+    def test_files_made_by_an_earlier_step_are_not_missing(self):
+        needs = D.check_needs("live_allocation_report", DAY)
+        up = [n for n in needs if n["upstream"]]
+        self.assertEqual([n["upstream"] for n in up], ["master_file"])
+        self.assertFalse(D.would_pass("live_allocation_report", DAY))     # the earlier step has no inputs here
+        with mock.patch.object(D, "check_needs", side_effect=lambda proc, d, staged=None: (
+                [] if proc == "master_file" else [{"present": False, "optional": False, "upstream": "master_file"}])):
+            self.assertTrue(D.would_pass("live_allocation_report", DAY))
+
+
 class Run(Base):
     def test_script_runs_in_work_folder_and_output_is_harvested(self):
         for n in D.PROCS["master_file"].needs(DAY):

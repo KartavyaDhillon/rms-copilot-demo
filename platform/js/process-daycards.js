@@ -36,7 +36,7 @@
     '.dc-note{font-size:11.5px;color:var(--muted);margin:4px 0 8px;line-height:1.45}' +
     '.dc-bar{height:5px;border-radius:9px;background:var(--line);overflow:hidden;margin:6px 0 4px}.dc-bar i{display:block;height:100%;background:var(--green);transition:width .5s}' +
     '.dc-btn{font-family:var(--sans);font-weight:650;font-size:12px;border:0;border-radius:20px;padding:7px 16px;cursor:pointer;background:var(--blue);color:var(--blue-d)}' +
-    '.dc-btn:disabled{background:var(--panel-3);color:var(--dim);cursor:not-allowed}.dc-btn.amber:disabled{background:var(--amber);color:var(--amber-d);cursor:default;opacity:1}' +
+    '.dc-btn.ghost{background:transparent;border:1px solid var(--line-2);color:var(--ink)}.dc-btn.ghost:hover{border-color:var(--blue);color:var(--blue)}.dc-btn:disabled{background:var(--panel-3);color:var(--dim);cursor:not-allowed}.dc-btn.amber:disabled{background:var(--amber);color:var(--amber-d);cursor:default;opacity:1}' +
     '.dc-link{background:none;border:0;color:var(--muted);font-size:11px;cursor:pointer;text-decoration:underline;padding:0}' +
     '.dc-list{font-size:11px;color:var(--muted);line-height:1.55;border-top:1px solid var(--line);padding-top:6px;margin-top:6px;max-height:150px;overflow:auto}' +
     '.dc-list .m{color:var(--red)}.dc-list .w{color:var(--dim);font-size:10px}' +
@@ -50,6 +50,11 @@
     '.dc-in{background:transparent;border:1px solid var(--line-2);border-radius:8px;color:var(--ink);padding:7px 9px;font-size:12.5px;font-family:inherit}' +
     '.dc-chip2{padding:5px 12px;border-radius:20px;font-size:11.5px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)}' +
     '.dc-chip2.on{border-color:rgba(59,130,246,.6);background:rgba(59,130,246,.14);color:var(--blue)}' +
+    '.dc-drop{border:1.5px dashed var(--line-2);border-radius:14px;padding:14px 16px;margin:0 0 12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;cursor:pointer;transition:.15s;background:rgba(255,255,255,.015)}' +
+    '.dc-drop:hover,.dc-drop.over{border-color:var(--blue);background:rgba(59,130,246,.07)}.dc-drop .ic{font-size:26px}' +
+    '.dc-pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;padding:4px 11px;border-radius:20px;border:1px solid var(--line)}' +
+    '.dc-pill.ok{color:var(--green);border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.07)}.dc-pill.bad{color:var(--red);border-color:rgba(248,113,113,.5);background:rgba(248,113,113,.07)}' +
+    '.dc-res{font-size:11.5px;line-height:1.6;margin:-4px 0 12px;padding:8px 12px;border:1px solid var(--line);border-radius:10px}.dc-res .e{color:var(--red)}.dc-res .g{color:var(--green)}' +
     '.dc-frow{display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line);font-size:12px}.dc-frow .n{flex:1;min-width:0;overflow-wrap:anywhere;font-family:var(--mono);font-size:11.5px}';
   document.head.appendChild(css);
 
@@ -151,25 +156,29 @@
       return '<div class="dc-out">📄 <a href="' + API + '/daycards/output?card=' + card + '&proc=' + p.key + '&date=' + encodeURIComponent(S(card).data.iso) + '&name=' + encodeURIComponent(o.name) + '" download>' + esc(o.name) + '</a><span style="color:var(--dim);font-size:11px">' + kb(o.size) + '</span></div>';
     }).join('');
     return '<div class="dc-p ' + cls + '"><div class="dc-h"><span class="dc-t">' + esc(p.label) + '</span>' + chip +
-      '<span style="margin-left:auto"><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
+      '<span style="margin-left:auto;display:flex;gap:8px"><button class="dc-btn ghost" onclick="dcPick(\'' + card + '\')" data-tip="Bring a file yourself (for example when the downloader could not get it). It is put in the right place by its name.">⬆ Upload</button><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
       '<div class="dc-note">' + esc(p.note) + '</div>' +
       '<div style="font-size:12px"><b>' + p.found + '</b><span style="color:var(--dim)"> / ' + p.total + ' required files ready</span> ' +
-      (miss ? '<button class="dc-link" onclick="dcToggle(\'' + card + '\',\'' + p.key + '\')">' + (open ? 'hide' : 'show') + ' missing files (' + miss + ')</button>' : '<span style="color:var(--green)">✓ pre-check passes</span>') + '</div>' +
+      (miss ? '<button class="dc-link" onclick="dcToggle(\'' + card + '\',\'' + p.key + '\')">' + (open ? 'hide' : 'show') + ' missing files (' + miss + ')</button>' : '<span style="color:var(--green)">✓ pre-check passes</span>') +
+      ((p.later || []).length ? ' <span style="color:var(--dim);font-size:11px">· ' + p.later.length + ' file' + (p.later.length > 1 ? 's' : '') + ' will be made by ' + esc(p.later[0].from) + ' first</span>' : '') + '</div>' +
       '<div class="dc-bar"><i style="width:' + pct + '%"></i></div>' + missHtml + lastErr +
       (outs ? '<div style="margin-top:8px"><div class="dc-lbl">Output</div>' + outs + '</div>' : '') +
       '<div style="font-size:10.5px;color:var(--dim);margin-top:6px">E-mailed to: ' + esc(p.to || '-') + (p.cc ? ' · Cc: ' + esc(p.cc) : '') + '</div></div>';
   }
 
   function manualHtml(card, d) {
-    if (!d.manual) return '';
-    return '<div class="dc-lbl">Manual files for ' + esc(d.date) + ' <span style="text-transform:none;letter-spacing:0">- saved in <span style="font-family:var(--mono)">' + esc(d.manual.folder) + '</span></span></div><div class="dc-man">' +
-      d.manual.slots.map(function (s) {
-        return '<div class="dc-m ' + (s.present ? 'ok' : 'bad') + '"><div style="font-weight:650;font-family:var(--mono);font-size:11.5px">' + esc(s.label) + '</div>' +
-          '<div style="color:var(--dim);font-size:10.5px;margin:2px 0 6px">used by: ' + esc(s.used) + '</div>' +
-          '<div style="display:flex;align-items:center;gap:8px"><span style="color:' + (s.present ? 'var(--green)' : 'var(--red)') + '">' + (s.present ? '✓ ' + kb(s.size) : '✗ not uploaded') + '</span>' +
-          '<label class="dc-btn" style="margin-left:auto;cursor:pointer;padding:5px 14px">' + (s.present ? 'Replace' : 'Upload') +
-          '<input type="file" accept=".csv" style="display:none" onchange="dcUpload(\'' + card + '\',\'' + s.key + '\',this)"></label></div></div>';
-      }).join('') + '</div>';
+    var s = S(card), pills = '';
+    if (d.manual) pills = d.manual.slots.map(function (x) {
+      return '<span class="dc-pill ' + (x.present ? 'ok' : 'bad') + '">' + (x.present ? '✓' : '✗') + ' ' + esc(x.label) + '</span>';
+    }).join('');
+    var res = (s.upl || []).length ? '<div class="dc-res">' + s.upl.map(function (r) {
+      return r.ok ? '<div class="g">✓ ' + esc(r.name) + ' <span style="color:var(--dim)">→ ' + esc(r.where) + '</span></div>' : '<div class="e">✗ ' + esc(r.name) + ' - ' + esc(r.error) + '</div>';
+    }).join('') + '</div>' : '';
+    return '<div class="dc-drop" id="dcDrop" onclick="dcPick(\'' + card + '\')" ondragover="event.preventDefault();this.classList.add(\'over\')" ondragleave="this.classList.remove(\'over\')" ondrop="dcDrop(event,\'' + card + '\')">' +
+      '<span class="ic">⬆️</span><div style="flex:1;min-width:220px"><div style="font-weight:700;font-size:13.5px">Upload files for ' + esc(d.date) + '</div>' +
+      '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Drop any files here or click to choose (several at once). Each one is put in the right place by its name' +
+      (d.manual ? ' - the manual files go to <span style="font-family:var(--mono)">MANUAL FILES</span>' : '') + ', the others into 76 FILES DOWNLOADER / COMMON FILES / LIVE ALLOCATION.</div></div>' +
+      (pills ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + pills + '</div>' : '') + '</div>' + res;
   }
 
   function paint(card, force) {
@@ -246,14 +255,31 @@
     if (!window.confirm('Stop the run that is going on now?')) return;
     post('/daycards/stop', { card: card }).then(function (j) { say(j && j.stopped ? 'Stopping…' : 'Nothing is running.'); reload(card); });
   };
-  window.dcUpload = function (card, slot, input) {
-    var f = input.files && input.files[0]; if (!f) return;
-    var d = S(card).date || (S(card).data && S(card).data.iso);
-    fetch(API + '/daycards/manual?card=' + card + '&date=' + encodeURIComponent(d) + '&slot=' + slot + '&name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
-      .then(function (r) { return r.json(); })
-      .then(function (j) { if (j && j.ok) say('Saved ' + j.name + ' for ' + dmy(d) + '.'); else say((j && (j.error || j.detail)) || 'Not saved.', 'err'); input.value = ''; reload(card); })
-      .catch(function (e) { say('Not saved: ' + e, 'err'); });
+  function sendFiles(card, files) {
+    var s = S(card), d = s.date || (s.data && s.data.iso), list = Array.prototype.slice.call(files || []);
+    if (!list.length) return;
+    s.upl = [];
+    var chain = Promise.resolve();
+    list.forEach(function (f) {
+      chain = chain.then(function () {
+        return fetch(API + '/daycards/upload?card=' + card + '&date=' + encodeURIComponent(d) + '&name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
+          .then(function (r) { return r.json().then(function (j) { return j; }); })
+          .then(function (j) { s.upl.push(j && j.ok ? { ok: true, name: j.name, where: j.where } : { ok: false, name: f.name, error: (j && (j.error || j.detail)) || 'not saved' }); })
+          .catch(function (e) { s.upl.push({ ok: false, name: f.name, error: String(e) }); });
+      });
+    });
+    chain.then(function () {
+      var ok = s.upl.filter(function (x) { return x.ok; }).length;
+      say(ok + ' of ' + list.length + ' file' + (list.length > 1 ? 's' : '') + ' saved' + (ok < list.length ? ' - see the list for the others.' : '.'), ok < list.length ? 'err' : '');
+      reload(card);
+    });
+  }
+  window.dcPick = function (card) {
+    var i = document.createElement('input'); i.type = 'file'; i.multiple = true; i.style.display = 'none';
+    i.onchange = function () { sendFiles(card, i.files); i.remove(); };
+    document.body.appendChild(i); i.click();
   };
+  window.dcDrop = function (ev, card) { ev.preventDefault(); ev.currentTarget.classList.remove('over'); sendFiles(card, ev.dataTransfer && ev.dataTransfer.files); };
 
   // ───────────────────────── Backup files ─────────────────────────
   function bk(card) {
