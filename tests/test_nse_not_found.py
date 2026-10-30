@@ -10,6 +10,10 @@ from unittest import mock
 from tests.test_scheduler_processes import Base, Ctx
 
 
+
+from core.scheduler import nse
+nse.NOT_FOUND_PAUSE = 0          # the retry pause for 715/714 answers is real in production; no waiting in tests
+
 class Resp:
     def __init__(self, code, text="", headers=None, content=b""):
         self.status_code, self.text, self.headers, self.content = code, text, headers or {}, content

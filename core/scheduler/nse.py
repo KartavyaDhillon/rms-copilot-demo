@@ -144,6 +144,20 @@ def _bad_token(r) -> bool:
         return False
 
 
+def _not_found_400(r) -> bool:
+    """HTTP 400 with code 715 FOLDER NOT FOUND / 714 FILE NOT FOUND - NSE's other way of saying "not there"."""
+    if r.status_code != 400:
+        return False
+    up = r.text.upper()
+    return ("715" in r.text and "FOLDER NOT FOUND" in up) or ("714" in r.text and "FILE NOT FOUND" in up)
+
+
+# NSE sometimes answers 715 / 714 for a file that IS there (30-10-2026: S_MG02 answered 715 at 07:40 although it had been
+# on the portal since 09:30 the day before, and downloaded fine 26 minutes later). So ask again a couple of times first.
+NOT_FOUND_RETRIES = 2
+NOT_FOUND_PAUSE = 15
+
+
 def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path, ctx,
              date: Optional[str] = None) -> Optional[Path]:
     """kind 'member' | 'common'.  Returns the saved path, or None when NSE says the file is not there (yet)."""
@@ -158,9 +172,16 @@ def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path
     with _LOCK:
         ctx.log(f"NSE: requesting {filename} from {folder} ({segment}).")
         force = False
+        nf = 0
         for n in range(1, MAX_TRIES + 1):
             r = _send("GET", url, ctx, f"downloading {filename}",
                       headers={"Authorization": f"Bearer {_token(ctx, force)}"}, timeout=DOWNLOAD_TIMEOUT)
+            if _not_found_400(r) and nf < NOT_FOUND_RETRIES and not getattr(ctx, "cancelled", False):
+                nf += 1
+                ctx.log(f"NSE: answered 'not found' (HTTP 400) for {filename} - NSE sometimes does that for files that are "
+                        f"there; asking again in {NOT_FOUND_PAUSE} s ({nf}/{NOT_FOUND_RETRIES}).")
+                time.sleep(NOT_FOUND_PAUSE)
+                continue
             if r.status_code in (429, 500, 502, 503, 504) or _cut_short(r):
                 # NSE server trouble / gateway timeout / download cut off half-way: wait and ask again (old script: 504 → retry)
                 ctx.log(f"NSE: server problem (HTTP {r.status_code}{', file cut short' if r.status_code == 200 else ''}) — "
