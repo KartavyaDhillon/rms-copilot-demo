@@ -5,7 +5,7 @@
   'use strict';
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var TITLE = 'Allocation Report';
-  var S = { mode: 'sofar', until: '15:00', rd: '', rt: '23:59', fd: '', ft: '10:00', td: '', tt: '14:30', clients: [], deliver: 'mail',
+  var S = { mode: 'sofar', until: '15:00', rd: '', rt: '23:59', ask: '', fd: '', ft: '10:00', td: '', tt: '14:30', clients: [], deliver: 'mail',
             mailto: '', data: null, busy: false, msg: '', msgKind: '', timer: null, ctl: null };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
@@ -161,6 +161,12 @@
     } else if (p.ok === false && p.msg) {
       out = '<div style="color:var(--red)">' + esc(p.msg) + '</div>';
     }
+    if (S.ask) {
+      out += '<div style="margin-top:8px;border:1px solid var(--line-2);border-radius:10px;padding:12px 14px;background:rgba(255,255,255,.04)">' +
+        '<div style="color:var(--ink);font-size:12.5px;line-height:1.5">' + S.ask + '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:10px"><button class="sa-save" style="flex:1" onclick="allocConfirm(true)">Yes, send it</button>' +
+        '<button class="sa-tool" style="flex:1" onclick="allocConfirm(false)">Cancel</button></div></div>';
+    }
     if (S.msg) out += '<div style="margin-top:6px;color:' + (S.msgKind === 'bad' ? 'var(--red)' : (S.msgKind === 'ok' ? 'var(--green)' : 'var(--amber)')) + ';white-space:pre-wrap">' + S.msg + '</div>';
     return out;
   }
@@ -248,7 +254,7 @@
       saShowModal(TITLE, '<div style="color:var(--red);font-size:13px">Could not reach the server.</div>');
     });
   };
-  window.allocMode = function (v) { S.mode = v; S.msg = ''; paintMode(); };
+  window.allocMode = function (v) { S.mode = v; S.msg = ''; S.ask = ''; S.confirmed = false; paintMode(); };
   window.allocDeliver = function (v) { S.deliver = v; paintDeliver(); };
   window.allocSet = function (k, v) { S[k] = v; if (k !== 'mailto') { var w = $('allocWin'); if (w) w.textContent = windowText(); } };
   window.allocAdd = function () {
@@ -264,6 +270,11 @@
 
   function setMsg(t, kind) { S.msg = t; S.msgKind = kind || ''; paintDynamic(); }
 
+  window.allocConfirm = function (yes) {
+    S.ask = '';
+    if (yes) { S.confirmed = true; window.allocRun(); } else { S.confirmed = false; paintDynamic(); }
+  };
+
   window.allocRun = function () {
     var d = S.data || {};
     if (d.running || S.busy) return;
@@ -271,9 +282,15 @@
     window.allocAdd();
     if (S.mode === 'reclose') {
       if (!S.rd || !S.rt) { setMsg('Choose the date and time to send the report up to.', 'bad'); return; }
-      var mk = String((d.marker || '')).slice(0, 16).replace('T', ' ');
-      if (mk && (S.rd + ' ' + S.rt) <= mk && !confirm('The marker (' + pretty(d.marker) + ') is already at or past this time.\n\nThis resends the report for ' + dmy(S.rd) + ' from 00:00 and moves the marker back to ' + dmy(S.rd) + ' ' + S.rt + '.\n\nContinue?')) return;
-      if (!confirm('Resend the Scheduler Report for ' + dmy(S.rd) + ' up to ' + S.rt + '?\n\nThis e-mails the OFFICIAL nightly report to the saved Email To / CC and moves the nightly marker to that time.')) return;
+      if (!S.confirmed) {
+        var mk = String((d.marker || '')).slice(0, 16).replace('T', ' ');
+        var past = mk && (S.rd + ' ' + S.rt) <= mk;
+        S.ask = 'Send the Scheduler Report for <b>' + dmy(S.rd) + '</b> up to <b>' + esc(S.rt) + '</b>?' +
+          '<div style="color:var(--muted);font-size:11.5px;margin-top:6px">It will be e-mailed to the saved Email To / CC and the nightly marker moves to that time.' +
+          (past ? '<br><span style="color:var(--amber)">The marker is already at or past this time, so it will move back.</span>' : '') + '</div>';
+        S.msg = ''; paintDynamic(); return;
+      }
+      S.confirmed = false;
     }
     var q = 'mode=' + S.mode + '&clients=' + encodeURIComponent(S.clients.join(',')) + '&deliver=' + S.deliver;
     if (S.mode === 'until') {
