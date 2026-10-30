@@ -478,6 +478,10 @@ Best Regards,<br><b>Kartavya Dhillon</b><br>Master Capital Services Ltd<br>📞 
         fp = os.path.join(FOLDER, f)
         if os.path.isdir(fp): continue
         if f.lower().endswith(".py") or f.lower().endswith(".bat"): continue
+        if f.upper().startswith("RISK_REPORT_"):        # COMMON FILES keeps the risk report - not part of this backup
+            try: os.remove(fp)
+            except Exception: pass
+            continue
         files_to_move.append(fp)
     for file_path in files_to_move:
         try:

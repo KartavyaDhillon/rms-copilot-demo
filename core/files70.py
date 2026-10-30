@@ -1274,6 +1274,27 @@ def start_ticker(interval_s: int = 30):
     return True
 
 
+def save_upload(d: dt.date, name: str, data: bytes) -> dict:
+    """One file brought by hand (the download did not get it): the NAME decides the folder of the day, so it lands exactly
+    where the downloader would have put it - the downloader then counts it as there and MASTER FILE / SA04 / EODSAR read it."""
+    name = os.path.basename(name or "")
+    if not data:
+        raise ValueError(f"{name or 'the file'} is empty.")
+    hit = None
+    for it in plan(d):
+        if (it.get("name") and it["name"].lower() == name.lower()) or (it.get("rx") and re.match(it["rx"], name, re.I)):
+            hit = it
+            break
+    if not hit:
+        raise ValueError(f"'{name}' is not one of the files expected for {dstr(d)} - check the name and the date in it.")
+    folder = day_dir(d) / hit["sub"] if hit["sub"] else day_dir(d)
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / (name + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(folder / name)
+    return {"ok": True, "name": name, "size": len(data), "where": GROUP_LABEL.get(hit["group"], hit["group"]), "folder": hit["sub"] or "(day folder)"}
+
+
 # ───────────────────────────── backup: zips of a day ─────────────────────────────
 BACKUP_GROUPS = [(k, l) for k, l, _ in GROUPS] + [("eodsar", EODSAR), ("live", "Live allocation 1-8")]
 

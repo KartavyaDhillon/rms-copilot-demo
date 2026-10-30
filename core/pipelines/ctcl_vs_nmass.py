@@ -1303,6 +1303,12 @@ Master Capital Services Ltd<br>
             # bloat the backups; deleting it would break the NEXT run's
             # pre-run check, which is the failure that would actually hurt.
             if fname.lower() == _kambala: continue
+            # RISK_REPORT belongs to COMMON FILES (which keeps its own backup): never copied into a process backup or the
+            # database - only the working copy in this folder is removed
+            if fname.upper().startswith("RISK_REPORT_"):
+                try: os.remove(fpath)
+                except Exception: pass
+                continue
             # MTF risk report: uploaded once, reused by runs 1-5 -> only backed up (and removed) after run 5
             if fname.startswith("MTF_RISK_REPORT") and run_number < 5: continue
             # the MCX file that was downloaded but NOT used by this run is stored as NOT_USED__<name>

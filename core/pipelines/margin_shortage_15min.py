@@ -2183,6 +2183,11 @@ Master Capital Services Ltd<br>
                 print(f"⏭️ Skipping Risk Report (not last run): {f}")
                 continue
 
+            if f.upper().startswith("RISK_REPORT_"):      # COMMON FILES keeps the risk report - never in a process backup
+                os.remove(src)
+                print(f"🧹 Risk Report removed from the working folder (not backed up - COMMON FILES keeps it): {f}")
+                continue
+
             # the MCX file downloaded but NOT used by this run is stored as NOT_USED__<name>
             dst = os.path.join(backup_root, _stale.mark_unused_name(f, UNUSED_MCX_NAMES))
             shutil.copy2(src, dst)

@@ -106,6 +106,55 @@ class Risk(Base):
         self.assertFalse([m for m in D.missing_for_backup("sa", DAY, ["sa_cm"]) if "Risk" in m["label"]])
 
 
+class Auto(Base):
+    def setUp(self):
+        super().setUp()
+        for k in list(os.environ):
+            if k.startswith("DC_") and "_AUTO" in k:
+                os.environ.pop(k)
+        self.tdays = mock.patch.object(D, "_trading_day", lambda d: d.weekday() < 5)
+        self.tdays.start()
+        self.logp = mock.patch.object(D, "log_dir", lambda card: self.tmp / "logs" / card)
+        self.logp.start()
+
+    def tearDown(self):
+        self.logp.stop()
+        self.tdays.stop()
+        super().tearDown()
+
+    def at(self, h, m, card="master", starter=None):
+        return D.auto_tick(card, dt.datetime(2026, 10, 30, h, m), starter=starter or (lambda c, procs, d, by="": {"ok": True}))
+
+    def test_times_per_card(self):
+        self.assertEqual({c: D.auto_time(c) for c in D.CARDS}, {"master": "09:30", "sa": "11:00", "eodsar": "11:00"})
+
+    def test_runs_only_after_its_time_on_trading_days(self):
+        self.assertIsNone(self.at(9, 29))
+        self.assertIn("attempt 1", self.at(9, 30))
+        self.assertIsNone(D.auto_tick("master", dt.datetime(2026, 10, 31, 9, 45), starter=lambda *a, **k: {"ok": True}))   # Saturday
+        self.assertIsNone(self.at(10, 59, "sa"))
+        self.assertTrue(self.at(11, 0, "sa"))
+
+    def test_retries_wait_and_switch_off(self):
+        self.assertTrue(self.at(9, 30))
+        self.assertIsNone(self.at(9, 40))                 # too soon after the first try
+        self.assertTrue(self.at(9, 46))
+        os.environ["DC_SA_AUTO"] = "off"
+        self.assertIsNone(self.at(11, 5, "sa"))
+
+    def test_time_can_be_changed(self):
+        os.environ["DC_MASTER_AUTO_TIME"] = "10:15"
+        self.assertIsNone(self.at(9, 40))
+        self.assertTrue(self.at(10, 15))
+
+    def test_only_what_is_not_done_is_started(self):
+        got = {}
+        D_ = D
+        with mock.patch.object(D_, "proc_done", lambda c, k, d: k == "master_file"):
+            self.at(9, 30, starter=lambda c, procs, d, by="": got.setdefault("p", procs) and {"ok": True})
+        self.assertEqual(got["p"], ["live_allocation_report", "mcx_intrasar"])
+
+
 class Upload(Base):
     def test_routes_by_name(self):
         (self.live / "8").mkdir(parents=True)

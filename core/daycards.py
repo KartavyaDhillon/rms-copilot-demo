@@ -282,11 +282,11 @@ _reg(Proc("ncdex_eodsar", "NCDEX EODSAR", "eodsar", "ncdex_eodsar.py", needs_ncd
 
 CARDS.update({
     "master": {"title": "MASTER FILE", "folder": "MASTER FILE", "icon": "🧾", "accent": "#10b981",
-               "procs": ["master_file", "live_allocation_report", "mcx_intrasar"], "manual": False,
+               "procs": ["master_file", "live_allocation_report", "mcx_intrasar"], "manual": False, "auto_time": "09:30",
                "desc": "Master file → Live allocation report → MCX intrasar. One click runs them in order."},
-    "sa": {"title": "SA04 REPORTING", "folder": "SA04 REPORTING", "icon": "📑", "accent": "#6366f1", "procs": ["sa_cm", "sa_fo"], "manual": True,
+    "sa": {"title": "SA04 REPORTING", "folder": "SA04 REPORTING", "icon": "📑", "accent": "#6366f1", "procs": ["sa_cm", "sa_fo"], "manual": True, "auto_time": "11:00",
            "desc": "SA04 reports for CM and FO (with the MCX end-of-day files)."},
-    "eodsar": {"title": "EODSAR", "folder": "EODSAR", "icon": "🌙", "accent": "#ec4899", "procs": ["mcx_eodsar", "ncdex_eodsar"], "manual": True,
+    "eodsar": {"title": "EODSAR", "folder": "EODSAR", "icon": "🌙", "accent": "#ec4899", "procs": ["mcx_eodsar", "ncdex_eodsar"], "manual": True, "auto_time": "11:00",
                "desc": "MCX and NCDEX end-of-day short-allocation reports."},
 })
 
@@ -709,9 +709,16 @@ def status(card: str, d: Optional[dt.date] = None) -> dict:
                       "outputs": [{"name": o.name, "size": o.stat().st_size} for o in outs],
                       "last": last_result(card, key, d), "to": os.getenv(email_env(key)[0], p.to_default),
                       "cc": os.getenv(email_env(key)[1], p.cc_default)})
+    acc: Dict[str, List[str]] = {}
+    for key in c["procs"]:                                   # the only names the Upload accepts for this card and date
+        for n in PROCS[key].needs(d):
+            lab = _readable(re.sub(r"^\d/", "", n.rx))
+            if lab not in acc.setdefault(n.group, []):
+                acc[n.group].append(lab)
     return {"card": card, "title": c["title"], "date": dstr(d), "iso": d.isoformat(), "default_iso": default_date().isoformat(),
             "procs": procs, "job": job_status(card), "manual": manual_status(d, card) if c["manual"] else None,
-            "folder": str(card_dir(card) / dstr(d))}
+            "folder": str(card_dir(card) / dstr(d)), "auto": auto_info(card),
+            "accepted": [{"group": g, "files": v} for g, v in acc.items()]}
 
 
 def manual_status(d: dt.date, card: Optional[str] = None) -> dict:
@@ -962,6 +969,128 @@ def list_logs(card: str, limit: int = 60) -> list:
         return [{"name": p.name, "size": p.stat().st_size} for p in names[:limit]]
     except OSError:
         return []
+
+
+# ───────────────────────────── auto run (a card's own daily timer) ─────────────────────────────
+# Only for cards with "auto_time" (MASTER FILE 09:30; SA04 REPORTING and EODSAR 11:00 - their manual files are uploaded before that). Settings under the card's Credentials:
+#   DC_<CARD>_AUTO = on / off      DC_<CARD>_AUTO_TIME = HH:MM
+# Trading days only (holiday calendar of the console), for the PREVIOUS trading day. It runs what is not done yet,
+# in order; if a pre-check fails (a file is not there yet) it tries again every DC_<CARD>_AUTO_RETRY_MIN minutes
+# (default 15) up to DC_<CARD>_AUTO_RETRIES times (default 12), until DC_<CARD>_AUTO_UNTIL (default 18:00).
+_TICK: Dict[str, dict] = {}
+
+
+def has_auto(card: str) -> bool:
+    return bool(CARDS.get(card, {}).get("auto_time"))
+
+
+def _akey(card: str, what: str = "") -> str:
+    return f"DC_{card.upper()}_AUTO" + (f"_{what}" if what else "")
+
+
+def auto_on(card: str) -> bool:
+    return has_auto(card) and (os.getenv(_akey(card), "on").strip().lower() or "on") not in ("off", "no", "0", "false")
+
+
+def _hhmm(v: str, default: str) -> int:
+    m = re.match(r"^\s*(\d{1,2})[:.](\d{2})\s*$", v or "")
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        m = re.match(r"^(\d{2}):(\d{2})$", default)
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+def auto_time(card: str) -> str:
+    mins = _hhmm(os.getenv(_akey(card, "TIME"), ""), CARDS[card].get("auto_time", "09:30"))
+    return f"{mins // 60:02d}:{mins % 60:02d}"
+
+
+def auto_info(card: str) -> dict:
+    return {"on": auto_on(card), "time": auto_time(card)} if has_auto(card) else {}
+
+
+def _auto_file(card: str) -> Path:
+    return log_dir(card) / ".auto.json"
+
+
+def proc_done(card: str, key: str, d: dt.date) -> bool:
+    return bool(last_result(card, key, d).get("ok") and outputs_of(key, d))
+
+
+def _trading_day(d: dt.date) -> bool:
+    try:
+        from core.scheduler import helpers as H
+        return bool(H.is_trading_day(d))
+    except Exception:
+        return d.weekday() < 5
+
+
+def auto_tick(card: str, now: Optional[dt.datetime] = None, starter=None) -> Optional[str]:
+    """Every 30 s. Starts the not-yet-done processes of the previous trading day when it is time -> reason or None."""
+    if not auto_on(card) or is_running(card):
+        return None
+    now = now or dt.datetime.now()
+    today = now.date()
+    if not _trading_day(today):
+        return None
+    cur = now.hour * 60 + now.minute
+    if cur < _hhmm(os.getenv(_akey(card, "TIME"), ""), CARDS[card]["auto_time"]) or cur >= _hhmm(os.getenv(_akey(card, "UNTIL"), ""), "18:00"):
+        return None
+    d = default_date()
+    f = _auto_file(card)
+    try:
+        st = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+
+    def save():
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(st), encoding="utf-8")
+    if st.get("today") != today.isoformat():
+        st = {"today": today.isoformat(), "attempts": 0, "last": None}
+    todo = [k for k in CARDS[card]["procs"] if not proc_done(card, k, d)]
+    if not todo:
+        return None
+    try:
+        retries = max(0, int(os.getenv(_akey(card, "RETRIES"), "12")))
+        gap = max(1, int(os.getenv(_akey(card, "RETRY_MIN"), "15")))
+    except ValueError:
+        retries, gap = 12, 15
+    if st["attempts"] > retries:
+        return None
+    if st.get("last"):
+        try:
+            if (now - dt.datetime.fromisoformat(st["last"])).total_seconds() < gap * 60:
+                return None
+        except ValueError:
+            pass
+    st["attempts"] += 1
+    st["last"] = now.isoformat(timespec="seconds")
+    save()
+    res = (starter or start)(card, todo, d, by="auto run (timer)")
+    if not res.get("ok"):
+        return None
+    return f"{dstr(d)} attempt {st['attempts']}: {', '.join(todo)}"
+
+
+def start_ticker(interval_s: int = 30):
+    started = False
+    for card in CARDS:
+        if not has_auto(card) or (_TICK.get(card, {}).get("thread") and _TICK[card]["thread"].is_alive()):
+            continue
+        ev = threading.Event()
+
+        def loop(c=card, e=ev):
+            print(f"[{c}] auto run timer started.", flush=True)
+            while not e.wait(interval_s):
+                try:
+                    auto_tick(c)
+                except Exception as ex:                                  # noqa: BLE001
+                    print(f"[{c}] timer error: {type(ex).__name__}: {ex}", flush=True)
+        th = threading.Thread(target=loop, name=f"daycard-{card}-timer", daemon=True)
+        _TICK[card] = {"thread": th, "stop": ev}
+        th.start()
+        started = True
+    return started
 
 
 # ───────────────────────────── backup: zips of a day ─────────────────────────────

@@ -365,7 +365,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
-                            '<script src="/platform/js/process-files70.js?v=2"></script><script src="/platform/js/process-daycards.js?v=2"></script>'
+                            '<script src="/platform/js/process-files70.js?v=4"></script><script src="/platform/js/process-daycards.js?v=7"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
@@ -942,6 +942,15 @@ async def f70_run(request: Request):
     res = _f7.start(d, by=by, groups=groups, ip=ip)
     return JSONResponse(res, status_code=200 if res.get("ok") else 409)
 
+@app.post("/files70/upload")
+async def f70_upload(request: Request, name: str, date: str = ""):
+    """Upload ONE file for the day (raw body); the name decides the folder."""
+    from core import files70 as _f7
+    try:
+        return _f7.save_upload(_f70_date(date), name, await request.body())
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
 @app.post("/files70/stop")
 def f70_stop():
     from core import files70 as _f7
@@ -1084,6 +1093,7 @@ def _daycards_startup():
     try:
         from core import daycards as _dc_
         _dc_.apply_defaults()
+        _dc_.start_ticker()                      # MASTER FILE's own daily auto run
     except Exception as _e:
         print(f"⚠️  MASTER FILE / SA / EODSAR defaults not applied: {type(_e).__name__}: {_e}")
 

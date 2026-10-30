@@ -218,3 +218,22 @@ class Captcha(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UploadAccepted(unittest.TestCase):
+    def test_only_expected_names_are_accepted(self):
+        import tempfile, datetime as dt
+        from pathlib import Path
+        from unittest import mock
+        tmp = Path(tempfile.mkdtemp())
+        d = dt.date(2026, 10, 29)
+        with mock.patch.object(F, "day_dir", lambda x: tmp / "day"):
+            r = F.save_upload(d, "EPI.xlsx", b"x")
+            self.assertTrue((tmp / "day" / "EPI.xlsx").is_file())
+            r = F.save_upload(d, "MCX_MARGIN_%s_20261029.csv" % F._mcx_user(), b"x")
+            self.assertTrue((tmp / "day" / "MCX" / ("MCX_MARGIN_%s_20261029.csv" % F._mcx_user())).is_file())
+            for bad in ("random.csv", "EPI_old.xlsx", "MCX_MARGIN_%s_20250101.csv" % F._mcx_user()):
+                with self.assertRaises(ValueError):
+                    F.save_upload(d, bad, b"x")
+            with self.assertRaises(ValueError):
+                F.save_upload(d, "EPI.xlsx", b"")

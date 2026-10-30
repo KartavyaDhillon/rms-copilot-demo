@@ -28,6 +28,7 @@
 
   var css = document.createElement('style');
   css.textContent =
+    '#task-mcxcash,#task-files70new,[id^=task-dc-]{min-height:360px}' +
     '.dc-p{border:1px solid var(--line);border-radius:13px;padding:13px 15px;margin:0 0 12px;background:var(--panel-2,rgba(255,255,255,.03))}' +
     '.dc-p.ok{border-color:rgba(52,211,153,.4)}.dc-p.bad{border-color:rgba(248,113,113,.45)}.dc-p.run{border-color:var(--amber)}' +
     '.dc-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.dc-t{font-family:var(--display);font-size:15px;font-weight:750}' +
@@ -156,7 +157,7 @@
       return '<div class="dc-out">📄 <a href="' + API + '/daycards/output?card=' + card + '&proc=' + p.key + '&date=' + encodeURIComponent(S(card).data.iso) + '&name=' + encodeURIComponent(o.name) + '" download>' + esc(o.name) + '</a><span style="color:var(--dim);font-size:11px">' + kb(o.size) + '</span></div>';
     }).join('');
     return '<div class="dc-p ' + cls + '"><div class="dc-h"><span class="dc-t">' + esc(p.label) + '</span>' + chip +
-      '<span style="margin-left:auto;display:flex;gap:8px"><button class="dc-btn ghost" onclick="dcPick(\'' + card + '\')" data-tip="Bring a file yourself (for example when the downloader could not get it). It is put in the right place by its name.">⬆ Upload</button><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
+      '<span style="margin-left:auto;display:flex;gap:8px"><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
       '<div class="dc-note">' + esc(p.note) + '</div>' +
       '<div style="font-size:12px"><b>' + p.found + '</b><span style="color:var(--dim)"> / ' + p.total + ' required files ready</span> ' +
       (miss ? '<button class="dc-link" onclick="dcToggle(\'' + card + '\',\'' + p.key + '\')">' + (open ? 'hide' : 'show') + ' missing files (' + miss + ')</button>' : '<span style="color:var(--green)">✓ pre-check passes</span>') +
@@ -166,9 +167,16 @@
       '<div style="font-size:10.5px;color:var(--dim);margin-top:6px">E-mailed to: ' + esc(p.to || '-') + (p.cc ? ' · Cc: ' + esc(p.cc) : '') + '</div></div>';
   }
 
+  function acceptedHtml(d) {
+    var n = 0, body = (d.accepted || []).map(function (g) {
+      n += g.files.length;
+      return '<div style="margin-bottom:6px"><b style="color:var(--ink)">' + esc(g.group) + '</b><br>' + g.files.map(function (f) { return '<span style="font-family:var(--mono)">' + esc(f) + '</span>'; }).join('<br>') + '</div>';
+    }).join('');
+    return '<details style="margin:-4px 0 12px;font-size:11.5px;color:var(--muted)"><summary style="cursor:pointer">Files accepted by the upload (' + n + ') - anything else is refused</summary><div class="dc-list" style="max-height:220px">' + body + '</div></details>';
+  }
   function manualHtml(card, d) {
-    var s = S(card), pills = '';
-    if (d.manual) pills = d.manual.slots.map(function (x) {
+    var s = S(card);
+    var pills = ((d.manual && d.manual.slots) || []).map(function (x) {
       return '<span class="dc-pill ' + (x.present ? 'ok' : 'bad') + '">' + (x.present ? '✓' : '✗') + ' ' + esc(x.label) + '</span>';
     }).join('');
     var res = (s.upl || []).length ? '<div class="dc-res">' + s.upl.map(function (r) {
@@ -176,9 +184,8 @@
     }).join('') + '</div>' : '';
     return '<div class="dc-drop" id="dcDrop" onclick="dcPick(\'' + card + '\')" ondragover="event.preventDefault();this.classList.add(\'over\')" ondragleave="this.classList.remove(\'over\')" ondrop="dcDrop(event,\'' + card + '\')">' +
       '<span class="ic">⬆️</span><div style="flex:1;min-width:220px"><div style="font-weight:700;font-size:13.5px">Upload files for ' + esc(d.date) + '</div>' +
-      '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Drop any files here or click to choose (several at once). Each one is put in the right place by its name' +
-      (d.manual ? ' - the manual files go to <span style="font-family:var(--mono)">MANUAL FILES</span>' : '') + ', the others into 76 FILES DOWNLOADER / COMMON FILES / LIVE ALLOCATION.</div></div>' +
-      (pills ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + pills + '</div>' : '') + '</div>' + res;
+      '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Drop or choose files - only the files listed below are accepted, each is put in its right folder by its name. Normally the downloader brings them; use this (or ⬆ Upload files in 76 FILES DOWNLOADER) when one is missing.</div></div>' +
+      (pills ? '<div style="display:flex;gap:8px;flex-wrap:wrap">' + pills + '</div>' : '') + '</div>' + res + acceptedHtml(d);
   }
 
   function paint(card, force) {
@@ -194,14 +201,16 @@
     var other = job.running && job.date && job.date !== d.date;
     var allBtn = job.running
       ? '<button class="dc-btn amber" disabled><span class="dc-spin"></span>Running ' + esc(job.current || '') + ' for ' + esc(job.date || '') + '…</button>'
-      : '<button class="dc-btn" onclick="dcRun(\'' + card + '\',null)" data-tip="Runs ' + (d.procs.length > 1 ? 'all the processes below one after the other and stops at the first one that fails' : 'the process below') + '. Each one starts with a pre-check of its files.">▶ Run ' + (d.procs.length > 1 ? 'all (in order)' : '') + '</button>';
+      : '<button class="dc-btn" onclick="dcRun(\'' + card + '\',null)" data-tip="Runs the processes below that are not done yet for this date, one after the other, and stops at the first one that fails. A process that is already done is skipped - use its own Run to repeat it.">▶ ' + (d.procs.length < 2 ? 'Run' : todo(card).length === d.procs.length ? 'Run all (in order)' : todo(card).length ? 'Run the rest (' + todo(card).length + ' left)' : 'All done') + '</button>';
     el.innerHTML =
       '<div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:0 0 12px">' +
         '<div><div class="dc-lbl">Trade date</div><input type="date" id="dcDate" class="dc-in" value="' + esc(d.iso) + '" onchange="dcSetDate(\'' + card + '\',this.value)"></div>' +
         (d.iso !== d.default_iso ? '<button class="dc-link" style="margin-bottom:9px" onclick="dcSetDate(\'' + card + '\',\'' + esc(d.default_iso) + '\')">↺ back to the previous trading day (' + esc(dmy(d.default_iso)) + ')</button>'
           : '<span style="font-size:11.5px;color:var(--dim);margin-bottom:9px">previous trading day</span>') +
         '<div style="margin-bottom:2px">' + allBtn + '</div>' +
-        '<span style="font-size:11px;color:var(--dim);margin:0 0 9px auto">Outputs: <span style="font-family:var(--mono)">' + esc(d.folder) + '</span></span></div>' +
+        '<span style="font-size:11px;color:var(--dim);margin:0 0 9px auto;text-align:right;line-height:1.5">' +
+          (d.auto && d.auto.time ? (d.auto.on ? 'Auto run: every trading day at ' + esc(d.auto.time) + (d.manual ? ' (upload the manual files before)' : '') : 'Auto run is off') + ' · change under 🔑 Credentials<br>' : '') +
+          'Outputs: <span style="font-family:var(--mono)">' + esc(d.folder) + '</span></span></div>' +
       (other ? '<div class="dc-msg" style="color:var(--amber)">A run for ' + esc(job.date) + ' is going on - its progress shows when you pick that date.</div>' : '') +
       (showLog ? '<div class="dc-lbl">Live log <span style="text-transform:none;letter-spacing:0">- the full log of each run is under 🗂️ Logs</span></div><div class="dc-log" id="dcLogBox">' + ((job.lines || []).length ? job.lines.slice(-60).map(esc).join('\n') : 'Starting…') + '</div>' : '') +
       manualHtml(card, d) +
@@ -242,11 +251,19 @@
   // ───────────────────────── actions ─────────────────────────
   window.dcSetDate = function (card, iso) { if (!iso) return; S(card).date = iso; S(card).sig = ''; load(card); };
   window.dcToggle = function (card, key) { S(card).open[key] = !S(card).open[key]; paint(card, true); };
+  function isDone(p) { return !!(p && p.last && p.last.ok && p.outputs && p.outputs.length); }
+  function todo(card) { var d = S(card).data; return d ? d.procs.filter(function (p) { return !isDone(p); }) : []; }
   window.dcRun = function (card, procs) {
-    var s = S(card), d = s.date || (s.data && s.data.iso);
-    var keys = procs || ((cardMeta(card) || {}).procs || []).map(function (p) { return p.key; });
+    var s = S(card), d = s.date || (s.data && s.data.iso), skipped = [];
+    var keys = procs;
+    if (!keys) {                                   // "Run all": only what is not done yet for this date
+      var all = s.data ? s.data.procs : [];
+      keys = all.filter(function (p) { return !isDone(p); }).map(function (p) { return p.key; });
+      skipped = all.filter(isDone).map(function (p) { return p.label; });
+      if (!keys.length) { say('Everything is already done for ' + dmy(d) + '. To repeat one, press its own Run.', 'err'); return; }
+    }
     post('/daycards/run', { card: card, date: d, procs: keys }).then(function (j) {
-      if (j && j.ok) { s.lastRunAt = Date.now(); say('Started for ' + dmy(d) + ' - it begins with the pre-check of the files.'); }
+      if (j && j.ok) { s.lastRunAt = Date.now(); say('Started for ' + dmy(d) + (skipped.length ? ' - skipped (already done): ' + skipped.join(', ') + '.' : ' - it begins with the pre-check of the files.')); }
       else say((j && (j.error || j.detail)) || 'Could not start.', 'err');
       reload(card);
     });

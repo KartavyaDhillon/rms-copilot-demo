@@ -1665,6 +1665,12 @@ def run_concentration_compute():
 
             destination_path = os.path.join(backup_date_folder, file_name)
 
+            # the RISK_REPORT belongs to COMMON FILES, which keeps its own backup - never copied here
+            if file_name == risk_file or str(file_name).upper().startswith("RISK_REPORT_"):
+                os.remove(file_path)
+                print(f"🧹 Risk Report removed from the working folder (not backed up): {file_name}")
+                continue
+
             # If EXCEPTION file → COPY (do not remove from main folder)
             if file_name == "EXCEPTION.xlsx":
                 shutil.copy2(file_path, destination_path)

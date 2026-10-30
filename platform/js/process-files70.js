@@ -106,7 +106,8 @@
   function f7Open() {
     window._saReturn = null;
     modal(TITLE,
-      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 14px">' +
+      '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0 0 14px">' +
+        tb('⬆ Upload files', 'f7Pick()', 'A file the download could not get? Upload it here (several at once). It is put in the right folder of that date by its name, and MASTER FILE, SA04 REPORTING and EODSAR use it from there.') +
         tb('🔑 Credentials', 'f7Creds()', 'Every login this card uses: NSE, MCX, back office (EPI), NCDEX (both sites), security answer and the 2Captcha key.') +
         tb('📦 Backup files', 'f7Sub(f7Backup)', 'Pick a date and download the whole day folder, some groups, or only the files you tick - one zip.') +
         tb('🗂️ Logs', 'f7Logs()', 'The full log of every run.') +
@@ -197,9 +198,20 @@
       '<div class="f7-lbl">Files of ' + esc(d.date) + '</div><div class="f7-grid">' +
       d.groups.map(function (g) { return groupTile(g, job); }).join('') + '</div>' +
       lastBox(d) +
+      acceptedList(d) +
       '<div style="font-size:11px;color:var(--dim);margin-top:12px;line-height:1.6">Files are saved only in <span style="font-family:var(--mono)">' + esc(d.folder) + '</span> - nothing is copied to other folders. ' +
       'Files already in the folder are skipped - a run only fetches what is missing. Both NCDEX captchas are answered by the auto-solver. All logins (NSE, MCX, back office, NCDEX, 2Captcha) are under 🔑 Credentials.</div>';
     var nb = $('f7LogBox'); if (nb) nb.scrollTop = stick ? nb.scrollHeight : keep;
+  }
+
+  function acceptedList(d) {
+    var n = 0, body = d.groups.map(function (g) {
+      n += g.files.length;
+      return '<div style="margin-bottom:6px"><b style="color:var(--ink)">' + esc(g.label) + '</b> <span style="color:var(--dim)">(' + esc(g.folder) + ')</span><br>' +
+        g.files.map(function (f) { return '<span style="font-family:var(--mono)">' + esc(f.name) + '</span>'; }).join('<br>') + '</div>';
+    }).join('');
+    return '<details style="margin-top:12px;font-size:11.5px;color:var(--muted)"><summary style="cursor:pointer">Files accepted by ⬆ Upload files (' + n + ') - anything else is refused</summary>' +
+      '<div style="max-height:240px;overflow:auto;margin-top:6px;line-height:1.55">' + body + '</div></details>';
   }
 
   function autoText(d) {
@@ -245,6 +257,30 @@
       reload();
     });
   };
+  window.f7Pick = function () {
+    var i = document.createElement('input'); i.type = 'file'; i.multiple = true; i.style.display = 'none';
+    i.onchange = function () { f7Send(i.files); i.remove(); };
+    document.body.appendChild(i); i.click();
+  };
+  function f7Send(files) {
+    var d = S.date || (S.data && S.data.iso), list = Array.prototype.slice.call(files || []), res = [];
+    if (!list.length) return;
+    var chain = Promise.resolve();
+    list.forEach(function (f) {
+      chain = chain.then(function () {
+        return fetch(API + '/files70/upload?date=' + encodeURIComponent(d) + '&name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { res.push(j && j.ok ? '✓ ' + j.name + ' → ' + j.where : '✗ ' + f.name + ' - ' + ((j && (j.error || j.detail)) || 'not saved')); })
+          .catch(function (e) { res.push('✗ ' + f.name + ' - ' + e); });
+      });
+    });
+    chain.then(function () {
+      var ok = res.filter(function (x) { return x.charAt(0) === '✓'; }).length;
+      var el = $('f7Msg');
+      if (el) el.innerHTML = '<div class="f7-msg" style="color:' + (ok === list.length ? 'var(--green)' : 'var(--amber)') + ';line-height:1.6"><b>' + ok + ' of ' + list.length + ' uploaded for ' + dmy(d) + '</b><br>' + res.map(esc).join('<br>') + '</div>';
+      reload();
+    });
+  }
   window.f7Stop = function () {
     if (!window.confirm('Stop the download that is running now?')) return;
     post('/files70/stop').then(function (j) { say(j && j.stopped ? 'Stopping…' : 'Nothing is running.'); reload(); });

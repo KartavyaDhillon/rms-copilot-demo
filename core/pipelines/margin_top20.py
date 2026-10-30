@@ -213,7 +213,8 @@ Best regards,<br><b>Kartavya Dhillon</b><br>Master Capital Services Ltd<br>📞 
         ctcl_file2 = os.path.join(folder_path, "FULL_FILE_CTCL_VS_NMASS_01.xlsx")
         top20_files = glob.glob(os.path.join(folder_path, "Top20 Derivative Utilization*.xlsx"))
         files_to_backup = []
-        files_to_backup.extend(risk_files2)
+        # the RISK_REPORT is a COMMON FILES file: it is never put into this backup (COMMON FILES keeps its own),
+        # only the working copy is removed below
         if os.path.exists(ctcl_file2):
             files_to_backup.append(ctcl_file2)
         files_to_backup.extend(top20_files)
@@ -229,7 +230,7 @@ Best regards,<br><b>Kartavya Dhillon</b><br>Master Capital Services Ltd<br>📞 
                     print(f"❌ Backup failed: {file} → {e}")
             print(f"✅ Backup completed → {date_folder}")
         print("\n🧹 Starting CLEANUP...")
-        for file in files_to_backup:
+        for file in files_to_backup + risk_files2:
             try:
                 if os.path.exists(file):
                     os.remove(file); print(f"🗑 Deleted: {os.path.basename(file)}")

@@ -631,14 +631,22 @@ try:
     _dcm.apply_defaults()
     for _ck, _cv in _dcm.CARDS.items():
         _su, _sp = _dcm.sender_env(_ck)
+        _cred = {"E-mail sender (SMTP login) of this card": {
+            "user_key": _su, "pass_key": _sp,
+            "note": "The login these reports are e-mailed from. Leave empty to use the shared login of Scheduler > Connections > "
+                    "E-mail sending. If you change the e-mail address, type its password as well."}}
+        if _dcm.has_auto(_ck):
+            _cred["Auto run (on / off)"] = {"single_key": _dcm._akey(_ck), "default": "on",
+                                             "note": "on = runs by itself every trading day (holiday calendar followed), for the previous trading day. Type off to stop it."
+                                                     + (" Upload the manual files before the time below." if _cv["manual"] else "")}
+            _cred["Auto run time (HH:MM)"] = {"single_key": _dcm._akey(_ck, "TIME"), "default": _cv["auto_time"],
+                                               "note": "24-hour time, e.g. 09:30. Only the processes not done yet are run; if a file is not there yet (the pre-check stops it) "
+                                                       "it tries again every 15 minutes."}
         PIPELINES["dc_" + _ck] = {
             "name": _cv["title"], "module": "core.daycards", "func": "run_proc", "logdir": "daycard_" + _ck, "runs": 0,
             "state_dir_env": "DAYCARDS_DIR", "state_default": "D:\\CONSOLE\\data\\" + _cv["folder"], "state_file": "run_counter.txt",
             "email_keys": {_dcm.PROCS[_k].label: _dcm.email_env(_k) for _k in _cv["procs"]},
-            "cred": {"E-mail sender (SMTP login) of this card": {
-                "user_key": _su, "pass_key": _sp,
-                "note": "The login these reports are e-mailed from. Leave empty to use the shared login of Scheduler > Connections > "
-                        "E-mail sending. If you change the e-mail address, type its password as well."}},
+            "cred": _cred,
         }
 except Exception as _e:                                  # noqa: BLE001
     print(f"⚠️  MASTER FILE / SA / EODSAR cards not registered: {type(_e).__name__}: {_e}")
