@@ -125,6 +125,7 @@ ACT_REMARKS_QUESTION = "final remarks/comments"
 # --- Reply-overdue alert: if a mail has had no reply from Manohar / Jagesh / Anuj for ALERT_AFTER_HOURS ----------
 ALERT_ENABLED = True
 ALERT_AFTER_HOURS = 24
+DUE_GRACE_MIN = 30     # a scheduled run a few minutes BEFORE the 24 h mark (mail sent 10:00:58, run at 10:00:08) still counts as due
 ALERT_FOR = "Amit Pundir"          # whose work this is - named on the picture and in the e-mail
 ALERT_EMAIL_TO = []                # e-mail the picture to these (empty = no e-mail)
 WA_ENABLED = True
@@ -700,7 +701,7 @@ def record_of(rec: dict) -> dict:
 # ==========================================================================
 # 📗 Employee_Resign.xlsx  (saved next to the script, never attached to the mail)
 # ==========================================================================
-REPLY_PARSER = 4                   # bump when reply parsing changes: mailbox is then re-read once
+REPLY_PARSER = 5                   # bump when reply parsing changes: mailbox is then re-read once
 
 
 def norm(text: str) -> str:
@@ -941,6 +942,28 @@ def register_reply(state: dict, msg, sender: str, received: datetime, uid: str) 
     if batch is None:
         info(f"Mail from {role} ({str(msg.get('Subject', ''))[:50]!r}) does not belong to any mail we sent - ignored")
         return False
+    parts = []
+    if parsed["status"] == "table":
+        # ONE reply table can cover employees of SEVERAL of our mails (Anuj answers yesterday's and today's mail together):
+        # every mail whose employees are in the table gets its own copy of just those rows.
+        for other in state["batches"]:
+            if other is batch or _sent_at(other) > received + timedelta(minutes=1):
+                continue
+            keys = {k.upper() for k in other.get("keys", [])}
+            mine = {e: c for e, c in parsed["rows"].items() if e.upper() in keys}
+            if mine:
+                parts.append((other, dict(parsed, rows=mine)))
+        if parts:
+            own = {k.upper() for k in batch.get("keys", [])}
+            parsed = dict(parsed, rows={e: c for e, c in parsed["rows"].items() if e.upper() in own} or parsed["rows"])
+    done = _store_reply(batch, role, sender, received, uid, parsed)
+    for other, part in parts:
+        info(f"  (the same reply from {role} also covers {len(part['rows'])} employee(s) of the mail of {other['sent_at'][:16]})")
+        done = _store_reply(other, role, sender, received, uid, part) or done
+    return done
+
+
+def _store_reply(batch: dict, role: str, sender: str, received: datetime, uid: str, parsed: dict) -> bool:
     if parsed["status"] == "text":                  # plain words, no table: 'No s/f..', 'No trading code found'
         rows = rows_from_text(role, parsed.get("first", ""), parsed["text"], batch.get("keys", []))
         if rows:
@@ -1838,7 +1861,7 @@ def overdue_batches(state: dict, force: bool = False) -> list:
         if (b.get("alert") or {}).get("done") and not force:
             continue
         age = now - _sent_at(b)
-        if age > timedelta(days=REPLY_WATCH_DAYS) or (age < timedelta(hours=ALERT_AFTER_HOURS) and not force):
+        if age > timedelta(days=REPLY_WATCH_DAYS) or (age < timedelta(hours=ALERT_AFTER_HOURS, minutes=-DUE_GRACE_MIN) and not force):
             continue
         emps = [(state["sent"][k].get("name", k), state["sent"][k].get("emp_code") or k)
                 for k in b["keys"] if k in state["sent"] and not state["sent"][k].get("acted")]
@@ -2031,7 +2054,7 @@ def due_reminders(state: dict, force: bool = False) -> list:
         age = now - _sent_at(b)
         if age > timedelta(days=REPLY_WATCH_DAYS) or not batch_open(state, b):
             continue
-        if age < timedelta(hours=REMINDER_AFTER_HOURS) and not force:
+        if age < timedelta(hours=REMINDER_AFTER_HOURS, minutes=-DUE_GRACE_MIN) and not force:
             continue
         for addr, role in REPLY_SENDERS.items():
             if addr in b["replies"]:

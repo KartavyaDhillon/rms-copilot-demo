@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest import mock
@@ -88,6 +89,19 @@ class Lib(unittest.TestCase):
         self.assertEqual(set(r), {"E1", "E2"})
         one = L.rows_from_text("Anuj", "Terminal closed", "Terminal closed", ["E9"])
         self.assertEqual(one, {"E9": {"Terminal Id Status": "Terminal closed"}})
+
+    def test_one_table_reply_covers_two_mails(self):
+        state = {"sent": {}, "batches": [
+            {"message_id": None, "sent_at": "2026-11-02 10:00:58", "keys": ["M1"], "replies": {}},
+            {"message_id": None, "sent_at": "2026-11-03 10:00:14", "keys": ["M2", "M3"], "replies": {}}]}
+        rows = {"M1": {"Terminal id status": "Not Allotted"}, "M2": {"Terminal id status": "Active"},
+                "M3": {"Terminal id status": "Not Allotted"}}
+        parsed = {"status": "table", "rows": rows, "ids": ["M1", "M2", "M3"], "text": "x", "first": ""}
+        msg = {"Subject": "RE: Employee Clearance", "In-Reply-To": ""}
+        with mock.patch.object(L, "parse_reply", return_value=parsed):
+            L.register_reply(state, msg, "anuj.joshi@mastertrust.co.in", datetime(2026, 11, 3, 10, 16), "u1")
+        for b, want in zip(state["batches"], ({"M1"}, {"M2", "M3"})):
+            self.assertEqual(set(b["replies"]["anuj.joshi@mastertrust.co.in"]["rows"]), want)
 
     def test_shortfall_rule(self):
         self.assertEqual(L.shortfall_of(Decimal("-16.71")), Decimal("16.71"))
