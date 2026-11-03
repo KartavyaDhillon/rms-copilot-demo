@@ -73,6 +73,22 @@ class Lib(unittest.TestCase):
         self.assertEqual(pairs, [("AB1234", Decimal(15000))])
         self.assertEqual(L.parse_jagesh("Nil")[1], True)
 
+    def test_plain_words_replies(self):
+        for t in ("No s/f..", "No trading code found", "Nil", "none found", "No terminal id", "Terminal Id Is Not Allotted", "No shortfall", "No shortfall pending", "No dues", "Shortfall is nil", "Not allocated", "No pending s/f"):
+            self.assertTrue(L.says_nothing(t), t)
+        for t in ("AB1234 - 15,000", "no s/f but 7AB1234 is 5000", "Please check", "Done", ""):
+            self.assertFalse(L.says_nothing(t), t)
+        self.assertEqual(L.parse_manohar("No trading code found"), ([], ""))
+        self.assertTrue(L.parse_jagesh("No s/f..")[1])
+        keys = ["E1", "E2"]
+        r = L.rows_from_text("Jagesh", "No s/f..", "No s/f..", keys)
+        self.assertEqual(set(r), {"E1", "E2"})
+        self.assertEqual(L.rows_from_text("Manohar", "Please check", "Please check", keys), {})
+        r = L.rows_from_text("Anuj", "Terminal Id Is Not Allotted", "Dear Sandeep Sir, Terminal Id Is Not Allotted", keys)
+        self.assertEqual(set(r), {"E1", "E2"})
+        one = L.rows_from_text("Anuj", "Terminal closed", "Terminal closed", ["E9"])
+        self.assertEqual(one, {"E9": {"Terminal Id Status": "Terminal closed"}})
+
     def test_shortfall_rule(self):
         self.assertEqual(L.shortfall_of(Decimal("-16.71")), Decimal("16.71"))
         self.assertEqual(L.shortfall_of(Decimal("25.93")), Decimal(0))

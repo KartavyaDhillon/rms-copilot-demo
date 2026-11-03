@@ -700,7 +700,7 @@ def record_of(rec: dict) -> dict:
 # ==========================================================================
 # 📗 Employee_Resign.xlsx  (saved next to the script, never attached to the mail)
 # ==========================================================================
-REPLY_PARSER = 3                   # bump when reply parsing changes: mailbox is then re-read once
+REPLY_PARSER = 4                   # bump when reply parsing changes: mailbox is then re-read once
 
 
 def norm(text: str) -> str:
@@ -889,9 +889,13 @@ def parse_reply(msg, sent: dict) -> dict:
     if plain:
         text = cut_quoted_text(plain)
     else:
-        text = BeautifulSoup(cut_quoted_html(page), "html.parser").get_text(" ", strip=True)
+        text = BeautifulSoup(cut_quoted_html(page), "html.parser").get_text("\n", strip=True)
+    lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln and not re.fullmatch(r"(?i)(dear\b.*|hi\b.*|hello\b.*|sir,?|team,?|thanks?.*|regards?,?)", ln)]
+    first = lines[0] if lines else ""
     text = re.sub(r"\s+", " ", text).strip()
-    return {"status": "table" if changes else "text", "rows": changes, "ids": sorted(tables), "text": text[:500]}
+    return {"status": "table" if changes else "text", "rows": changes, "ids": sorted(tables), "text": text[:500],
+            "first": first[:200]}
 
 
 def msg_time(msg) -> datetime:
@@ -937,14 +941,20 @@ def register_reply(state: dict, msg, sender: str, received: datetime, uid: str) 
     if batch is None:
         info(f"Mail from {role} ({str(msg.get('Subject', ''))[:50]!r}) does not belong to any mail we sent - ignored")
         return False
+    if parsed["status"] == "text":                  # plain words, no table: 'No s/f..', 'No trading code found'
+        rows = rows_from_text(role, parsed.get("first", ""), parsed["text"], batch.get("keys", []))
+        if rows:
+            parsed["status"], parsed["rows"] = "answer", rows
     old = batch["replies"].get(sender)
-    if old and old["status"] == "table" and parsed["status"] == "text":
+    if old and old["status"] in ("table", "answer") and parsed["status"] == "text":
         info(f"{role} sent a further message without new data - keeping the earlier reply")
         return False
     batch["replies"][sender] = {"role": role, "received_at": received.strftime("%Y-%m-%d %H:%M:%S"), "uid": uid,
                                 "status": parsed["status"], "rows": parsed["rows"], "text": parsed["text"]}
     STATS["replies"] += 1
-    if parsed["status"] == "table":
+    if parsed["status"] == "answer":
+        ok(f"Reply from {role} read as plain words for {len(parsed['rows'])} employee(s): {parsed['text'][:80]!r}")
+    elif parsed["status"] == "table":
         cols = sorted({column_label(h) if norm(h) not in MOBILE_NORM else "Mobile No." for r in parsed["rows"].values() for h in r})
         ok(f"Reply from {role}: new data for {len(parsed['rows'])} employee(s) in column(s) {', '.join(cols)}"
            + (" (replaces the earlier reply)" if old else ""))
@@ -1190,6 +1200,46 @@ def is_nothing(text: str) -> bool:
     return bool(tokens) and all(x in ZERO_TOKENS for x in tokens)
 
 
+NEGATIVE_RE = re.compile(
+    r"\b(no|nil|nill|na|n/a|none|nothing|zero|nahi|nahin|nope|negative|clear|cleared|"
+    r"not\s+(found|available|applicable|there|allotted|alloted|allocated|assigned|issued|provided|given|created|generated|"
+    r"applicable|present|exist\w*|pending|due|outstanding|opened|active)|"
+    r"(never|nothing)\s+\w+|without\s+(any\s+)?(s/?f|shortfall|dues?)|"
+    r"(shortfall|s/?f|dues?|balance|debit|amount|pending|outstanding)\s+(is\s+|are\s+)?(nil|zero|na|nill|none|0))\b"
+    r"|no\s+(s/?f|shortfall|short\s*fall|dues?|pending|outstanding|debit|balance|trading|trade|account|a/?c|code|terminal|id|dealer)"
+    r"|not\s+allott?ed|not\s+allocated", re.I)
+
+
+def says_nothing(text: str) -> bool:
+    """A plain-words 'there is nothing': 'No s/f..', 'No trading code found', 'Nil', 'None found', 'no dealer id'.
+    Only when the words carry NO account code and NO number - 'no s/f but 7ABC123 is 5000' is NOT 'nothing'."""
+    t = (text or "").strip()
+    if not t or len(t) > 120 or not NEGATIVE_RE.search(t):
+        return False
+    if CODE_RE.search(t):
+        return False
+    return not re.search(r"(?<![A-Za-z])[1-9]\d*(?:[.,]\d+)?", t) and not re.search(r"[1-9]", t)
+
+
+REPLY_COLUMN = {"Manohar": "Trading a/c", "Jagesh": "S/F amount", "Anuj": "Terminal Id Status"}
+
+
+def rows_from_text(role: str, first_line: str, text: str, keys: list) -> dict:
+    """A reply written as plain words (no table). What it can safely mean:
+    - a clear 'nothing' ('No s/f..', 'No trading code found') answers EVERY employee of that mail;
+    - anything else is taken only when that mail had ONE employee (then it is obviously about him).
+    Returns {EMP: {column: value}} in the same shape a table reply gives, or {} when it cannot be tied to an employee."""
+    col = REPLY_COLUMN.get(role)
+    if not col or not keys:
+        return {}
+    first = (first_line or "").strip()
+    if first and (says_nothing(first) or is_nothing(first)):
+        return {k.upper(): {col: first[:120]} for k in keys}
+    if len(keys) == 1 and (text or "").strip():
+        return {keys[0].upper(): {col: text.strip()[:300]}}
+    return {}
+
+
 def pick_cell(cols: dict, role: str):
     """The cell of a reply row that belongs to this person. None = no such column, '' = blank cell."""
     hints = ROLE_HINTS.get(role, ())
@@ -1205,7 +1255,7 @@ def pick_cell(cols: dict, role: str):
 
 def parse_manohar(text: str) -> tuple[list, str]:
     t = (text or "").strip()
-    if is_nothing(t):
+    if is_nothing(t) or says_nothing(t):
         return [], ""
     codes = list(dict.fromkeys(m.group(0).upper() for m in CODE_RE.finditer(t)))
     return (codes, "") if codes else ([], f"cannot read any trading a/c code in Manohar's reply: {t!r}")
@@ -1220,7 +1270,7 @@ def parse_jagesh(text: str) -> tuple[list, bool, str]:
         return [], False, f"cannot read the amount in Jagesh's reply: {t!r}"
     if pairs:
         return pairs, False, ""
-    if is_nothing(t):
+    if is_nothing(t) or says_nothing(t):
         return [], True, ""
     return [], False, f"cannot read Jagesh's S/F amount: {t!r}"
 
