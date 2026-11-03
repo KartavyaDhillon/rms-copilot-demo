@@ -54,7 +54,7 @@ def _run(params, ctx):
     st, rc = res["stats"], res["rc"]
     if st.get("blocked"):
         raise RuntimeError("The Act step was STOPPED by a mismatch - nothing was submitted. "
-                           "See Darwin_Act_BLOCKED.txt in data/darwinbox_exit (an e-mail was sent to the sender).")
+                           "See Darwin_Act_BLOCKED.txt in the process's outputs folder (an e-mail was sent to the sender).")
     if rc:
         raise RuntimeError(f"The Darwinbox run finished with problems (code {rc}) - see the log lines above. "
                            "Nothing is lost: the next run tries again.")

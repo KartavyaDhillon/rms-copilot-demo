@@ -167,17 +167,51 @@ STATS: dict = {}                   # what this run did (see _reset_stats)
 
 # ==========================================================================
 _REPO = Path(__file__).resolve().parents[2]
-HERE = Path(os.getenv("DARWIN_DATA_DIR") or (_REPO / "data" / "darwinbox_exit"))
-HERE.mkdir(parents=True, exist_ok=True)
-COOKIE_FILE = HERE / ".darwinbox_session.json"
-STATE_FILE = HERE / "darwinbox_sent_records.json"
-LOG_FILE = HERE / "darwinbox_exit_mailer.log"
-LOCK_FILE = HERE / "darwinbox_exit_mailer.lock"
-PREVIEW_FILE = HERE / "email_preview.html"
-EXCEL_FILE = HERE / "Employee_Resign.xlsx"
-ACT_PREVIEW_XLSX = HERE / "Darwin_Act_Preview.xlsx"
-ACT_PREVIEW_JSON = HERE / "Darwin_Act_Preview.json"
-ACT_BLOCKED_FILE = HERE / "Darwin_Act_BLOCKED.txt"
+PROCESS_FOLDER = "DARWINBOX EXIT CLEARANCE"       # same name as the scheduler process: <data>/scheduler/<this>/{state,outputs,logs}
+_OLD_DIR = _REPO / "data" / "darwinbox_exit"      # where earlier versions kept everything (inside the code folder)
+_OVERRIDE = os.getenv("DARWIN_DATA_DIR")          # explicit single folder (flat layout) - kept for special set-ups
+if _OVERRIDE:
+    STATE_DIR = OUT_DIR = LOG_DIR = Path(_OVERRIDE)
+else:
+    from core.scheduler import paths as _paths
+    STATE_DIR = _paths.proc_dir(PROCESS_FOLDER, "state")      # records json, saved session, device, lock
+    OUT_DIR = _paths.proc_dir(PROCESS_FOLDER, "outputs")      # Employee_Resign.xlsx, Act preview, alert pictures, previews
+    LOG_DIR = _paths.proc_dir(PROCESS_FOLDER, "logs")
+for _d in (STATE_DIR, OUT_DIR, LOG_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+HERE = OUT_DIR
+COOKIE_FILE = STATE_DIR / ".darwinbox_session.json"
+STATE_FILE = STATE_DIR / "darwinbox_sent_records.json"
+LOG_FILE = LOG_DIR / "darwinbox_exit_mailer.log"
+LOCK_FILE = STATE_DIR / "darwinbox_exit_mailer.lock"
+PREVIEW_FILE = OUT_DIR / "email_preview.html"
+EXCEL_FILE = OUT_DIR / "Employee_Resign.xlsx"
+ACT_PREVIEW_XLSX = OUT_DIR / "Darwin_Act_Preview.xlsx"
+ACT_PREVIEW_JSON = OUT_DIR / "Darwin_Act_Preview.json"
+ACT_BLOCKED_FILE = OUT_DIR / "Darwin_Act_BLOCKED.txt"
+
+
+def _migrate_old_data() -> None:
+    """One-time COPY (never move/overwrite) of the old data/darwinbox_exit files into the new folders, so the sent
+    records survive the change - without them every employee would look new and be e-mailed again."""
+    if _OVERRIDE or not _OLD_DIR.is_dir():
+        return
+    import shutil
+    for f in _OLD_DIR.iterdir():
+        if not f.is_file() or f.name.lower() == "readme.md":
+            continue
+        n = f.name.lower()
+        dest_dir = LOG_DIR if n.endswith(".log") else STATE_DIR if (n.endswith(".lock") or n == "darwinbox_sent_records.json"
+                                                                  or n.startswith(".darwinbox") or n == "darwinbox_device.json") else OUT_DIR
+        dest = dest_dir / f.name
+        if not dest.exists():
+            try:
+                shutil.copy2(f, dest)
+            except OSError:
+                pass
+
+
+_migrate_old_data()
 
 LOGIN_URL = f"{BASE_URL}/user/login?source=logout"
 HOME_URL = f"{BASE_URL}/ms/db/home"
@@ -662,7 +696,7 @@ def enrich(client: Darwinbox, records: list[dict]) -> None:
 def load_state() -> dict:
     state: dict = {"sent": {}, "batches": [], "pop_seen2": [], "act_alert": ""}
     if not STATE_FILE.exists() and os.getenv("DARWIN_ALLOW_EMPTY_STATE", "").strip().lower() not in ("1", "true", "yes"):
-        raise AppError(f"{STATE_FILE.name} is missing in {HERE}. Without it every employee would look NEW and all the old "
+        raise AppError(f"{STATE_FILE.name} is missing in {STATE_FILE.parent}. Without it every employee would look NEW and all the old "
                        "mails would be sent again, so the run is refused. Copy the file back (git pull / backup), or set "
                        "DARWIN_ALLOW_EMPTY_STATE=1 for a brand-new start.")
     if STATE_FILE.exists():
