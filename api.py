@@ -360,7 +360,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
                             '<script src="/platform/js/process-locks.js?v=9"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=4"></script>'
-                            '<script src="/platform/js/process-mtfic.js?v=9"></script>'
+                            '<script src="/platform/js/process-mtfic.js?v=10"></script>'
                             '<script src="/platform/js/process-alloc.js?v=11"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
@@ -6669,7 +6669,7 @@ def mtfic_upload(files: _SA_List[_SA_UploadFile] = _SA_File(...)):
 def mtfic_file(kind: str = "xlsx"):
     """Last run's Excel / image — served from its Backup folder (the originals are cleaned away)."""
     from core.pipelines import mtf_impact_cost as _m
-    if kind not in ("xlsx", "png"):
+    if kind not in ("xlsx", "png", "txt"):
         return JSONResponse({"ok": False, "error": "unknown file"}, status_code=400)
     p = _m.served_file(kind)
     if not p:

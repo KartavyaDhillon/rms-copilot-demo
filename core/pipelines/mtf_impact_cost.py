@@ -3,6 +3,9 @@ core/pipelines/mtf_impact_cost.py — MTF <-> Security-Category Impact-Cost reco
 (one on-demand run from the dashboard; logic ported from reconcile_mtf_impact_cost.py and
 download_nse_cm_impact_cost.py in D:\\SECURITY CAT IMPACT COST).
 
+Also written each run: MTF_TRADE-<DDMMYYYY>.txt (TradeBook rows with Product MTF or MTFS, one fixed-layout line per trade),
+e-mailed to MTFIC_TRADE_TO / MTFIC_TRADE_CC (Email To / CC button) with unlimited retries on server errors, then backed up.
+
 ONE base folder (env MTF_IMPACT_FOLDER, default <console>\\data\\SECURITY CAT IMPACT COST, next to
 COMMON FILES like RECONCILIATION) holds everything:
     TradeBook_<DDMMYYYY>.csv|xlsx|xls      uploaded by the operator
@@ -726,6 +729,109 @@ def backup_and_clean(files: list, d: datetime.date) -> tuple:
     return dest, done, problems
 
 
+# ───────────────────────────── MTF trade file (TXT) + e-mail ────────────────
+TRADE_PRODUCTS = ("MTF", "MTFS")
+
+
+def _clean_id(v) -> str:
+    """A TradeID / ExchOrderID as plain digits. Excel / float spellings (1.2E+15, 123.0) are turned back into digits."""
+    t = str(v if v is not None else "").strip()
+    if not t or t.lower() == "nan":
+        return ""
+    if re.fullmatch(r"-?\d+\.0+", t):
+        return t.split(".")[0]
+    if re.fullmatch(r"-?\d+(\.\d+)?[eE][+-]?\d+", t):
+        try:
+            from decimal import Decimal
+            return format(Decimal(t), "f").split(".")[0]
+        except Exception:
+            return t
+    return t
+
+
+def trade_line(trade_id, client_id, exch_order_id) -> str:
+    """9292566,11,,,,,,,,,,,,,MT110213,,N,,,,,1000000088131305,,,,1,   (11, N and 1 are fixed)"""
+    cols = [trade_id, "11"] + [""] * 12 + [client_id, "", "N", "", "", "", "", exch_order_id, "", "", "", "1", ""]
+    return ",".join(cols)
+
+
+def build_trade_file(tb, d: datetime.date, out_dir: Path):
+    """MTF_TRADE-<DDMMYYYY>.txt from the TradeBook rows whose Product is MTF or MTFS. -> (path, rows, skipped)."""
+    pcol, tcol = get_col(tb, "Product"), get_col(tb, "TradeID")
+    ccol, ocol = get_col(tb, "ClientID"), get_col(tb, "ExchOrderID")
+    prod = tb[pcol].fillna("").astype(str).str.strip().str.upper()
+    sel = tb[prod.isin(TRADE_PRODUCTS)]
+    lines, skipped = [], 0
+    for tid, cid, oid in zip(sel[tcol], sel[ccol], sel[ocol]):
+        tid, cid, oid = _clean_id(tid), str(cid if cid is not None else "").strip(), _clean_id(oid)
+        if not tid or not cid or cid.lower() == "nan":
+            skipped += 1
+            continue
+        lines.append(trade_line(tid, cid, oid))
+    path = Path(out_dir) / f"MTF_TRADE-{d:%d%m%Y}.txt"
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write("".join(ln + "\r\n" for ln in lines))
+    return path, len(lines), skipped
+
+
+def _emails_env(key: str) -> list:
+    return [x.strip() for x in re.split(r"[,;\s]+", os.getenv(key, "")) if x.strip()]
+
+
+_SIGNATURE_HTML = ("Best Regards,<br><b>Kartavya Dhillon</b><br>Master Capital Services Ltd<br>"
+                   "Tel: 011-66331000 | Ext. 84")
+
+
+def send_trade_file_email(path: Path, d: datetime.date, n_rows: int) -> dict:
+    """E-mails the trade file through the shared SMTP account (SENDER_EMAIL / SENDER_PASSWORD).
+    A server / network error is retried WITHOUT limit (5 s, then 15 s). A refused password or refused address is not
+    (retrying cannot fix it) - the file is still saved and backed up. Never raises."""
+    import smtplib
+    import time
+    from email import encoders
+    from email.mime.base import MIMEBase
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    sender, pw = os.getenv("SENDER_EMAIL", "").strip(), os.getenv("SENDER_PASSWORD", "")
+    host, port = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in"), int(os.getenv("SMTP_PORT", "587") or 587)
+    to, cc = _emails_env("MTFIC_TRADE_TO"), _emails_env("MTFIC_TRADE_CC")
+    if not sender or not pw:
+        log("  E-mail not sent: the sender e-mail / password are not set (Credentials).")
+        return {"sent": False, "error": "no sender e-mail / password set", "to": [], "cc": []}
+    if not to:
+        to = [sender]
+        log(f"  No 'To' address saved for the MTF trade file (Email To / CC button) - sending it to {sender} only.")
+    body = (f"Dear Sir,<br><br>Please find attached the MTF trade file <b>{path.name}</b> for "
+            f"<b>{d:%d-%m-%Y}</b> ({n_rows:,} trade{'s' if n_rows != 1 else ''}).<br><br>{_SIGNATURE_HTML}")
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            msg = MIMEMultipart()
+            msg["From"], msg["To"], msg["Cc"] = sender, ", ".join(to), ", ".join(cc)
+            msg["Subject"] = f"MTF Trade File - {d:%d-%m-%Y}"
+            msg.attach(MIMEText(body, "html"))
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(path.read_bytes())
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            msg.attach(part)
+            with smtplib.SMTP(host, port, timeout=30) as srv:
+                srv.starttls()
+                srv.login(sender, pw)
+                srv.send_message(msg, to_addrs=to + cc)
+            log(f"✅ Email sent successfully — MTF trade file → {', '.join(to)}"
+                + (f" · cc {', '.join(cc)}" if cc else "") + f" [{path.name}]")
+            return {"sent": True, "error": "", "to": to, "cc": cc, "attempts": attempt}
+        except (smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as e:
+            log(f"❌ E-mail refused ({type(e).__name__}) - not retried, the file is saved and backed up: {e}")
+            return {"sent": False, "error": f"{type(e).__name__}: {e}", "to": to, "cc": cc, "attempts": attempt}
+        except Exception as e:
+            wait = 5 if attempt < 10 else 15
+            log(f"❌ E-mail failed (attempt {attempt}): {type(e).__name__}: {e} - trying again in {wait} s")
+            time.sleep(wait)
+
+
 # ───────────────────────────── the run ──────────────────────────────────────
 def _fail(msg):
     log(f"❌ {msg}")
@@ -888,6 +994,24 @@ def _run_all(date_str, send_wa, force=False, by=""):
     if png:
         log(f"Saved: {png.name}")
 
+    # 3b ─ MTF trade file (Product MTF + MTFS): create, then e-mail
+    trade_info = {"name": "", "rows": 0, "skipped": 0, "mail": {"sent": False, "error": "not created"}}
+    try:
+        tpath, trows, tskip = build_trade_file(tb, d, base_dir())
+        log(f"MTF trade file: {tpath.name} - {trows:,} trade(s) (Product MTF + MTFS)"
+            + (f", {tskip} row(s) without TradeID/ClientID skipped" if tskip else ""))
+        trade_info.update(name=tpath.name, rows=trows, skipped=tskip)
+        if trows:
+            _prog(3, "E-mailing the MTF trade file")
+            trade_info["mail"] = send_trade_file_email(tpath, d, trows)
+        else:
+            trade_info["mail"] = {"sent": False, "error": "no MTF / MTFS trades today"}
+            log("MTF trade file has no rows - not e-mailed.")
+    except Exception as e:
+        tpath = None
+        log(f"⚠ MTF trade file could not be created: {type(e).__name__}: {e}")
+        trade_info["mail"] = {"sent": False, "error": f"{type(e).__name__}: {e}"}
+
     # 4 ─ WhatsApp
     wa_res = {"sent": 0, "failed": 0, "skipped": "turned off for this run"}
     if not send_whatsapp_enabled(send_wa, png):
@@ -899,7 +1023,7 @@ def _run_all(date_str, send_wa, force=False, by=""):
 
     # 5 ─ backup, then clean the base folder
     _prog(5, "Backing up files and cleaning the folder")
-    used = [tb_path, xlsx] + ([png] if png else []) + ([catg] if in_base_catg else [])
+    used = [tb_path, xlsx] + ([png] if png else []) + ([tpath] if tpath else []) + ([catg] if in_base_catg else [])
     bdir, done, problems = backup_and_clean(used, d)
     log(f"Backed up {len(done)} file(s) to {bdir}")
     for p in problems:
@@ -915,7 +1039,8 @@ def _run_all(date_str, send_wa, force=False, by=""):
         "unique_symbols": len(details), "top": top, "wa": wa_res,
         "sources": {"impact": catg.name, "tradebook": tb_path.name, "holding": hold_path.name},
         "backup_dir": str(bdir),
-        "files": {"xlsx": xlsx.name, "png": png.name if png else ""},
+        "files": {"xlsx": xlsx.name, "png": png.name if png else "", "txt": trade_info["name"]},
+        "trade_file": trade_info,
         "backup_problems": problems,
     }
     _write_json(backup_root() / "last_run.json", result)

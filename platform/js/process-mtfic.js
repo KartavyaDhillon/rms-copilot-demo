@@ -80,14 +80,17 @@
     var more = (l.unique_symbols || 0) > 8 ? '<div style="font-size:10.5px;color:var(--dim);margin-top:4px">+ ' + (l.unique_symbols - 8) + ' more in the Excel (Check_Required sheet)</div>' : '';
     var wa = l.wa || {};
     var waTxt = wa.skipped ? ('WhatsApp: not sent (' + esc(wa.skipped) + ')') : ('WhatsApp: ' + n(wa.sent) + ' sent' + (wa.failed ? ', ' + n(wa.failed) + ' failed' : ''));
+    var tf = l.trade_file || {}, tm = tf.mail || {};
+    var tradeTxt = tf.name ? ('<br>MTF trade file: ' + n(tf.rows) + ' trade(s) · ' + (tm.sent ? 'e-mailed to ' + esc((tm.to || []).join(', ')) : '<span style="color:var(--amber)">NOT e-mailed (' + esc(tm.error || 'unknown') + ')</span>')) : '';
     return '<div style="font-size:11px;color:var(--dim);margin-bottom:6px">Run for <b style="color:var(--ink)">' + esc(l.date) + '</b> · finished ' + esc(l.finished) + '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' + tile('MTF trades', l.mtf, 'var(--ink)') + tile('OK', l.ok, 'var(--green)') + tile('Check required', l.check, l.check ? 'var(--red)' : 'var(--ink)') + '</div>' +
       (l.check ? '<div style="font-size:11px;color:var(--muted);margin:6px 0">' + n(l.no_holding) + ' no Holding record · ' + n(l.isin_missing) + ' ISIN not in NSE file · ' + n(l.wrong_category) + ' wrong category</div>' : '') +
       (rows ? '<table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:6px"><tbody>' + rows + '</tbody></table>' + more : '') +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 4px">' +
       '<a class="sa-save" style="text-decoration:none;text-align:center;flex:1;min-width:150px;background:var(--green);color:#04120a" href="' + API + '/mtfic/file?kind=xlsx" download>&#11015; Excel report</a>' +
+      (l.files && l.files.txt ? '<a class="sa-save" style="text-decoration:none;text-align:center;flex:1;min-width:150px;background:var(--amber);color:#201400" href="' + API + '/mtfic/file?kind=txt" download>&#11015; MTF trade file</a>' : '') +
       (l.files && l.files.png ? '<a class="sa-save" style="text-decoration:none;text-align:center;flex:1;min-width:150px;background:var(--blue);color:#061020" href="' + API + '/mtfic/file?kind=png" download>&#11015; Dashboard image</a>' : '') + '</div>' +
-      '<div style="font-size:10.5px;color:var(--dim);line-height:1.6">' + waTxt + '<br>Backed up to <span style="font-family:var(--mono)">' + esc(l.backup_dir) + '</span>' +
+      '<div style="font-size:10.5px;color:var(--dim);line-height:1.6">' + waTxt + tradeTxt + '<br>Backed up to <span style="font-family:var(--mono)">' + esc(l.backup_dir) + '</span>' +
       ((l.backup_problems || []).length ? '<br><span style="color:var(--amber)">' + l.backup_problems.map(esc).join('<br>') + '</span>' : '') + '</div>';
   }
 
@@ -132,6 +135,7 @@
       stepsHtml(p, running) + '<div style="font-size:11px;color:var(--dim);min-height:15px">' + line + '</div>' + msg;
     var html =
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+      '<button class="sa-tool" onclick="pxConfig(\'mtfic\')" data-tip="Who gets the MTF trade file by e-mail (To / CC)">&#9993;&#65039; Email To / CC</button>' +
       '<button class="sa-tool" onclick="pxCredentials(\'mtfic\')" data-tip="WhatsApp token and numbers">&#128273; Credentials</button>' +
       '<button class="sa-tool" onclick="pxBackup(\'mtfic\')" data-tip="Browse past runs: every file used and generated is kept here">&#128230; Backup files</button>' +
       '<button class="sa-tool" onclick="pxLogs(\'mtfic\')" data-tip="Full saved output of past runs">&#128450;&#65039; Logs</button></div>' +

@@ -283,7 +283,7 @@ PIPELINES = {
     "mtfic": {"name": "MTF Impact Cost", "logdir": "mtfic", "runs": 1,
               "state_dir_env": "MTF_IMPACT_FOLDER", "state_default": os.path.join(REPO, "data", "SECURITY CAT IMPACT COST"),
               "state_file": "run_counter.txt",
-              "email_keys": {},
+              "email_keys": {"MTF trade file (MTF_TRADE-<date>.txt)": ["MTFIC_TRADE_TO", "MTFIC_TRADE_CC"]},
               "cred": {"WhatsApp (Tata) bearer token": {"single_key": "MTFIC_WA_TOKEN",
                         "note": "sends the dashboard image. Leave blank to use the shared WA_AUTH_TOKEN."},
                        "WhatsApp numbers": {"single_key": "MTFIC_WA_NUMBERS",
@@ -296,6 +296,14 @@ PIPELINES = {
                   ["NSE impact-cost file", "C_CATG_*.T01", "C_CATG_<MON><YYYY>.T01"],
                   ["Reconciliation Excel", "Reconciliation_MTF_ImpactCost_*.xlsx", "Reconciliation_MTF_ImpactCost_<DDMMYYYY>.xlsx"],
                   ["Dashboard image", "Reconciliation_MTF_Dashboard_*.png", "Reconciliation_MTF_Dashboard_<DDMMYYYY>.png"],
+              ],
+              # the Backup files window also shows the generated trade file (it is not an upload)
+              "backup_types": [
+                  ["TradeBook", "TradeBook_*.csv,TradeBook_*.xlsx,TradeBook_*.xls", "TradeBook_<DDMMYYYY>.csv"],
+                  ["NSE impact-cost file", "C_CATG_*.T01", "C_CATG_<MON><YYYY>.T01"],
+                  ["Reconciliation Excel", "Reconciliation_MTF_ImpactCost_*.xlsx", "Reconciliation_MTF_ImpactCost_<DDMMYYYY>.xlsx"],
+                  ["Dashboard image", "Reconciliation_MTF_Dashboard_*.png", "Reconciliation_MTF_Dashboard_<DDMMYYYY>.png"],
+                  ["MTF trade file", "MTF_TRADE-*.txt", "MTF_TRADE-<DDMMYYYY>.txt"],
               ]},
     # Allocation report (manual runs from the Process Center tile; the nightly close runs in the Scheduler).
     "alloc": {"name": "Allocation Report", "logdir": "alloc", "runs": 1,
