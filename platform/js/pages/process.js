@@ -39,7 +39,7 @@
         '<div class="pc-bar"><div class="l"></div>' +
         '<div style="display:flex;gap:8px">' +
         '<button class="btn sm ghost pc-tcs" id="pcTcs" data-state="unknown" title="Who is using the TCS BANCS (MCX eclear) login right now, and who is next. Click for details."><span class="dot"></span><span class="lbl">TCS BANCS</span><b id="pcTcsState">\u2026</b></button>' +
-        '<button class="btn sm ghost" id="pcAuto" title="Automatic captcha and RSA-token filling, and the low-balance e-mail">\u26a1 Auto-fill CAPTCHA / TOKEN: <b id="pcAutoState">\u2026</b></button>' +
+        '<button class="btn sm ghost" id="pcAuto" title="Automatic captcha and RSA-token filling, and the low-balance e-mail">\u26a1 AUTOFILL</button>' +
         '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
         '<a class="btn sm ghost" href="/legacy" target="_blank" title="Original console with sidebar and internal views, in a new tab">' + RMS.icon("external") + " Standalone</a></div></div>" +
@@ -70,7 +70,7 @@
     const chip = $("#pcTcs"); if (chip) chip.dataset.state = d && d.state ? d.state : "unknown";
     if (!d || d.state === "unknown") { el.innerHTML = '<span style="color:#9ca3af">unknown</span>'; return; }
     if (d.state === "free") {
-      el.innerHTML = '<span>free</span>' + (d.next ? ' <span style="opacity:.8">\u00b7 next: ' + esc(d.next.name) + " " + esc(d.next.at) + "</span>" : "");
+      el.innerHTML = "<span>free</span>";
     } else if (d.state === "busy") {
       const h = d.holders[0];
       el.innerHTML = "<span>in use: " + esc(h.name) + (h.elapsed_s != null ? " \u00b7 " + tcsMin(h.elapsed_s) : "") + "</span>";
@@ -124,9 +124,9 @@
   let captchaAuto = { enabled: false, key_configured: false }, tokenAuto = { enabled: true, seed_ok: false };
 
   function autoPaintBtn() {
-    const st = $("#pcAutoState"); if (!st) return;
+    const btn = $("#pcAuto"); if (!btn) return;
     const c = captchaAuto.key_configured && captchaAuto.enabled, t = tokenAuto.enabled;
-    st.innerHTML = 'Captcha <span style="color:' + (c ? "#4ade80" : "#fbbf24") + '">' + (!captchaAuto.key_configured ? "No key" : c ? "On" : "Off") + "</span> \u00b7 Token <span style=\"color:" + (t ? "#4ade80" : "#fbbf24") + '">' + (t ? "On" : "Off") + "</span>";
+    btn.title = "Automatic captcha and RSA-token filling. Captcha: " + (!captchaAuto.key_configured ? "no key" : c ? "on" : "off") + " \u00b7 Token: " + (t ? "on" : "off") + ". Click to change.";
   }
   async function autoRefresh() {
     try { captchaAuto = await (await fetch("/captcha/auto")).json(); } catch (e) { /* server not updated yet */ }
