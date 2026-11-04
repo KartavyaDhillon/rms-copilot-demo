@@ -4,7 +4,8 @@ core/pipelines/mtf_impact_cost.py — MTF <-> Security-Category Impact-Cost reco
 download_nse_cm_impact_cost.py in D:\\SECURITY CAT IMPACT COST).
 
 Also written each run: MTF_TRADE-<DDMMYYYY>.txt (TradeBook rows with Product MTF or MTFS, one fixed-layout line per trade),
-e-mailed to MTFIC_TRADE_TO / MTFIC_TRADE_CC (Email To / CC button) with unlimited retries on server errors, then backed up.
+plus MTF_<DDMMYYYY>_KAMBALA.csv (the MTF / MTFS rows of the TradeBook itself); both e-mailed (subject MTF_MTFS_TRADE_FILE) to
+MTFIC_TRADE_TO / MTFIC_TRADE_CC (Email To / CC button) with unlimited retries on server errors, then backed up and removed.
 
 ONE base folder (env MTF_IMPACT_FOLDER, default <console>\\data\\SECURITY CAT IMPACT COST, next to
 COMMON FILES like RECONCILIATION) holds everything:
@@ -774,6 +775,17 @@ def build_trade_file(tb, d: datetime.date, out_dir: Path):
     return path, len(lines), skipped
 
 
+def build_tradebook_csv(tb, d: datetime.date, out_dir: Path):
+    """MTF_<DDMMYYYY>_KAMBALA.csv - the TradeBook itself, only the rows whose Product is MTF or MTFS (all columns, as
+    they came). -> (path, rows)."""
+    pcol = get_col(tb, "Product")
+    prod = tb[pcol].fillna("").astype(str).str.strip().str.upper()
+    sel = tb[prod.isin(TRADE_PRODUCTS)]
+    path = Path(out_dir) / f"MTF_{d:%d%m%Y}_KAMBALA.csv"
+    sel.to_csv(path, index=False, encoding="utf-8")
+    return path, len(sel)
+
+
 def _emails_env(key: str) -> list:
     return [x.strip() for x in re.split(r"[,;\s]+", os.getenv(key, "")) if x.strip()]
 
@@ -782,17 +794,17 @@ _SIGNATURE_HTML = ("Best Regards,<br><b>Kartavya Dhillon</b><br>Master Capital S
                    "Tel: 011-66331000 | Ext. 84")
 
 
-def send_trade_file_email(path: Path, d: datetime.date, n_rows: int) -> dict:
-    """E-mails the trade file through the shared SMTP account (SENDER_EMAIL / SENDER_PASSWORD).
+def send_trade_file_email(files, d: datetime.date, n_rows: int) -> dict:
+    """E-mails the MTF files (the TXT and the CSV) through the process's sender (Credentials > E-mail sender).
     A server / network error is retried WITHOUT limit (5 s, then 15 s). A refused password or refused address is not
-    (retrying cannot fix it) - the file is still saved and backed up. Never raises."""
+    (retrying cannot fix it) - the files are still saved and backed up. Never raises."""
     import smtplib
     import time
     from email import encoders
     from email.mime.base import MIMEBase
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    # This process's own sender (Credentials > E-mail sender) when set - its password only; else the shared sender.
+    files = [Path(f) for f in (files if isinstance(files, (list, tuple)) else [files]) if f]
     from core.sender_override import sender as _rms_sender
     sender, pw = _rms_sender("mtfic")
     host = os.getenv("MTFIC_SMTP_SERVER", "").strip() or os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
@@ -807,30 +819,32 @@ def send_trade_file_email(path: Path, d: datetime.date, n_rows: int) -> dict:
     if not to:
         to = [sender]
         log(f"  No 'To' address saved for the MTF trade file (Email To / CC button) - sending it to {sender} only.")
-    body = (f"Dear Sir,<br><br>Please find attached the MTF trade file <b>{path.name}</b> for "
-            f"<b>{d:%d-%m-%Y}</b> ({n_rows:,} trade{'s' if n_rows != 1 else ''}).<br><br>{_SIGNATURE_HTML}")
+    body = (f"Dear Sir,<br><br>Please find attached the MTF trade file for <b>{d:%d-%m-%Y}</b> "
+            f"({n_rows:,} trade{'s' if n_rows != 1 else ''}): " + ", ".join(f"<b>{f.name}</b>" for f in files) +
+            f".<br><br>{_SIGNATURE_HTML}")
     attempt = 0
     while True:
         attempt += 1
         try:
             msg = MIMEMultipart()
             msg["From"], msg["To"], msg["Cc"] = sender, ", ".join(to), ", ".join(cc)
-            msg["Subject"] = f"MTF Trade File - {d:%d-%m-%Y}"
+            msg["Subject"] = "MTF_MTFS_TRADE_FILE"
             msg.attach(MIMEText(body, "html"))
-            part = MIMEBase("application", "octet-stream")
-            part.set_payload(path.read_bytes())
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f'attachment; filename="{path.name}"')
-            msg.attach(part)
+            for f in files:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(f.read_bytes())
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", f'attachment; filename="{f.name}"')
+                msg.attach(part)
             with smtplib.SMTP(host, port, timeout=30) as srv:
                 srv.starttls()
                 srv.login(sender, pw)
                 srv.send_message(msg, to_addrs=to + cc)
-            log(f"✅ Email sent successfully — MTF trade file → {', '.join(to)}"
-                + (f" · cc {', '.join(cc)}" if cc else "") + f" [{path.name}]")
+            log(f"✅ Email sent successfully — MTF trade files → {', '.join(to)}"
+                + (f" · cc {', '.join(cc)}" if cc else "") + " [" + ", ".join(f.name for f in files) + "]")
             return {"sent": True, "error": "", "to": to, "cc": cc, "attempts": attempt}
         except (smtplib.SMTPAuthenticationError, smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as e:
-            log(f"❌ E-mail refused ({type(e).__name__}) - not retried, the file is saved and backed up: {e}")
+            log(f"❌ E-mail refused ({type(e).__name__}) - not retried, the files are saved and backed up: {e}")
             return {"sent": False, "error": f"{type(e).__name__}: {e}", "to": to, "cc": cc, "attempts": attempt}
         except Exception as e:
             wait = 5 if attempt < 10 else 15
@@ -1000,22 +1014,26 @@ def _run_all(date_str, send_wa, force=False, by=""):
     if png:
         log(f"Saved: {png.name}")
 
-    # 3b ─ MTF trade file (Product MTF + MTFS): create, then e-mail
-    trade_info = {"name": "", "rows": 0, "skipped": 0, "mail": {"sent": False, "error": "not created"}}
+    # 3b ─ MTF trade files (Product MTF + MTFS): the TXT and the TradeBook CSV; create, then e-mail both
+    trade_info = {"name": "", "rows": 0, "skipped": 0, "csv": "", "csv_rows": 0,
+                  "mail": {"sent": False, "error": "not created"}}
+    tpath = cpath = None
     try:
         tpath, trows, tskip = build_trade_file(tb, d, base_dir())
         log(f"MTF trade file: {tpath.name} - {trows:,} trade(s) (Product MTF + MTFS)"
             + (f", {tskip} row(s) without TradeID/ClientID skipped" if tskip else ""))
         trade_info.update(name=tpath.name, rows=trows, skipped=tskip)
-        _prog(4, "E-mailing the MTF trade file")
+        cpath, crows = build_tradebook_csv(tb, d, base_dir())
+        log(f"MTF TradeBook CSV: {cpath.name} - {crows:,} row(s)")
+        trade_info.update(csv=cpath.name, csv_rows=crows)
+        _prog(4, "E-mailing the MTF trade files")
         if trows:
-            trade_info["mail"] = send_trade_file_email(tpath, d, trows)
+            trade_info["mail"] = send_trade_file_email([tpath, cpath], d, trows)
         else:
             trade_info["mail"] = {"sent": False, "error": "no MTF / MTFS trades today"}
             log("MTF trade file has no rows - not e-mailed.")
     except Exception as e:
-        tpath = None
-        log(f"⚠ MTF trade file could not be created: {type(e).__name__}: {e}")
+        log(f"⚠ MTF trade files could not be created: {type(e).__name__}: {e}")
         trade_info["mail"] = {"sent": False, "error": f"{type(e).__name__}: {e}"}
 
     # 4 ─ WhatsApp
@@ -1029,7 +1047,7 @@ def _run_all(date_str, send_wa, force=False, by=""):
 
     # 5 ─ backup, then clean the base folder
     _prog(6, "Backing up files and cleaning the folder")
-    used = [tb_path, xlsx] + ([png] if png else []) + ([tpath] if tpath else []) + ([catg] if in_base_catg else [])
+    used = [tb_path, xlsx] + ([png] if png else []) + ([tpath] if tpath else []) + ([cpath] if cpath else []) + ([catg] if in_base_catg else [])
     bdir, done, problems = backup_and_clean(used, d)
     log(f"Backed up {len(done)} file(s) to {bdir}")
     for p in problems:
@@ -1045,7 +1063,7 @@ def _run_all(date_str, send_wa, force=False, by=""):
         "unique_symbols": len(details), "top": top, "wa": wa_res,
         "sources": {"impact": catg.name, "tradebook": tb_path.name, "holding": hold_path.name},
         "backup_dir": str(bdir),
-        "files": {"xlsx": xlsx.name, "png": png.name if png else "", "txt": trade_info["name"]},
+        "files": {"xlsx": xlsx.name, "png": png.name if png else "", "txt": trade_info["name"], "csv": trade_info["csv"]},
         "trade_file": trade_info,
         "backup_problems": problems,
     }
@@ -1059,7 +1077,7 @@ def send_whatsapp_enabled(send_wa: bool, png) -> bool:
 
 
 def served_file(kind: str):
-    """Absolute path of the last run's output (from Backup), or None. kind = xlsx | png."""
+    """Absolute path of the last run's output (from Backup), or None. kind = xlsx | png | txt | csv."""
     lr = last_run()
     name = (lr.get("files") or {}).get(kind)
     bdir = lr.get("backup_dir")

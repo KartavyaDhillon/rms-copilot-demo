@@ -310,6 +310,7 @@ PIPELINES = {
                   ["Reconciliation Excel", "Reconciliation_MTF_ImpactCost_*.xlsx", "Reconciliation_MTF_ImpactCost_<DDMMYYYY>.xlsx"],
                   ["Dashboard image", "Reconciliation_MTF_Dashboard_*.png", "Reconciliation_MTF_Dashboard_<DDMMYYYY>.png"],
                   ["MTF trade file", "MTF_TRADE-*.txt", "MTF_TRADE-<DDMMYYYY>.txt"],
+                  ["MTF TradeBook (Kambala)", "MTF_*_KAMBALA.csv", "MTF_<DDMMYYYY>_KAMBALA.csv"],
               ]},
     # Allocation report (manual runs from the Process Center tile; the nightly close runs in the Scheduler).
     "alloc": {"name": "Allocation Report", "logdir": "alloc", "runs": 1,
