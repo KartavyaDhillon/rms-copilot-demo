@@ -380,6 +380,21 @@ html.compact .card { padding: 12px; }
 .pc-bar .l svg { width: 15px; height: 15px; color: var(--accent); }
 .pc-bar .l small { color: var(--text-3); font-weight: 500; }
 .pc-frame { flex: 1; border: 0; width: 100%; background: transparent; }
+/* every button in the Process Center bar has a visible boundary, so its size can be seen */
+.pc-bar .btn, .pc-bar .btn.ghost { border: 1px solid var(--line-2); background: var(--surface-3); }
+.pc-bar .btn.primary { border-color: var(--accent); background: var(--accent); }
+.pc-bar .btn:hover { border-color: var(--accent); }
+/* TCS BANCS status chip */
+.pc-tcs { display: inline-flex; align-items: center; gap: 8px; border-radius: 999px !important; padding: 5px 13px !important; border-width: 1.5px !important; }
+.pc-tcs .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-3); flex: none; }
+.pc-tcs .lbl { opacity: .75; font-weight: 600; }
+.pc-tcs[data-state="free"] { border-color: var(--ok) !important; background: rgba(52,211,153,.10) !important; }
+.pc-tcs[data-state="free"] .dot { background: var(--ok); }
+.pc-tcs[data-state="busy"] { border-color: var(--warn) !important; background: rgba(251,191,36,.12) !important; }
+.pc-tcs[data-state="busy"] .dot { background: var(--warn); animation: pcTcsPulse 1.2s ease-in-out infinite; }
+.pc-tcs[data-state="clash"] { border-color: var(--err) !important; background: rgba(248,113,113,.12) !important; }
+.pc-tcs[data-state="clash"] .dot { background: var(--err); animation: pcTcsPulse .8s ease-in-out infinite; }
+@keyframes pcTcsPulse { 50% { opacity: .35; } }
 
 /* ═══ HISTORY ═══ */
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

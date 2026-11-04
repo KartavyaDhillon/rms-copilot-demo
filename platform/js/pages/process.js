@@ -38,7 +38,7 @@
       el.innerHTML =
         '<div class="pc-bar"><div class="l"></div>' +
         '<div style="display:flex;gap:8px">' +
-        '<button class="btn sm ghost" id="pcTcs" title="Who is using the TCS BANCS (MCX eclear) login right now, and who is next. Click for details.">TCS BANCS: <b id="pcTcsState">\u2026</b></button>' +
+        '<button class="btn sm ghost pc-tcs" id="pcTcs" data-state="unknown" title="Who is using the TCS BANCS (MCX eclear) login right now, and who is next. Click for details."><span class="dot"></span><span class="lbl">TCS BANCS</span><b id="pcTcsState">\u2026</b></button>' +
         '<button class="btn sm ghost" id="pcAuto" title="Automatic captcha and RSA-token filling, and the low-balance e-mail">\u26a1 Auto-fill CAPTCHA / TOKEN: <b id="pcAutoState">\u2026</b></button>' +
         '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
@@ -67,14 +67,15 @@
   function tcsPaint() {
     const el = $("#pcTcsState"); if (!el) return;
     const d = tcsLast;
+    const chip = $("#pcTcs"); if (chip) chip.dataset.state = d && d.state ? d.state : "unknown";
     if (!d || d.state === "unknown") { el.innerHTML = '<span style="color:#9ca3af">unknown</span>'; return; }
     if (d.state === "free") {
-      el.innerHTML = '<span style="color:#4ade80">free</span>' + (d.next ? ' <span style="opacity:.8">\u00b7 next: ' + esc(d.next.name) + " " + esc(d.next.at) + "</span>" : "");
+      el.innerHTML = '<span>free</span>' + (d.next ? ' <span style="opacity:.8">\u00b7 next: ' + esc(d.next.name) + " " + esc(d.next.at) + "</span>" : "");
     } else if (d.state === "busy") {
       const h = d.holders[0];
-      el.innerHTML = '<span style="color:#fbbf24">in use: ' + esc(h.name) + (h.elapsed_s != null ? " " + tcsMin(h.elapsed_s) : "") + "</span>";
+      el.innerHTML = "<span>in use: " + esc(h.name) + (h.elapsed_s != null ? " \u00b7 " + tcsMin(h.elapsed_s) : "") + "</span>";
     } else {
-      el.innerHTML = '<span style="color:#f87171">' + d.holders.length + " at once \u2014 clash</span>";
+      el.innerHTML = "<span>" + d.holders.length + " at once \u2014 clash</span>";
     }
   }
   async function tcsRefresh() {
@@ -93,17 +94,29 @@
       h += '<div style="margin-bottom:6px">Nobody is using it. <b>Next:</b> ' + esc(tcsWhenText(d.next)) + "</div>";
     }
     if (d.upcoming && d.upcoming.length) {
-      h += '<div style="margin:10px 0 4px;opacity:.7">Coming up today (automatic runs)</div>';
-      d.upcoming.forEach((x) => { h += "<div>" + esc(x.at) + " \u00b7 " + esc(x.name) + "</div>"; });
+      const kindTxt = { auto: ["automatic", "#60a5fa"], scheduler: ["scheduler", "#a78bfa"], manual: ["manual window", "#fbbf24"] };
+      h += '<div style="margin:10px 0 4px;opacity:.7">Coming up today</div>';
+      d.upcoming.forEach((x) => {
+        const k = kindTxt[x.kind] || kindTxt.auto;
+        h += '<div style="display:flex;gap:8px;align-items:baseline;padding:2px 0"><span style="min-width:44px;font-variant-numeric:tabular-nums">' + esc(x.at) + '</span><span style="flex:1">' + esc(x.name) +
+          (x.note ? ' <span style="opacity:.6">\u00b7 ' + esc(x.note) + "</span>" : "") + '</span><span style="font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid ' + k[1] + ";color:" + k[1] + '">' + k[0] + "</span></div>";
+      });
     }
-    h += '<div style="margin-top:12px;opacity:.6;font-size:12px">A manual download can also be started by a person at any time; it shows here while it holds the login.</div></div>';
+    h += '<div style="margin-top:12px;opacity:.6;font-size:12px">Manual windows are when a person is expected to download the MCX file for that run. A download started by hand shows here the moment it starts.</div></div>';
     return h;
   }
   function tcsInit() {
     const b = $("#pcTcs"); if (!b) return;
     b.onclick = async () => { await tcsRefresh(); RMS.modal("TCS BANCS login (MCX eclear)", tcsDetailHtml(), { width: 520, icon: "plug" }); };
     tcsRefresh();
-    if (!tcsTimer) tcsTimer = setInterval(tcsRefresh, 5000);
+    if (!tcsTimer) tcsTimer = setInterval(tcsRefresh, 3000);
+    const fr = $("#pcFrame");
+    const hook = () => {
+      try {
+        fr.contentDocument.addEventListener("click", () => { [300, 1200, 3000, 6000].forEach((ms) => setTimeout(tcsRefresh, ms)); }, true);
+      } catch (e) { /* frame not reachable: the 3 s timer still updates the chip */ }
+    };
+    if (fr) { fr.addEventListener("load", hook); hook(); }
   }
 
   /* ── Auto-fill CAPTCHA / TOKEN: one button, a small window with the two on/off switches + the balance alert.

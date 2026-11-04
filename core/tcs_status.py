@@ -70,12 +70,38 @@ def _box_holders():
     return out
 
 
+# Standalone download buttons that log in to TCS BANCS (pipeline_box action slots). They do not use the lock files, so
+# their own "running" slot is what tells us the login is in use.
+_ACTION_USERS = {("ctcl", "mcx90"): "CTCL vs NMASS (MCX 90% download)", ("ms15", "mcx90"): "MARGIN SHORTAGE 15-min (MCX 90% download)",
+                 ("probable", "tcs"): "PROBABLE (TCS button)"}
+
+
+def _action_holders():
+    out = []
+    try:
+        from core import pipeline_box as PB
+        for pipe, action, started in PB.running_actions():
+            name = _ACTION_USERS.get((pipe, action))
+            if not name:
+                continue
+            el, since = None, ""
+            try:
+                t0 = dt.datetime.fromisoformat(str(started))
+                el, since = max(0, int((dt.datetime.now() - t0).total_seconds())), t0.strftime("%H:%M:%S")
+            except Exception:
+                pass
+            out.append({"name": name, "since": since, "elapsed_s": el, "source": "button"})
+    except Exception:
+        pass
+    return out
+
+
 def _next_users(now: dt.datetime) -> list:
     """[{'name', 'at': 'HH:MM', 'minutes': n}] for every automatic start still to come today, soonest first."""
     cur = now.hour * 60 + now.minute
     found = []
 
-    def add(name, hhmm_text, lead=0):
+    def add(name, hhmm_text, lead=0, kind="auto", note=""):
         try:
             h, m = (int(x) for x in str(hhmm_text).split(":")[:2])
         except Exception:
@@ -84,7 +110,7 @@ def _next_users(now: dt.datetime) -> list:
         if t < 0:
             t = 0
         if t >= cur:
-            found.append({"name": name, "at": f"{t // 60:02d}:{t % 60:02d}", "minutes": t - cur})
+            found.append({"name": name, "at": f"{t // 60:02d}:{t % 60:02d}", "minutes": t - cur, "kind": kind, "note": note})
 
     for mod, label in (("core.live_allocation", "LIVE ALLOCATION CAPTURE"), ("core.mcx_cash_maintenance", "MCX CASH MAINTENANCE")):
         try:
@@ -112,6 +138,44 @@ def _next_users(now: dt.datetime) -> list:
                 add(f"SHORT ALLOCATION run {n} (MCX deposit)", cfg["time"], lead=int(st.get("predl_min", 15)))
     except Exception:
         pass
+
+    # 2) Scheduler schedules of processes that log in to MCX eclear (e.g. MCX HOURLY SURVEILLANCE, every hour)
+    try:
+        from core.scheduler import catalog, holidays, rules, service, store
+        utc_now = service._now()
+        for s in store.list_schedules("enabled"):
+            pdef = catalog.get(s.get("process_key"))
+            if pdef is None or "mcx_eclear" not in tuple(getattr(pdef, "uses", ()) or ()):
+                continue
+            tz = rules.get_tz(s.get("tz"))
+            today = now.date()
+            runs = []
+            for u in rules.occurrences({"rule": s["rule"], "tz": s["tz"], "start_date": s.get("start_date"),
+                                        "end_date": s.get("end_date"), "skip_holidays": s.get("skip_holidays")}, utc_now, holidays.is_holiday):
+                loc = u.astimezone(tz)
+                if loc.date() != today:
+                    break
+                runs.append(loc)
+                if len(runs) >= 48:
+                    break
+            if runs:
+                first = runs[0]
+                add(f"{s.get('name') or pdef.name} (scheduler)", f"{first.hour}:{first.minute}", kind="scheduler",
+                    note=f"{len(runs)} run(s) left today, then {runs[1].strftime('%H:%M')}" if len(runs) > 1 else "last run today")
+    except Exception:
+        pass
+
+    # 3) Manual boxes: a person presses their buttons around the run windows, and the run needs the MCX file by then
+    try:
+        for pipe, label in (("ms15", "MARGIN SHORTAGE 15-min"), ("ctcl", "CTCL vs NMASS")):
+            for i in range(1, 40):
+                v = os.getenv(f"{pipe.upper()}_RUN{i}_WINDOW", "").strip()
+                if not v:
+                    continue
+                m = v.split("-")[0]
+                add(f"{label} run {i} (manual, needs the MCX file)", m, kind="manual", note=f"window {v}")
+    except Exception:
+        pass
     found.sort(key=lambda x: x["minutes"])
     return found
 
@@ -122,8 +186,12 @@ def status(now: dt.datetime = None) -> dict:
     c = _card_holder()
     if c:
         holders.append(c)
-    holders += _box_holders()
+    seen = {h["name"] for h in holders}
+    for h in _box_holders() + _action_holders():
+        if h["name"] not in seen:                       # the same download can show up in two places
+            holders.append(h)
+            seen.add(h["name"])
     state = "free" if not holders else ("busy" if len(holders) == 1 else "clash")
     nxt = _next_users(now)
-    return {"state": state, "holders": holders, "next": nxt[0] if nxt else None, "upcoming": nxt[:5],
+    return {"state": state, "holders": holders, "next": nxt[0] if nxt else None, "upcoming": nxt[:12],
             "now": now.strftime("%H:%M:%S")}
