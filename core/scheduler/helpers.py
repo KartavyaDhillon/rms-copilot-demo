@@ -149,6 +149,7 @@ def is_trading_day(d: dt.date, hol: Optional[set] = None) -> bool:
     return d.weekday() < 5 and d not in hol
 
 
+
 def prev_trading_day(d: Optional[dt.date] = None, n: int = 1) -> dt.date:
     d = d or dt.date.today()
     hol = holidays()

@@ -1431,6 +1431,16 @@ async def _lock_identity_middleware(request, call_next):
     return await call_next(request)
 
 
+@app.get("/ops/tcs-status")
+def ops_tcs_status():
+    """Read-only: who holds the TCS BANCS (MCX eclear) login now, and who is the next automatic user."""
+    try:
+        from core import tcs_status
+        return tcs_status.status()
+    except Exception as e:
+        return {"state": "unknown", "error": str(e), "holders": [], "next": None, "upcoming": []}
+
+
 @app.get("/ops/locks")
 def ops_locks():
     try:
