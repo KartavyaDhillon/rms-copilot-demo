@@ -104,8 +104,8 @@ EMAIL_CC = _emails("R1R2_EMAIL_CC")
 
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "")
+from core.sender_override import sender as _rms_sender        # this process's own sender (Credentials), else the shared one
+SENDER_EMAIL, SENDER_PASSWORD = _rms_sender()
 
 
 class AbortRun(Exception):

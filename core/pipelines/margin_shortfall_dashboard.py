@@ -877,8 +877,10 @@ def run_margin_shortfall_dashboard(base_dir, common_dir=None, update_limits_file
     dashboard_csv = os.path.join(output_dir, f"{DASHBOARD_CSV_PREFIX}_{run_date_str}.csv")
 
     wa_auth_token = os.getenv("WA_AUTH_TOKEN", "")
-    sender_email = os.getenv("MARGIN_SHORTFALL_SENDER_EMAIL") or os.getenv("SENDER_EMAIL", "")
-    sender_password = os.getenv("MARGIN_SHORTFALL_SENDER_PASSWORD") or os.getenv("SENDER_PASSWORD", "")
+    from core.sender_override import sender as _rms_sender
+    _se, _sp = _rms_sender()
+    sender_email = os.getenv("MARGIN_SHORTFALL_SENDER_EMAIL") or _se
+    sender_password = os.getenv("MARGIN_SHORTFALL_SENDER_PASSWORD") or _sp
 
     source_file = update_limits_file or resolve_source_file(base_dir)
     print("Reading:", source_file)

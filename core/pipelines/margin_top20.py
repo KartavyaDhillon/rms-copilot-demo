@@ -111,8 +111,8 @@ def _run_margin_top20_impl():
     """Top20 margin utilisation: read → 3 files → password → email → backup+cleanup."""
     SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
     SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-    SMTP_EMAIL = os.getenv("SENDER_EMAIL")
-    SMTP_PASSWORD = os.getenv("SENDER_PASSWORD")
+    from core.sender_override import sender as _rms_sender        # the calling process's own sender, else the shared one
+    SMTP_EMAIL, SMTP_PASSWORD = _rms_sender()
 
     risk_files = glob.glob(os.path.join(FOLDER_PATH, "RISK_REPORT_*.csv"))
     ctcl_file = os.path.join(FOLDER_PATH, "FULL_FILE_CTCL_VS_NMASS_01.xlsx")

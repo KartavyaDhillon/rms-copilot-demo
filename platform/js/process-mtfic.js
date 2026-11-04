@@ -5,7 +5,7 @@
   'use strict';
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
   var TITLE = 'MTF Impact Cost';
-  var STEPS = ['Check files', 'NSE file', 'Reconcile', 'WhatsApp', 'Backup'];
+  var STEPS = ['Check files', 'NSE file', 'Reconcile', 'E-mail', 'WhatsApp', 'Backup'];
   var S = { iso: '', wa: true, data: null, msg: '', msgKind: '', busy: false, timer: null, sig: '', ctl: null };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
@@ -60,7 +60,7 @@
 
   function stepsHtml(p, running) {
     var cur = running ? (p.step || 1) : 0;
-    var done = (!running && p.ok === true) ? 5 : 0;
+    var done = (!running && p.ok === true) ? 6 : 0;
     return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 4px">' + STEPS.map(function (s, i) {
       var k = i + 1, on = (cur === k), ok = (done >= k) || (running && cur > k);
       var bg = on ? 'rgba(251,191,36,.15)' : (ok ? 'rgba(52,211,153,.14)' : 'transparent');

@@ -37,7 +37,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 OK_CATEGORY = 1
-TOTAL_STEPS = 5
+TOTAL_STEPS = 6
 _BASE_URL = "https://www.nseindia.com"
 _REPORTS_PAGE = f"{_BASE_URL}/all-reports"
 _API_URL = f"{_BASE_URL}/api/monthly-reports"
@@ -792,8 +792,14 @@ def send_trade_file_email(path: Path, d: datetime.date, n_rows: int) -> dict:
     from email.mime.base import MIMEBase
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    sender, pw = os.getenv("SENDER_EMAIL", "").strip(), os.getenv("SENDER_PASSWORD", "")
-    host, port = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in"), int(os.getenv("SMTP_PORT", "587") or 587)
+    # This process's own sender (Credentials > E-mail sender) when set - its password only; else the shared sender.
+    from core.sender_override import sender as _rms_sender
+    sender, pw = _rms_sender("mtfic")
+    host = os.getenv("MTFIC_SMTP_SERVER", "").strip() or os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
+    try:
+        port = int(os.getenv("MTFIC_SMTP_PORT", "").strip() or os.getenv("SMTP_PORT", "587") or 587)
+    except ValueError:
+        port = 587
     to, cc = _emails_env("MTFIC_TRADE_TO"), _emails_env("MTFIC_TRADE_CC")
     if not sender or not pw:
         log("  E-mail not sent: the sender e-mail / password are not set (Credentials).")
@@ -1001,8 +1007,8 @@ def _run_all(date_str, send_wa, force=False, by=""):
         log(f"MTF trade file: {tpath.name} - {trows:,} trade(s) (Product MTF + MTFS)"
             + (f", {tskip} row(s) without TradeID/ClientID skipped" if tskip else ""))
         trade_info.update(name=tpath.name, rows=trows, skipped=tskip)
+        _prog(4, "E-mailing the MTF trade file")
         if trows:
-            _prog(3, "E-mailing the MTF trade file")
             trade_info["mail"] = send_trade_file_email(tpath, d, trows)
         else:
             trade_info["mail"] = {"sent": False, "error": "no MTF / MTFS trades today"}
@@ -1017,12 +1023,12 @@ def _run_all(date_str, send_wa, force=False, by=""):
     if not send_whatsapp_enabled(send_wa, png):
         log("WhatsApp: not sent (turned off for this run)" if not send_wa else "WhatsApp: no image to send")
     else:
-        _prog(4, "Sending the WhatsApp image")
+        _prog(5, "Sending the WhatsApp image")
         wa_res = send_whatsapp(png, dmy(d))
-    _prog(4, "WhatsApp step finished")
+    _prog(5, "WhatsApp step finished")
 
     # 5 ─ backup, then clean the base folder
-    _prog(5, "Backing up files and cleaning the folder")
+    _prog(6, "Backing up files and cleaning the folder")
     used = [tb_path, xlsx] + ([png] if png else []) + ([tpath] if tpath else []) + ([catg] if in_base_catg else [])
     bdir, done, problems = backup_and_clean(used, d)
     log(f"Backed up {len(done)} file(s) to {bdir}")
@@ -1044,7 +1050,7 @@ def _run_all(date_str, send_wa, force=False, by=""):
         "backup_problems": problems,
     }
     _write_json(backup_root() / "last_run.json", result)
-    _prog(5, f"Completed: {len(ok_rows)} OK, {len(chk)} check required", running=False, ok=True)
+    _prog(6, f"Completed: {len(ok_rows)} OK, {len(chk)} check required", running=False, ok=True)
     log("✅ MTF impact-cost run completed")
 
 

@@ -93,5 +93,39 @@ class Restart(unittest.TestCase):
         self.assertEqual(len(calls), 4)
 
 
+class SenderEmailStaysLocal(unittest.TestCase):
+    """MTF Impact Cost's own sender: its e-mail address is only its own, its PASSWORD follows the same address everywhere."""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.keys = ["SCHED_ENV_DIR", "SENDER_EMAIL", "SENDER_PASSWORD", "MTFIC_SMTP_EMAIL", "MTFIC_SMTP_PASSWORD",
+                     "SA_SMTP_EMAIL", "SA_SMTP_PASSWORD"]
+        self.old = {k: os.environ.get(k) for k in self.keys}
+        os.environ["SCHED_ENV_DIR"] = str(self.tmp)
+        (self.tmp / ".env").write_text("", encoding="utf-8")
+        (self.tmp / ".env.local").write_text("", encoding="utf-8")
+        os.environ.update({"SENDER_EMAIL": "a@x.in", "SENDER_PASSWORD": "old", "MTFIC_SMTP_EMAIL": "a@x.in",
+                           "MTFIC_SMTP_PASSWORD": "old", "SA_SMTP_EMAIL": "b@x.in", "SA_SMTP_PASSWORD": "keep"})
+
+    def tearDown(self):
+        for k, v in self.old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_password_follows_the_same_address_only(self):
+        changed = cred_links.on_saved({"MTFIC_SMTP_PASSWORD": "new"})
+        self.assertIn("SENDER_PASSWORD", changed)
+        self.assertEqual(os.environ["SENDER_PASSWORD"], "new")
+        self.assertEqual(os.environ["SA_SMTP_PASSWORD"], "keep")          # another address: untouched
+
+    def test_changing_only_the_address_changes_nothing_elsewhere(self):
+        os.environ["MTFIC_SMTP_EMAIL"] = "c@x.in"
+        changed = cred_links.on_saved({"MTFIC_SMTP_PASSWORD": "pw2"})
+        self.assertNotIn("SENDER_PASSWORD", changed)
+        self.assertEqual(os.environ["SENDER_EMAIL"], "a@x.in")
+        self.assertEqual(os.environ["SENDER_PASSWORD"], "old")
+
+
 if __name__ == "__main__":
     unittest.main()

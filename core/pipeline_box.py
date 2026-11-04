@@ -92,9 +92,9 @@ PIPELINES = {
                             "Top20 V1": ["CTCL_TOP20_V1_TO", "CTCL_TOP20_CC"],
                             "Payout Check": ["PAYOUT_CHECK_TO", "PAYOUT_CHECK_CC"],
                             "Cash Risk Codes": ["CTCL_SHORTFALL_EMAIL_TO", "CTCL_SHORTFALL_EMAIL_CC"]},
-             "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
-                       "pass_key": "SENDER_PASSWORD",
-                       "note": "the email account CTCL sends reports from"},
+             "cred": {"SMTP sender (email account)": {"user_key": "CTCL_SENDER_EMAIL",
+                       "pass_key": "CTCL_SENDER_PASSWORD",
+                       "note": "the email account CTCL sends reports from. Changing the address here changes it for CTCL only; a changed PASSWORD is copied to every process that sends from the same address."},
                       "NMASS / NSCCL login": {"user_key": "CTCL_NMASS_USER",
                        "pass_key": "CTCL_NMASS_PASSWORD",
                        "note": "connect2nsccl.com login used by NMASS_NCFE_API_MIX.PY"},
@@ -213,8 +213,8 @@ PIPELINES = {
              "state_dir_env": "R1R2_FOLDER", "state_default": os.path.join(REPO, "data", "r1_r2_comparison"),
              "state_file": "run_counter.txt",
              "email_keys": {"Report": ["R1R2_EMAIL_TO", "R1R2_EMAIL_CC"]},
-             "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
-                       "pass_key": "SENDER_PASSWORD",
+             "cred": {"SMTP sender (email account)": {"user_key": "R1R2_SENDER_EMAIL",
+                       "pass_key": "R1R2_SENDER_PASSWORD",
                        "note": "same account every other pipe here sends reports from"},
                       "NSCCL / NMASS login": {"user_key": "CTCL_NMASS_USER",
                        "pass_key": "CTCL_NMASS_PASSWORD",
@@ -251,8 +251,8 @@ PIPELINES = {
                             "T1 HOLDING": ["RECO_T1_TO", "RECO_T1_CC"],
                             "NFO BFO MTFS": ["RECO_NFO_TO", "RECO_NFO_CC"],
                             "KAMBALA POSITION": ["RECO_KAMB_TO", "RECO_KAMB_CC"]},
-             "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
-                       "pass_key": "SENDER_PASSWORD",
+             "cred": {"SMTP sender (email account)": {"user_key": "RECO_SENDER_EMAIL",
+                       "pass_key": "RECO_SENDER_PASSWORD",
                        "note": "the account the four reports are sent from. Leave blank to keep the login written inside the scripts."},
                       "NSE extranet (member code / login / password)": {"user_key": "RECO_NSE_LOGIN_ID",
                        "pass_key": "RECO_NSE_PASSWORD",
@@ -284,7 +284,13 @@ PIPELINES = {
               "state_dir_env": "MTF_IMPACT_FOLDER", "state_default": os.path.join(REPO, "data", "SECURITY CAT IMPACT COST"),
               "state_file": "run_counter.txt",
               "email_keys": {"MTF trade file (MTF_TRADE-<date>.txt)": ["MTFIC_TRADE_TO", "MTFIC_TRADE_CC"]},
-              "cred": {"WhatsApp (Tata) bearer token": {"single_key": "MTFIC_WA_TOKEN",
+              "cred": {"E-mail sender (SMTP account)": {"user_key": "MTFIC_SMTP_EMAIL", "pass_key": "MTFIC_SMTP_PASSWORD",
+                        "note": "the account the MTF trade file is e-mailed from. The e-mail address is only for this process. A changed PASSWORD is also copied to every other process that sends from the same e-mail address."},
+                       "SMTP server": {"single_key": "MTFIC_SMTP_SERVER",
+                        "note": "mail server of that account, e.g. smtp3.netcore.co.in. Blank = the shared SMTP_SERVER is used."},
+                       "SMTP port": {"single_key": "MTFIC_SMTP_PORT",
+                        "note": "usually 587 (the run uses STARTTLS). Blank = the shared SMTP_PORT is used."},
+                       "WhatsApp (Tata) bearer token": {"single_key": "MTFIC_WA_TOKEN",
                         "note": "sends the dashboard image. Leave blank to use the shared WA_AUTH_TOKEN."},
                        "WhatsApp numbers": {"single_key": "MTFIC_WA_NUMBERS",
                         "note": "10-digit numbers only (+91 is added automatically), optionally with a name after #, comma separated. Example: 9876543210#Rahul, 9123456789#Priya. Blank = nothing is sent."}},
@@ -344,8 +350,8 @@ PIPELINES = {
              # Download credentials are shared with CTCL vs NMASS (same broker accounts) —
              # a password update here fixes both processes at once. WhatsApp (Gupshup) and
              # the Mastertrust webpayout mobile-lookup are new/separate for this pipeline.
-             "cred": {"SMTP sender (email account)": {"user_key": "SENDER_EMAIL",
-                       "pass_key": "SENDER_PASSWORD",
+             "cred": {"SMTP sender (email account)": {"user_key": "MS15_SENDER_EMAIL",
+                       "pass_key": "MS15_SENDER_PASSWORD",
                        "note": "same email account CTCL vs NMASS sends reports from"},
                       "NMASS / NSCCL login": {"user_key": "CTCL_NMASS_USER",
                        "pass_key": "CTCL_NMASS_PASSWORD",
@@ -420,8 +426,8 @@ PIPELINES = {
                            "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
                            "note": "eclear.mcxccl.com login — shared with Short Allocation's MCX Deposit "
                                    "and Client Prudential Limit's MCX Web Allocation buttons"},
-                          "SMTP sender — Reconciliation report": {"user_key": "SENDER_EMAIL",
-                           "pass_key": "SENDER_PASSWORD",
+                          "SMTP sender — Reconciliation report": {"user_key": "PROBABLE_SENDER_EMAIL",
+                           "pass_key": "PROBABLE_SENDER_PASSWORD",
                            "note": "same kartavya account CTCL/MS15 send reports from"},
                           "SMTP sender — Alerts (zone/branch/region emails)":
                            {"user_key": "PROBABLE_ALERTS_SMTP_EMAIL", "pass_key": "PROBABLE_ALERTS_SMTP_PASSWORD",
@@ -1177,7 +1183,7 @@ def stream_pipeline(key, run_no=None, extra_env=None, by=None, ip=None, force=Fa
             else:
                 code = f"from {p['module']} import {p['func']} as _f; _f()"
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
-                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO,
+                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO, "RMS_PIPE": str(key),
                    **({"PD_RUN_BY": str(_by)} if key in ("physdel", "physdelfile") else {}), **(extra_env or {})}
             saw_fail = False; last_exc = ""; recovered_after_fail = False; retry_signaled = False
             with open(logp, "w", encoding="utf-8", errors="replace") as lf:
@@ -1308,7 +1314,7 @@ def _stream_code(code, logdir_key, logname_prefix):
         _outcome = "error"
         try:
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
-                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO}
+                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO, "RMS_PIPE": str(logdir_key)}
             saw_fail = False; recovered_after_fail = False; retry_signaled = False
             _started_dt = datetime.datetime.now()
             _by, _ip = _log_identity(lock_key=lock_key)
@@ -1407,7 +1413,7 @@ def _stream_code_act(code, pipe, action, logname_prefix):
     def worker():
         try:
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
-                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO}
+                   "PYTHONUNBUFFERED": "1", "PYTHONPATH": REPO, "RMS_PIPE": str(pipe)}
             saw_fail = False; recovered_after_fail = False; retry_signaled = False
             _started_dt = datetime.datetime.now()
             _by, _ip = _log_identity()
@@ -1856,7 +1862,13 @@ def pb_get_config(pipe):
             creds[lbl] = {"single_key": c["single_key"], "value": _pb_mask(_v) if c.get("secret") else _v,
                            "secret": bool(c.get("secret")), "note": c.get("note", "")}
         else:
-            creds[lbl] = {"user": g(c["user_key"], ""), "pass": _pb_mask(g(c["pass_key"], "")),
+            _eff = None
+            try:
+                from core import sender_override as _so
+                _eff = _so.display_values(c["user_key"], c["pass_key"])
+            except Exception:
+                pass
+            creds[lbl] = {"user": _eff[0] if _eff else g(c["user_key"], ""), "pass": _pb_mask(_eff[1] if _eff else g(c["pass_key"], "")),
                           "user_key": c["user_key"], "pass_key": c["pass_key"], "note": c.get("note", "")}
     return {"emails": emails, "creds": creds}
 

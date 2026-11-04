@@ -837,7 +837,8 @@ def patch_script(proc, src, dest):
     txt = re.sub(r"^(\s*)(CC_LIST|cc_emails)\s*=\s*\[[^\]]*\]",
                  lambda m: f"{m.group(1)}{m.group(2)} = {_pylit(cc)}", txt, flags=re.M)
     # 4) sender login (only when set in Credentials; otherwise the script's own stays)
-    se, sp = os.getenv("SENDER_EMAIL", "").strip(), os.getenv("SENDER_PASSWORD", "")
+    from core.sender_override import sender as _rms_sender        # this process's own sender (Credentials), else the shared one
+    se, sp = _rms_sender()
     if se and sp:
         txt = re.sub(r"^(\s*)(SMTP_USER|sender_email)\s*=\s*([\"']).*?\3",
                      lambda m: f"{m.group(1)}{m.group(2)} = {_pylit(se)}", txt, flags=re.M)

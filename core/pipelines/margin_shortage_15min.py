@@ -1807,8 +1807,8 @@ def _run_margin_shortage_15min_impl():
     # =====================================================
     SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
     SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-    SMTP_EMAIL = os.getenv("SENDER_EMAIL")
-    SMTP_PASSWORD = os.getenv("SENDER_PASSWORD")
+    from core.sender_override import sender as _rms_sender        # this process's own sender (Credentials), else the shared one
+    SMTP_EMAIL, SMTP_PASSWORD = _rms_sender()
 
     def send_email(subject, body, to_list, cc_list, attachment, label="Email"):
         # `label` names WHICH of the five emails this is (main summary, or one of

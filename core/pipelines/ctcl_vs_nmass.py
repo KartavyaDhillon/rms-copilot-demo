@@ -952,8 +952,8 @@ def _run_ctcl_vs_nmass_impl(run_number_override=None):
     # SMTP from .env
     SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
     SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-    SMTP_EMAIL = os.getenv("SENDER_EMAIL")
-    SMTP_PASSWORD = os.getenv("SENDER_PASSWORD")
+    from core.sender_override import sender as _rms_sender        # this process's own sender (Credentials), else the shared one
+    SMTP_EMAIL, SMTP_PASSWORD = _rms_sender()
 
     def send_email_with_retry(subject, body, to_list, cc_list, attachment_path, label=""):
         from email.message import EmailMessage

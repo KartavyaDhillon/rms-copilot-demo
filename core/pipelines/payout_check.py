@@ -71,8 +71,8 @@ def _run_payout_check_impl(_preloaded_update=None):
 
     SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
     SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
-    SMTP_EMAIL = os.getenv("SENDER_EMAIL")
-    SMTP_PASSWORD = os.getenv("SENDER_PASSWORD")
+    from core.sender_override import sender as _rms_sender        # the calling process's own sender, else the shared one
+    SMTP_EMAIL, SMTP_PASSWORD = _rms_sender()
     TO_EMAILS = _emails("PAYOUT_CHECK_TO") or ["rms_del@mastertrust.co.in"]
     CC_EMAILS = _emails("PAYOUT_CHECK_CC")
 

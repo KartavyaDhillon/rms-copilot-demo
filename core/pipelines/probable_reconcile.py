@@ -372,8 +372,8 @@ def _send_email_with_retry(base_folder, today_ddmmyyyy, today_str_prev, attachme
                             safe_test=False):
     smtp_server = os.getenv("SMTP_SERVER", "smtp3.netcore.co.in")
     smtp_port   = int(os.getenv("SMTP_PORT", "587"))
-    smtp_email  = os.getenv("SENDER_EMAIL", "")
-    smtp_pass   = os.getenv("SENDER_PASSWORD", "")
+    from core.sender_override import sender as _rms_sender        # this process's own sender (Credentials), else the shared one
+    smtp_email, smtp_pass = _rms_sender()
     if safe_test:
         # Safe test: one destination, no CC. See the SAFE TEST block in
         # core/pipelines/probable_alerts.py — same switch, same reasoning.
