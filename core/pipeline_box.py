@@ -288,6 +288,7 @@ PIPELINES = {
                         "note": "sends the dashboard image. Leave blank to use the shared WA_AUTH_TOKEN."},
                        "WhatsApp numbers": {"single_key": "MTFIC_WA_NUMBERS",
                         "note": "10-digit numbers only (+91 is added automatically), optionally with a name after #, comma separated. Example: 9876543210#Rahul, 9123456789#Priya. Blank = nothing is sent."}},
+              "dynamic_base": "core.pipelines.mtf_impact_cost:base_dir",   # the run's own folder rule (MTF_IMPACT_FOLDER, else next to COMMON FILES)
               "upload_dir_env": "MTF_IMPACT_FOLDER", "upload_default": os.path.join(REPO, "data", "SECURITY CAT IMPACT COST"),
               "backup_root_env": "MTF_IMPACT_FOLDER", "backup_subdir": "Backup",
               "file_types": [
@@ -1718,7 +1719,7 @@ def _read_counter(p):
     still fails the last good value of today is returned. Only a file that stays missing with no value earlier today (or one dated another
     day) counts as 0."""
     import time as _t
-    base = os.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))
+    base = _pb_dyn(p, os.getenv(p.get("state_dir_env", ""), p.get("state_default", "")))
     fp = os.path.join(base, p.get("state_file", "run_counter.txt"))
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     for _attempt in range(4):
@@ -1739,7 +1740,7 @@ def _read_counter(p):
     return last[1] if last and last[0] == today else 0
 
 def _overrides_path(p):
-    base = os.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))
+    base = _pb_dyn(p, os.getenv(p.get("state_dir_env", ""), p.get("state_default", "")))
     return os.path.join(base, "run_overrides.json")
 
 def _read_overrides(p):
@@ -2422,7 +2423,7 @@ def pb_upload(pipe, items, target="main", password=""):
                 "label": p.get("common_label", "COMMON FILES"),
                 "examples": [x for x in spec["examples"] if x.lower().startswith("risk_report")] or spec["examples"]}
     else:
-        dest = os.getenv(p.get("upload_dir_env", ""), p.get("upload_default", ""))
+        dest = _pb_dyn(p, os.getenv(p.get("upload_dir_env", ""), p.get("upload_default", "")))
         # RISK_REPORT belongs in the common folder — reject it here so it can't
         # land in the wrong place.
         globs = [g for g in spec["globs"] if g.lower() not in common_globs]
@@ -2512,6 +2513,20 @@ def pb_upload(pipe, items, target="main", password=""):
             "rejected": rejected, "valid": spec["examples"], "dest_is_fallback": dest_is_fallback,
             "password_required": password_required}
 
+def _pb_dyn(p, base):
+    """A pipeline may name the function that knows its real base folder ('module:function'); it wins over the static
+    default, so the Backup / Upload windows look in the same folder the run writes to."""
+    spec = p.get("dynamic_base")
+    if spec:
+        try:
+            mod, fn = spec.split(":")
+            import importlib
+            return str(getattr(importlib.import_module(mod), fn)())
+        except Exception:
+            pass
+    return base
+
+
 def pb_backup_types(pipe):
     pp = PIPELINES.get(pipe, {})
     # "backup_types" (when a pipe has it) is what the Backup files window can show; "file_types" is what may be UPLOADED.
@@ -2519,7 +2534,7 @@ def pb_backup_types(pipe):
 
 def _pb_backup_roots(pipe):
     p = PIPELINES.get(pipe, {})
-    base = os.getenv(p.get("backup_root_env", ""), p.get("upload_default", ""))
+    base = _pb_dyn(p, os.getenv(p.get("backup_root_env", ""), p.get("upload_default", "")))
     return [os.path.join(base, p.get("backup_subdir", "BACKUPFILES AUTOMATED"))]
 
 def _pb_cli_env_window(env_key, default):
