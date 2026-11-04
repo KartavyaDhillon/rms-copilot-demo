@@ -103,6 +103,11 @@ class Lib(unittest.TestCase):
         for b, want in zip(state["batches"], ({"M1"}, {"M2", "M3"})):
             self.assertEqual(set(b["replies"]["anuj.joshi@mastertrust.co.in"]["rows"]), want)
 
+    def test_jagesh_client_column_is_paired(self):
+        self.assertEqual(L.pick_cell({"S/F amount": "11.21", "Client": "6NBB2189"}, "Jagesh"), "6NBB2189 - 11.21")
+        self.assertEqual(L.pick_cell({"S/F amount": "0", "Client": ""}, "Jagesh"), "0")
+        self.assertEqual(L.parse_jagesh("6NBB2189 - 11.21")[0], [("6NBB2189", Decimal("11.21"))])
+
     def test_shortfall_rule(self):
         self.assertEqual(L.shortfall_of(Decimal("-16.71")), Decimal("16.71"))
         self.assertEqual(L.shortfall_of(Decimal("25.93")), Decimal(0))

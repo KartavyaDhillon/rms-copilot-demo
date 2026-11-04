@@ -1307,7 +1307,14 @@ def pick_cell(cols: dict, role: str):
         hit = other if len(other) == 1 else {}
     if not hit:
         return None
-    return " ".join(str(v).strip() for v in hit.values() if v and str(v).strip())
+    text = " ".join(str(v).strip() for v in hit.values() if v and str(v).strip())
+    if role == "Jagesh" and text and not CODE_RE.search(text):
+        # He added a separate 'client' / 'a/c' column next to the amount: the pair is 'CODE - amount'
+        codes = [str(v).strip() for h, v in plain.items()
+                 if h not in hit and any(x in norm(h) for x in ("client", "account", "acct", "ucc", "code")) and v and CODE_RE.fullmatch(str(v).strip())]
+        if len(codes) == 1:
+            return f"{codes[0].upper()} - {text}"
+    return text
 
 
 def parse_manohar(text: str) -> tuple[list, str]:

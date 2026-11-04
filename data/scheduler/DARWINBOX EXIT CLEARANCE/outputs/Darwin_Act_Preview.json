@@ -1,0 +1,171 @@
+[
+  {
+    "emp_id": "M0214647",
+    "name": "Neelapala Kondababu",
+    "status": "SUBMITTED",
+    "url": "https://mastertrust.darwinbox.in/separation/CompleteAction",
+    "fields": [
+      {
+        "name": "pbqBeYWPUn",
+        "value": "<csrf token>"
+      },
+      {
+        "name": "phase_id",
+        "value": "a6941526cf3ce4"
+      },
+      {
+        "name": "task_type",
+        "value": "separation_task"
+      },
+      {
+        "name": "task_type_approval",
+        "value": "true"
+      },
+      {
+        "name": "SeprationEmployeeWorkFLow[id]",
+        "value": "a6ad5e799eee49113875226"
+      },
+      {
+        "name": "FormFramework[id]",
+        "value": "a6878e79293677"
+      },
+      {
+        "name": "isNewForm",
+        "value": "true"
+      },
+      {
+        "name": "NewFormInput",
+        "value": "{\"f1\":{\"answer\":[1],\"numericValue\":null,\"comment\":null,\"otherValue\":null,\"type\":\"choices\",\"uploadedFiles\":[],\"hidden\":false,\"order\":0,\"smartTag\":null,\"isMandatory\":true},\"f2\":{\"answer\":[1],\"numericValue\":null,\"comment\":null,\"otherValue\":null,\"type\":\"choices\",\"uploadedFiles\":[],\"hidden\":false,\"order\":1,\"isMandatory\":true},\"f3\":{\"answer\":[0],\"numericValue\":null,\"comment\":null,\"otherValue\":null,\"type\":\"choices\",\"uploadedFiles\":[],\"hidden\":false,\"order\":2,\"isMandatory\":true},\"f4\":{\"answer\":\"0\",\"comment\":null,\"type\":\"text-box\",\"defaultValue\":null,\"hidden\":false,\"order\":3,\"isMandatory\":true},\"f5\":{\"answer\":\"0\",\"comment\":null,\"type\":\"text-box\",\"defaultValue\":null,\"hidden\":false,\"order\":4,\"isMandatory\":true},\"f6\":{\"answer\":\"0\",\"comment\":null,\"type\":\"text-box\",\"defaultValue\":null,\"hidden\":false,\"order\":5,\"isMandatory\":true},\"f7\":{\"answer\":\"Trading A/c - NA as received from Manohar, S/F amount NA as received from Jagesh, Terminal Id Is Not Allotted as received from Anuj\",\"comment\":null,\"type\":\"text-box\",\"defaultValue\":null,\"hidden\":false,\"order\":6,\"smartTag\":null,\"isMandatory\":true},\"f8\":{\"answer\":\"LBRPK3273J\",\"comment\":null,\"label\":\"PAN\",\"fieldType\":\"textfield\",\"validations\":\"pan\",\"regex\":null,\"section\":\"personal_identity\",\"mandatory\":false,\"type\":\"system-attributes\",\"fieldName\":\"bank_pan_num\",\"isEditable\":false,\"updateInProfile\":false,\"is_separation_field\":false,\"defaultValue\":null,\"isCustom\":false,\"hidden\":false,\"order\":7,\"smartTag\":null,\"isMandatory\":false},\"allSmartTags\":{\"answer\":[],\"hidden\":true,\"type\":\"smart_tags\"}}"
+      },
+      {
+        "name": "formUniqueId",
+        "value": "ms-separation-form"
+      },
+      {
+        "name": "NewFormInputValid",
+        "value": "true"
+      },
+      {
+        "name": "NewFormCriticality",
+        "value": ""
+      },
+      {
+        "name": "NewFormSkipStep",
+        "value": ""
+      },
+      {
+        "name": "NewFormDecodeInCMSInput",
+        "value": "1"
+      },
+      {
+        "name": "AddAttachmentWorkFlow[name]",
+        "value": ""
+      }
+    ],
+    "NewFormInput": {
+      "f1": {
+        "answer": [
+          1
+        ],
+        "numericValue": null,
+        "comment": null,
+        "otherValue": null,
+        "type": "choices",
+        "uploadedFiles": [],
+        "hidden": false,
+        "order": 0,
+        "smartTag": null,
+        "isMandatory": true
+      },
+      "f2": {
+        "answer": [
+          1
+        ],
+        "numericValue": null,
+        "comment": null,
+        "otherValue": null,
+        "type": "choices",
+        "uploadedFiles": [],
+        "hidden": false,
+        "order": 1,
+        "isMandatory": true
+      },
+      "f3": {
+        "answer": [
+          0
+        ],
+        "numericValue": null,
+        "comment": null,
+        "otherValue": null,
+        "type": "choices",
+        "uploadedFiles": [],
+        "hidden": false,
+        "order": 2,
+        "isMandatory": true
+      },
+      "f4": {
+        "answer": "0",
+        "comment": null,
+        "type": "text-box",
+        "defaultValue": null,
+        "hidden": false,
+        "order": 3,
+        "isMandatory": true
+      },
+      "f5": {
+        "answer": "0",
+        "comment": null,
+        "type": "text-box",
+        "defaultValue": null,
+        "hidden": false,
+        "order": 4,
+        "isMandatory": true
+      },
+      "f6": {
+        "answer": "0",
+        "comment": null,
+        "type": "text-box",
+        "defaultValue": null,
+        "hidden": false,
+        "order": 5,
+        "isMandatory": true
+      },
+      "f7": {
+        "answer": "Trading A/c - NA as received from Manohar, S/F amount NA as received from Jagesh, Terminal Id Is Not Allotted as received from Anuj",
+        "comment": null,
+        "type": "text-box",
+        "defaultValue": null,
+        "hidden": false,
+        "order": 6,
+        "smartTag": null,
+        "isMandatory": true
+      },
+      "f8": {
+        "answer": "LBRPK3273J",
+        "comment": null,
+        "label": "PAN",
+        "fieldType": "textfield",
+        "validations": "pan",
+        "regex": null,
+        "section": "personal_identity",
+        "mandatory": false,
+        "type": "system-attributes",
+        "fieldName": "bank_pan_num",
+        "isEditable": false,
+        "updateInProfile": false,
+        "is_separation_field": false,
+        "defaultValue": null,
+        "isCustom": false,
+        "hidden": false,
+        "order": 7,
+        "smartTag": null,
+        "isMandatory": false
+      },
+      "allSmartTags": {
+        "answer": [],
+        "hidden": true,
+        "type": "smart_tags"
+      }
+    }
+  }
+]
