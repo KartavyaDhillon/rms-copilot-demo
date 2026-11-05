@@ -408,11 +408,18 @@
     if (b.mode === 'files') body.files = p.map(function (f) { return f.rel; });
     if (go) { go.disabled = true; go.innerHTML = '<span class="f7-spin"></span>Making the zip…'; }
     fetch(API + '/files70/zip', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      .then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'No files for that choice.' : 'Server answered ' + r.status); return r.blob(); })
-      .then(function (blob) {
-        var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '76_FILES_' + dmy(b.date) + '.zip';
-        document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
-        if (m) m.innerHTML = '<span style="color:var(--green)">✓ Zip downloaded (' + p.length + ' files).</span>';
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.status === 404 ? 'No files for that choice.' : 'Server answered ' + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        // a normal browser download: streamed to disk by the browser, nothing big is held in the page's memory
+        var a = document.createElement('a');
+        a.href = API + '/files70/zip/' + encodeURIComponent(j.id) + '?name=' + encodeURIComponent(j.name);
+        a.download = j.name;
+        document.body.appendChild(a); a.click(); setTimeout(function () { a.remove(); }, 4000);
+        var mb = j.size ? ' · ' + (j.size / 1048576).toFixed(1) + ' MB' : '';
+        if (m) m.innerHTML = '<span style="color:var(--green)">✓ Zip ready - downloading (' + p.length + ' files' + mb + ').</span>';
       })
       .catch(function (e) { if (m) m.innerHTML = '<span style="color:var(--red)">' + esc(e.message || e) + '</span>'; })
       .then(function () { f7BkPaint(); });

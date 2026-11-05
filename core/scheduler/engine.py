@@ -47,6 +47,9 @@ class BusyError(Exception):
     pass
 
 
+LIVE: dict = {}          # execution id -> ExecContext of the runs going on right now (live log for the UI)
+
+
 class ExecContext:
     """Handed to every process run function."""
 
@@ -253,6 +256,7 @@ class SchedulerEngine:
 
     def _execute(self, eid: str, s: dict, pdef, trigger: str, attempt: int):
         ctx = ExecContext(eid, s, trigger)
+        LIVE[eid] = ctx                                     # the Execution details window reads the log while it runs
         status, etype, emsg = "SUCCESS", "", ""
         from core.scheduler import connections as _conns
         _tok = _conns.set_process(pdef.key)                 # lets this process use its OWN copy of a connection (own sender ...)
@@ -275,6 +279,8 @@ class SchedulerEngine:
             store.finish_execution(eid, status, end, etype, emsg, ctx.text())
         except Exception as e:
             print(f"[scheduler] could not store result of {eid}: {e}", flush=True)
+        finally:
+            LIVE.pop(eid, None)
         if status == "FAILED":
             retry_scheduled = False
             try:

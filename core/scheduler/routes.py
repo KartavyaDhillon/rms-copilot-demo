@@ -198,6 +198,9 @@ def execution_one(eid: str, request: Request):
     r = store.get_execution(eid)
     if not r:
         return _deny("Execution not found.", 404)
+    live = engine.LIVE.get(eid)
+    if live is not None and not r.get("log_text"):
+        r = dict(r, log_text=live.text())          # still running: show what it has done so far
     return service.execution_view(r)
 
 

@@ -157,6 +157,42 @@ def build_zip(zip_path: Path, files: List[Path], ctx) -> int:
     return len(files)
 
 
+_TRUST = {"done": False, "how": ""}
+
+
+def _requests_with_windows_certs(ctx=None):
+    """service.mastertrust.co.in uses a certificate that Python's own list does not know, but Windows does (the old
+    scripts worked on PCs with pip-system-certs). Use the Windows certificate store: truststore (pip install truststore)
+    or pip-system-certs, whichever is installed. -> the requests module."""
+    requests = H.need("requests")
+    if not _TRUST["done"]:
+        _TRUST["done"] = True
+        try:
+            import truststore
+            truststore.inject_into_ssl()
+            _TRUST["how"] = "truststore"
+        except Exception:
+            try:
+                import pip_system_certs.wrapt_requests  # noqa: F401
+                _TRUST["how"] = "pip-system-certs"
+            except Exception:
+                _TRUST["how"] = ""
+        if ctx is not None:
+            ctx.log("Upload API: using the Windows certificate store (" + _TRUST["how"] + ")." if _TRUST["how"] else
+                    "Upload API: neither truststore nor pip-system-certs is installed - Python's own certificate list is used.")
+    return requests
+
+
+def _is_cert_error(e) -> bool:
+    m = str(e)
+    return "CERTIFICATE_VERIFY_FAILED" in m or "certificate verify failed" in m
+
+
+def _cert_help() -> str:
+    return ("the upload server's SSL certificate is not trusted by this Python. Fix once on the console PC: "
+            "open a terminal in the console's Python and run  pip install truststore  then restart the console.")
+
+
 class _UploadAuth:
     def __init__(self, folder: str, ctx):
         c = connections.require("upload_api", "base_url", "user_id", "password")
@@ -175,7 +211,7 @@ class _UploadAuth:
     def get(self, force: bool = False) -> str:
         if not force and self.token and self.exp and dt.datetime.now() < self.exp - dt.timedelta(minutes=5):
             return self.token
-        requests = H.need("requests")
+        requests = _requests_with_windows_certs(self.ctx)
         last = ""
         for n in range(1, 11):
             if getattr(self.ctx, "cancelled", False):
@@ -202,6 +238,8 @@ class _UploadAuth:
             except RuntimeError:
                 raise
             except Exception as e:
+                if _is_cert_error(e):
+                    raise RuntimeError("Upload API: " + _cert_help())        # retrying cannot fix a certificate
                 last = f"{type(e).__name__}: {e}"
             self.ctx.log(f"Upload API login try {n}/10 failed ({last}) - again in 5 s.")
             time.sleep(5)
@@ -210,7 +248,7 @@ class _UploadAuth:
 
 def upload(folder: str, zip_path: Path, template_name: str, d: dt.date, ctx) -> str:
     """POST customFileImport (file = the zip, fileName = the literal template, date = DD-MM-YYYY). -> the answer text."""
-    requests = H.need("requests")
+    requests = _requests_with_windows_certs(ctx)
     auth = _UploadAuth(folder, ctx)
     force, last = False, ""
     for n in range(1, 9):
@@ -224,6 +262,8 @@ def upload(folder: str, zip_path: Path, template_name: str, d: dt.date, ctx) -> 
                                   files={"file": (zip_path.name, fh, "application/zip")},
                                   data={"fileName": template_name, "date": f"{d:%d-%m-%Y}"}, timeout=180)
         except Exception as e:
+            if _is_cert_error(e):
+                raise RuntimeError("Upload API: " + _cert_help())
             last = f"{type(e).__name__}: {e}"
             ctx.log(f"Upload try {n}/8: {last} - again in 10 s.")
             time.sleep(10)
@@ -295,6 +335,9 @@ def run_dates(folder: str, params, ctx, one_day: Callable[[dt.date, Path], List[
         except Exception as e:
             failed.append((d, f"{type(e).__name__}: {e}"))
             ctx.log(f"✗ {d:%d-%m-%Y} NOT uploaded - {type(e).__name__}: {e}")
+            if str(e).startswith("Upload API"):           # the upload itself is broken: the other days would fail the same way
+                ctx.log("The upload API cannot be used right now - the remaining days are left for the next run.")
+                break
     summary = (f"uploaded: {', '.join(f'{d:%d-%m-%Y}' for d in done) or 'none'}")
     if failed:
         raise RuntimeError(summary + " | NOT uploaded: " + "; ".join(f"{d:%d-%m-%Y} ({m[:140]})" for d, m in failed))

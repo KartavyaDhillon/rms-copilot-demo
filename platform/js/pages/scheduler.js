@@ -606,6 +606,20 @@
         (r.error_type ? row("Error", "<span style='color:var(--err)'>" + esc(r.error_type) + ": " + esc(r.error_msg || "") + "</span>") : (r.error_msg ? row("Note", esc(r.error_msg)) : "")) +
         '<div class="card-sub" style="margin:10px 0 4px;font-weight:800">LOG</div><pre class="logview" style="max-height:340px;overflow:auto;white-space:pre-wrap;font-size:11.5px">' +
         (r.log_text ? RMS.colorizeLog(r.log_text) : "(no log text)") + "</pre>", { width: 760 });
+      // still running: refresh the log every 3 s while the window is open (the run writes it as it goes)
+      if (r.status === "RUNNING") {
+        const pre = document.querySelector(".logview:last-of-type");
+        const tick = setInterval(async () => {
+          if (!pre || !document.body.contains(pre)) { clearInterval(tick); return; }
+          try {
+            const n = await jget("/sched/executions/" + id);
+            const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+            pre.innerHTML = n.log_text ? RMS.colorizeLog(n.log_text) : "(no log text yet)";
+            if (atEnd) pre.scrollTop = pre.scrollHeight;
+            if (n.status !== "RUNNING") clearInterval(tick);
+          } catch (e) { clearInterval(tick); }
+        }, 3000);
+      }
     } catch (e) { toast("err", "Could not open", e.message); }
   }
 

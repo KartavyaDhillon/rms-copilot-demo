@@ -367,7 +367,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
-                            '<script src="/platform/js/process-files70.js?v=4"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
+                            '<script src="/platform/js/process-files70.js?v=5"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
@@ -978,21 +978,41 @@ def f70_file(rel: str, date: str = ""):
 
 @app.post("/files70/zip")
 async def f70_zip(request: Request):
-    """{date, mode: 'full' | 'groups' | 'files', groups: [...], files: [rel, ...]} -> one zip (same layout as on disk)."""
+    """{date, mode: 'full' | 'groups' | 'files', groups: [...], files: [rel, ...]} -> {ok, id, name, size}.
+    The zip is made in a worker thread (zipping hundreds of MB on the event loop froze the whole console for everyone)
+    and is then fetched with GET /files70/zip/{id} as a normal browser download (streamed to disk - the old way read the
+    whole zip into the browser's memory, which failed with 'Failed to fetch' on big days)."""
     from core import files70 as _f7
+    from starlette.concurrency import run_in_threadpool
     body = await request.json()
     d = _f70_date(body.get("date") or "")
     mode = body.get("mode") or "full"
     try:
         if mode == "files":
-            z = _f7.make_zip(d, rels=[str(x) for x in (body.get("files") or [])][:2000] or ["-"])
+            z = await run_in_threadpool(_f7.make_zip, d, None, [str(x) for x in (body.get("files") or [])][:2000] or ["-"])
         elif mode == "groups":
-            z = _f7.make_zip(d, groups=[str(x) for x in (body.get("groups") or [])] or ["-"])
+            z = await run_in_threadpool(_f7.make_zip, d, [str(x) for x in (body.get("groups") or [])] or ["-"])
         else:
-            z = _f7.make_zip(d)
+            z = await run_in_threadpool(_f7.make_zip, d)
     except FileNotFoundError:
         raise HTTPException(404, "no files for that choice")
-    return FileResponse(str(z), filename=f"76_FILES_{_f7.dstr(d)}.zip", media_type="application/zip")
+    if "application/zip" in (request.headers.get("accept") or "").lower():      # an old page still open: send the file itself
+        return FileResponse(str(z), filename=f"76_FILES_{_f7.dstr(d)}.zip", media_type="application/zip")
+    return {"ok": True, "id": z.name, "name": f"76_FILES_{_f7.dstr(d)}.zip", "size": z.stat().st_size}
+
+
+@app.get("/files70/zip/{zid}")
+def f70_zip_get(zid: str, name: str = ""):
+    """The zip made by POST /files70/zip (kept for an hour)."""
+    import re as _re
+    from core import files70 as _f7
+    if not _re.fullmatch(r"70files_[0-9A-Za-z_\-]+\.zip", zid or ""):
+        raise HTTPException(400, "bad id")
+    p = _f7.LOG_DIR / "_zip" / zid
+    if not p.is_file():
+        raise HTTPException(404, "this zip is gone - make it again")
+    nm = name if _re.fullmatch(r"[0-9A-Za-z_\-]+\.zip", name or "") else zid
+    return FileResponse(str(p), filename=nm, media_type="application/zip")
 
 # ── MASTER FILE / SA / EODSAR cards (the hand-run scripts of a trading day; see core/daycards.py) ──────────────────
 def _dc(card: str):
