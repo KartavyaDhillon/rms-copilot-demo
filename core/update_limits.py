@@ -511,15 +511,31 @@ def _pick(d1: dt.date, d2: Optional[dt.date], times: Optional[List[str]]) -> Lis
     return rows
 
 
+MAX_CLIENTS = 500
+
+
+def client_list(client: str) -> List[str]:
+    """'7GDW01, 4790 6WBB2040' (comma / space / new line) -> ['7GDW01', '4790', '6WBB2040'] (upper case, no repeats)."""
+    out = []
+    for c in re.split(r"[,;\s]+", str(client or "").upper()):
+        c = c.strip()
+        if c and c not in out:
+            out.append(c)
+    if not out:
+        raise ValueError("type a client code")
+    if len(out) > MAX_CLIENTS:
+        raise ValueError(f"at most {MAX_CLIENTS} client codes at a time (got {len(out)})")
+    return out
+
+
 def _client_frame(client: str, rows: List[dict]):
     import polars as pl
-    q = str(client or "").strip().upper()
-    if not q:
-        raise ValueError("type a client code")
-    qz = q.lstrip("0")
-    cond = pl.col(KEY).str.to_uppercase() == q
+    qs = client_list(client)
+    qz = [q.lstrip("0") for q in qs if q.lstrip("0")]
+    up = pl.col(KEY).str.to_uppercase()
+    cond = up.is_in(qs)
     if qz:                                    # 080011226 and 80011226 are the same client
-        cond = cond | (pl.col(KEY).str.to_uppercase().str.strip_chars_start("0") == qz)
+        cond = cond | up.str.strip_chars_start("0").is_in(qz)
 
     def one(e):
         p = data_dir() / e["parquet"]
@@ -530,7 +546,7 @@ def _client_frame(client: str, rows: List[dict]):
         parts = [x for x in ex.map(one, rows) if x is not None and x.height]
     if not parts:
         return None
-    return pl.concat(parts, how="diagonal_relaxed").sort(["TRADE_DATE", "SNAP_TIME"])
+    return pl.concat(parts, how="diagonal_relaxed").sort(["TRADE_DATE", "SNAP_TIME", KEY])
 
 
 def _jv(v):
@@ -548,17 +564,22 @@ def search(client: str, d1: dt.date, d2: Optional[dt.date] = None, times: Option
         return {"ok": True, "client": client, "snapshots": 0, "rows": [], "columns": [], "ms": 0,
                 "note": "nothing stored for this date - use Store today now, Load history or Upload"}
     df = _client_frame(client, rows)
+    qs = client_list(client)
     if df is None:
-        return {"ok": True, "client": client, "snapshots": len(rows), "rows": [], "columns": [],
-                "ms": int((time.time() - t0) * 1000), "note": f"client {client} is not in the {len(rows)} snapshot(s) of these dates"}
+        return {"ok": True, "client": client, "clients": qs, "missing": qs, "snapshots": len(rows), "rows": [], "columns": [],
+                "ms": int((time.time() - t0) * 1000),
+                "note": f"{'client ' + qs[0] + ' is' if len(qs) == 1 else 'none of the ' + str(len(qs)) + ' clients is'} in the {len(rows)} snapshot(s) of these dates"}
+    have = {str(x).upper() for x in df[KEY].to_list()}
+    havez = {h.lstrip("0") for h in have}
+    missing = [q for q in qs if q not in have and q.lstrip("0") not in havez]
     cols = [c for c in df.columns if c not in EXTRA]
     order = [KEY] + [c for c in KEY_FIELDS if c in cols] + [c for c in cols if c != KEY and c not in KEY_FIELDS]
     out = []
     for r in df.iter_rows(named=True):
         out.append({"date": r["TRADE_DATE"].isoformat() if r["TRADE_DATE"] else "", "time": r["SNAP_TIME"], "source": r["SOURCE"],
                     "data": {c: _jv(r.get(c)) for c in order}})
-    return {"ok": True, "client": client, "snapshots": len(rows), "rows": out, "columns": order,
-            "ms": int((time.time() - t0) * 1000)}
+    return {"ok": True, "client": client, "clients": qs, "missing": missing, "snapshots": len(rows), "rows": out,
+            "columns": order, "ms": int((time.time() - t0) * 1000)}
 
 
 def client_excel(client: str, d1: dt.date, d2: Optional[dt.date] = None, times: Optional[List[str]] = None) -> Path:
@@ -571,7 +592,8 @@ def client_excel(client: str, d1: dt.date, d2: Optional[dt.date] = None, times: 
     tmp = data_dir() / "tmp"
     tmp.mkdir(exist_ok=True)
     _clean_tmp(tmp)
-    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", client.strip())[:30]
+    qs = client_list(client)
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", qs[0])[:30] if len(qs) == 1 else f"{len(qs)}_CLIENTS"
     out = tmp / f"UPDATE_LIMITS_{safe}_{d1:%d%m%Y}{'_' + (d2 or d1).strftime('%d%m%Y') if d2 and d2 != d1 else ''}_{int(time.time())}.xlsx"
     df.write_excel(out, worksheet="Update Limits", autofit=False, freeze_panes=(1, 3))
     return out

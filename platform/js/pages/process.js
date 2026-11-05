@@ -58,7 +58,24 @@
   };
 
   /* ── TCS BANCS status chip: free / in use (who, how long) / clash, plus who is next. Read-only: /ops/tcs-status ── */
-  let tcsLast = null, tcsTimer = null;
+  let tcsLast = null, tcsTimer = null, tcsTick = null;
+  const tcsStart = {};            // holder name -> start time (ms) worked out from elapsed_s, so the chip counts every second
+  function tcsLive(h) {
+    if (!h || h.elapsed_s == null) return null;
+    const st = tcsStart[h.name];
+    return st ? Math.max(0, Math.floor((Date.now() - st) / 1000)) : h.elapsed_s;
+  }
+  function tcsNoteStarts(d) {
+    const now = Date.now(), seen = {};
+    ((d && d.holders) || []).forEach((h) => {
+      if (h.elapsed_s == null) return;
+      seen[h.name] = 1;
+      const st = now - h.elapsed_s * 1000, old = tcsStart[h.name];
+      // keep the earlier start when it is the same run (the server answer can be ~2 s old) - the clock never steps back
+      tcsStart[h.name] = old && Math.abs(old - st) < 10000 ? Math.min(old, st) : st;
+    });
+    Object.keys(tcsStart).forEach((k) => { if (!seen[k]) delete tcsStart[k]; });
+  }
   const tcsMin = (s) => (s == null ? "" : Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"));
   function tcsWhenText(n) {
     if (!n) return "nothing scheduled today";
@@ -73,7 +90,7 @@
       el.innerHTML = "<span>free</span>";
     } else if (d.state === "busy") {
       const h = d.holders[0];
-      el.innerHTML = "<span>in use: " + esc(h.name) + (h.elapsed_s != null ? " \u00b7 " + tcsMin(h.elapsed_s) : "") + "</span>";
+      el.innerHTML = "<span>in use: " + esc(h.name) + (h.elapsed_s != null ? " \u00b7 " + tcsMin(tcsLive(h)) : "") + "</span>";
     } else {
       el.innerHTML = "<span>" + d.holders.length + " at once \u2014 clash</span>";
     }
@@ -81,6 +98,7 @@
   async function tcsRefresh() {
     if (document.hidden) return;
     try { tcsLast = await (await fetch("/ops/tcs-status", { credentials: "same-origin" })).json(); } catch (e) { return; }
+    tcsNoteStarts(tcsLast);
     tcsPaint();
   }
   function tcsDetailHtml() {
@@ -89,7 +107,7 @@
     let h = '<div style="font-size:13px;line-height:1.6"><div style="margin-bottom:10px">Status: <b style="color:' + badge[0] + '">' + badge[1] + "</b></div>";
     if (d.holders && d.holders.length) {
       h += '<div style="margin-bottom:6px;opacity:.7">Using the login now</div>';
-      d.holders.forEach((x) => { h += '<div style="padding:6px 10px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:6px"><b>' + esc(x.name) + "</b><br><span style=\"opacity:.75\">started " + esc(x.since || "?") + (x.elapsed_s != null ? " \u00b7 running " + tcsMin(x.elapsed_s) : "") + "</span></div>"; });
+      d.holders.forEach((x) => { h += '<div style="padding:6px 10px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:6px"><b>' + esc(x.name) + "</b><br><span style=\"opacity:.75\">started " + esc(x.since || "?") + (x.elapsed_s != null ? " \u00b7 running " + tcsMin(tcsLive(x)) : "") + "</span></div>"; });
       if (d.state === "clash") h += '<div style="color:#f87171;margin:6px 0">Two processes are logged in together. The second login can kick the first one out of its download. Wait for one to finish, or stop one.</div>';
     } else {
       h += '<div style="margin-bottom:6px">Nobody is using it. <b>Next:</b> ' + esc(tcsWhenText(d.next)) + "</div>";
@@ -111,6 +129,7 @@
     b.onclick = async () => { await tcsRefresh(); RMS.modal("TCS BANCS login (MCX eclear)", tcsDetailHtml(), { width: 520, icon: "plug" }); };
     tcsRefresh();
     if (!tcsTimer) tcsTimer = setInterval(tcsRefresh, 5000);
+    if (!tcsTick) tcsTick = setInterval(() => { if (!document.hidden && tcsLast && tcsLast.state === "busy") tcsPaint(); }, 1000);   // stopwatch: +1 s every second
     const fr = $("#pcFrame");
     const hook = () => {
       try {

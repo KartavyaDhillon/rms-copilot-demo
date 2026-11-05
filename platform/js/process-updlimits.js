@@ -8,7 +8,7 @@
   if (window.__ulInjected) return;
   window.__ulInjected = true;
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
-  var ST = { data: null, timer: null, date: '', to: '', client: '', times: {}, day: [], res: null, filter: '', hideZero: true, upl: [], view: 'main', jobSig: '' };
+  var ST = { data: null, timer: null, date: '', to: '', client: '', times: {}, day: [], res: null, filter: '', hideZero: false, dateUser: false, upl: [], view: 'main', jobSig: '' };
   var ACC = '#0ea5e9';
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"']/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -83,7 +83,7 @@
   function ulOpen() {
     ST.view = 'main';
     var d = ST.data || {};
-    if (!ST.date) ST.date = (d.latest && d.latest.date) || isoToday();
+    if (!ST.dateUser) ST.date = (d.latest && d.latest.date) || isoToday();      // the newest stored date until you pick one
     modal('🗄️ UPDATE LIMITS DATA',
       '<div id="ulRoot">' +
       '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 12px">' +
@@ -95,11 +95,12 @@
       '<div id="ulMsg"></div><div id="ulSum" style="font-size:11.5px;color:var(--muted);margin:0 0 10px"></div><div id="ulJob"></div>' +
       '<div class="ul-sec"><div class="ul-h">🔍 Find a client</div>' +
         '<div class="ul-row">' +
-          '<div><div class="dc-lbl">Client code</div><input id="ulClient" class="dc-in" style="width:160px;text-transform:uppercase" placeholder="e.g. 7GDW01" value="' + esc(ST.client) + '" onkeydown="if(event.key===\'Enter\')ulSearch()"></div>' +
+          '<div style="flex:1;min-width:230px"><div class="dc-lbl">Client code(s) - one, or many separated by commas</div><input id="ulClient" class="dc-in" style="width:100%;text-transform:uppercase" placeholder="7GDW01, 4790, 6WBB2040" value="' + esc(ST.client) + '" onkeydown="if(event.key===\'Enter\')ulSearch()" data-tip="Up to 500 codes, separated by commas, spaces or new lines (you can paste a column from Excel)."></div>' +
           '<div><div class="dc-lbl">Date</div><input type="date" id="ulDate" class="dc-in" value="' + esc(ST.date) + '" onchange="ulSetDate(this.value)"></div>' +
           '<div><div class="dc-lbl">To (optional)</div><input type="date" id="ulTo" class="dc-in" value="' + esc(ST.to) + '" onchange="ulSetTo(this.value)"></div>' +
           '<button class="dc-btn" id="ulGo" onclick="ulSearch()">🔍 Search</button>' +
-          '<button class="dc-btn ghost" id="ulXls" onclick="ulClientXlsx()" data-tip="Excel with only this client\'s rows (all columns of the file) for the chosen snapshots.">⬇ Client Excel</button>' +
+          '<button class="dc-btn ghost" id="ulXls" onclick="ulClientXlsx()" data-tip="Excel with only these clients\' rows - ALL columns of the file - for the chosen snapshots.">⬇ Client Excel</button>' +
+          '<button class="dc-btn ghost" id="ulFull" onclick="ulFullFile()" data-tip="The whole Update Limits file of this date: the snapshot you ticked below, else the latest one of the day. The original .xlsx when it is still there, else a CSV (zip).">⬇ Full file</button>' +
         '</div><div id="ulTimes" style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 0"></div>' +
         '<div id="ulRes" style="margin-top:12px"></div></div>' +
       '<div class="ul-sec"><div class="ul-h">📄 Files of <span id="ulDayLbl">' + esc(dmy(ST.date)) + '</span></div><div id="ulDay" style="font-size:12px;color:var(--muted)">Loading…</div></div>' +
@@ -155,7 +156,14 @@
   }
   function paintDay() {
     var el = $('ulDay'); if (!el) return;
-    if (!ST.day.length) { el.innerHTML = 'Nothing stored for this date. Use ⟳ Store today now, 📚 Load history or upload the file below.'; return; }
+    paintFullBtn();
+    if (!ST.day.length) {
+      var near = ((ST.data && ST.data.dates) || []).slice(0, 12);
+      el.innerHTML = 'Nothing stored for this date. Use ⟳ Store today now, 📚 Load history or upload the file below.' +
+        (near.length ? '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="dc-lbl" style="margin:0 4px 0 0">Stored dates</span>' +
+          near.map(function (x) { return '<button class="dc-chip2" onclick="ulSetDate(\'' + x.date + '\')">' + esc(dmy(x.date)) + ' <span style="opacity:.6">(' + x.n + ')</span></button>'; }).join('') + '</div>' : '');
+      return;
+    }
     el.innerHTML = '<div class="ul-wrap" style="max-height:260px"><table class="ul-tbl"><thead><tr><th>Date · time</th><th style="text-align:left">Source</th><th style="text-align:left">Time from</th><th>Clients</th><th>Size</th><th>Full file</th></tr></thead><tbody>' +
       ST.day.slice().reverse().map(function (e) {
         return '<tr><td style="font-family:var(--mono);color:var(--ink)">' + esc(dmy(e.date)) + ' ' + esc(e.time) + '</td><td style="text-align:left">' + esc(e.source) + '</td><td style="text-align:left;color:var(--dim)">' + esc(e.time_src) + '</td>' +
@@ -171,9 +179,31 @@
     el.innerHTML = '<span class="dc-lbl" style="margin:6px 4px 0 0">Snapshots</span><button class="dc-chip2' + (sel.length ? '' : ' on') + '" onclick="ulTime(null)">All (' + ST.day.length + ')</button>' +
       ST.day.map(function (e) { var t = String(e.time).slice(0, 5); return '<button class="dc-chip2' + (ST.times[t] ? ' on' : '') + '" onclick="ulTime(\'' + t + '\')" data-tip="' + esc(e.source + ' · time from ' + e.time_src) + '">' + t + '</button>'; }).join('');
   }
-  window.ulTime = function (t) { if (t === null) ST.times = {}; else ST.times[t] = !ST.times[t]; paintTimes(); if (ST.res) ulSearch(); };
-  window.ulSetDate = function (v) { if (!v) return; ST.date = v; ST.times = {}; loadDay(); if (ST.client) ulSearch(); };
+  window.ulTime = function (t) { if (t === null) ST.times = {}; else ST.times[t] = !ST.times[t]; paintTimes(); paintFullBtn(); if (ST.res) ulSearch(); };
+  window.ulSetDate = function (v) { if (!v) return; ST.date = v; ST.dateUser = true; ST.times = {}; var i = $('ulDate'); if (i && i.value !== v) i.value = v; loadDay(); if (ST.client) ulSearch(); };
   window.ulSetTo = function (v) { ST.to = v || ''; ST.times = {}; loadDay(); if (ST.client) ulSearch(); };
+
+  function fullPick() {
+    if (!ST.day.length || (ST.to && ST.to !== ST.date)) return null;
+    var sel = Object.keys(ST.times).filter(function (k) { return ST.times[k]; });
+    if (sel.length === 1) return ST.day.filter(function (e) { return String(e.time).slice(0, 5) === sel[0]; })[0] || null;
+    return ST.day[ST.day.length - 1];
+  }
+  function paintFullBtn() {
+    var b = $('ulFull'); if (!b) return;
+    var e = fullPick();
+    b.innerHTML = e ? '⬇ Full file (' + esc(dmy(e.date).slice(0, 5)) + ' ' + esc(String(e.time).slice(0, 5)) + ')' : '⬇ Full file';
+    b.style.opacity = e ? '1' : '.5';
+  }
+  window.ulFullFile = function () {
+    if (ST.to && ST.to !== ST.date) { say('Full file is for one date - clear the To date.', 'err'); return; }
+    var e = fullPick();
+    if (!e) { say('Nothing stored for ' + dmy(ST.date) + ' - pick a stored date (see the list below).', 'err'); return; }
+    var a = document.createElement('a');
+    a.href = API + '/ulimits/full?id=' + encodeURIComponent(e.id) + '&fmt=' + (e.orig ? 'orig' : 'csv');
+    a.download = ''; document.body.appendChild(a); a.click(); setTimeout(function () { a.remove(); }, 2000);
+    say('Downloading the full file of ' + dmy(e.date) + ' ' + String(e.time).slice(0, 5) + (e.orig ? ' (original .xlsx)' : ' (CSV in a zip - takes a few seconds to make)') + '.');
+  };
 
   // ───────────────────────── search ─────────────────────────
   function query() {
@@ -190,10 +220,10 @@
   };
   function paintRes() {
     var el = $('ulRes'), r = ST.res; if (!el) return;
-    if (!r) { el.innerHTML = '<div style="font-size:12px;color:var(--dim)">Type a client code and press Search (or Enter). Every snapshot of the day comes side by side; values that changed from the snapshot before are in amber.</div>'; return; }
+    if (!r) { el.innerHTML = '<div style="font-size:12px;color:var(--dim)">Type one client code (or many, separated by commas) and press Search (or Enter). One client: every snapshot of the day side by side. Many clients: one line per client per snapshot. All columns of the file are shown; values that changed from the snapshot before are in amber.</div>'; return; }
     if (r.ok === false || r.error) { el.innerHTML = '<div class="dc-msg" style="color:var(--red)">' + esc(r.error || r.detail || 'Search failed') + '</div>'; return; }
     if (!r.rows || !r.rows.length) { el.innerHTML = '<div class="dc-msg" style="color:var(--amber)">' + esc(r.note || 'Not found.') + '</div>'; return; }
-    var rows = r.rows, first = rows[rows.length - 1].data, multi = rows.some(function (x) { return x.date !== rows[0].date; });
+    var rows = r.rows, multi = rows.some(function (x) { return x.date !== rows[0].date; });
     var f = (ST.filter || '').toLowerCase();
     var cols = r.columns.filter(function (c) {
       if (c === 'Entity') return false;
@@ -201,23 +231,37 @@
       if (ST.hideZero && !f) return rows.some(function (x) { return !zero(x.data[c]); });
       return true;
     });
-    var keys = {}; ['ClientName', 'Profile', 'Cash', 'Collateral(Total)', 'MarginUsed', 'Available Margin', 'Payin', 'Payout', 'Unrealized', 'UnrealizedEqMargin', 'PeakMargin'].forEach(function (k) { keys[k] = 1; });
-    el.innerHTML =
-      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px;font-size:12.5px">' +
-        '<b style="font-family:var(--mono);font-size:14px">' + esc(first.Entity) + '</b><span>' + esc(first.ClientName || '') + '</span><span class="dc-chip">' + esc(first.Profile || '') + '</span>' +
-        '<span style="color:var(--dim)">' + rows.length + ' row' + (rows.length > 1 ? 's' : '') + ' from ' + r.snapshots + ' snapshot' + (r.snapshots > 1 ? 's' : '') + ' · ' + r.ms + ' ms</span>' +
-        '<span style="margin-left:auto;display:flex;gap:10px;align-items:center"><input class="dc-in" style="width:170px" placeholder="Find a column…" value="' + esc(ST.filter) + '" oninput="ulFilter(this.value)">' +
-        '<label style="font-size:11.5px;display:flex;gap:5px;align-items:center"><input type="checkbox" ' + (ST.hideZero ? 'checked' : '') + ' onchange="ulZero(this.checked)"> hide columns that are 0 in every row</label></span></div>' +
-      '<div class="ul-wrap"><table class="ul-tbl"><thead><tr><th>Column</th>' + rows.map(function (x) {
+    var many = (r.clients || []).length > 1;
+    var first = rows[rows.length - 1].data;
+    var head = '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px;font-size:12.5px">' +
+      (many ? '<b>' + (r.clients.length - (r.missing || []).length) + ' of ' + r.clients.length + ' clients found</b>'
+        : '<b style="font-family:var(--mono);font-size:14px">' + esc(first.Entity) + '</b><span>' + esc(first.ClientName || '') + '</span><span class="dc-chip">' + esc(first.Profile || '') + '</span>') +
+      '<span style="color:var(--dim)">' + rows.length + ' row' + (rows.length > 1 ? 's' : '') + ' from ' + r.snapshots + ' snapshot' + (r.snapshots > 1 ? 's' : '') + ' · ' + r.ms + ' ms</span>' +
+      '<span style="margin-left:auto;display:flex;gap:10px;align-items:center"><input class="dc-in" style="width:170px" placeholder="Find a column…" value="' + esc(ST.filter) + '" oninput="ulFilter(this.value)">' +
+      '<label style="font-size:11.5px;display:flex;gap:5px;align-items:center"><input type="checkbox" ' + (ST.hideZero ? 'checked' : '') + ' onchange="ulZero(this.checked)"> hide columns that are 0 in every row</label></span></div>' +
+      ((r.missing || []).length ? '<div class="dc-msg" style="color:var(--amber);margin:0 0 8px">Not in these snapshots: ' + r.missing.map(esc).join(', ') + '</div>' : '');
+    var body;
+    if (!many) {                                           // one client: every snapshot side by side, one line per column
+      body = '<div class="ul-wrap"><table class="ul-tbl"><thead><tr><th>Column</th>' + rows.map(function (x) {
         return '<th data-tip="' + esc(x.source) + '">' + (multi ? esc(dmy(x.date).slice(0, 5)) + ' ' : '') + esc(String(x.time).slice(0, 5)) + '</th>';
       }).join('') + '</tr></thead><tbody>' +
       cols.map(function (c) {
-        return '<tr class="' + (keys[c] ? 'key' : '') + '"><td>' + esc(c) + '</td>' + rows.map(function (x, i) {
+        return '<tr><td>' + esc(c) + '</td>' + rows.map(function (x, i) {
           var v = x.data[c], prev = i ? rows[i - 1].data[c] : v;
           return '<td class="' + (i && String(v) !== String(prev) ? 'chg' : '') + '">' + fmt(v) + '</td>';
         }).join('') + '</tr>';
-      }).join('') + '</tbody></table></div>' +
-      '<div style="font-size:11px;color:var(--dim);margin-top:6px">' + cols.length + ' of ' + (r.columns.length - 1) + ' columns shown.</div>';
+      }).join('') + '</tbody></table></div>';
+    } else {                                               // many clients: one line per client per snapshot, every column
+      var sorted = rows.slice().sort(function (a, b) { return String(a.data.Entity).localeCompare(String(b.data.Entity)) || (a.date + a.time).localeCompare(b.date + b.time); });
+      var prevOf = {};
+      body = '<div class="ul-wrap"><table class="ul-tbl"><thead><tr><th>Client</th><th>' + (multi ? 'Date · time' : 'Time') + '</th>' + cols.map(function (c) { return '<th>' + esc(c) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+        sorted.map(function (x) {
+          var p = prevOf[x.data.Entity]; prevOf[x.data.Entity] = x;
+          return '<tr><td style="font-family:var(--mono);color:var(--ink)">' + esc(x.data.Entity) + '</td><td style="font-family:var(--mono)" data-tip="' + esc(x.source) + '">' + (multi ? esc(dmy(x.date).slice(0, 5)) + ' ' : '') + esc(String(x.time).slice(0, 5)) + '</td>' +
+            cols.map(function (c) { var v = x.data[c]; return '<td class="' + (p && String(v) !== String(p.data[c]) ? 'chg' : '') + '">' + fmt(v) + '</td>'; }).join('') + '</tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+    el.innerHTML = head + body + '<div style="font-size:11px;color:var(--dim);margin-top:6px">' + cols.length + ' of ' + (r.columns.length - 1) + ' columns shown' + (cols.length < r.columns.length - 1 ? ' (filter / hide zeros is on)' : ' - all columns of the file') + '. ⬇ Client Excel always has every column.</div>';
   }
   window.ulFilter = function (v) { ST.filter = v; paintRes(); var i = document.querySelector('#ulRes input.dc-in'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); } };
   window.ulZero = function (on) { ST.hideZero = on; paintRes(); };

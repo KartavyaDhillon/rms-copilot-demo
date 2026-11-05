@@ -74,6 +74,11 @@ class Store(Base):
         self.assertEqual(s["rows"][0]["time"], "09:49:05")
         self.assertEqual(U.search("7gdw01", d)["rows"][0]["data"]["Cash"], -637.04)
         self.assertEqual(U.search("NOPE", d)["rows"], [])
+        m = U.search("7gdw01, 80011226  NOPE\n4790", d)               # many codes: comma / space / new line
+        self.assertEqual(sorted(x["data"]["Entity"] for x in m["rows"]), ["080011226", "4790", "7GDW01"])
+        self.assertEqual(m["missing"], ["NOPE"])
+        self.assertEqual(len(m["columns"]), 3)                          # every column of the file
+        self.assertIn("3_CLIENTS", U.client_excel("7GDW01,4790,080011226", d).name)
         x = U.client_excel("7GDW01", d)
         self.assertTrue(x.exists() and x.stat().st_size > 1000)
         z = U.full_file(r["entry"]["id"], "csv")
