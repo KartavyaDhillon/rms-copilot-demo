@@ -79,6 +79,7 @@
     }
   }
   async function tcsRefresh() {
+    if (document.hidden) return;
     try { tcsLast = await (await fetch("/ops/tcs-status", { credentials: "same-origin" })).json(); } catch (e) { return; }
     tcsPaint();
   }
@@ -109,7 +110,7 @@
     const b = $("#pcTcs"); if (!b) return;
     b.onclick = async () => { await tcsRefresh(); RMS.modal("TCS BANCS login (MCX eclear)", tcsDetailHtml(), { width: 520, icon: "plug" }); };
     tcsRefresh();
-    if (!tcsTimer) tcsTimer = setInterval(tcsRefresh, 3000);
+    if (!tcsTimer) tcsTimer = setInterval(tcsRefresh, 5000);
     const fr = $("#pcFrame");
     const hook = () => {
       try {

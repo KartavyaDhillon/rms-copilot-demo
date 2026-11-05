@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import sys
+import threading
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -180,8 +181,22 @@ def _next_users(now: dt.datetime) -> list:
     return found
 
 
-def status(now: dt.datetime = None) -> dict:
-    now = now or dt.datetime.now()
+_NEXT_CACHE = {"t": 0.0, "min": -1, "val": []}
+_STATUS_CACHE = {"t": 0.0, "val": None}
+_LOCK = threading.Lock()
+
+
+def _next_cached(now: dt.datetime) -> list:
+    """'Who is next' is heavy (status of several modules + scheduler rules) and only changes by the minute: compute it at
+    most once every 30 s for ALL open pages, not once per page per poll."""
+    if time.time() - _NEXT_CACHE["t"] < 30 and _NEXT_CACHE["val"] is not None:
+        return _NEXT_CACHE["val"]
+    val = _next_users(now)
+    _NEXT_CACHE.update(t=time.time(), val=val)
+    return val
+
+
+def _build(now: dt.datetime) -> dict:
     holders = []
     c = _card_holder()
     if c:
@@ -192,6 +207,23 @@ def status(now: dt.datetime = None) -> dict:
             holders.append(h)
             seen.add(h["name"])
     state = "free" if not holders else ("busy" if len(holders) == 1 else "clash")
-    nxt = _next_users(now)
+    nxt = _next_cached(now)
     return {"state": state, "holders": holders, "next": nxt[0] if nxt else None, "upcoming": nxt[:12],
             "now": now.strftime("%H:%M:%S")}
+
+
+def status(now: dt.datetime = None) -> dict:
+    """One shared answer for every browser: rebuilt at most every 2 s, and only one request rebuilds it at a time (the
+    others wait for that result instead of each doing the same work)."""
+    if now is not None:                                  # tests pass their own clock: no caching
+        return _build(now)
+    v = _STATUS_CACHE["val"]
+    if v is not None and time.time() - _STATUS_CACHE["t"] < 2:
+        return v
+    with _LOCK:
+        v = _STATUS_CACHE["val"]
+        if v is not None and time.time() - _STATUS_CACHE["t"] < 2:
+            return v
+        v = _build(dt.datetime.now())
+        _STATUS_CACHE.update(t=time.time(), val=v)
+        return v

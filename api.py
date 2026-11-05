@@ -307,7 +307,9 @@ def _popup_visible(request: Request, sf, pipes):
 
 
 @app.get("/health")
-def health():
+async def health():
+    # async on purpose: it is answered on the event loop and never waits for a free worker thread, so the "Server" light
+    # stays green even when every worker is busy with slow status calls.
     return {"status": "ok", "auto_send": AUTO_SEND}
 
 
@@ -5619,6 +5621,22 @@ def pd_percent(value: str = ""):
 def ops_progress(pipe: str = "", kind: str = "", since: float = 0):
     """What the CURRENT (or latest) run of ANY process box is doing, read from its log - so every open window shows the live
     steps even when somebody else started the run (generic version of /pd/progress)."""
+    import time as _t
+    _k = (pipe, kind, round(float(since or 0)))
+    _hit = _OPS_PROGRESS_CACHE.get(_k)
+    if _hit and _t.monotonic() - _hit[0] < 2.5:      # every open screen asks every few seconds: one real log read serves all
+        return _hit[1]
+    _res = _ops_progress_read(pipe, kind, since)
+    if len(_OPS_PROGRESS_CACHE) > 200:
+        _OPS_PROGRESS_CACHE.clear()
+    _OPS_PROGRESS_CACHE[_k] = (_t.monotonic(), _res)
+    return _res
+
+
+_OPS_PROGRESS_CACHE: dict = {}
+
+
+def _ops_progress_read(pipe, kind, since):
     import glob as _g, os as _os, re as _re
     from core.pipeline_box import LOG_BASE, PIPELINES
     if not _re.fullmatch(r"[a-z0-9_]{1,20}", pipe or ""):
