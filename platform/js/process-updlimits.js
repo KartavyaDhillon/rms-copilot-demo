@@ -8,7 +8,7 @@
   if (window.__ulInjected) return;
   window.__ulInjected = true;
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
-  var ST = { data: null, timer: null, date: '', to: '', client: '', times: {}, day: [], res: null, filter: '', hideZero: false, dateUser: false, upl: [], view: 'main', jobSig: '' };
+  var ST = { data: null, timer: null, date: '', to: '', client: '', times: {}, day: [], res: null, filter: '', hideZero: false, dateUser: false, upl: [], view: 'main', jobSig: '', sel: {}, zfmt: 'orig', zbusy: false };
   var ACC = '#0ea5e9';
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"']/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -80,8 +80,12 @@
   function tb(label, fn, tip, extra) {
     return '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;white-space:nowrap' + (extra || '') + '" onclick="' + fn + '"' + (tip ? ' data-tip="' + esc(tip) + '"' : '') + '>' + label + '</button>';
   }
-  function ulOpen() {
+  function ulOpen(keep) {
     ST.view = 'main';
+    if (keep !== true) {                      // opened from the card = fresh, like for the next person; 'back' keeps the screen
+      ST.client = ''; ST.to = ''; ST.times = {}; ST.day = []; ST.res = null; ST.filter = ''; ST.hideZero = false;
+      ST.dateUser = false; ST.upl = []; ST.sel = {}; ST.zfmt = 'orig'; ST.zbusy = false; ST.jobSig = '';
+    }
     var d = ST.data || {};
     if (!ST.dateUser) ST.date = (d.latest && d.latest.date) || isoToday();      // the newest stored date until you pick one
     modal('🗄️ UPDATE LIMITS DATA',
@@ -164,14 +168,44 @@
           near.map(function (x) { return '<button class="dc-chip2" onclick="ulSetDate(\'' + x.date + '\')">' + esc(dmy(x.date)) + ' <span style="opacity:.6">(' + x.n + ')</span></button>'; }).join('') + '</div>' : '');
       return;
     }
-    el.innerHTML = '<div class="ul-wrap" style="max-height:260px"><table class="ul-tbl"><thead><tr><th>Date · time</th><th style="text-align:left">Source</th><th style="text-align:left">Time from</th><th>Clients</th><th>Size</th><th>Full file</th></tr></thead><tbody>' +
+    var n = ST.day.length, ticked = zipIds().length;
+    el.innerHTML = '<div class="ul-wrap" style="max-height:260px"><table class="ul-tbl"><thead><tr><th style="width:28px"><input type="checkbox" id="ulAll" ' + (ticked === n && n ? 'checked' : '') + ' onchange="ulSelAll(this.checked)" data-tip="Tick / untick every file of the day"></th><th>Date · time</th><th style="text-align:left">Source</th><th style="text-align:left">Time from</th><th>Clients</th><th>Size</th><th>Full file</th></tr></thead><tbody>' +
       ST.day.slice().reverse().map(function (e) {
-        return '<tr><td style="font-family:var(--mono);color:var(--ink)">' + esc(dmy(e.date)) + ' ' + esc(e.time) + '</td><td style="text-align:left">' + esc(e.source) + '</td><td style="text-align:left;color:var(--dim)">' + esc(e.time_src) + '</td>' +
+        return '<tr><td style="text-align:left"><input type="checkbox" ' + (ST.sel[e.id] ? 'checked' : '') + ' onchange="ulSel(\'' + e.id + '\',this.checked)"></td>' +
+          '<td style="font-family:var(--mono);color:var(--ink)">' + esc(dmy(e.date)) + ' ' + esc(e.time) + '</td><td style="text-align:left">' + esc(e.source) + '</td><td style="text-align:left;color:var(--dim)">' + esc(e.time_src) + '</td>' +
           '<td>' + Number(e.rows || 0).toLocaleString('en-IN') + '</td><td style="color:var(--dim)">' + mb(e.bytes) + '</td><td>' +
           (e.orig ? '<a class="ul-a" href="' + API + '/ulimits/full?id=' + encodeURIComponent(e.id) + '&fmt=orig" data-tip="The original Update Limits .xlsx" download>⬇ Original .xlsx</a> · ' : '') +
           '<a class="ul-a" href="' + API + '/ulimits/full?id=' + encodeURIComponent(e.id) + '&fmt=csv" data-tip="The whole file as CSV in a zip (opens in Excel), made from the stored copy - takes a few seconds." download>⬇ CSV</a></td></tr>';
-      }).join('') + '</tbody></table></div>';
+      }).join('') + '</tbody></table></div>' +
+      '<div id="ulZipBar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px"></div>';
+    paintZipBar();
   }
+  function zipIds() { return ST.day.filter(function (e) { return ST.sel[e.id]; }).map(function (e) { return e.id; }); }
+  function paintZipBar() {
+    var el = $('ulZipBar'); if (!el) return;
+    var ids = zipIds(), n = ST.day.length, use = ids.length || n;
+    var fm = [['orig', 'Original .xlsx', 'The original files as they are (fast, the biggest).'], ['csv', 'CSV', 'Made from the stored copy, compressed (a few seconds per file).'], ['parquet', 'Parquet', 'The stored copy - the smallest; opens in Python / Power BI.']];
+    el.innerHTML = '<span class="dc-lbl" style="margin:0">Zip of</span>' +
+      fm.map(function (f) { return '<button class="dc-chip2' + (ST.zfmt === f[0] ? ' on' : '') + '" data-tip="' + esc(f[2]) + '" onclick="ulZFmt(\'' + f[0] + '\')">' + f[1] + '</button>'; }).join('') +
+      '<button class="dc-btn" id="ulZipGo" onclick="ulZip()" ' + (ST.zbusy ? 'disabled' : '') + '>' + (ST.zbusy ? '<span class="dc-spin"></span>Making the zip…' : '⬇ Download zip (' + (ids.length ? ids.length + ' ticked' : 'all ' + n + ' of the day') + ')') + '</button>' +
+      '<span style="font-size:11px;color:var(--dim)">' + (ids.length ? '' : 'Nothing ticked = the whole day. ') + 'Tick the boxes to pick some files.</span>';
+  }
+  window.ulSel = function (id, on) { if (on) ST.sel[id] = true; else delete ST.sel[id]; var a = $('ulAll'); if (a) a.checked = zipIds().length === ST.day.length; paintZipBar(); };
+  window.ulSelAll = function (on) { ST.sel = {}; if (on) ST.day.forEach(function (e) { ST.sel[e.id] = true; }); paintDay(); };
+  window.ulZFmt = function (f) { ST.zfmt = f; paintZipBar(); };
+  window.ulZip = function () {
+    var ids = zipIds(); if (!ids.length) ids = ST.day.map(function (e) { return e.id; });
+    if (!ids.length || ST.zbusy) return;
+    if (ids.length > 60) { say('At most 60 files in one zip - tick fewer.', 'err'); return; }
+    ST.zbusy = true; paintZipBar();
+    post('/ulimits/zip', { ids: ids, fmt: ST.zfmt }).then(function (j) {
+      if (!j || !j.ok) throw new Error((j && (j.error || j.detail)) || 'Could not make the zip.');
+      var a = document.createElement('a'); a.href = API + '/ulimits/zip/' + encodeURIComponent(j.id) + '?name=' + encodeURIComponent(j.name); a.download = j.name;
+      document.body.appendChild(a); a.click(); setTimeout(function () { a.remove(); }, 2000);
+      say('Zip of ' + ids.length + ' file' + (ids.length > 1 ? 's' : '') + ' (' + mb(j.size) + ') is downloading.');
+    }).catch(function (e) { say(e.message || String(e), 'err'); })
+      .then(function () { ST.zbusy = false; paintZipBar(); });
+  };
   function paintTimes() {
     var el = $('ulTimes'); if (!el) return;
     if (!ST.day.length || (ST.to && ST.to !== ST.date)) { el.innerHTML = ''; return; }
@@ -180,8 +214,8 @@
       ST.day.map(function (e) { var t = String(e.time).slice(0, 5); return '<button class="dc-chip2' + (ST.times[t] ? ' on' : '') + '" onclick="ulTime(\'' + t + '\')" data-tip="' + esc(e.source + ' · time from ' + e.time_src) + '">' + t + '</button>'; }).join('');
   }
   window.ulTime = function (t) { if (t === null) ST.times = {}; else ST.times[t] = !ST.times[t]; paintTimes(); paintFullBtn(); if (ST.res) ulSearch(); };
-  window.ulSetDate = function (v) { if (!v) return; ST.date = v; ST.dateUser = true; ST.times = {}; var i = $('ulDate'); if (i && i.value !== v) i.value = v; loadDay(); if (ST.client) ulSearch(); };
-  window.ulSetTo = function (v) { ST.to = v || ''; ST.times = {}; loadDay(); if (ST.client) ulSearch(); };
+  window.ulSetDate = function (v) { if (!v) return; ST.date = v; ST.dateUser = true; ST.times = {}; ST.sel = {}; var i = $('ulDate'); if (i && i.value !== v) i.value = v; loadDay(); if (ST.client) ulSearch(); };
+  window.ulSetTo = function (v) { ST.to = v || ''; ST.times = {}; ST.sel = {}; loadDay(); if (ST.client) ulSearch(); };
 
   function fullPick() {
     if (!ST.day.length || (ST.to && ST.to !== ST.date)) return null;
@@ -319,7 +353,7 @@
     });
   };
   window.ulStop = function () { post('/ulimits/stop').then(function (j) { say(j.stopped ? 'Stopping…' : 'Nothing is being stored.'); refresh(500); }); };
-  function back() { return '<button class="dc-link" style="margin:0 0 12px" onclick="ulOpen()">← back</button>'; }
+  function back() { return '<button class="dc-link" style="margin:0 0 12px" onclick="ulOpen(true)">← back</button>'; }
   window.ulHistory = function () {
     var s = (ST.data && ST.data.settings) || {};
     modal('📚 UPDATE LIMITS DATA - load history', back() +
@@ -336,7 +370,7 @@
     var m = $('ulHMsg');
     post('/ulimits/load', { from: $('ulHf').value, to: $('ulHt').value, root: $('ulHr').value }).then(function (j) {
       if (!j.ok) { if (m) m.innerHTML = '<span style="color:var(--red)">' + esc(j.error || j.detail || 'Could not start') + '</span>'; return; }
-      ulOpen();
+      ulOpen(true);
       say(j.queued ? j.queued + ' file' + (j.queued > 1 ? 's' : '') + ' to store (' + (j.found - j.queued) + ' already there) - progress below.' : j.found ? 'All ' + j.found + ' files of these dates are already stored.' : (j.note || 'No files found.'), j.found ? '' : 'err');
       refresh(300);
     });
@@ -356,7 +390,7 @@
     var m = $('ulSMsg');
     post('/ulimits/settings', { auto: $('ulSa').checked, time: $('ulSt').value, ctcl_root: $('ulSr').value }).then(function (j) {
       if (!j.ok) { if (m) m.innerHTML = '<span style="color:var(--red)">' + esc(j.error || j.detail || 'Not saved') + '</span>'; return; }
-      refresh(0); setTimeout(function () { ulOpen(); say('Saved.'); }, 300);
+      refresh(0); setTimeout(function () { ulOpen(true); say('Saved.'); }, 300);
     });
   };
 

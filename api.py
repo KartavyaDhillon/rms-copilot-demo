@@ -368,7 +368,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
                             '<script src="/platform/js/process-files70.js?v=5"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
-                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=2"></script></body>', 1)
+                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=3"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1180,6 +1180,33 @@ def ul_full(id: str, fmt: str = "orig"):
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     return FileResponse(str(p), filename=p.name)
+
+@app.post("/ulimits/zip")
+async def ul_zip(request: Request):
+    """{ids: [snapshot ids], fmt: orig|csv|parquet} -> builds ONE zip in the background thread and answers {id, name, size};
+    the browser then downloads it with GET /ulimits/zip/{id} (streamed, so a big zip does not sit in browser memory)."""
+    from core import update_limits as _ul
+    body = await request.json()
+    ids = [str(x) for x in (body.get("ids") or [])]
+    if any(not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{6}", i) for i in ids):
+        raise HTTPException(400, "bad request")
+    try:
+        z = await _ul_rtp(_ul.make_zip, ids, str(body.get("fmt") or "orig"))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "id": z.name, "name": re.sub(r"_\d{10}\.zip$", ".zip", z.name), "size": z.stat().st_size}
+
+@app.get("/ulimits/zip/{zid}")
+def ul_zip_get(zid: str, name: str = ""):
+    from core import update_limits as _ul
+    if not re.fullmatch(r"Update_Limits_[0-9A-Za-z_]+\.zip", zid or ""):
+        raise HTTPException(400, "bad request")
+    p = _ul.data_dir() / "tmp" / zid
+    if not p.is_file():
+        raise HTTPException(404, "the zip is not there any more - make it again")
+    return FileResponse(str(p), filename=re.sub(r"[^A-Za-z0-9_.-]", "_", name) or re.sub(r"_\d{10}\.zip$", ".zip", zid), media_type="application/zip")
 
 @app.post("/ulimits/upload")
 async def ul_upload(request: Request, name: str, date: str = "", time: str = "", lastmod: str = ""):

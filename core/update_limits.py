@@ -625,6 +625,50 @@ def full_file(sid: str, fmt: str = "orig") -> Path:
     return z
 
 
+MAX_ZIP_FILES = 60
+
+
+def make_zip(ids: List[str], fmt: str = "orig") -> Path:
+    """One zip with the chosen snapshots (a whole day, or some of it). fmt: orig = the original .xlsx (kept as it is, no
+    recompression - the fastest), csv = the stored data as CSV (compressed), parquet = the stored Parquet files (smallest).
+    A snapshot whose original file is gone falls back to CSV."""
+    import polars as pl
+    if fmt not in ("orig", "csv", "parquet"):
+        raise ValueError("format must be orig, csv or parquet")
+    if not ids:
+        raise ValueError("no files chosen")
+    if len(ids) > MAX_ZIP_FILES:
+        raise ValueError(f"at most {MAX_ZIP_FILES} files in one zip")
+    by_id = {e["id"]: e for e in index()}
+    chosen = [by_id[i] for i in ids if i in by_id]
+    if not chosen:
+        raise FileNotFoundError("snapshots not found")
+    chosen.sort(key=lambda e: (e["date"], e["time"]))
+    tmp = data_dir() / "tmp"
+    tmp.mkdir(exist_ok=True)
+    _clean_tmp(tmp)
+    d0, d1 = chosen[0]["date"], chosen[-1]["date"]
+    stem = f"Update_Limits_{dt.date.fromisoformat(d0):%d%m%Y}" + (f"_to_{dt.date.fromisoformat(d1):%d%m%Y}" if d1 != d0 else "") + f"_{len(chosen)}_files"
+    out = tmp / f"{stem}_{int(time.time())}.zip"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=5, allowZip64=True) as zf:
+        for e in chosen:
+            d = dt.date.fromisoformat(e["date"])
+            base = f"Update Limits{d:%d%m%Y}_{e['time'].replace(':', '')}"
+            orig = Path(e.get("src_path") or "")
+            if fmt == "orig" and orig.is_file():
+                zf.write(orig, f"{base}{orig.suffix.lower() or '.xlsx'}", compress_type=zipfile.ZIP_STORED)
+            elif fmt == "parquet":
+                zf.write(data_dir() / e["parquet"], f"{base}.parquet", compress_type=zipfile.ZIP_STORED)
+            else:
+                csv = tmp / f"{base}_{os.getpid()}.csv"
+                try:
+                    pl.read_parquet(data_dir() / e["parquet"]).drop(EXTRA).write_csv(csv)
+                    zf.write(csv, f"{base}.csv")
+                finally:
+                    csv.unlink(missing_ok=True)
+    return out
+
+
 def _clean_tmp(tmp: Path, older_s: int = 3600):
     for f in tmp.iterdir():
         try:

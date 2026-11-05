@@ -98,6 +98,22 @@ class Store(Base):
         self.assertEqual(U.search("7GDW01", dt.date(2026, 11, 4), times=["09:49"])["rows"][0]["data"]["Cash"], 5.0)
         self.assertEqual(U.load_history(dt.date(2026, 11, 4), dt.date(2026, 11, 4))["queued"], 0)
 
+    def test_zip_of_chosen_files(self):
+        import zipfile
+        d = dt.date(2026, 11, 5)
+        f1 = make_xlsx(self.root / "a" / "Update Limits05112026.xlsx", mtime=dt.datetime(2026, 11, 5, 9, 0, 1))
+        f2 = make_xlsx(self.root / "b" / "Update Limits05112026.xlsx", rows=[("7GDW01", "B", 9.0)], mtime=dt.datetime(2026, 11, 5, 11, 0, 2))
+        i1 = U.ingest_file(f1, d, "CTCL run 01")["entry"]["id"]
+        i2 = U.ingest_file(f2, d, "CTCL run 02")["entry"]["id"]
+        z = U.make_zip([i2, i1], "orig")
+        self.assertEqual(zipfile.ZipFile(z).namelist(), ["Update Limits05112026_090001.xlsx", "Update Limits05112026_110002.xlsx"])
+        self.assertEqual(zipfile.ZipFile(U.make_zip([i1], "csv")).namelist(), ["Update Limits05112026_090001.csv"])
+        self.assertEqual(zipfile.ZipFile(U.make_zip([i1, i2], "parquet")).namelist()[0], "Update Limits05112026_090001.parquet")
+        f1.unlink()                                                      # original gone -> that file falls back to CSV
+        self.assertEqual(zipfile.ZipFile(U.make_zip([i1], "orig")).namelist(), ["Update Limits05112026_090001.csv"])
+        with self.assertRaises(ValueError):
+            U.make_zip([], "orig")
+
     def test_upload_rules(self):
         with self.assertRaises(ValueError):
             U.check_upload("limits.xlsx")                                       # no date anywhere
