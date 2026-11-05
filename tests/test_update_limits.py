@@ -114,6 +114,14 @@ class Store(Base):
         with self.assertRaises(ValueError):
             U.make_zip([], "orig")
 
+    def test_page_lists_the_full_file(self):
+        d = dt.date(2026, 11, 5)
+        f = make_xlsx(self.root / "p" / "Update Limits05112026.xlsx", mtime=dt.datetime(2026, 11, 5, 9, 0, 1))
+        sid = U.ingest_file(f, d, "CTCL run 01")["entry"]["id"]
+        p1 = U.page(sid, 0, 2)
+        self.assertEqual((p1["total"], len(p1["rows"]), p1["columns"][0]), (3, 2, "Entity"))
+        self.assertEqual(len(U.page(sid, 2, 2)["rows"]), 1)
+
     def test_upload_rules(self):
         with self.assertRaises(ValueError):
             U.check_upload("limits.xlsx")                                       # no date anywhere

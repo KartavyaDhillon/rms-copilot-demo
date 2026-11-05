@@ -368,7 +368,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
                             '<script src="/platform/js/process-files70.js?v=5"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
-                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=4"></script></body>', 1)
+                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1142,6 +1142,17 @@ def ul_search(client: str, date: str = "", to: str = "", times: str = ""):
         return _ul.search(client, d1, d2, [t for t in times.split(",") if t] or None)
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+@app.get("/ulimits/page")
+def ul_page(id: str, offset: int = 0, limit: int = 200):
+    """Browse a full stored file page by page (no download)."""
+    from core import update_limits as _ul
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{6}", id or ""):
+        raise HTTPException(400, "bad request")
+    try:
+        return _ul.page(id, offset, limit)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
 
 @app.get("/ulimits/client.xlsx")
 def ul_client_xlsx(client: str, date: str = "", to: str = "", times: str = ""):

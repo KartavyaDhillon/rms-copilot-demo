@@ -99,7 +99,7 @@
       '<div id="ulMsg"></div><div id="ulSum" style="font-size:11.5px;color:var(--muted);margin:0 0 10px"></div><div id="ulJob"></div>' +
       '<div class="ul-sec"><div class="ul-h">🔍 Find a client</div>' +
         '<div class="ul-row">' +
-          '<div style="flex:1;min-width:230px"><div class="dc-lbl">Client code(s) - one, or many separated by commas · empty = full file of the day</div><input id="ulClient" class="dc-in" style="width:100%;text-transform:uppercase" placeholder="7GDW01, 4790, 6WBB2040" value="' + esc(ST.client) + '" onkeydown="if(event.key===\'Enter\')ulSearch()" data-tip="Up to 500 codes, separated by commas, spaces or new lines (you can paste a column from Excel)."></div>' +
+          '<div style="flex:1;min-width:230px"><div class="dc-lbl">Client code(s) - one, or many separated by commas · empty = list the full file of the day</div><input id="ulClient" class="dc-in" style="width:100%;text-transform:uppercase" placeholder="7GDW01, 4790, 6WBB2040" value="' + esc(ST.client) + '" onkeydown="if(event.key===\'Enter\')ulSearch()" data-tip="Up to 500 codes, separated by commas, spaces or new lines (you can paste a column from Excel)."></div>' +
           '<div><div class="dc-lbl">Date</div><input type="date" id="ulDate" class="dc-in" value="' + esc(ST.date) + '" onchange="ulSetDate(this.value)"></div>' +
           '<div><div class="dc-lbl">To (optional)</div><input type="date" id="ulTo" class="dc-in" value="' + esc(ST.to) + '" onchange="ulSetTo(this.value)"></div>' +
           '<button class="dc-btn" id="ulGo" onclick="ulSearch()">🔍 Search</button>' +
@@ -213,7 +213,7 @@
     el.innerHTML = '<span class="dc-lbl" style="margin:6px 4px 0 0">Snapshots</span><button class="dc-chip2' + (sel.length ? '' : ' on') + '" onclick="ulTime(null)">All (' + ST.day.length + ')</button>' +
       ST.day.map(function (e) { var t = String(e.time).slice(0, 5); return '<button class="dc-chip2' + (ST.times[t] ? ' on' : '') + '" onclick="ulTime(\'' + t + '\')" data-tip="' + esc(e.source + ' · time from ' + e.time_src) + '">' + t + '</button>'; }).join('');
   }
-  window.ulTime = function (t) { if (t === null) ST.times = {}; else ST.times[t] = !ST.times[t]; paintTimes(); paintFullBtn(); if (ST.res) ulSearch(); };
+  window.ulTime = function (t) { if (t === null) ST.times = {}; else ST.times[t] = !ST.times[t]; paintTimes(); paintFullBtn(); if (ST.res && ST.res.browse) ulBrowse(0); else if (ST.res) ulSearch(); };
   window.ulSetDate = function (v) { if (!v) return; ST.date = v; ST.dateUser = true; ST.times = {}; ST.sel = {}; var i = $('ulDate'); if (i && i.value !== v) i.value = v; loadDay(); if (ST.client) ulSearch(); };
   window.ulSetTo = function (v) { ST.to = v || ''; ST.times = {}; ST.sel = {}; loadDay(); if (ST.client) ulSearch(); };
 
@@ -259,15 +259,51 @@
   }
   window.ulSearch = function () {
     var c = $('ulClient'); ST.client = (c ? c.value : ST.client).trim().toUpperCase();
-    if (!ST.client) { ulWholeDay(); return; }
+    if (!ST.client) { ulBrowse(0); return; }
     var go = $('ulGo'); if (go) { go.disabled = true; go.innerHTML = '<span class="dc-spin"></span>Searching…'; }
     get('/ulimits/search?' + query()).then(function (j) { ST.res = j; paintRes(); })
       .catch(function () { ST.res = { ok: false, error: 'Server did not answer.' }; paintRes(); })
       .then(function () { var g = $('ulGo'); if (g) { g.disabled = false; g.innerHTML = '🔍 Search'; } });
   };
+  // ── no client code: list the FULL file of the day in the window, page by page (nothing is downloaded) ──
+  function browsePick() {
+    if (!ST.day.length || (ST.to && ST.to !== ST.date)) return null;
+    var sel = ST.day.filter(function (e) { return ST.times[String(e.time).slice(0, 5)]; });
+    return (sel.length ? sel : ST.day)[(sel.length ? sel : ST.day).length - 1];     // the ticked one, else the latest
+  }
+  function ulBrowse(offset) {
+    if (ST.to && ST.to !== ST.date) { say('The full file is listed for one date - clear the To date, or type a client code.', 'err'); return; }
+    var e = browsePick();
+    if (!e) { say('Nothing stored for ' + dmy(ST.date) + ' - pick a stored date (see the list below).', 'err'); return; }
+    var go = $('ulGo'); if (go) { go.disabled = true; go.innerHTML = '<span class="dc-spin"></span>Loading…'; }
+    get('/ulimits/page?id=' + encodeURIComponent(e.id) + '&offset=' + (offset || 0) + '&limit=200')
+      .then(function (j) { ST.res = (j && j.ok) ? { browse: j } : { ok: false, error: (j && (j.detail || j.error)) || 'Could not read the file.' }; paintRes(); })
+      .catch(function () { ST.res = { ok: false, error: 'Server did not answer.' }; paintRes(); })
+      .then(function () { var g = $('ulGo'); if (g) { g.disabled = false; g.innerHTML = '🔍 Search'; } });
+  }
+  window.ulBrowse = ulBrowse;
+  function paintBrowse(el, b) {
+    var f = (ST.filter || '').toLowerCase();
+    var idx = []; b.columns.forEach(function (c, i) { if (!f || i === 0 || c.toLowerCase().indexOf(f) >= 0) idx.push(i); });
+    var from = b.offset + 1, to = b.offset + b.rows.length, last = b.offset + b.rows.length >= b.total;
+    var nav = '<span style="display:flex;gap:8px;align-items:center">' +
+      '<button class="dc-btn ghost" ' + (b.offset ? '' : 'disabled') + ' onclick="ulBrowse(' + Math.max(0, b.offset - 200) + ')">◀ Prev</button>' +
+      '<span style="font-family:var(--mono);font-size:11.5px">rows ' + from.toLocaleString('en-IN') + '–' + to.toLocaleString('en-IN') + ' of ' + Number(b.total).toLocaleString('en-IN') + '</span>' +
+      '<button class="dc-btn ghost" ' + (last ? 'disabled' : '') + ' onclick="ulBrowse(' + (b.offset + 200) + ')">Next ▶</button></span>';
+    el.innerHTML =
+      '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 8px;font-size:12.5px">' +
+        '<b>Full file · ' + esc(dmy(b.date)) + ' ' + esc(String(b.time).slice(0, 5)) + '</b><span class="dc-chip">' + esc(b.source) + '</span>' +
+        '<span style="color:var(--dim)">' + b.columns.length + ' columns · ' + b.ms + ' ms · tick a time under Snapshots for another snapshot</span>' +
+        '<span style="margin-left:auto;display:flex;gap:10px;align-items:center"><input class="dc-in" style="width:170px" placeholder="Find a column…" value="' + esc(ST.filter) + '" oninput="ulFilter(this.value)">' + nav + '</span></div>' +
+      '<div class="ul-wrap"><table class="ul-tbl"><thead><tr>' + idx.map(function (i) { return '<th>' + esc(b.columns[i]) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      b.rows.map(function (r) { return '<tr>' + idx.map(function (i) { return '<td' + (i === 0 ? ' style="font-family:var(--mono);color:var(--ink)"' : '') + '>' + fmt(r[i]) + '</td>'; }).join('') + '</tr>'; }).join('') +
+      '</tbody></table></div>' +
+      '<div style="font-size:11px;color:var(--dim);margin-top:6px">Listed only - nothing is downloaded. To get the whole file use ⬇ Full file, or the Original / CSV links and the zip below.</div>';
+  }
   function paintRes() {
     var el = $('ulRes'), r = ST.res; if (!el) return;
-    if (!r) { el.innerHTML = '<div style="font-size:12px;color:var(--dim)">Type one client code (or many, separated by commas) and press Search (or Enter). Leave it empty and press Search to download the full file of the day (the ticked snapshot, else all snapshots of the day in a zip). One client: every snapshot of the day side by side. Many clients: one line per client per snapshot. All columns of the file are shown; values that changed from the snapshot before are in amber.</div>'; return; }
+    if (r && r.browse) { paintBrowse(el, r.browse); return; }
+    if (!r) { el.innerHTML = '<div style="font-size:12px;color:var(--dim)">Type one client code (or many, separated by commas) and press Search (or Enter). Leave it empty and press Search to list the full file of the day in this window, 200 rows a page (the ticked snapshot, else the latest one). One client: every snapshot of the day side by side. Many clients: one line per client per snapshot. All columns of the file are shown; values that changed from the snapshot before are in amber.</div>'; return; }
     if (r.ok === false || r.error) { el.innerHTML = '<div class="dc-msg" style="color:var(--red)">' + esc(r.error || r.detail || 'Search failed') + '</div>'; return; }
     if (!r.rows || !r.rows.length) { el.innerHTML = '<div class="dc-msg" style="color:var(--amber)">' + esc(r.note || 'Not found.') + '</div>'; return; }
     var rows = r.rows, multi = rows.some(function (x) { return x.date !== rows[0].date; });

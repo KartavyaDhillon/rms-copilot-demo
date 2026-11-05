@@ -582,6 +582,21 @@ def search(client: str, d1: dt.date, d2: Optional[dt.date] = None, times: Option
             "columns": order, "ms": int((time.time() - t0) * 1000)}
 
 
+def page(sid: str, offset: int = 0, limit: int = 200) -> dict:
+    """One page of a stored snapshot (all columns), for browsing the full file in the window without downloading it."""
+    import polars as pl
+    e = next((x for x in index() if x["id"] == sid), None)
+    if not e:
+        raise FileNotFoundError("snapshot not found")
+    offset, limit = max(0, int(offset)), max(1, min(1000, int(limit)))
+    t0 = time.time()
+    df = pl.scan_parquet(data_dir() / e["parquet"]).slice(offset, limit).collect().drop(EXTRA)
+    cols = [KEY] + [c for c in KEY_FIELDS if c in df.columns] + [c for c in df.columns if c != KEY and c not in KEY_FIELDS]
+    return {"ok": True, "id": sid, "date": e["date"], "time": e["time"], "source": e["source"], "total": int(e.get("rows") or 0),
+            "offset": offset, "columns": cols, "rows": [[_jv(r.get(c)) for c in cols] for r in df.iter_rows(named=True)],
+            "ms": int((time.time() - t0) * 1000)}
+
+
 def client_excel(client: str, d1: dt.date, d2: Optional[dt.date] = None, times: Optional[List[str]] = None) -> Path:
     rows = _pick(d1, d2, times)
     df = _client_frame(client, rows) if rows else None
