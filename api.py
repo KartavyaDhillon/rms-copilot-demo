@@ -1255,6 +1255,20 @@ async def ul_settings(request: Request):
     return {"ok": True, "settings": s}
 
 @app.on_event("startup")
+def _warm_status_caches():
+    """Fill the slow status caches in the background right after a restart, so the first screens that poll do not
+    all wait for the disk at the same moment (after a restart every open screen asks within a few seconds)."""
+    import threading as _wth
+
+    def warm():
+        for fn in (pd_status, reco_readiness, r1r2_readiness, ops_overview, r1r2_today_status, reco_today_status):
+            try:
+                fn()
+            except Exception as _e:                      # noqa: BLE001
+                print(f"[cache] warm-up of {getattr(fn, '__name__', fn)} failed: {type(_e).__name__}: {_e}")
+    _wth.Thread(target=warm, name="warm-status-caches", daemon=True).start()
+
+@app.on_event("startup")
 def _ulimits_startup():
     try:
         from core import update_limits as _ul
@@ -5767,7 +5781,8 @@ _PD_WA_LISTS = {"DELHI": "Delhi", "LUDHIANA": "Ludhiana", "CHANDIGARH": "Chandig
 def pd_status():
     from core.pipelines import physdel_cfg as _pd
     _pd.apply_defaults()
-    return {"window": _pd.window_info(), "inputs": _pd.inputs_report(), "missing": _pd.missing_inputs(),
+    _rep = _pd.inputs_report()                      # once - missing_inputs() without it would scan every folder again
+    return {"window": _pd.window_info(), "inputs": _rep, "missing": _pd.missing_inputs(_rep),
             "last_run": _pd.last_run(), "percent": _pd.get_percent(), "file_percent": _pd.get_file_percent(), "busy": _pd.busy_other(), "safe_test": _pd.safe_test_targets(),
             "today": __import__("datetime").date.today().isoformat()}
 

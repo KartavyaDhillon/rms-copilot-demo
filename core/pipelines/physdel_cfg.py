@@ -210,35 +210,46 @@ def pick_ctcl_file(root: Optional[str] = None) -> Optional[dict]:
 
 def _pick_ctcl_once(root: Optional[str] = None) -> Optional[dict]:
     """The CTCL vs NMASS MAIN output (FULL_FILE_CTCL_VS_NMASS_<NN>.xlsx - not the zone variants) from the LATEST backup:
-    the newest date folder, and inside it the highest run number.  Returns None when there is none."""
+    the newest date folder, and inside it the highest run number.  Returns None when there is none.
+    Only the newest date folders are opened (newest first, stopping at the first one that has the file) - walking the
+    whole backup tree (months of folders) took 20-40 s per call on the server and made every screen wait."""
     rootp = Path(root or os.path.join(ctcl_base(), "BACKUPFILES AUTOMATED"))
     if not rootp.is_dir():
         return None
-    best = None
-    for dp, _dirs, files in os.walk(rootp):
-        for fn in files:
-            m = _CTCL_MAIN.match(fn)
-            if not m:
-                continue
-            rel = Path(dp).relative_to(rootp).parts
-            d = next((x for x in (_date_from(p) for p in rel) if x), None)
-            if d is None:
-                continue
-            run = next((int(p) for p in rel if p.isdigit() and len(p) <= 2), int(m.group(1)))
-            full = os.path.join(dp, fn)
-            try:
-                mt = os.path.getmtime(full)
-            except OSError:
-                continue
-            key = (d, run, mt)
-            if best is None or key > best[0]:
-                best = (key, full, d, run, mt)
-    if best is None:
+    try:
+        dated = []
+        for e in os.scandir(rootp):
+            if e.is_dir():
+                d0 = _date_from(e.name)
+                if d0:
+                    dated.append((d0, e.path))
+    except OSError:
         return None
-    _k, full, d, run, mt = best
-    return {"path": full, "name": os.path.basename(full), "date": d.isoformat(), "run": run,
-            "mtime": dt.datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
-            "where": f"CTCL vs NMASS backup {d:%d-%m-%Y} / run {run:02d}"}
+    dated.sort(reverse=True)
+    for d0, folder in dated[:15]:                     # the newest date folder normally has it; a few more as a safety net
+        best = None
+        for dp, _dirs, files in os.walk(folder):
+            for fn in files:
+                m = _CTCL_MAIN.match(fn)
+                if not m:
+                    continue
+                rel = Path(dp).relative_to(rootp).parts
+                d = next((x for x in (_date_from(p) for p in rel) if x), d0)
+                run = next((int(p) for p in rel if p.isdigit() and len(p) <= 2), int(m.group(1)))
+                full = os.path.join(dp, fn)
+                try:
+                    mt = os.path.getmtime(full)
+                except OSError:
+                    continue
+                key = (d, run, mt)
+                if best is None or key > best[0]:
+                    best = (key, full, d, run, mt)
+        if best is not None:
+            _k, full, d, run, mt = best
+            return {"path": full, "name": os.path.basename(full), "date": d.isoformat(), "run": run,
+                    "mtime": dt.datetime.fromtimestamp(mt).isoformat(timespec="seconds"),
+                    "where": f"CTCL vs NMASS backup {d:%d-%m-%Y} / run {run:02d}"}
+    return None
 
 
 def risk_report(today: Optional[dt.date] = None) -> Optional[dict]:
