@@ -45,7 +45,10 @@
       RMS.setOnline(true);
       return await r.json();
     } catch (e) {
-      if (!(opts && opts.quiet)) RMS.setOnline(false);
+      // Only a real network failure means the server is down. A slow answer (our own timeout -> AbortError) or an
+      // HTTP error (401 session expired, 500) means the server IS up, so it must not turn the light to "unreachable".
+      const netDown = e && e.name === "TypeError";
+      if (netDown && !(opts && opts.quiet)) RMS.setOnline(false);
       throw e;
     } finally { clearTimeout(t); }
   };
@@ -84,12 +87,13 @@
   /* Sidebar "Server" light: pages like Process Center use plain fetch(), so nothing ever flipped a stale
      "unreachable" back. A tiny /health check every 10 s (and when the tab wakes) keeps it truthful on every page. */
   (function () {
+    let miss = 0;
     function beat() {
       const ctl = new AbortController();
       const t = setTimeout(() => ctl.abort(), 8000);
       fetch("/health", { signal: ctl.signal, cache: "no-store" })
-        .then((r) => RMS.setOnline(!!r.ok))
-        .catch(() => RMS.setOnline(false))
+        .then((r) => { miss = 0; RMS.setOnline(!!r.ok); })
+        .catch(() => { miss += 1; if (miss >= 2) RMS.setOnline(false); })   // one late answer is not "down"
         .finally(() => clearTimeout(t));
     }
     setTimeout(beat, 1500);

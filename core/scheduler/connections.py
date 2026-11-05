@@ -184,6 +184,14 @@ GROUPS: Dict[str, dict] = {
             ("password", "Password", True, ""),
         ],
     },
+    "upload_api": {
+        "label": "Mastertrust upload API (customFileImport - peak margin zips)",
+        "fields": [
+            ("base_url", "API address", False, "https://service.mastertrust.co.in"),
+            ("user_id", "User ID", False, "RMSDELH"),
+            ("password", "Password", True, ""),
+        ],
+    },
     "backoffice": {
         "label": "Back-office API (Bank alerts)",
         "fields": [
@@ -281,7 +289,8 @@ def view() -> List[dict]:
 # the SAME account (same e-mail / same user id); other accounts are never touched. None = one account for the whole group.
 IDENT = {"smtp": "email", "smtpb": "email", "alloc_smtp": "email", "pop3": "username", "pop3b": "username",
          "alloc_pop3": "username", "nse": "login_id", "mcx_sftp": "user", "mcx_eclear": "user_id", "backoffice": "username",
-         "atom": "username", "darwinbox": "username", "kambala_ftp": "user", "common_ftp": "user"}
+         "atom": "username", "darwinbox": "username", "kambala_ftp": "user", "common_ftp": "user",
+         "upload_api": "user_id"}
 
 
 def view_for(process: str) -> List[dict]:

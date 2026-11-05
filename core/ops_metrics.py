@@ -37,16 +37,51 @@ _START_TS = time.time()   # fallback server-start marker (module imports at boot
 _CACHE: dict = {}
 _CACHE_LOCK = threading.Lock()
 
+_REFRESHING: set = set()
+
+
 def _cached(key, ttl, fn):
+    """TTL cache that never makes a caller wait once a value exists.
+    - fresh value            -> returned at once
+    - stale value            -> returned at once, ONE background thread recomputes it
+    - no value yet (startup) -> only the first caller computes; the others wait for that one result
+    Before this, every screen that asked while the value was stale recomputed it itself (scan of every log
+    folder etc.), so 6 open browsers = 6 parallel scans, each 10-50 s, which starved the server."""
     now = time.time()
     with _CACHE_LOCK:
         hit = _CACHE.get(key)
         if hit and now - hit[0] < ttl:
             return hit[1]
-    val = fn()
-    with _CACHE_LOCK:
-        _CACHE[key] = (now, val)
-    return val
+        if hit:
+            if key not in _REFRESHING:
+                _REFRESHING.add(key)
+                threading.Thread(target=_refresh, args=(key, fn), daemon=True, name=f"ops-cache-{key}").start()
+            return hit[1]
+        lock = _FIRST_LOCKS.setdefault(key, threading.Lock())
+    with lock:                                   # first-ever computation: one at a time per key
+        with _CACHE_LOCK:
+            hit = _CACHE.get(key)
+        if hit:
+            return hit[1]
+        val = fn()
+        with _CACHE_LOCK:
+            _CACHE[key] = (time.time(), val)
+        return val
+
+
+_FIRST_LOCKS: dict = {}
+
+
+def _refresh(key, fn):
+    try:
+        val = fn()
+        with _CACHE_LOCK:
+            _CACHE[key] = (time.time(), val)
+    except Exception:
+        pass
+    finally:
+        with _CACHE_LOCK:
+            _REFRESHING.discard(key)
 
 
 # ── pipeline registry view ────────────────────────────────────────────────────

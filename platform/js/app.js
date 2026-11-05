@@ -199,7 +199,7 @@
     // background summary poll even when not on the Dashboard — keeps the bell,
     // sidebar run-dot and server pill live from anywhere in the app.
     RMS.poll(() => {
-      RMS.api("/ops/summary", { quiet: false }).then((s) => {
+      RMS.api("/ops/summary", { quiet: true, timeout: 30000 }).then((s) => {
         RMS.digestRecent(s.recent || []);
         const dot = $("#navRunDot");
         if (dot) dot.hidden = !(s.running && s.running.length);

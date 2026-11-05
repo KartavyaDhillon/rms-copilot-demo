@@ -2614,6 +2614,7 @@ async function tokenCancel(){
   // their pipe's popup state as part of stopping, and /sa/stop covers CLI
   // and PROBABLE too since they share the SA token file/route.
   tokenHideModal();
+  try{ _pxStripsStopped(_tokenSource==='sa' && _tokenCaller==='reco' ? 'reco' : _tokenSource); }catch(e){}
   try{
     if(_tokenSource==='ctcl'){ await fetch(API+'/ctcl/stop',{method:'POST'}); }
     else if(_tokenSource==='ms15'){ await fetch(API+'/ms15/stop',{method:'POST'}); }
@@ -5885,6 +5886,19 @@ async function _ms15RunSmartGo(){
     _pxRunReal('ms15');
   });
 }
+// After Stop, a download strip must not keep spinning "Downloading ... from TCS BANCS": its stream is closed, so no
+// "done"/"end" message will ever arrive to replace it. Show "Stopped" and hide it after a few seconds.
+function _pxStripsStopped(pipe){
+  var ids={ctcl:['ctclMcx90Strip'], ms15:['ms15Mcx90Strip','ms15NmassStrip'], sa:['saMcxDepositStrip'], cli:['cliStrip'], r1r2:['r1r2Strip'], reco:['recoStrip']}[pipe]||[];
+  ids.forEach(function(id){
+    var el=document.getElementById(id);
+    if(!el || el.style.display==='none') return;
+    if(el.innerHTML.indexOf('animation:spin')<0) return;          // only a strip that is still showing "in progress"
+    clearTimeout(el._ft);
+    el.innerHTML='<div style="font-weight:700;color:var(--amber)">&#9632; Stopped by you — nothing is downloading now.</div>';
+    el._ft=setTimeout(function(){ el.style.display='none'; },8000);
+  });
+}
 async function pxStop(pipe){
   // Ownership check happens SERVER-side (api.py's _can_stop()) — ask first and
   // bail out without touching any UI state if denied, so a rejected Stop can
@@ -5898,6 +5912,7 @@ async function pxStop(pipe){
   // This used to close the single shared _pxES, which meant Stop on one box
   // silently killed whatever other box happened to be streaming at the time.
   _pxCloseES(pipe);
+  _pxStripsStopped(pipe);
   if(pipe==='ctcl'){
     try{ if(_ctclMcx90ES){ _ctclMcx90ES.close(); _ctclMcx90ES=null; const b=document.getElementById('ctclMcx90Btn'); if(b){b.disabled=false;b.textContent='📥 Download MCX files';} } }catch(e){}
     captchaStopPoller();
