@@ -66,19 +66,27 @@ def _run(params, ctx):
         bhav_csv = K.unzip_first(zp, inp)
         zp.unlink()
         nse_ymd = ymd
-        mf = f"NSE_CM_security_{dmy}.csv.gz"
-        r2 = _get(s, f"https://nsearchives.nseindia.com/content/cm/interop/{mf}", NSE_H)
-        if _ok(r2, 500):
-            gp = inp / mf
-            gp.write_bytes(r2.content)
-            sec_csv = K.gunzip(gp)
-            gp.unlink()
         break
     if not nse_ymd:
         raise FileNotFoundError("NSE Bhavcopy was not found for any of: " +
                                 ", ".join(f"{x:%d-%m-%Y}" for x in cand_days) + " (see the lines above for each result).")
-    if not sec_csv:
-        raise FileNotFoundError("NSE security file (NSE_CM_security) is not available for that date yet.")
+    # ── NSE security file: its price band (PricRg) is the band that applies from the NEXT market open, so the file
+    # published on trading day X holds the band for day X+1. The bhavcopy of day D was traded inside the band of the
+    # security file of the TRADING DAY BEFORE D (D = 02-11 -> security file of 30-10, not of 02-11). Using the file of
+    # D itself would judge D's prices against D+1's band and give wrong circuits. Old files stay on NSE for months.
+    d_bhav = dt.datetime.strptime(nse_ymd, "%Y%m%d").date()
+    sec_day = H.prev_trading_day(d_bhav)
+    mf = f"NSE_CM_security_{sec_day:%d%m%Y}.csv.gz"
+    ctx.log(f"Price bands: the security file of {sec_day:%d-%m-%Y} ({sec_day:%a}) - the trading day before the Bhavcopy date {d_bhav:%d-%m-%Y}.")
+    r2 = _get(s, f"https://nsearchives.nseindia.com/content/cm/interop/{mf}", NSE_H, retries=8)
+    if not _ok(r2, 500):
+        raise FileNotFoundError(f"NSE security file {mf} (price bands of {sec_day:%d-%m-%Y}) could not be downloaded "
+                                + ("- no response from NSE." if r2 is None else f"- HTTP {r2.status_code}.")
+                                + " The report is not made with another day's bands.")
+    gp = inp / mf
+    gp.write_bytes(r2.content)
+    sec_csv = K.gunzip(gp)
+    gp.unlink()
 
     # ── BSE bhavcopy: same date, else the day before
     bse_csv = None
@@ -197,7 +205,7 @@ def _run(params, ctx):
             "<p><b>Report Highlights:</b></p><ul>"
             "<li>Data sourced from the <b>NSE and BSE cash Bhavcopy files</b> along with the <b>NSE security file</b></li>"
             "<li>Only eligible securities (<b>ElgbltyNrmlMkt not 0</b>) are considered</li>"
-            "<li>Price range (<b>PricRg</b>) is split into <b>lower and upper limits</b>; Open, High, Low, Close and Last price are checked</li>"
+            "<li>Price range (<b>PricRg</b>) is taken from the <b>NSE security file of the trading day before</b> the Bhavcopy date (the band that applied on that day), split into <b>lower and upper limits</b>; Open, High, Low, Close and Last price are checked</li>"
             "<li>Data is aggregated at <b>ISIN level</b></li>"
             "<li><b>COUNT</b> = consecutive days (max 5) a symbol is at the same circuit; resets otherwise</li>"
             "<li><b>Exchange selection:</b> NSE has priority; if NSE is within range but BSE breaches, BSE is used; if NSE has no data, BSE is the fallback</li>"
