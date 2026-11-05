@@ -99,7 +99,7 @@
       '<div id="ulMsg"></div><div id="ulSum" style="font-size:11.5px;color:var(--muted);margin:0 0 10px"></div><div id="ulJob"></div>' +
       '<div class="ul-sec"><div class="ul-h">🔍 Find a client</div>' +
         '<div class="ul-row">' +
-          '<div style="flex:1;min-width:230px"><div class="dc-lbl">Client code(s) - one, or many separated by commas</div><input id="ulClient" class="dc-in" style="width:100%;text-transform:uppercase" placeholder="7GDW01, 4790, 6WBB2040" value="' + esc(ST.client) + '" onkeydown="if(event.key===\'Enter\')ulSearch()" data-tip="Up to 500 codes, separated by commas, spaces or new lines (you can paste a column from Excel)."></div>' +
+          '<div style="flex:1;min-width:230px"><div class="dc-lbl">Client code(s) - one, or many separated by commas · empty = full file of the day</div><input id="ulClient" class="dc-in" style="width:100%;text-transform:uppercase" placeholder="7GDW01, 4790, 6WBB2040" value="' + esc(ST.client) + '" onkeydown="if(event.key===\'Enter\')ulSearch()" data-tip="Up to 500 codes, separated by commas, spaces or new lines (you can paste a column from Excel)."></div>' +
           '<div><div class="dc-lbl">Date</div><input type="date" id="ulDate" class="dc-in" value="' + esc(ST.date) + '" onchange="ulSetDate(this.value)"></div>' +
           '<div><div class="dc-lbl">To (optional)</div><input type="date" id="ulTo" class="dc-in" value="' + esc(ST.to) + '" onchange="ulSetTo(this.value)"></div>' +
           '<button class="dc-btn" id="ulGo" onclick="ulSearch()">🔍 Search</button>' +
@@ -193,8 +193,8 @@
   window.ulSel = function (id, on) { if (on) ST.sel[id] = true; else delete ST.sel[id]; var a = $('ulAll'); if (a) a.checked = zipIds().length === ST.day.length; paintZipBar(); };
   window.ulSelAll = function (on) { ST.sel = {}; if (on) ST.day.forEach(function (e) { ST.sel[e.id] = true; }); paintDay(); };
   window.ulZFmt = function (f) { ST.zfmt = f; paintZipBar(); };
-  window.ulZip = function () {
-    var ids = zipIds(); if (!ids.length) ids = ST.day.map(function (e) { return e.id; });
+  window.ulZip = function (only) {
+    var ids = only || zipIds(); if (!ids.length) ids = ST.day.map(function (e) { return e.id; });
     if (!ids.length || ST.zbusy) return;
     if (ids.length > 60) { say('At most 60 files in one zip - tick fewer.', 'err'); return; }
     ST.zbusy = true; paintZipBar();
@@ -239,6 +239,19 @@
     say('Downloading the full file of ' + dmy(e.date) + ' ' + String(e.time).slice(0, 5) + (e.orig ? ' (original .xlsx)' : ' (CSV in a zip - takes a few seconds to make)') + '.');
   };
 
+  // No client code typed: Search / Client Excel give the FULL file of the day instead - the one snapshot ticked under
+  // Snapshots, else every snapshot of the day (ticked times only, when some are ticked) in one zip.
+  function ulWholeDay() {
+    if (ST.to && ST.to !== ST.date) { say('Full files are for one date - clear the To date, or type a client code.', 'err'); return; }
+    if (!ST.day.length) { say('Nothing stored for ' + dmy(ST.date) + ' - pick a stored date (see the list below).', 'err'); return; }
+    var sel = Object.keys(ST.times).filter(function (k) { return ST.times[k]; });
+    var pick = sel.length ? ST.day.filter(function (e) { return ST.times[String(e.time).slice(0, 5)]; }) : ST.day;
+    if (pick.length === 1) { ST.times = {}; ST.times[String(pick[0].time).slice(0, 5)] = true; ulFullFile(); paintTimes(); return; }
+    say('No client code - downloading the full file of ' + dmy(ST.date) + ': ' + pick.length + ' snapshot' + (pick.length > 1 ? 's' : '') + ' in one zip…');
+    ulZip(pick.map(function (e) { return e.id; }));
+  }
+  window.ulWholeDay = ulWholeDay;
+
   // ───────────────────────── search ─────────────────────────
   function query() {
     var t = Object.keys(ST.times).filter(function (k) { return ST.times[k]; });
@@ -246,7 +259,7 @@
   }
   window.ulSearch = function () {
     var c = $('ulClient'); ST.client = (c ? c.value : ST.client).trim().toUpperCase();
-    if (!ST.client) { say('Type a client code.', 'err'); return; }
+    if (!ST.client) { ulWholeDay(); return; }
     var go = $('ulGo'); if (go) { go.disabled = true; go.innerHTML = '<span class="dc-spin"></span>Searching…'; }
     get('/ulimits/search?' + query()).then(function (j) { ST.res = j; paintRes(); })
       .catch(function () { ST.res = { ok: false, error: 'Server did not answer.' }; paintRes(); })
@@ -254,7 +267,7 @@
   };
   function paintRes() {
     var el = $('ulRes'), r = ST.res; if (!el) return;
-    if (!r) { el.innerHTML = '<div style="font-size:12px;color:var(--dim)">Type one client code (or many, separated by commas) and press Search (or Enter). One client: every snapshot of the day side by side. Many clients: one line per client per snapshot. All columns of the file are shown; values that changed from the snapshot before are in amber.</div>'; return; }
+    if (!r) { el.innerHTML = '<div style="font-size:12px;color:var(--dim)">Type one client code (or many, separated by commas) and press Search (or Enter). Leave it empty and press Search to download the full file of the day (the ticked snapshot, else all snapshots of the day in a zip). One client: every snapshot of the day side by side. Many clients: one line per client per snapshot. All columns of the file are shown; values that changed from the snapshot before are in amber.</div>'; return; }
     if (r.ok === false || r.error) { el.innerHTML = '<div class="dc-msg" style="color:var(--red)">' + esc(r.error || r.detail || 'Search failed') + '</div>'; return; }
     if (!r.rows || !r.rows.length) { el.innerHTML = '<div class="dc-msg" style="color:var(--amber)">' + esc(r.note || 'Not found.') + '</div>'; return; }
     var rows = r.rows, multi = rows.some(function (x) { return x.date !== rows[0].date; });
@@ -301,7 +314,7 @@
   window.ulZero = function (on) { ST.hideZero = on; paintRes(); };
   window.ulClientXlsx = function () {
     var c = $('ulClient'); ST.client = (c ? c.value : ST.client).trim().toUpperCase();
-    if (!ST.client) { say('Type a client code.', 'err'); return; }
+    if (!ST.client) { ulWholeDay(); return; }
     var b = $('ulXls'); if (b) { b.disabled = true; b.innerHTML = '<span class="dc-spin"></span>Making…'; }
     fetch(API + '/ulimits/client.xlsx?' + query()).then(function (r) {
       if (!r.ok) return r.json().then(function (j) { throw new Error(j.detail || ('Server answered ' + r.status)); });

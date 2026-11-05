@@ -2284,7 +2284,11 @@ function _pipeBoxLabel(src){
 }
 function captchaStartPoller(){
   if(_captchaPoller) return;
-  _captchaPoller=setInterval(async()=>{
+  // One check at a time (the 9 checks below used to start again every 2 s even while the previous ones were still
+  // waiting, piling requests up), and none while this tab is hidden - it checks again the moment it is shown.
+  let _captchaTickBusy=false;
+  _captchaPoller=setInterval(()=>{ if(_captchaTickBusy||document.hidden) return; _captchaTickBusy=true; _captchaTick().finally(()=>{ _captchaTickBusy=false; }); },2000);
+  async function _captchaTick(){
     // ── CTCL CAPTCHA — always poll so retry reason shows without hiding modal ──
     if(!_tokenVisible){ try{
       const d=await (await fetch(API+'/ctcl/captcha/pending')).json();
@@ -2374,7 +2378,7 @@ function captchaStartPoller(){
       if(d.pending && !_missingFileVisible && Date.now()>_missingFileSuppressUntil){ missingFileShowModal(d.missing, d.context, d.timeout_at); }
       else if(!d.pending && _missingFileVisible){ missingFileHideModal(); }
     }catch(e){}
-  },2000);
+  }
 }
 // ── MCX file choice (CTCL vs NMASS + Margin Shortage) ─────────────────────────────────────────────────
 // Both MCX files are downloaded by "📥 Download MCX files". WHICH one a run uses is asked in a window every time a run

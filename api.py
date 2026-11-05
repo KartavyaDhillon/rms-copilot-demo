@@ -360,7 +360,7 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=9"></script>'
+                            '<script src="/platform/js/process-locks.js?v=10"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=4"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=12"></script>'
                             '<script src="/platform/js/process-alloc.js?v=11"></script>'
@@ -368,7 +368,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
                             '<script src="/platform/js/process-files70.js?v=5"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
-                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=3"></script></body>', 1)
+                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=4"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -578,31 +578,11 @@ def login_page():
 # error payload instead of ever preventing the whole server from booting.
 
 def _ttl_cached(seconds):
-    """Answer a polled status route from a copy up to `seconds` old, so five open screens polling every few
-    seconds cost ONE real computation, not twenty. If a refresh is already running, other callers get the
-    previous answer straight away instead of piling up behind it (the first caller ever waits for the real one)."""
-    import functools as _ft, threading as _th, time as _tm
-
-    def deco(fn):
-        st = {"t": 0.0, "v": None, "has": False}
-        lock = _th.Lock()
-
-        @_ft.wraps(fn)
-        def wrapper(*a, **k):
-            if st["has"] and _tm.monotonic() - st["t"] < seconds:
-                return st["v"]
-            if not lock.acquire(blocking=not st["has"]):
-                return st["v"]                      # somebody is refreshing: serve the previous answer now
-            try:
-                if st["has"] and _tm.monotonic() - st["t"] < seconds:
-                    return st["v"]
-                v = fn(*a, **k)
-                st["v"], st["t"], st["has"] = v, _tm.monotonic(), True
-                return v
-            finally:
-                lock.release()
-        return wrapper
-    return deco
+    """Polled status routes answer at once from a stored copy; when it is older than `seconds` ONE background thread
+    refreshes it (stale-while-revalidate, core/swr_cache.py). A slow disk can no longer hold server threads and the
+    browser's 6 connections - which is what made screens show "server unreachable"."""
+    from core.swr_cache import cached as _swr
+    return _swr(seconds)
 
 
 @app.get("/ops/summary")
@@ -631,6 +611,7 @@ def ops_timeline():
         return {"error": str(e), "items": []}
 
 @app.get("/ops/overview")
+@_ttl_cached(10)
 def ops_overview():
     try:
         from core import ops_metrics
@@ -652,6 +633,7 @@ def _la_date(s):
     raise HTTPException(400, "bad date")
 
 @app.get("/live-alloc/status")
+@_ttl_cached(4)
 def la_status(date: str = ""):
     from core import live_allocation as _la
     try:
@@ -920,6 +902,7 @@ def _f70_date(s: str = ""):
         raise HTTPException(400, str(e))
 
 @app.get("/files70/status")
+@_ttl_cached(5)
 def f70_status(date: str = ""):
     from core import files70 as _f7
     try:
@@ -1029,6 +1012,7 @@ def dc_meta():
                       for k, c in _dc_.CARDS.items()]}
 
 @app.get("/daycards/status")
+@_ttl_cached(5)
 def dc_status(card: str, date: str = ""):
     _d = _dc(card)
     try:
@@ -1137,6 +1121,7 @@ def _ul_dates(date: str, to: str = ""):
         raise HTTPException(400, str(e))
 
 @app.get("/ulimits/status")
+@_ttl_cached(3)
 def ul_status():
     from core import update_limits as _ul
     return _ul.status()
@@ -1279,6 +1264,7 @@ def _ulimits_startup():
 
 # ── SHORT ALLOCATION AUTO RUN (runs start by themselves; see core/sa_auto.py) ──────────────────────────────
 @app.get("/sa/auto/status")
+@_ttl_cached(5)
 def sa_auto_status():
     from core import sa_auto as _au
     return {"ok": True, **_au.status()}
@@ -1612,6 +1598,7 @@ async def _lock_identity_middleware(request, call_next):
 
 
 @app.get("/ops/tcs-status")
+@_ttl_cached(3)
 def ops_tcs_status():
     """Read-only: who holds the TCS BANCS (MCX eclear) login now, and who is the next automatic user."""
     try:
@@ -1622,6 +1609,7 @@ def ops_tcs_status():
 
 
 @app.get("/ops/locks")
+@_ttl_cached(2)
 def ops_locks():
     try:
         from core import lock_manager
@@ -6172,6 +6160,7 @@ def r1r2_mcx_download_stream():
 
 
 @app.get("/r1r2/readiness")
+@_ttl_cached(5)
 def r1r2_readiness():
     """Check whether all 5 files (CM/FO/CO/NCDEX/MCX) are present in
     R1R2_FOLDER, dated today. Reuses r1_r2_comparison's own
@@ -6203,6 +6192,7 @@ def r1r2_readiness():
 
 
 @app.get("/r1r2/today-status")
+@_ttl_cached(3)
 def r1r2_today_status():
     """Read-only peek at today's meta (.reconciliation_meta.json) — which of
     Afternoon/Evening have already run today (Live has no once-per-day limit
@@ -6367,6 +6357,7 @@ def reco_readiness():
 
 
 @app.get("/reco/today-status")
+@_ttl_cached(3)
 def reco_today_status():
     from core.pipelines import reconciliation as _rc
     import datetime as _rcdt

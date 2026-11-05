@@ -378,14 +378,17 @@
   wrap("saRenderRuns", apply);
 
   /* ── live subscription (SSE, browser auto-reconnects) ───────────────── */
+  /* Was an EventSource (/ops/locks/stream): it kept one of the browser's 6 connections per server busy for ever
+     (two per tab with the main page), so polls queued and screens said "server unreachable". A short poll instead. */
+  function take(d) {
+    try { LOCKS = ((d && d.locks) || []).filter(function (l) { return (l.affects || []).length; }); }
+    catch (e) { return; }
+    apply();
+  }
   function connect() {
-    var es = new EventSource("/ops/locks/stream");
-    es.onmessage = function (m) {
-      try { LOCKS = (JSON.parse(m.data).locks || []).filter(function (l) { return (l.affects || []).length; }); }
-      catch (e) { return; }
-      apply();
-    };
-    es.onerror = function () { /* EventSource retries automatically */ };
+    fetch("/ops/locks", { cache: "no-store", credentials: "same-origin" })
+      .then(function (r) { return r.json(); }).then(take).catch(function () {})
+      .then(function () { setTimeout(connect, document.hidden ? 15000 : 3000); });
   }
   connect();
 

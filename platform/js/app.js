@@ -213,31 +213,33 @@
     // running anywhere; every page (and the embedded console via its own
     // injected overlay) reacts instantly, no refresh needed.
     RMS.locks = [];
-    (function lockStream() {
+    // Was an EventSource (/ops/locks/stream). Each open page held one connection open for ever, and the embedded
+    // Process Center held a second: a browser only has 6 connections per server, so with 2-3 tabs open the polls
+    // queued behind them and the screen showed "server unreachable". A short poll does the same job.
+    (function lockPoll() {
       let known = {};
-      try {
-        const es = new EventSource("/ops/locks/stream");
-        es.onmessage = (m) => {
-          let snap; try { snap = JSON.parse(m.data); } catch (e) { return; }
-          const locks = snap.locks || [];
-          locks.forEach((l) => {
-            if (!known[l.key + l.started_at] && Object.keys(known).length) {
-              // Was an unconditional RMS.toast() — every run start, anywhere on
-              // the console, by anyone, popped a toast for every viewer. With
-              // several pipelines running many times a day that made the toast
-              // stack essentially constant. Record it in the bell (history)
-              // only now; nothing pops up unless the user opens the bell menu.
-              RMS.pushNotif("info", l.label + " started",
-                "by " + (l.by || "unknown user") + (l.ip ? " · " + l.ip : ""));
-            }
-          });
-          known = {};
-          locks.forEach((l) => (known[l.key + l.started_at] = 1));
-          if (!Object.keys(known).length) known = { _empty: 1 };
-          RMS.locks = locks;
-          document.dispatchEvent(new CustomEvent("rms:locks"));
-        };
-      } catch (e) {}
+      function handle(snap) {
+        const locks = (snap && snap.locks) || [];
+        locks.forEach((l) => {
+          if (!known[l.key + l.started_at] && Object.keys(known).length) {
+            // Recorded in the bell (history) only; nothing pops up unless the user opens the bell menu.
+            RMS.pushNotif("info", l.label + " started",
+              "by " + (l.by || "unknown user") + (l.ip ? " · " + l.ip : ""));
+          }
+        });
+        known = {};
+        locks.forEach((l) => (known[l.key + l.started_at] = 1));
+        if (!Object.keys(known).length) known = { _empty: 1 };
+        RMS.locks = locks;
+        document.dispatchEvent(new CustomEvent("rms:locks"));
+      }
+      function tick() {
+        fetch("/ops/locks", { cache: "no-store", credentials: "same-origin" })
+          .then((r) => r.json()).then(handle).catch(() => {})
+          .then(() => setTimeout(tick, document.hidden ? 15000 : 3000));
+      }
+      tick();
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) fetch("/ops/locks", { cache: "no-store" }).then((r) => r.json()).then(handle).catch(() => {}); });
     })();
 
     navigate();
