@@ -368,7 +368,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
                             '<script src="/platform/js/process-files70.js?v=5"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
-                            '<script src="/platform/js/process-saauto.js?v=2"></script></body>', 1)
+                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1118,6 +1118,137 @@ def _daycards_startup():
         _dc_.start_ticker()                      # MASTER FILE's own daily auto run
     except Exception as _e:
         print(f"⚠️  MASTER FILE / SA / EODSAR defaults not applied: {type(_e).__name__}: {_e}")
+
+# ── UPDATE LIMITS DATA (every Update Limits file as Parquet; client lookup by date; see core/update_limits.py) ─────────
+import datetime as _ul_dt, time as _time_mod
+from starlette.concurrency import run_in_threadpool as _ul_rtp
+def _ul_who(request: Request) -> str:
+    try:
+        return _actor(request)[0] or ""
+    except Exception:
+        return ""
+
+def _ul_dates(date: str, to: str = ""):
+    from core import update_limits as _ul
+    try:
+        d1 = _ul.parse_date(date) or _ul_dt.date.today()
+        return d1, _ul.parse_date(to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/ulimits/status")
+def ul_status():
+    from core import update_limits as _ul
+    return _ul.status()
+
+@app.get("/ulimits/day")
+def ul_day(date: str = "", to: str = ""):
+    from core import update_limits as _ul
+    d1, d2 = _ul_dates(date, to)
+    return {"ok": True, "snapshots": [{k: e.get(k) for k in ("id", "date", "time", "time_src", "source", "file", "rows", "cols", "bytes", "stored_at", "by")}
+                                      | {"orig": bool(e.get("src_path")) and os.path.isfile(e.get("src_path") or "")}
+                                      for e in _ul.snapshots(d1, d2)]}
+
+@app.get("/ulimits/search")
+def ul_search(client: str, date: str = "", to: str = "", times: str = ""):
+    from core import update_limits as _ul
+    d1, d2 = _ul_dates(date, to)
+    try:
+        return _ul.search(client, d1, d2, [t for t in times.split(",") if t] or None)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+@app.get("/ulimits/client.xlsx")
+def ul_client_xlsx(client: str, date: str = "", to: str = "", times: str = ""):
+    from core import update_limits as _ul
+    d1, d2 = _ul_dates(date, to)
+    try:
+        p = _ul.client_excel(client, d1, d2, [t for t in times.split(",") if t] or None)
+    except FileNotFoundError:
+        raise HTTPException(404, "this client is not in the snapshots of these dates")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return FileResponse(str(p), filename=re.sub(r"_\d{10}\.xlsx$", ".xlsx", p.name))
+
+@app.get("/ulimits/full")
+def ul_full(id: str, fmt: str = "orig"):
+    from core import update_limits as _ul
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}_\d{6}", id or "") or fmt not in ("orig", "csv", "parquet"):
+        raise HTTPException(400, "bad request")
+    try:
+        p = _ul.full_file(id, fmt)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    return FileResponse(str(p), filename=p.name)
+
+@app.post("/ulimits/upload")
+async def ul_upload(request: Request, name: str, date: str = "", time: str = "", lastmod: str = ""):
+    """One Update Limits file (raw body). Date from the name (else `date`), time from `time` / the name / the file's
+    modified time (`lastmod`, ms, sent by the browser). Checked before the body is read; stored in the background."""
+    from core import update_limits as _ul
+    try:
+        info = _ul.check_upload(name, date, time, lastmod)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "name": name, "error": str(e)}, status_code=400)
+    tmpd = _ul.data_dir() / "tmp"
+    tmpd.mkdir(exist_ok=True)
+    tmp = tmpd / f"up_{os.getpid()}_{int(_time_mod.time() * 1000)}.part"
+    size = 0
+    try:
+        with open(tmp, "wb") as fh:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > 600 * 1024 * 1024:
+                    raise ValueError("file is bigger than 600 MB")
+                fh.write(chunk)
+        if size < 100:
+            raise ValueError("empty file")
+        return await _ul_rtp(_ul.finish_upload, tmp, name, info, _ul_who(request))
+    except ValueError as e:
+        tmp.unlink(missing_ok=True)
+        return JSONResponse({"ok": False, "name": name, "error": str(e)}, status_code=400)
+
+@app.post("/ulimits/load")
+async def ul_load(request: Request):
+    """{from, to, root ('' = the CTCL backup folder)} -> the Update Limits files of those days are stored one by one."""
+    from core import update_limits as _ul
+    body = await request.json()
+    try:
+        d1 = _ul.parse_date(body.get("from"))
+        d2 = _ul.parse_date(body.get("to"), d1)
+        if not d1:
+            raise ValueError("pick the From date")
+        return await _ul_rtp(_ul.load_history, d1, d2, str(body.get("root") or ""), _ul_who(request))
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+@app.post("/ulimits/store-today")
+async def ul_store_today(request: Request):
+    from core import update_limits as _ul
+    return await _ul_rtp(_ul.store_today, _ul_who(request))
+
+@app.post("/ulimits/stop")
+def ul_stop():
+    from core import update_limits as _ul
+    return {"ok": True, "stopped": _ul.stop()}
+
+@app.post("/ulimits/settings")
+async def ul_settings(request: Request):
+    from core import update_limits as _ul
+    body = await request.json()
+    try:
+        s = _ul.save_settings({k: body[k] for k in ("auto", "time", "ctcl_root") if k in body})
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    return {"ok": True, "settings": s}
+
+@app.on_event("startup")
+def _ulimits_startup():
+    try:
+        from core import update_limits as _ul
+        _ul.start_ticker()                       # daily auto store (default 18:00)
+    except Exception as _e:
+        print(f"⚠️  UPDATE LIMITS DATA timer not started: {type(_e).__name__}: {_e}")
 
 # ── SHORT ALLOCATION AUTO RUN (runs start by themselves; see core/sa_auto.py) ──────────────────────────────
 @app.get("/sa/auto/status")

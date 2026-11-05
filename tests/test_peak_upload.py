@@ -56,15 +56,20 @@ class Dates(Base):
         _, todo = P.dates_to_do("X", 7, dt.date(2026, 10, 29), today=dt.date(2026, 11, 5))
         self.assertEqual(todo, [dt.date(2026, 10, 29)])
 
-    def test_seed_from_old_backup(self):
-        old = self.root / "old"
-        (old / "29-10-2026").mkdir(parents=True)
-        (old / "29-10-2026" / "NCL_PEAKMARGIN_29102026.zip").write_bytes(b"x")
-        (old / "28-10-2026").mkdir()                      # no zip -> not counted
+    def test_first_run_is_t2_only(self):
+        _, todo = P.dates_to_do("X", 7, None, today=dt.date(2026, 11, 5))   # empty ledger
+        self.assertEqual(todo, [dt.date(2026, 11, 3)])
+
+    def test_own_backup_counts_as_uploaded(self):
+        b = paths.proc_dir("X", "backup")
+        (b / "29-10-2026").mkdir(parents=True)
+        (b / "29-10-2026" / "NCL_PEAKMARGIN_29102026.zip").write_bytes(b"x")
+        (b / "28-10-2026").mkdir()                        # no zip -> not counted
         c = Ctx()
-        self.assertEqual(P.seed_ledger("X", str(old), c), 1)
+        self.assertEqual(P.sync_from_own_backup("X", c), 1)
         self.assertIn("2026-10-29", P.ledger("X"))
-        self.assertEqual(P.seed_ledger("X", str(old), c), 0)   # only the first run
+        self.assertNotIn("2026-10-28", P.ledger("X"))
+        self.assertEqual(P.sync_from_own_backup("X", c), 0)   # already in the list
 
 
 class Upload(Base):
@@ -103,7 +108,7 @@ class RunLoop(Base):
             P.mark_uploaded("X", dt.date(2026, 10, 29))
             with mock.patch.object(P, "dates_to_do", return_value=(dt.date(2026, 11, 3),
                                                                    [dt.date(2026, 10, 30), dt.date(2026, 11, 3)])):
-                res = P.run_dates("X", {"catch_up_days": 7}, c, one_day, "NCL_PEAKMARGIN", "T.zip", "")
+                res = P.run_dates("X", {"catch_up_days": 7}, c, one_day, "NCL_PEAKMARGIN", "T.zip")
         self.assertEqual(up.call_count, 2)
         self.assertIn("30-10-2026", res)
         led = P.ledger("X")
@@ -125,7 +130,7 @@ class RunLoop(Base):
                 mock.patch.object(P, "dates_to_do", return_value=(dt.date(2026, 11, 3),
                                                                   [dt.date(2026, 10, 30), dt.date(2026, 11, 3)])):
             with self.assertRaises(RuntimeError) as e:
-                P.run_dates("X", {}, Ctx(), one_day, "NCL_PEAKMARGIN", "T.zip", "")
+                P.run_dates("X", {}, Ctx(), one_day, "NCL_PEAKMARGIN", "T.zip")
         self.assertIn("NOT uploaded: 30-10-2026", str(e.exception))
         self.assertIn("2026-11-03", P.ledger("X"))
         self.assertNotIn("2026-10-30", P.ledger("X"))

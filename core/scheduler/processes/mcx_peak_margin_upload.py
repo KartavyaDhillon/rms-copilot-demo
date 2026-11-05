@@ -12,7 +12,6 @@ from core.scheduler import helpers as H, peak_upload as P
 from core.scheduler.catalog import Param, register
 
 FOLDER = "MCX PEAK MARGIN UPLOAD"
-OLD_BACKUP = r"D:\MCX PEAK FILES UPLOAD\backup"
 
 
 def names(d: dt.date, user: str) -> list:
@@ -46,7 +45,7 @@ def _one_day_factory(params, ctx):
 
 @H.logged(FOLDER)
 def _run(params, ctx):
-    return P.run_dates(FOLDER, params, ctx, _one_day_factory(params, ctx), "MCX_PEAKMARGIN", "MCX_PEAKMARGIN_DDMMYYYY.zip", OLD_BACKUP)
+    return P.run_dates(FOLDER, params, ctx, _one_day_factory(params, ctx), "MCX_PEAKMARGIN", "MCX_PEAKMARGIN_DDMMYYYY.zip")
 
 
 register(
@@ -60,8 +59,6 @@ register(
               help="Also upload the trading days of this many days before T-2 that were never uploaded. 0 = only T-2."),
         Param("force_date", "Upload only this trade date (DD-MM-YYYY)", "str", default="",
               help="Leave empty normally. Filled = upload exactly this day (again), nothing else."),
-        Param("old_backup_dir", "Old script's backup folder (first run only)", "str", scope="process",
-              default=OLD_BACKUP, help="Dates found here count as already uploaded on the very first run."),
     ],
     retry_safe=False, parallel_safe=False, category="Uploads", folder=FOLDER, uses=("mcx_sftp", "upload_api"),
 )

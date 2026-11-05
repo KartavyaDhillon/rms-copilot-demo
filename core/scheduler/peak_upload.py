@@ -9,9 +9,9 @@ What changed compared with the two scripts
   and 29-10 was uploaded). Now the date is T-2 from the market-holiday calendar (the same holidays_list.csv as the rest
   of the scheduler), and a missing file is an ERROR (failure alert), never a reason to pick another day.
 * DAYS THAT WERE MISSED: every uploaded trade date is written to a ledger. Each run also uploads the trading days of the
-  last N days (setting "Catch up missed days") that are not in the ledger yet, oldest first. On the very first run the
-  ledger is filled from the old scripts' backup folders (backup\\<dd-mm-yyyy>), so what they already uploaded is not
-  sent again.
+  last N days (setting "Catch up missed days") that are not in the ledger yet, oldest first. Each run also counts every
+  data\\scheduler\\<process>\\backup\\<dd-mm-yyyy> folder holding a zip as uploaded (own backup only). The very first
+  run on a server (empty ledger) uploads T-2 only - catch-up starts from the next run.
 * FILES:
     NSE CM/FO/CO .lis   -> NSE extranet (Scheduler > Connections > NSE), then the 76 FILES DOWNLOADER day folder.
     MCX 8 peak csv      -> MCX file portal (Connections > MCX file portal), then the 76 FILES DOWNLOADER day folder.
@@ -55,26 +55,29 @@ def mark_uploaded(folder: str, d: dt.date, note: str = ""):
     _ledger_file(folder).write_text(json.dumps({k: led[k] for k in keep}, indent=1), encoding="utf-8")
 
 
-def seed_ledger(folder: str, old_backup: str, ctx) -> int:
-    """First run only: every backup\\<dd-mm-yyyy> folder of the old script that holds a zip = already uploaded."""
-    if _ledger_file(folder).exists() or not old_backup:
-        return 0
-    led, n = {}, 0
-    root = Path(old_backup)
+def sync_from_own_backup(folder: str, ctx) -> int:
+    """Every run: each data\\scheduler\\<process>\\backup\\<dd-mm-yyyy> folder that holds a zip = already uploaded
+    (merged into the list, never removes anything). Only the process's OWN backup is looked at."""
+    led = ledger(folder)
+    n = 0
+    root = paths.proc_dir(folder, "backup")
     try:
         for sub in root.iterdir():
             try:
                 d = dt.datetime.strptime(sub.name, "%d-%m-%Y").date()
             except ValueError:
                 continue
+            if d.isoformat() in led:
+                continue
             if sub.is_dir() and any(f.suffix.lower() == ".zip" for f in sub.iterdir()):
-                led[d.isoformat()] = "uploaded by the old script (from its backup folder)"
+                led[d.isoformat()] = "zip found in this process's backup folder"
                 n += 1
     except OSError as e:
-        ctx.log(f"Old backup folder not readable ({old_backup}): {e} - starting with an empty list.")
-    _ledger_file(folder).write_text(json.dumps(led, indent=1), encoding="utf-8")
+        ctx.log(f"Backup folder not readable ({root}): {e}")
     if n:
-        ctx.log(f"First run: {n} trade date(s) found in the old backup folder {old_backup} - they count as uploaded.")
+        keep = sorted(led)[-400:]
+        _ledger_file(folder).write_text(json.dumps({k: led[k] for k in keep}, indent=1), encoding="utf-8")
+        ctx.log(f"{n} trade date(s) found in backup\\ - they count as uploaded.")
     return n
 
 
@@ -86,6 +89,8 @@ def dates_to_do(folder: str, catch_up_days: int, force: Optional[dt.date], today
     if force:
         return t2, [force]
     led = ledger(folder)
+    if not led:                       # very first run on this server: nothing to compare with -> T-2 only, no catch-up
+        return t2, [t2]
     todo, d = [], t2
     oldest = t2 - dt.timedelta(days=max(0, int(catch_up_days or 0)))
     while d >= oldest:
@@ -305,12 +310,12 @@ def archive(folder: str, d: dt.date, keep: List[Path], work: Path, ctx) -> Path:
 
 # ───────────────────────────── the common run loop ─────────────────────────────
 def run_dates(folder: str, params, ctx, one_day: Callable[[dt.date, Path], List[Path]], zip_prefix: str,
-              template_name: str, old_backup_default: str) -> str:
+              template_name: str) -> str:
     """one_day(d, work_dir) must return the files to zip, or raise when a mandatory file is missing."""
     force = parse_force_date(params.get("force_date"))
     if not force and getattr(ctx, "trigger", "") != H.MANUAL and not H.is_trading_day(dt.date.today()):
         raise H.Skipped(f"{dt.date.today():%d-%m-%Y} is not a trading day (weekend / market holiday) - nothing to do.")
-    seed_ledger(folder, (params.get("old_backup_dir") or old_backup_default).strip(), ctx)
+    sync_from_own_backup(folder, ctx)
     t2, todo = dates_to_do(folder, int(params.get("catch_up_days") or 0), force)
     ctx.log(f"T-2 trade date on the holiday calendar: {t2:%d-%m-%Y} ({t2:%A}).")
     if not todo:
