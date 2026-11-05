@@ -634,9 +634,14 @@
     const g = ((S.conns && S.conns.groups) || []).find((x) => x.group === group);
     return !!g && g.fields.every((f) => f.optional || (f.secret ? f.set : !!f.value));
   }
+  // what THIS process sees (its own saved copy, else the shared values) - sent by /sched/processes as creds_ready
+  function procConnReady(p, group) {
+    if (p && p.creds_ready && group in p.creds_ready) return !!p.creds_ready[group];
+    return connReady(group);
+  }
   const CONN_NAME = { whatsapp: "WhatsApp", smtp: "E-mail (SMTP)", pop3: "Mailbox (POP3)",
     smtpb: "E-mail 2 (SMTP)", pop3b: "Mailbox 2 (POP3)", nse: "NSE Extranet", kambala_ftp: "Kambala FTP", alloc_pop3: "Mailbox (POP3)", alloc_smtp: "E-mail (SMTP)", mcx_sftp: "MCX portal",
-    mcx_eclear: "MCX eclear", atom: "ATOM", backoffice: "Back-office API", client_margin: "Excel passwords" };
+    mcx_eclear: "MCX eclear", atom: "ATOM", backoffice: "Back-office API", client_margin: "Excel passwords", upload_api: "Upload API" };
   const LOGO = { mcx_web_morning_email: "MX", partic_id_email: "PI", sn327_whatsapp: "327", sn359_whatsapp: "359",
     co_bo_blocking_file: "CB", otm_3_9_blocking_files: "3-9", contract_delta: "CD", persistent_noise_creators: "PN",
     cm_deloi_file: "DL", slbm_reports: "SL", fo_reports: "FO", mcx_restricted_basket: "MR", circuit_validation: "CV",
@@ -658,7 +663,7 @@
       const needPhone = procParams.some((q) => q.fmt === "phones" && q.required && !String(((S.pset && S.pset[p.key]) || {})[q.name] || "").trim());
       if (isMail) items.push('<button class="sch-tool' + (needMail ? " warn" : "") + '" data-recip="' + esc(p.key) + '" data-kind="mail">✉️ Email To / CC</button>');
       if (isPhone) items.push('<button class="sch-tool' + (needPhone ? " warn" : "") + '" data-recip="' + esc(p.key) + '" data-kind="phone">📱 WhatsApp numbers</button>');
-      if ((p.uses || []).length) items.push('<button class="sch-tool' + ((p.uses || []).every(connReady) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>');
+      if ((p.uses || []).length) items.push('<button class="sch-tool' + ((p.uses || []).every((g) => procConnReady(p, g)) ? "" : " warn") + '" data-cred="' + esc(p.key) + '">🔑 Credentials</button>');
       if (hasUp) items.push('<button class="sch-tool green" data-upload="' + esc(p.key) + '">⬆️ Upload files</button>');
       if (p.key === "rms_limits_mand_kambala") items.push('<button class="sch-tool green" data-addcodes="1">➕ Add client codes</button>');
       items.push('<button class="sch-tool" data-logs="' + esc(p.key) + '">📜 Logs</button>');
@@ -687,8 +692,8 @@
         '<div class="sch-line"><span class="t">' + esc(s.trigger_text) + " · " + esc(s.days_text) + '</span><span class="n">Next ' + esc(s.next_run_text) +
         '</span><button class="sch-link" data-edit="' + s.id + '">Edit</button></div>').join("") +
         (mine.length > 2 ? '<div class="sch-none">+ ' + (mine.length - 2) + " more on the Schedules tab</div>" : "");
-      const chips = (p.uses || []).map((g) => '<span class="badge ' + (connReady(g) ? "ok" : "warn") + '" data-cred="' + esc(p.key) + '" style="cursor:pointer" title="Open credentials">' +
-        esc(CONN_NAME[g] || g) + (connReady(g) ? " ✓" : " — not set") + "</span>").join(" ");
+      const chips = (p.uses || []).map((g) => '<span class="badge ' + (procConnReady(p, g) ? "ok" : "warn") + '" data-cred="' + esc(p.key) + '" style="cursor:pointer" title="Open credentials">' +
+        esc(CONN_NAME[g] || g) + (procConnReady(p, g) ? " ✓" : " — not set") + "</span>").join(" ");
       const wa = (p.uses || []).includes("whatsapp");
       const logo = LOGO[p.key] || p.name.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
       return '<div class="sch-box" data-pk="' + esc(p.key) + '"><div class="sch-head"><div class="sch-logo ' + (wa ? "wa" : "mail") + '">' + esc(logo) + "</div>" +

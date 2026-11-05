@@ -100,7 +100,22 @@ def processes(request: Request):
     who, err = _guard(request, False)
     if err:
         return err
-    return {"processes": [d.to_dict() for d in catalog.all_defs()]}
+    out = []
+    for d in catalog.all_defs():
+        item = d.to_dict()
+        # Which credentials THIS process sees as complete - its own copy when it has one (saved from its Credentials
+        # button), otherwise the shared values. The page used to check only the shared values, so a process whose
+        # credentials were saved on the process itself stayed yellow ("not set") although it was ready.
+        try:
+            from core.scheduler import connections as _c
+            groups = {g["group"]: g for g in _c.view_for(d.key)}
+            item["creds_ready"] = {u: bool(groups.get(u)) and all(
+                f.get("optional") or (f.get("set") if f.get("secret") else bool(f.get("value")))
+                for f in groups[u]["fields"]) for u in (d.uses or ()) if u in groups}
+        except Exception:
+            pass
+        out.append(item)
+    return {"processes": out}
 
 
 @router.get("/summary")
