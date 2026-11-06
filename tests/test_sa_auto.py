@@ -16,20 +16,18 @@ import sa_peak                            # noqa: E402
 
 
 class PeakNumbers(unittest.TestCase):
-    def test_cash_and_fo_stop_at_4_the_rest_go_to_8(self):
-        got = [sa_peak.suffixes(i) for i in range(1, 9)]
+    def test_every_run_uses_its_own_peak_file_1_to_4(self):
+        got = [sa_peak.suffixes(i) for i in range(1, 5)]
         self.assertEqual(got[3], ("i04", "i04", "04"))
-        for n in (5, 6, 7, 8):
-            cf, co, mx = got[n - 1]
-            self.assertEqual(cf, "i04")                  # cash / fo: the 4th file
-            self.assertEqual(co, f"i{n:02d}")            # CO and MCX/NCCL: their own file
-            self.assertEqual(mx, f"{n:02d}")
+        for n in (1, 2, 3, 4):
+            self.assertEqual(got[n - 1], (f"i{n:02d}", f"i{n:02d}", f"{n:02d}"))
         self.assertFalse(sa_peak.reuses_cf(4))
-        self.assertTrue(sa_peak.reuses_cf(5))
 
-    def test_run_9_is_refused(self):
-        with self.assertRaises(ValueError):
-            sa_peak.suffixes(9)
+    def test_runs_5_to_8_no_longer_exist(self):
+        for n in (5, 6, 7, 8, 9):
+            with self.assertRaises(ValueError):
+                sa_peak.suffixes(n)
+        self.assertEqual((SA.MAX_RUN, AU.MAX_RUN, sa_peak.MAX_RUN), (4, 4, 4))
 
     def test_4th_cash_fo_files_are_copied_back_from_run_4_backup(self):
         with tempfile.TemporaryDirectory() as d:
@@ -50,7 +48,7 @@ class Base(unittest.TestCase):
         self.old = SA.LOG_DIR, SA.STATUS_FILE
         SA.LOG_DIR = self.tmp.name
         SA.STATUS_FILE = os.path.join(self.tmp.name, "_run_status.json")
-        for k in ("SA_RUN5_TIME", "SA_AUTO_RUN5", "SA_WA_FAILURE_ALERT"):
+        for k in ("SA_RUN1_TIME", "SA_AUTO_RUN1", "SA_RUN5_TIME", "SA_AUTO_RUN5", "SA_WA_FAILURE_ALERT"):
             os.environ.pop(k, None)
 
     def tearDown(self):
@@ -59,59 +57,59 @@ class Base(unittest.TestCase):
 
 
 class Settings(Base):
-    def test_defaults_runs_5_and_6_auto_with_the_asked_times(self):
+    def test_only_runs_1_to_4_exist_all_manual_by_default(self):
         st = AU.get_settings()
-        self.assertEqual([st["runs"][str(n)]["time"] for n in (5, 6, 7, 8)], ["17:45", "19:30", "21:30", "23:30"])
-        self.assertEqual([st["runs"][str(n)]["auto"] for n in range(1, 9)], [False] * 4 + [True, True, False, False])
+        self.assertEqual(sorted(st["runs"]), ["1", "2", "3", "4"])
+        self.assertEqual([st["runs"][str(n)]["auto"] for n in range(1, 5)], [False] * 4)
         self.assertEqual((st["predl_min"], st["fresh_min"], st["wait_min"], st["retries"]), (15, 45, 15, 2))
-        for n in range(1, 9):                            # an automatic run waits the same 15 minutes whichever run it is
+        for n in range(1, 5):                            # an automatic run waits the same 15 minutes whichever run it is
             self.assertEqual(AU.wait_minutes(n, st), 15)
 
     def test_save_and_validate(self):
-        AU.save_settings({"runs": {"7": {"time": "21:45", "auto": True}}, "wait_min": 20})
+        AU.save_settings({"runs": {"4": {"time": "21:45", "auto": True}}, "wait_min": 20})
         st = AU.get_settings()
-        self.assertEqual(st["runs"]["7"], {"time": "21:45", "auto": True})
+        self.assertEqual(st["runs"]["4"], {"time": "21:45", "auto": True})
         self.assertEqual(st["wait_min"], 20)
         with self.assertRaises(ValueError):
-            AU.save_settings({"runs": {"5": {"time": "25:99"}}})
-        with self.assertRaises(ValueError):
-            AU.save_settings({"runs": {"9": {"auto": True}}})
+            AU.save_settings({"runs": {"4": {"time": "25:99"}}})
+        for n in ("5", "8", "9"):
+            with self.assertRaises(ValueError):
+                AU.save_settings({"runs": {n: {"auto": True}}})
 
-    def test_windows_of_runs_5_to_8_exist(self):
-        w = SA.cfg()["windows"]
-        self.assertEqual(w[5], "17:45-19:29")
-        self.assertEqual(w[8], "23:30-23:59")
+    def test_only_four_run_windows_exist(self):
+        self.assertEqual(sorted(SA.cfg()["windows"]), [1, 2, 3, 4])
 
 
 class Timer(Base):
     def at(self, hh, mm):
         return dt.datetime(2026, 10, 28, hh, mm)
 
-    def test_deposit_fifteen_minutes_before_then_the_run(self):
-        st, state = AU.get_settings(), {"date": "x", "runs": {}}
-        self.assertIsNone(AU.due_action(self.at(17, 29), st, state))
-        self.assertEqual(AU.due_action(self.at(17, 30), st, state), ("deposit", 5))
-        state["runs"]["5"] = {"deposit": "done"}
-        self.assertIsNone(AU.due_action(self.at(17, 44), st, state))
-        self.assertEqual(AU.due_action(self.at(17, 45), st, state), ("run", 5))
-
-    def test_runs_7_and_8_have_no_deposit_step_and_are_off_by_default(self):
+    def auto1(self):
+        """Settings with run 1 switched on at 17:45 (nothing is automatic by default any more)."""
         st = AU.get_settings()
-        done = {"date": "x", "runs": {"5": {"status": "done"}, "6": {"status": "done"}}}
-        self.assertIsNone(AU.due_action(self.at(21, 35), st, done))        # 7 is off: nothing, and no deposit step for it anyway
-        st["runs"]["7"]["auto"] = True
-        self.assertIsNone(AU.due_action(self.at(21, 20), st, done))        # no deposit pre-step for run 7
-        self.assertEqual(AU.due_action(self.at(21, 31), st, done), ("run", 7))
+        st["runs"]["1"].update(auto=True, time="17:45")
+        return st
+
+    def test_deposit_fifteen_minutes_before_then_the_run(self):
+        st, state = self.auto1(), {"date": "x", "runs": {}}
+        self.assertIsNone(AU.due_action(self.at(17, 29), st, state))
+        self.assertEqual(AU.due_action(self.at(17, 30), st, state), ("deposit", 1))
+        state["runs"]["1"] = {"deposit": "done"}
+        self.assertIsNone(AU.due_action(self.at(17, 44), st, state))
+        self.assertEqual(AU.due_action(self.at(17, 45), st, state), ("run", 1))
+
+    def test_nothing_is_automatic_by_default(self):
+        self.assertIsNone(AU.due_action(self.at(17, 45), AU.get_settings(), {"date": "x", "runs": {}}))
 
     def test_one_attempt_per_day_and_missed_after_grace(self):
-        st = AU.get_settings()
+        st = self.auto1()
         for status in ("done", "failed", "running", "skipped", "stopped", "waiting for peak file (15 min)"):
-            self.assertIsNone(AU.due_action(self.at(17, 50), st, {"date": "x", "runs": {"5": {"status": status, "deposit": "done"}}}), status)
-        self.assertEqual(AU.due_action(self.at(19, 20), st, {"date": "x", "runs": {"5": {"deposit": "done"}}})[0:2], ("missed", 5))
+            self.assertIsNone(AU.due_action(self.at(17, 50), st, {"date": "x", "runs": {"1": {"status": status, "deposit": "done"}}}), status)
+        self.assertEqual(AU.due_action(self.at(19, 20), st, {"date": "x", "runs": {"1": {"deposit": "done"}}})[0:2], ("missed", 1))
 
     def test_a_run_done_by_hand_is_not_started_again(self):
-        SA._record("SA-05", overall="done", code2="done")
-        self.assertEqual(AU.due_action(self.at(17, 50), AU.get_settings(), {"date": "x", "runs": {}}), ("mark_done", 5))
+        SA._record("SA-01", overall="done", code2="done")
+        self.assertEqual(AU.due_action(self.at(17, 50), self.auto1(), {"date": "x", "runs": {}}), ("mark_done", 1))
 
     def test_does_nothing_while_a_run_is_going_on(self):
         SA._SA["running"] = True
@@ -168,7 +166,7 @@ class Deposit(Base):
             SA.cfg = lambda: {**old(), "output": d}
             calls = []
             try:
-                r = AU.step_deposit(5, download=lambda: calls.append(1) or (True, "ok"))
+                r = AU.step_deposit(1, download=lambda: calls.append(1) or (True, "ok"))
             finally:
                 SA.cfg = old
             self.assertEqual(r["status"], "skipped")
@@ -181,7 +179,7 @@ class Deposit(Base):
             SA.cfg = lambda: {**old(), "output": d}
             seq = [(False, "token refused"), (True, "done")]
             try:
-                r = AU.step_deposit(5, download=lambda: seq.pop(0), sleep=lambda s: None)
+                r = AU.step_deposit(1, download=lambda: seq.pop(0), sleep=lambda s: None)
             finally:
                 SA.cfg = old
                 os.environ.pop("TCS_SESSION_LOCK_DIR", None)
@@ -195,8 +193,8 @@ class RunSlot(Base):
 
         def run(n):
             tries.append(n)
-            return {"ok": False, "msg": "Download failed", "peak_missing": "MCX_PeakMargin56720_20261028_05.csv", "stopped": False}
-        rs = AU.run_slot(5, run=run, sleep=sleeps.append, alert=lambda n, h, d: alerts.append((n, h, d)) or {"sent": True})
+            return {"ok": False, "msg": "Download failed", "peak_missing": "MCX_PeakMargin56720_20261028_01.csv", "stopped": False}
+        rs = AU.run_slot(1, run=run, sleep=sleeps.append, alert=lambda n, h, d: alerts.append((n, h, d)) or {"sent": True})
         self.assertEqual(len(tries), 3)                      # first try + 2 retries
         self.assertEqual(sleeps, [900, 900])                 # 15 minutes each
         self.assertEqual(rs["status"], "failed")
@@ -210,8 +208,8 @@ class RunSlot(Base):
             old = SA.cfg
             SA.cfg = lambda: {**old(), "output": d}                     # no MCX_DEPOSIT file in the folder
             try:
-                AU._upd(5, deposit="failed", deposit_alert_sent=True)
-                rs = AU.run_slot(5, run=lambda n: {"ok": False, "msg": "files missing", "peak_missing": None, "stopped": False},
+                AU._upd(1, deposit="failed", deposit_alert_sent=True)
+                rs = AU.run_slot(1, run=lambda n: {"ok": False, "msg": "files missing", "peak_missing": None, "stopped": False},
                                  sleep=lambda s: None, alert=lambda n, h, dd: alerts.append(h) or {"sent": True})
             finally:
                 SA.cfg = old
@@ -224,14 +222,14 @@ class RunSlot(Base):
             old = SA.cfg
             SA.cfg = lambda: {**old(), "output": d}
             try:
-                AU._upd(5, deposit="failed", deposit_alert_sent=True)
-                AU.run_slot(5, run=lambda n: {"ok": False, "msg": "x", "peak_missing": "MCX_PeakMargin.csv", "stopped": False},
+                AU._upd(1, deposit="failed", deposit_alert_sent=True)
+                AU.run_slot(1, run=lambda n: {"ok": False, "msg": "x", "peak_missing": "MCX_PeakMargin.csv", "stopped": False},
                             sleep=lambda s: None, alert=lambda n, h, dd: alerts.append(h) or {"sent": True})
             finally:
                 SA.cfg = old
         self.assertEqual(len(alerts), 1)                                 # a missing peak file is a different problem: its alert goes
 
-    def test_run_1_on_auto_follows_the_same_steps_as_5_and_6(self):
+    def test_run_1_on_auto_waits_15_minutes_not_5(self):
         sleeps = []
         AU.run_slot(1, run=lambda n: {"ok": False, "msg": "x", "peak_missing": "f", "stopped": False}, sleep=sleeps.append,
                     alert=lambda *a: {"sent": False})
@@ -243,18 +241,18 @@ class RunSlot(Base):
         st["runs"]["1"]["time"] = t = "08:30"
         h, m = [int(x) for x in t.split(":")]
         pre = dt.datetime(2026, 10, 28, h, m) - dt.timedelta(minutes=15)
-        self.assertEqual(AU.due_action(pre, st, {"date": "x", "runs": {"5": {"status": "done"}, "6": {"status": "done"}}}), ("deposit", 1))
+        self.assertEqual(AU.due_action(pre, st, {"date": "x", "runs": {}}), ("deposit", 1))
 
     def test_success_on_the_second_try_sends_nothing(self):
         seq = [{"ok": False, "msg": "x", "peak_missing": "f", "stopped": False}, {"ok": True, "msg": "", "peak_missing": None, "stopped": False}]
         alerts = []
-        rs = AU.run_slot(6, run=lambda n: seq.pop(0), sleep=lambda s: None, alert=lambda *a: alerts.append(a) or {})
+        rs = AU.run_slot(2, run=lambda n: seq.pop(0), sleep=lambda s: None, alert=lambda *a: alerts.append(a) or {})
         self.assertEqual(rs["status"], "done")
         self.assertEqual(alerts, [])
 
     def test_other_failure_alerts_at_once_without_waiting(self):
         sleeps, alerts = [], []
-        rs = AU.run_slot(5, run=lambda n: {"ok": False, "msg": "SA Processing failed", "peak_missing": None, "stopped": False},
+        rs = AU.run_slot(1, run=lambda n: {"ok": False, "msg": "SA Processing failed", "peak_missing": None, "stopped": False},
                          sleep=sleeps.append, alert=lambda n, h, d: alerts.append(h) or {"sent": True})
         self.assertEqual(sleeps, [])
         self.assertEqual(len(alerts), 1)
@@ -262,13 +260,13 @@ class RunSlot(Base):
 
     def test_stopped_by_a_person_is_not_retried_or_alerted(self):
         alerts = []
-        rs = AU.run_slot(5, run=lambda n: {"ok": False, "msg": "stopped", "peak_missing": None, "stopped": True},
+        rs = AU.run_slot(1, run=lambda n: {"ok": False, "msg": "stopped", "peak_missing": None, "stopped": True},
                          sleep=lambda s: None, alert=lambda *a: alerts.append(a) or {})
         self.assertEqual(rs["status"], "stopped")
         self.assertEqual(alerts, [])
 
     def test_alert_without_a_number_says_why(self):
-        r = AU.send_alert(5, "h", "d")
+        r = AU.send_alert(1, "h", "d")
         self.assertFalse(r["sent"])
         self.assertIn("FAILURE ALERT", r["reason"])
 
@@ -276,7 +274,7 @@ class RunSlot(Base):
         os.environ["SA_WA_FAILURE_ALERT"] = "9812345678, +919876543210"
         got = []
         try:
-            r = AU.send_alert(5, "h", "d", sender=lambda nums, h, d: got.append(nums))
+            r = AU.send_alert(1, "h", "d", sender=lambda nums, h, d: got.append(nums))
         finally:
             os.environ.pop("SA_WA_FAILURE_ALERT", None)
         self.assertTrue(r["sent"])
@@ -292,60 +290,3 @@ class CheckModeStops(Base):
         self.assertEqual(SA.cl_runs(), {5, 6})
         with mock.patch.dict(os.environ, {"SA_CL_RUNS": "off"}):
             self.assertEqual(SA.cl_runs(), set())
-
-
-class OrchestratorRuns5to8(Base):
-    """stream_short_allocation with stand-in scripts: runs 5-8 do Download + SA Processing and never LAS Funding."""
-
-    def setUp(self):
-        super().setUp()
-        self._cl = mock.patch.object(SA, "_download_client_collaterals", lambda out_dir, tag, put: (True, ""))   # check mode: no real NMASS login here
-        self._cl.start()
-        self.addCleanup(self._cl.stop)
-        self.d = tempfile.TemporaryDirectory()
-        r = self.d.name
-        self.codes = os.path.join(r, "codes"); os.makedirs(self.codes)
-        self.state = os.path.join(r, "run_state.txt")
-        open(self.state, "w").write(f"DATE={dt.date.today().isoformat()}\nRUN=5\nRETRY=0\n")
-        self.flag = os.path.join(r, "missing.flag")
-        self.las = os.path.join(r, "las_ran.txt")
-        open(os.path.join(self.codes, SA.CODE1), "w").write(
-            "import os,sys\n"
-            f"if os.path.exists(r'{self.flag}') and os.getenv('SA_AUTO_RUN')=='1':\n"
-            "    print('[SA_PEAK_MISSING] MCX_PeakMargin_05.csv'); sys.exit(3)\n"
-            "print('downloaded'); sys.exit(0)\n")
-        open(os.path.join(self.codes, SA.CODE2), "w").write("print('processed')\n")
-        for s in (SA.CODE3, SA.CODE4):
-            open(os.path.join(self.codes, s), "w").write(f"open(r'{self.las}','w').write('x')\n")
-        self.env = {"SA_CODES_DIR": self.codes, "SA_STATE_FILE": self.state, "SA_OUTPUT_DIR": r,
-                    "SA_LAS_FUNDING_DIR": r, "SA_PYTHON": sys.executable}
-        self.saved = {k: os.environ.get(k) for k in self.env}
-        os.environ.update(self.env)
-        import core.env_boot as eb
-        self.eb_reload, eb.reload = eb.reload, (lambda *a, **k: None)   # keep the test's paths
-
-    def tearDown(self):
-        import core.env_boot as eb
-        eb.reload = self.eb_reload
-        for k, v in self.saved.items():
-            os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
-        self.d.cleanup()
-        super().tearDown()
-
-    def test_run_5_downloads_processes_and_never_runs_las(self):
-        evs = list(SA.stream_short_allocation("05"))
-        self.assertTrue(any(e.get("type") == "done" and e.get("ok") for e in evs), evs)
-        self.assertFalse(os.path.exists(self.las))
-        self.assertEqual(SA.get_run_status("SA-05").get("overall"), "done")
-
-    def test_auto_run_reports_the_missing_peak_file_without_a_popup(self):
-        open(self.flag, "w").write("x")
-        res = AU._run_stream(5)
-        self.assertFalse(res["ok"])
-        self.assertIn("MCX_PeakMargin_05.csv", res["peak_missing"] or "")
-        self.assertFalse(os.path.exists(self.las))
-
-    def test_same_missing_file_does_not_stop_a_manual_run_from_the_normal_flow(self):
-        open(self.flag, "w").write("x")                       # not auto: the script behaves as before (exit 0 here)
-        evs = list(SA.stream_short_allocation("05"))
-        self.assertTrue(any(e.get("type") == "done" and e.get("ok") for e in evs), evs)

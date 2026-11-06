@@ -30,8 +30,8 @@ from core import short_allocation as SA
 
 MAX_RUN = SA.MAX_RUN
 DEPOSIT_RUNS = 6                       # the MCX deposit pre-step exists for runs 1-6 only
-_DEFAULT_TIME = {5: "17:45", 6: "19:30", 7: "21:30", 8: "23:30"}
-_DEFAULT_AUTO = {5: True, 6: True}     # for now only runs 5 and 6 are automatic
+_DEFAULT_TIME = {}                     # runs 5-8 were removed; runs 1-4 are started by hand unless Auto is switched on
+_DEFAULT_AUTO = {}
 _LOCK = threading.RLock()
 _TICK = {"thread": None, "stop": threading.Event(), "busy": None}
 

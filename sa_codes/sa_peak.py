@@ -8,7 +8,7 @@ import glob
 import os
 import shutil
 
-MAX_RUN = 8
+MAX_RUN = 4
 
 
 def _cap(name, default):
@@ -24,8 +24,8 @@ def suffixes(run_no):
     if not 1 <= n <= MAX_RUN:
         raise ValueError(f"run {n} is outside 1..{MAX_RUN}")
     cf = min(n, _cap("SA_PEAK_CAP_CF", 4))
-    co = min(n, _cap("SA_PEAK_CAP_CO", 8))
-    mx = min(n, _cap("SA_PEAK_CAP_MCX", 8))
+    co = min(n, _cap("SA_PEAK_CAP_CO", 4))
+    mx = min(n, _cap("SA_PEAK_CAP_MCX", 4))
     return f"i{cf:02d}", f"i{co:02d}", f"{mx:02d}"
 
 

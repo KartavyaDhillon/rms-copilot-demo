@@ -421,9 +421,9 @@ def get_run_suffix():
     if _forced.isdigit():
         run_no = int(_forced)
 
-    # 🛑 MAX 8 RUNS PER DAY (runs 5-8: Short Allocation only, no LAS Funding)
-    if run_no > 8:
-        print("🛑 All 8 runs already completed for today.")
+    # 🛑 MAX 4 RUNS PER DAY (runs 5-8 were removed)
+    if run_no > 4:
+        print("🛑 All 4 runs already completed for today.")
         sys.exit(0)
 
     # SAVE STATE (before execution)
@@ -434,7 +434,7 @@ def get_run_suffix():
             f"RETRY={retry}\n"
         )
 
-    print(f"▶ RUN {run_no}/8")
+    print(f"▶ RUN {run_no}/4")
     return run_no, f"i{run_no:02d}", f"{run_no:02d}"
 
 

@@ -84,11 +84,10 @@ def _load():
             except Exception: pass
 
 
-MAX_RUN = 8                 # runs 1-4 = Download -> SA Processing -> LAS Funding; runs 5-8 = Download -> SA Processing only
+MAX_RUN = 4                 # runs 1-4 = Download -> SA Processing -> LAS Funding (runs 5-8 were removed: their data did not match)
 LAS_RUNS = 4
-# Default scheduled time of runs 5-8 (5:45 pm, 7:30 pm, 9:30 pm, 11:30 pm); overridable with SA_RUN5_TIME ... in .env
-# or in the Auto Run settings. A run's window is from its time until the next run's time.
-_DEFAULT_TIMES = {5: "17:45", 6: "19:30", 7: "21:30", 8: "23:30"}
+# Runs 1-4 have no default scheduled time / window (they are started by hand). Kept as a dict so SA_RUN<n>_TIME in .env still works.
+_DEFAULT_TIMES = {}
 
 
 def _default_window(n):
@@ -740,7 +739,7 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
 
             # ── LAS-only mode: skip Download + SA Processing, run only LAS ───────
             if las_only and no_las:
-                put({"type": "error", "msg": "Runs 5-8 have no LAS Funding step."}); return
+                put({"type": "error", "msg": "This run has no LAS Funding step."}); return
             if las_only:
                 put({"type": "log", "msg": f"LAS-only mode — skipping Download and SA Processing; running LAS Funding only for {tag}."})
                 _eff_las = int(run_no)   # SA-01→1, SA-02→2, etc.
@@ -942,7 +941,7 @@ def stream_short_allocation(run_no, override_date=None, force=False, skip_las=Fa
             elif 5 <= eff <= MAX_RUN:
                 next_script, step3_name = None, None        # runs 5-8: no LAS step (skip_las is already on)
             else:
-                put({"type": "log", "msg": "All 8 runs already completed for today."})
+                put({"type": "log", "msg": "All 4 runs already completed for today."})
                 _record(tag, overall="done")
                 put({"type": "done", "ok": True}); return
 

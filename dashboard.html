@@ -1996,12 +1996,12 @@ let _saLastFriendlyMsg=null, _saLastFriendlyId=null;
 function saGetExpectedRunNo(){
   if(window._saActiveTag) return window._saActiveTag.replace('SA-','');
   if(!_saStatus||!_saStatus.runs) return '01';
-  for(let i=1;i<=8;i++){
+  for(let i=1;i<=4;i++){
     const rs=_saStatus.runs['SA-0'+i]||{};
     const isDone=(rs.code2==='done' || rs.overall==='done');
     if(!isDone) return '0'+i;
   }
-  return '';  // all eight runs complete today
+  return '';  // all four runs complete today
 }
 
 /** Generate the exact expected filenames for today and the given run number.
@@ -2059,7 +2059,7 @@ async function saLoadReady(){
   if(_saStatus){
     const wins=_saStatus.windows||{}, runs=_saStatus.runs||{}, now=saNowMin();
     let nextWinStart=null;
-    for(let i=1;i<=8;i++){
+    for(let i=1;i<=4;i++){
       const id='SA-0'+i, rs=runs[id]||{};
       if(rs.overall==='done') continue;  // this run is fully complete — skip
       const pw=saParseWin(wins[i]||wins[String(i)]);
@@ -2200,12 +2200,12 @@ function saRenderRuns(){
   // from run_state.txt which persists across days and caused stale "Done today".
   let completed=0;
   // SA-02+ unlocks when SA Processing (code2) done — LAS failure does NOT block.
-  for(let j=1;j<=8;j++){
+  for(let j=1;j<=4;j++){
     const r=runs['SA-0'+j]||{};
     if(r.code2==='done' || r.overall==='done') completed=j; else break;
   }
   let due=null, html='';
-  for(let i=1;i<=8;i++){
+  for(let i=1;i<=4;i++){
     const id='SA-0'+i, w=wins[i]||wins[String(i)]||'', pw=saParseWin(w);
     const rs=runs[id]||{};
     const fullDone=(rs.overall==='done');
@@ -3538,7 +3538,7 @@ async function saUpload(overrideRun){
   window._saUpRun = overrideRun || saGetExpectedRunNo();
   const _runLabel = window._saUpRun ? `Run <b>SA-${window._saUpRun}</b> is next — files with wrong run suffix will be rejected` : `All runs complete today — no run-suffix check`;
   const _chip=(n)=>`<button style="padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${window._saUpRun==='0'+n?'var(--teal)':'rgba(100,116,139,.4)'};background:${window._saUpRun==='0'+n?'rgba(52,211,153,.12)':'transparent'};color:${window._saUpRun==='0'+n?'var(--teal)':'var(--dim)'}" onclick="saUpload('0${n}')">SA-0${n}</button>`;
-  const _runBadge=`<div style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;padding:5px 11px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.3);border-radius:8px;font-size:11.5px;color:var(--blue)">🔢 ${_runLabel}</div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:10.5px;color:var(--dim)">Upload for:</span>${[1,2,3,4,5,6,7,8].map(n=>_chip(n)).join('')}</div>`;
+  const _runBadge=`<div style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;padding:5px 11px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.3);border-radius:8px;font-size:11.5px;color:var(--blue)">🔢 ${_runLabel}</div><div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:10.5px;color:var(--dim)">Upload for:</span>${[1,2,3,4].map(n=>_chip(n)).join('')}</div>`;
   // Show exact expected filenames for today + current run
   const _runDate = window._saRunDate || new Date().toISOString().slice(0,10);
   const _ef = saExpectedFilenames(window._saUpRun, _runDate);

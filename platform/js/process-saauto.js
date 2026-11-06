@@ -1,5 +1,5 @@
 /* SHORT ALLOCATION - "Auto Run" window, opened from Credentials (🔑) > Auto Run. Runs start by themselves at their time (core/sa_auto.py); here you set the time and
-   the Auto switch of each run (1-8), the waiting / retry numbers, and see what happened today. Alert numbers are in the
+   the Auto switch of each run (1-4), the waiting / retry numbers, and see what happened today. Alert numbers are in the
    "WhatsApp numbers" window, row "FAILURE ALERT (auto run)". Injected at serve time (api.py /legacy). */
 (function () {
   'use strict';
@@ -29,7 +29,7 @@
     var sum = on.length ? 'Auto is <b style="color:var(--green)">ON</b> for run ' + on.join(', ') : 'Auto is <b style="color:var(--muted)">OFF</b> for every run';
     return '<div style="border:1px solid rgba(52,211,153,.4);background:rgba(52,211,153,.06);border-radius:11px;padding:14px;margin-bottom:12px">' +
       '<div style="font-weight:650;font-size:14px;margin-bottom:3px">⚡ Auto Run</div>' +
-      '<div style="font-size:10.5px;color:var(--dim);margin-bottom:10px">Runs start by themselves at their time - times, On/Off for runs 1-8, waiting, and the WhatsApp failure alert. ' + sum + '.</div>' +
+      '<div style="font-size:10.5px;color:var(--dim);margin-bottom:10px">Runs start by themselves at their time - times, On/Off for runs 1-4, waiting, and the WhatsApp failure alert. ' + sum + '.</div>' +
       '<button type="button" class="sa-save" style="width:100%" onclick="saAutoOpen(window._saPw)">Open Auto Run settings</button></div>';
   };
   function load() {
@@ -51,7 +51,7 @@
     var d = D, rows = '';
     d.runs.forEach(function (r) {
       var las = r.run > 4 ? '<span style="color:var(--dim);font-size:10.5px"> · no LAS</span>' : '';
-      var dep = r.run <= 6 ? '' : '<span style="color:var(--dim);font-size:10.5px"> · deposit by hand</span>';
+      var dep = r.run <= 4 ? '' : '<span style="color:var(--dim);font-size:10.5px"> · deposit by hand</span>';
       rows += '<tr data-row="' + r.run + '"><td style="padding:6px 8px;font-weight:650;white-space:nowrap">SA-0' + r.run + las + dep + '</td>' +
         '<td style="padding:6px 8px"><input type="time" class="sa-auto-time" value="' + esc(r.time) + '" style="width:112px"></td>' +
         '<td style="padding:6px 8px">' + toggleCell(r.run, r.auto) + '</td>' +
@@ -65,7 +65,7 @@
     var nums = '';
     var age = d.deposit_age_min == null ? 'no MCX deposit file in the base folder' : 'MCX deposit file in the base folder is ' + d.deposit_age_min + ' min old';
     var html = '<div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-bottom:12px">A run with <b>Auto ON</b> starts by itself at its time - nobody has to click, and no pop-up opens. ' +
-      s.predl_min + ' minutes before (runs 1-6) the <b>MCX Deposit</b> file is downloaded, unless a file newer than ' + s.fresh_min + ' minutes is already in the base folder. ' +
+      s.predl_min + ' minutes before (runs 1-4) the <b>MCX Deposit</b> file is downloaded, unless a file newer than ' + s.fresh_min + ' minutes is already in the base folder. ' +
       'If an exchange peak file has not come, it waits and tries again; after the last try a <b>WhatsApp failure alert</b> goes out.</div>' +
       '<div style="font-size:11.5px;margin-bottom:10px">' + nums + '<br><span style="color:var(--dim)">' + esc(age) + ' · timer ' + (d.timer ? 'running' : '<b style="color:var(--red)">NOT running</b>') + ' · now ' + esc(d.now) + '</span></div>' +
       '<table style="width:100%;border-collapse:collapse;margin-bottom:12px"><thead><tr style="text-align:left;font-size:10.5px;color:var(--dim);text-transform:uppercase"><th style="padding:4px 8px">Run</th><th style="padding:4px 8px">Time</th><th style="padding:4px 8px">Auto</th><th style="padding:4px 8px">Today</th></tr></thead><tbody>' + rows + '</tbody></table>' +
@@ -91,7 +91,7 @@
     if (pv) pv.onclick = function () {
       collect();
       window.saShowModal('🖼 The WhatsApp failure alert', '<div style="font-size:12.5px;color:var(--muted);margin-bottom:10px">This is the picture that goes out when an automatic run fails (sample wording, marked TEST).</div>' +
-        '<img src="' + API + '/sa/auto/preview?run=5&t=' + Date.now() + '" style="width:100%;border:1px solid var(--line);border-radius:10px" alt="alert preview">' +
+        '<img src="' + API + '/sa/auto/preview?run=4&t=' + Date.now() + '" style="width:100%;border:1px solid var(--line);border-radius:10px" alt="alert preview">' +
         '<button class="sa-save" style="width:100%;margin-top:14px" id="saAuBack">← Back</button>');
       var bk = document.getElementById('saAuBack'); if (bk) bk.onclick = function () { render(); };
     };
@@ -102,7 +102,7 @@
       var list = (window._saListState.SA_WA_FAILURE_ALERT || []).filter(function (x) { return (x || '').trim(); });
       if (!list.length) { if (m) m.innerHTML = '<span style="color:var(--red)">✕ Add a number first, then press Save, then test.</span>'; return; }
       if (m) m.innerHTML = '<span style="color:var(--muted)">Sending the test…</span>';
-      post('/sa/auto/test-alert', { password: PW, run: 5 }).then(function (d) {
+      post('/sa/auto/test-alert', { password: PW, run: 4 }).then(function (d) {
         if (m) m.innerHTML = d && d.ok ? '<span style="color:var(--green)">✓ Test sent: ' + esc(d.reason) + '. (It goes to the numbers that are SAVED - press Save first if you just added one.)</span>' : '<span style="color:var(--red)">✕ ' + esc((d && d.error) || 'not sent') + '</span>';
       }).catch(function () { if (m) m.innerHTML = '<span style="color:var(--red)">✕ Could not reach the server.</span>'; });
     };

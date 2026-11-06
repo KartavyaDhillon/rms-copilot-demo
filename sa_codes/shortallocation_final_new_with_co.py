@@ -53,7 +53,7 @@ def get_current_run_suffix():
     else:
         run_no = int(data.get("RUN", 1)) - 1
 
-    if not 1 <= run_no <= 8:
+    if not 1 <= run_no <= 4:
         raise SystemExit("❌ Invalid RUN state. Cannot determine processing slot.")
 
     print(f"🔁 Processing files for RUN {run_no}")

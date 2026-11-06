@@ -1373,7 +1373,7 @@ def sa_auto_preview(run: int = 5):
     from fastapi.responses import FileResponse, JSONResponse
     from core import sa_auto as _au
     try:
-        return FileResponse(str(_au.render_sample(max(1, min(8, run)))), media_type="image/png", headers={"Cache-Control": "no-store"})
+        return FileResponse(str(_au.render_sample(max(1, min(4, run)))), media_type="image/png", headers={"Cache-Control": "no-store"})
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"{type(e).__name__}: {e}"}, status_code=500)
 
@@ -1388,15 +1388,15 @@ def sa_auto_test_alert(u: _SAAutoTest):
     from core.short_allocation import check_password as _pw
     if not _pw(u.password):
         return {"ok": False, "error": "Wrong password"}
-    r = _au.send_alert(max(1, min(8, u.run)), "THIS IS A TEST - nothing has failed. The exchange peak file has not arrived yet: MCX_PeakMargin56720_" + __import__("datetime").date.today().strftime("%Y%m%d") + "_05.csv.",
+    r = _au.send_alert(max(1, min(4, u.run)), "THIS IS A TEST - nothing has failed. The exchange peak file has not arrived yet: MCX_PeakMargin56720_" + __import__("datetime").date.today().strftime("%Y%m%d") + "_05.csv.",
                        "Waited 30 minutes over 2 retries; the file was still missing. (Test message - no action needed.)", test=True)
     return {"ok": bool(r.get("sent")), "error": "" if r.get("sent") else r.get("reason", "not sent"), "reason": r.get("reason", "")}
 
 @app.post("/sa/auto/skip")
 def sa_auto_skip(run: int, undo: bool = False):
     from core import sa_auto as _au
-    if not 1 <= run <= 8:
-        return {"ok": False, "error": "run must be 1-8"}
+    if not 1 <= run <= 4:
+        return {"ok": False, "error": "run must be 1-4"}
     _au.skip_today(run, undo)
     return {"ok": True, **_au.status()}
 
