@@ -14,7 +14,7 @@ FOLDER = "3-9% BLOCKING FILES"
 def risk_categories(path: Path, software: str, exclude) -> list:
     """The distinct CATEGORY values of today's RISK_REPORT for one TRADING_SOFTWARE_TYPE (default KAMB), de-duplicated,
     without the excluded ones, sorted. Same as: filter TRADING_SOFTWARE_TYPE = KAMB, copy CATEGORY, remove duplicates."""
-    want, skip = software.strip().upper(), {e.strip().upper() for e in exclude if e.strip()}
+    want, skip = software.strip().upper(), {e.strip().strip("'\"").upper() for e in exclude if e and e.strip()}
     for enc in ("utf-8-sig", "latin-1"):
         try:
             with open(path, newline="", encoding=enc) as f:
@@ -48,7 +48,7 @@ def _run(params, ctx):
     inp, out = paths.proc_dir(FOLDER, "inputs"), paths.proc_dir(FOLDER, "outputs")
     risk = H.find_risk_report(ctx)
     cats = risk_categories(risk, params.get("software_type") or "KAMB",
-                           (params.get("exclude_categories") or "").replace("\n", ",").split(","))
+                           (params.get("exclude_categories") or "").replace("\n", ",").replace(";", ",").split(","))
     if not cats:
         raise RuntimeError(f"No CATEGORY found in {risk.name} for TRADING_SOFTWARE_TYPE = "
                            f"{(params.get('software_type') or 'KAMB').strip().upper()}.")

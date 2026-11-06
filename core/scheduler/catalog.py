@@ -169,6 +169,12 @@ def effective_params(pdef: ProcessDef, schedule_params: dict) -> dict:
     (recipients …) saved on the Processes tab. Process-level settings always win."""
     from core.scheduler import proc_settings
     out = dict(schedule_params or {})
+    # The edit form pre-fills a parameter's default when the schedule never stored a value (e.g. the schedule was
+    # created before the parameter existed, or the field was left untouched). Apply the same default here so what
+    # the form SHOWS is what the run USES.
+    for p in pdef.params:
+        if p.scope == "schedule" and out.get(p.name) in (None, "") and p.default not in (None, ""):
+            out[p.name] = p.default
     out.update(proc_settings.get(pdef))
     return out
 
