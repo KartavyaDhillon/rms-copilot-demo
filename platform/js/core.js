@@ -321,6 +321,10 @@
     const btn = $("#userBtn"), menu = $("#userMenu");
     if (!btn || !menu) return;
 
+    if (location.protocol === "https:") {
+      fetch("/auth/cert-available").then((r) => r.json()).then((j) => { RMS._certOk = !!j.available; }).catch(() => {});
+    }
+
     fetch("/auth/me").then((r) => r.json()).then((me) => {
       RMS._me = me;
       if (me.signed_in && me.display_name) {
@@ -337,11 +341,16 @@
       e.stopPropagation();
       if (!menu.hidden) { menu.hidden = true; return; }
       const me = RMS._me || {};
+      // Only on https and only when the server has a certificate to give out
+      const certItem = (location.protocol === "https:" && RMS._certOk)
+        ? '<div class="um-body"><a class="um-signout" style="display:block;text-align:center;text-decoration:none;margin-bottom:6px" href="/auth/cert-installer.bat" download>Install security certificate</a></div>'
+        : "";
       if (me.signed_in) {
         menu.innerHTML =
           '<div class="um-head"><span class="um-name">' + RMS.esc(me.display_name) + '</span>' +
           '<span class="um-id">' + RMS.esc(me.employee_id) + '</span>' +
           (me.is_admin ? '<span style="display:inline-block;margin-top:6px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:800;background:rgba(251,191,36,.18);color:#fbbf24;border:1px solid rgba(251,191,36,.5)">ADMIN</span>' : "") + '</div>' +
+          certItem +
           '<div class="um-body"><button class="um-signout" id="umSignOut">Sign out</button></div>';
         $("#umSignOut").onclick = () => {
           fetch("/auth/logout", { method: "POST" }).finally(() => { location.href = "/login"; });
@@ -349,7 +358,7 @@
       } else {
         menu.innerHTML = '<div class="um-note">' +
           (me.auth_required ? "Not signed in." : "Sign-in isn't required on this server yet.") +
-          "</div>";
+          "</div>" + certItem;
       }
       menu.hidden = false;
     };

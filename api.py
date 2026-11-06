@@ -15,7 +15,7 @@ import uuid
 import traceback
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
 from urllib.parse import quote
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -535,6 +535,39 @@ async def auth_change_password(request: Request):
     out.set_cookie(_a.COOKIE_NAME, token, max_age=int(_a.session_hours() * 3600),
                    httponly=True, samesite="lax", path="/")
     return out
+
+
+@app.get("/auth/cert-installer.bat")
+def auth_cert_installer():
+    """One-file installer that makes this PC trust the console's self-signed
+    certificate (current user only, no admin, no Python). The certificate is
+    public information, so this route is open (under /auth/)."""
+    cert = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs", "cert.pem")
+    if not os.path.isfile(cert):
+        raise HTTPException(404, "This server is not running on HTTPS - no certificate to install.")
+    with open(cert, "r", encoding="ascii", errors="ignore") as f:
+        lines = [ln.strip() for ln in f.read().splitlines() if ln.strip()]
+    body = ["@echo off", "setlocal", 'set "F=%TEMP%\\rms_console_cert.cer"', 'if exist "%F%" del "%F%"']
+    for ln in lines:
+        body.append(f'>>"%F%" echo {ln}')
+    body += [
+        "echo Installing the RMS Copilot security certificate for your Windows user...",
+        'certutil -user -addstore Root "%F%" >nul',
+        "if errorlevel 1 (",
+        "  echo Could not install. Please run this file again and click Yes when Windows asks.",
+        ") else (",
+        "  echo Done. Close ALL browser windows and open the console again - the red warning will be gone.",
+        ")",
+        'del "%F%" >nul 2>&1',
+        "pause",
+    ]
+    return Response("\r\n".join(body) + "\r\n", media_type="application/octet-stream",
+                    headers={"Content-Disposition": 'attachment; filename="install_rms_cert.bat"'})
+
+
+@app.get("/auth/cert-available")
+def auth_cert_available():
+    return {"available": os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs", "cert.pem"))}
 
 
 @app.post("/auth/logout")

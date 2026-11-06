@@ -95,6 +95,18 @@ def main():
             san_entries.append(x509.IPAddress(ipaddress.ip_address(lan_ip)))
         except ValueError:
             pass
+    # Extra names/addresses the console is opened by from OUTSIDE (e.g. the public address IT forwards to it):
+    #   python generate_ssl_cert.py 111.93.186.146 kartavya-rms-226.mastertrust.local
+    # or set RMS_CERT_EXTRA=111.93.186.146,another.name in .env. Without them the browser says the certificate
+    # does not match that address even after the certificate is trusted.
+    import sys as _sys
+    _extra = [x.strip() for x in (_sys.argv[1:] + os.getenv("RMS_CERT_EXTRA", "").split(",")) if x.strip()]
+    for _x in _extra:
+        try:
+            san_entries.append(x509.IPAddress(ipaddress.ip_address(_x)))
+        except ValueError:
+            san_entries.append(x509.DNSName(_x))
+        print(f"  + also valid for: {_x}")
 
     cert = (
         x509.CertificateBuilder()

@@ -2192,8 +2192,25 @@ Master Capital Services Ltd<br>
             dst = os.path.join(backup_root, _stale.mark_unused_name(f, UNUSED_MCX_NAMES))
             shutil.copy2(src, dst)
             kind = "output" if f.startswith(("Shortage_vs_CC_Deposit", "Margin_Shortage_Alert")) else "input"
+            # A file held open by another program (Excel, browser, antivirus) must
+            # never abort the whole backup - that left the rest of the files
+            # (MCX deposit, outputs, manifest, ALLOC_FILES) unbacked until the next run.
+            _removed = False
+            for _try in range(5):
+                try:
+                    os.remove(src)
+                    _removed = True
+                    break
+                except PermissionError:
+                    time.sleep(1)
+            if not _removed:
+                try:
+                    os.remove(dst)      # keep one copy only; the file is backed up by the next run
+                except Exception:
+                    pass
+                print(f"⚠️ {f} is open in another program - left in the working folder, will be backed up by the next run")
+                continue
             _archive_to_db(db_tag, kind, dst)
-            os.remove(src)
             print(f"🗂️ Backed up & removed: {f}")
 
         _stale.write_used_manifest(backup_root, {f"MCX file ({MCX_LABEL})": _mcx_used_path}, UNUSED_MCX_NAMES)
