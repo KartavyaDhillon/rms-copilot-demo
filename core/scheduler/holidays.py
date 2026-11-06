@@ -98,7 +98,8 @@ def _write_special(rows: dict) -> None:
 
 
 def list_special() -> dict:
-    """{date: note} of the special trading days file."""
+    """{date: note} of the special trading days file (created with the Muhurat Sunday in it on first use)."""
+    load_special()
     p = special_file()
     out = {}
     if p and p.exists():
