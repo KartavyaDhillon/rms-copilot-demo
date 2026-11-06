@@ -158,9 +158,33 @@ NOT_FOUND_RETRIES = 2
 NOT_FOUND_PAUSE = 15
 
 
+def _friday_name(filename: str) -> Optional[str]:
+    """Special trading day (Sunday Muhurat): the same file name with TODAY's date replaced by the previous trading
+    day's date (DDMMYYYY and YYYYMMDD forms). None when today is a normal day or the name carries no date of today."""
+    today = dt.date.today()
+    prev = H.todays_file_fallback_day(today)
+    if not prev:
+        return None
+    alt = filename.replace(f"{today:%d%m%Y}", f"{prev:%d%m%Y}").replace(f"{today:%Y%m%d}", f"{prev:%Y%m%d}")
+    return alt if alt != filename else None
+
+
 def download(kind: str, segment: str, folder: str, filename: str, dest_dir: Path, ctx,
              date: Optional[str] = None) -> Optional[Path]:
-    """kind 'member' | 'common'.  Returns the saved path, or None when NSE says the file is not there (yet)."""
+    """kind 'member' | 'common'.  Returns the saved path, or None when NSE says the file is not there (yet).
+    On a SPECIAL trading day (Sunday Muhurat) that is not a normal trading day: if today's file is not there, the
+    previous trading day's file (Friday) is fetched instead."""
+    p = _download_one(kind, segment, folder, filename, dest_dir, ctx, date)
+    if p is None:
+        alt = _friday_name(filename)
+        if alt:
+            ctx.log(f"Special trading day: {filename} is not on NSE - trying the previous trading day's file {alt}.")
+            p = _download_one(kind, segment, folder, alt, dest_dir, ctx, date)
+    return p
+
+
+def _download_one(kind: str, segment: str, folder: str, filename: str, dest_dir: Path, ctx,
+                  date: Optional[str] = None) -> Optional[Path]:
     requests = H.need("requests")
     if kind not in ("member", "common"):
         raise ValueError("kind must be 'member' or 'common'")

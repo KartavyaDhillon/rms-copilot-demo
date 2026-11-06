@@ -1429,6 +1429,15 @@ def send_failure_alert(reason):
     except Exception:
         logging.exception("Could not send the failure alert email either.")
 
+def _is_special_day(d):
+    """True on a special trading day (e.g. Sunday Muhurat session) listed in special_trading_days.csv."""
+    try:
+        from core.scheduler import helpers as _H
+        return _H.is_special_day(d)
+    except Exception:
+        return False
+
+
 def plan_scheduled_runs(marker, now):
     """For a --scheduled run: which past business days still need their
     close (oldest first), and is today's live close due (evening only)?
@@ -1441,7 +1450,7 @@ def plan_scheduled_runs(marker, now):
     if marker:
         d = marker.date()
         while d < today:
-            if d.weekday() < 5 and marker < datetime.combine(d, dtime(23, 59)):
+            if (d.weekday() < 5 or _is_special_day(d)) and marker < datetime.combine(d, dtime(23, 59)):
                 days.append(d)
             d += timedelta(days=1)
     return days, now.hour >= 20
@@ -1539,7 +1548,7 @@ def bucket_backfill(matches, start_date, end_date):
     buckets = {}
     d = start_date
     while d <= end_date:
-        if d.weekday() < 5:  # Mon=0 .. Fri=4, skip Sat/Sun
+        if d.weekday() < 5 or _is_special_day(d):  # Mon=0 .. Fri=4, skip Sat/Sun (except a special trading day)
             buckets[d] = []
         d += timedelta(days=1)
 

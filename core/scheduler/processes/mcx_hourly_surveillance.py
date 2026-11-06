@@ -45,9 +45,12 @@ def _hm(s, dflt):
         raise ValueError(f"'{s}' is not a time like 09:00")
 
 
-def _in_window(now, first, last, sat_cut):
+def _in_window(now, first, last, sat_cut, manual=False):
     wd = now.weekday()
     cur = now.hour * 60 + now.minute
+    if wd == 6 and manual and H.is_special_day(now.date()):
+        # special trading day (Sunday Muhurat) run by hand: an ordinary session day, just the first/last run times apply
+        return (first <= cur <= last) if first <= last else (cur >= first or cur <= last)
     if wd == 6:
         return False
     if wd == 5 and cur > sat_cut:
@@ -447,7 +450,7 @@ def _run(params, ctx):
     now = datetime.now()
     first, last = _hm(params.get("first_run"), "09:00"), _hm(params.get("last_run"), "00:30")
     cut = _hm(params.get("saturday_cutoff"), "04:00")
-    if not _in_window(now, first, last, cut):
+    if not _in_window(now, first, last, cut, manual=H.is_manual(ctx)):
         raise H.Skipped(f"{now:%H:%M} is outside the run window ({params.get('first_run') or '09:00'}–"
                         f"{params.get('last_run') or '00:30'}, Sundays never) — no MCX login attempted.")
     out, tmp = paths.proc_dir(FOLDER, "outputs"), paths.proc_dir(FOLDER, "inputs")

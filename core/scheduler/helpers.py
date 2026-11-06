@@ -144,9 +144,39 @@ def holidays() -> set:
         return set()
 
 
-def is_trading_day(d: dt.date, hol: Optional[set] = None) -> bool:
+def special_days() -> set:
+    """Special trading days (e.g. Muhurat trading on a Sunday) from special_trading_days.csv; empty when unreadable."""
+    try:
+        from core.scheduler import holidays as _h
+        return set(_h.load_special())
+    except Exception:
+        return set()
+
+
+def is_special_day(d: dt.date) -> bool:
+    return d in special_days()
+
+
+def is_trading_day(d: dt.date, hol: Optional[set] = None, manual: bool = False) -> bool:
+    """Mon-Fri and not a market holiday. With manual=True (a Run now / Process Center button) a SPECIAL trading day
+    also counts. Schedules and auto timers never pass manual=True, so they keep treating that day as closed."""
     hol = holidays() if hol is None else hol
-    return d.weekday() < 5 and d not in hol
+    if d.weekday() < 5 and d not in hol:
+        return True
+    return bool(manual) and is_special_day(d)
+
+
+def is_manual(ctx) -> bool:
+    return getattr(ctx, "trigger", "") == MANUAL
+
+
+def todays_file_fallback_day(today: Optional[dt.date] = None) -> Optional[dt.date]:
+    """On a special trading day that is not a normal trading day (Sunday Muhurat session) -> the previous trading
+    day (Friday), whose file is used when today's own file is not on the portal. Otherwise None."""
+    today = today or dt.date.today()
+    if is_special_day(today) and not is_trading_day(today):
+        return prev_trading_day(today)
+    return None
 
 
 
@@ -181,6 +211,11 @@ def ctcl_run1_file(ctx=None) -> Optional[Path]:
     bk = base / "BACKUPFILES AUTOMATED" / today_dash()
     cands = [base / name, bk / "01" / name, bk / name]
     start = dt.datetime.combine(dt.date.today(), dt.time(0, 0)).timestamp()
+    fb = todays_file_fallback_day()                    # special trading day (Sunday): also accept Friday's run-1 file
+    if fb:
+        bk_fb = base / "BACKUPFILES AUTOMATED" / f"{fb:%d-%m-%Y}"
+        cands += [bk_fb / "01" / name, bk_fb / name]
+        start = dt.datetime.combine(fb, dt.time(0, 0)).timestamp()
     for c in cands:
         try:
             if c.is_file() and c.stat().st_mtime >= start:     # must be today's output, not yesterday's leftover
@@ -238,6 +273,14 @@ def find_risk_report(ctx=None) -> Path:
             if ctx:
                 ctx.log(f"Risk report: {c}")
             return c
+    fb = todays_file_fallback_day()                    # special trading day (Sunday): today's file first, else Friday's
+    if fb:
+        fname, fdash = f"RISK_REPORT_{fb:%d%m%Y}.csv", f"{fb:%d-%m-%Y}"
+        for c in (common_dir() / fname, common_dir() / "BACKUP FILES AUTOMATED" / fdash / fname):
+            if c.is_file():
+                if ctx:
+                    ctx.log(f"Special trading day: {name} is not there - using the previous trading day's risk report: {c}")
+                return c
     raise FileNotFoundError(f"Today's risk report ({name}) was not found in {common_dir()} — "
                             f"upload it to COMMON FILES first.")
 

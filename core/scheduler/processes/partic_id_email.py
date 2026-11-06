@@ -46,6 +46,11 @@ def _run(params, ctx):
             c = connections.require("pop3", "server", "port", "username", "password")
             partic = P.download_partic_file(inputs, c["server"], int(c["port"]), c["username"], c["password"],
                                             sender, subject, scan_start, ctx.log)
+            fb = H.todays_file_fallback_day()
+            if not partic and fb and H.is_manual(ctx):      # special trading day (Sunday): else Friday's mail
+                ctx.log(f"Special trading day: no mail today - looking for the previous trading day's ({fb:%d-%m-%Y}) mail.")
+                partic = P.download_partic_file(inputs, c["server"], int(c["port"]), c["username"], c["password"],
+                                                sender, subject, scan_start, ctx.log, day=fb)
         except RuntimeError:
             raise                                           # missing settings — waiting won't help
         except Exception as e:

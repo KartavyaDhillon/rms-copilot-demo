@@ -23,8 +23,8 @@ _DEPOSIT_RE = re.compile(r"^MCX_DEPOSIT_.*\.xlsx$", re.I)
 _RAW_RE = re.compile(r"^[A-Za-z0-9]+-(\d{14})\.xlsx$", re.I)
 
 
-def _is_today(p: Path) -> bool:
-    today = dt.date.today()
+def _is_today(p: Path, today: dt.date = None) -> bool:
+    today = today or dt.date.today()
     m = _RAW_RE.match(p.name)
     if m:
         try:
@@ -41,7 +41,12 @@ def _is_today(p: Path) -> bool:
 def _newest(folder: Path):
     if not folder.is_dir():
         return None
-    c = [p for p in folder.iterdir() if p.is_file() and (_DEPOSIT_RE.match(p.name) or _RAW_RE.match(p.name)) and _is_today(p)]
+    files = [p for p in folder.iterdir() if p.is_file() and (_DEPOSIT_RE.match(p.name) or _RAW_RE.match(p.name))]
+    c = [p for p in files if _is_today(p)]
+    if not c:
+        fb = H.todays_file_fallback_day()              # special trading day (Sunday): else the previous trading day's file
+        if fb:
+            c = [p for p in files if _is_today(p, fb)]
     return max(c, key=lambda p: p.stat().st_mtime) if c else None
 
 
@@ -64,6 +69,11 @@ def _locate(ctx) -> Path:
         day = base / "BACKUPFILES AUTOMATED" / H.today_dash()
         if day.is_dir():
             spots += [day] + sorted([d for d in day.rglob("*") if d.is_dir()])
+        fbd = H.todays_file_fallback_day()                # special trading day: the previous trading day's backup too
+        if fbd:
+            day = base / "BACKUPFILES AUTOMATED" / f"{fbd:%d-%m-%Y}"
+            if day.is_dir():
+                spots += [day] + sorted([d for d in day.rglob("*") if d.is_dir()])
         searched.append(str(base))
         for spot in spots:
             f = _newest(spot)

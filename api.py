@@ -44,6 +44,29 @@ AUTO_SEND = os.getenv("AUTO_SEND", "false").strip().lower() == "true"
 os.environ.setdefault("RMS_REPO_ROOT", os.path.dirname(os.path.abspath(__file__)))   # child scripts (sa_codes/, generated copies) use it to import core.*
 
 app = FastAPI(title="RMS Co-pilot API")
+
+
+# ── Windows console noise: "Exception in callback _ProactorBasePipeTransport._call_connection_lost()" ──────────────
+# A browser closed its connection first (tab closed / refresh / network drop), so Windows refuses the server's own
+# socket shutdown with WinError 10054. Nothing failed and no request is affected. ONLY that exact message is hidden;
+# every other asyncio error (and every other log line) still prints.
+import logging as _logging
+
+
+class _HideClosedSocketNoise(_logging.Filter):
+    def filter(self, record):
+        try:
+            if "_call_connection_lost" in record.getMessage() or "_ProactorBasePipeTransport" in record.getMessage():
+                exc = record.exc_info[1] if record.exc_info else None
+                if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+                    return False
+        except Exception:
+            pass
+        return True
+
+
+_logging.getLogger("asyncio").addFilter(_HideClosedSocketNoise())
+
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
 PENDING = {}
@@ -6782,6 +6805,47 @@ async def reco_holidays_remove(req: Request):
     except Exception:
         return {"ok": False, "error": "Pick a valid date"}
     _rc.remove_holiday(d)
+    return {"ok": True}
+
+
+@app.get("/special-days")
+def special_days_list():
+    """Special trading days (e.g. Muhurat on a Sunday): a MANUAL run works on these days; schedules / auto timers don't change."""
+    from core.scheduler import holidays as _sh
+    rows = _sh.list_special()
+    return {"items": [{"iso": d.isoformat(), "date": d.strftime("%d-%m-%Y"), "weekday": d.strftime("%A"), "note": n}
+                      for d, n in sorted(rows.items(), reverse=True)], "file": str(_sh.special_file())}
+
+
+@app.post("/special-days/add")
+async def special_days_add(req: Request):
+    from core.short_allocation import check_password as _sp_pw
+    from core.scheduler import holidays as _sh
+    import datetime as _spdt
+    b = await req.json()
+    if not _sp_pw(b.get("password", "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        d = _spdt.date.fromisoformat((b.get("date") or "").strip())
+    except Exception:
+        return {"ok": False, "error": "Pick a valid date"}
+    _sh.add_special(d, (b.get("note") or "").strip())
+    return {"ok": True}
+
+
+@app.post("/special-days/remove")
+async def special_days_remove(req: Request):
+    from core.short_allocation import check_password as _sp_pw
+    from core.scheduler import holidays as _sh
+    import datetime as _spdt
+    b = await req.json()
+    if not _sp_pw(b.get("password", "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        d = _spdt.date.fromisoformat((b.get("date") or "").strip())
+    except Exception:
+        return {"ok": False, "error": "Pick a valid date"}
+    _sh.remove_special(d)
     return {"ok": True}
 
 

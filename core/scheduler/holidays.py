@@ -67,3 +67,91 @@ def load() -> set:
 
 def is_holiday(d: dt.date) -> bool:
     return d in load()
+
+
+# ───────────────────────── special trading days (e.g. Muhurat trading on a Sunday) ─────────────────────────
+# A date listed here is a day the exchanges are OPEN although it is a weekend / listed holiday.  It never changes
+# the schedules or the auto-run timers (those keep treating the day as closed); it only lets a MANUAL run
+# ("Run now" / a Process Center button) work on that day.  File: special_trading_days.csv next to the holiday list
+# (first column DDMMYYYY, an optional note in column 2).  Override the location with SCHED_SPECIAL_FILE in .env.
+_SPECIAL = {"path": None, "mtime": None, "days": set()}
+
+
+def special_file() -> Optional[Path]:
+    v = os.getenv("SCHED_SPECIAL_FILE", "").strip()
+    if v:
+        return Path(v)
+    p = holiday_file()
+    return (p.parent / "special_trading_days.csv") if p else None
+
+
+SEED_SPECIAL = ("08112026", "Muhurat trading (Diwali) - Sunday")     # created once, with the file, when it does not exist yet
+
+
+def _write_special(rows: dict) -> None:
+    p = special_file()
+    if not p:
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["Date,Note"] + [f"{d:%d%m%Y},{(n or '').replace(',', ' ')}" for d, n in sorted(rows.items())]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def list_special() -> dict:
+    """{date: note} of the special trading days file."""
+    p = special_file()
+    out = {}
+    if p and p.exists():
+        with open(p, "r", newline="", encoding="utf-8-sig") as fh:
+            for row in csv.reader(fh):
+                d = _parse(row[0]) if row else None
+                if d:
+                    out[d] = row[1].strip() if len(row) > 1 else ""
+    return out
+
+
+def add_special(d: dt.date, note: str = "") -> None:
+    rows = list_special()
+    rows[d] = note
+    _write_special(rows)
+
+
+def remove_special(d: dt.date) -> None:
+    rows = list_special()
+    rows.pop(d, None)
+    _write_special(rows)
+
+
+def load_special() -> set:
+    p = special_file()
+    if p and not p.exists():
+        try:                                                  # first use: create the file with the Muhurat Sunday in it
+            d0 = _parse(SEED_SPECIAL[0])
+            _write_special({d0: SEED_SPECIAL[1]})
+        except Exception:
+            pass
+    if not p or not p.exists():
+        _SPECIAL.update({"path": None, "mtime": None, "days": set()})
+        return set()
+    try:
+        m = p.stat().st_mtime
+    except OSError:
+        return _SPECIAL["days"]
+    if _SPECIAL["path"] == str(p) and _SPECIAL["mtime"] == m:
+        return _SPECIAL["days"]
+    days = set()
+    try:
+        with open(p, "r", newline="", encoding="utf-8-sig") as fh:
+            for row in csv.reader(fh):
+                if row:
+                    d = _parse(row[0])
+                    if d:
+                        days.add(d)
+    except Exception:
+        return _SPECIAL["days"]
+    _SPECIAL.update({"path": str(p), "mtime": m, "days": days})
+    return days
+
+
+def is_special(d: dt.date) -> bool:
+    return d in load_special()

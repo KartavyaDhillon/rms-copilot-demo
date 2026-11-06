@@ -32,10 +32,10 @@ def _hhmm(s, d):
         raise ValueError(f"'{s}' is not a time like 15:55")
 
 
-def fetch(subject_filter, cutoff, ctx):
-    """[(received_ist, name, bytes)] earliest first — today's matching mails only."""
+def fetch(subject_filter, cutoff, ctx, target=None):
+    """[(received_ist, name, bytes)] earliest first — the matching mails of one day (today unless `target` is given)."""
     c = connections.require("pop3b", "server", "port", "username", "password")
-    target = datetime.now(IST).date()
+    target = target or datetime.now(IST).date()
     ctx.log(f"Mailbox: connecting to {c['server']}:{c['port']} as {c['username']}…")
     pop = poplib.POP3_SSL(c["server"], int(c["port"]), context=partic_lib._relaxed_ssl_context(), timeout=30)
     out = []
@@ -113,6 +113,10 @@ def _run(params, ctx):
     t0 = time.time()
     while True:
         found = fetch(sub, cutoff, ctx)
+        fb = H.todays_file_fallback_day()
+        if not found and fb and H.is_manual(ctx):          # special trading day (Sunday): no snapshots today -> Friday's
+            ctx.log(f"Special trading day: no snapshot mail today - using the previous trading day {fb:%d-%m-%Y}.")
+            found = fetch(sub, cutoff, ctx, target=fb)
         ctx.log(f"{len(found)} matching mail(s) before {cutoff:%H:%M} (need {need_n}).")
         if len(found) >= need_n or time.time() - t0 >= wait_s or getattr(ctx, "cancelled", False):
             break

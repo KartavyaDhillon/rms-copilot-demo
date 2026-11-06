@@ -117,9 +117,9 @@ def _pick_attachment(full_msg):
 
 def download_partic_file(folder: Path, server: str, port: int, user: str, password: str, sender: str,
                          subject_exact: str, scan_start: dtime, log: Callable[[str], None],
-                         timeout: int = 30, max_scan: int = 50000) -> Optional[Path]:
-    """Save today's matching e-mail attachment into `folder`; returns the path or None."""
-    target = datetime.now(IST).date()
+                         timeout: int = 30, max_scan: int = 50000, day=None) -> Optional[Path]:
+    """Save today's matching e-mail attachment into `folder` (or that of `day`); returns the path or None."""
+    target = day or datetime.now(IST).date()
     bound = datetime.combine(target, scan_start, tzinfo=IST)
     log(f"Mailbox search: from '{sender}', subject exactly '{subject_exact}', today from {bound:%H:%M} IST")
     folder.mkdir(parents=True, exist_ok=True)

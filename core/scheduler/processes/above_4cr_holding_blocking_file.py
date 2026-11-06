@@ -54,6 +54,14 @@ def find_holding(ctx=None) -> Path:
             if ctx:
                 ctx.log(f"Holding file: {c}")
             return c
+    fb = H.todays_file_fallback_day()                  # special trading day (Sunday): today's file first, else Friday's
+    if fb:
+        fname = f"HOLDING_{fb:%d%m%Y}.csv"
+        for c in (H.common_dir() / fname, H.common_dir() / "BACKUP FILES AUTOMATED" / f"{fb:%d-%m-%Y}" / fname):
+            if c.is_file():
+                if ctx:
+                    ctx.log(f"Special trading day: {name} is not there - using the previous trading day's holding file: {c}")
+                return c
     raise FileNotFoundError(f"Today's holding file ({name}) was not found in {H.common_dir()} — upload it to COMMON FILES first.")
 
 

@@ -42,6 +42,11 @@ def _run(params, ctx):
         raise FileNotFoundError("None of the three files is on NSE yet.")
 
     d1, d2 = f"{today:%d-%m-%Y}", f"{bday:%d-%m-%Y}"
+    if cd:                                   # special trading day: the Contract Delta file may be the previous day's
+        import re as _re
+        _m = _re.search(r"(\d{2})(\d{2})(\d{4})", getattr(cd, "name", ""))
+        if _m:
+            d1 = f"{_m.group(1)}-{_m.group(2)}-{_m.group(3)}"
     miss = (f"These file(s) ({', '.join(str(m) for m in missing)}) not available on the portal today."
             if missing else "All expected files are available today.")
     body = ("<html><body><p>Hi Team,</p><p>Please find the attached files:</p>"

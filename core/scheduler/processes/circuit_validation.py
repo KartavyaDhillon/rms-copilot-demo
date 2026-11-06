@@ -48,7 +48,8 @@ def _run(params, ctx):
     # Weekends and market holidays are skipped, so on a Monday 08:00 run (today's file is not out yet) it
     # goes straight to Friday instead of wasting its tries on Sunday and Saturday.
     today = dt.date.today()
-    cand_days = ([today] if H.is_trading_day(today) else []) + [H.prev_trading_day(today, n) for n in (1, 2, 3)]
+    # (special trading day, e.g. Sunday Muhurat, run by hand: today's file is tried first, then the Friday one.)
+    cand_days = ([today] if H.is_trading_day(today, manual=H.is_manual(ctx)) else []) + [H.prev_trading_day(today, n) for n in (1, 2, 3)]
     ctx.log("NSE Bhavcopy — dates it will check: " + ", ".join(f"{x:%d-%m-%Y} ({x:%a})" for x in cand_days))
     nse_ymd = None
     bhav_csv = sec_csv = None

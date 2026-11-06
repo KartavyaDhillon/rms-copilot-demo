@@ -41,8 +41,12 @@ def sig_text(params) -> str:
 
 def require_trading_day(ctx, d: dt.date = None):
     d = d or dt.date.today()
-    if not H.is_trading_day(d):
+    manual = H.is_manual(ctx)
+    if not H.is_trading_day(d, manual=manual):
         raise H.Skipped(f"{d:%d-%m-%Y} is not a trading day (weekend / market holiday) — nothing to do.")
+    if manual and not H.is_trading_day(d):
+        ctx.log(f"{d:%d-%m-%Y} is a SPECIAL trading day ({d:%A}): today's file is tried first, and if it is not on the "
+                f"portal the previous trading day's file ({H.prev_trading_day(d):%d-%m-%Y}) is used.")
 
 
 def wait_of(params) -> int:

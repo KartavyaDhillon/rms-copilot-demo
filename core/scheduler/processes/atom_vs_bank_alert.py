@@ -31,7 +31,7 @@ OK = "✅ Matched"
 CTCL_TXT = "CTCL LIMIT UPDATED BY TRADING SYSTEM"
 
 
-def fetch_atom(out_dir, ctx, wait_s=600):
+def fetch_atom(out_dir, ctx, wait_s=600, day=None):
     requests = H.need("requests")
     c = connections.require("atom", "username", "password")
     s = requests.Session()
@@ -84,7 +84,7 @@ def fetch_atom(out_dir, ctx, wait_s=600):
     max_id = max([r["id"] for r in before if r["id"] is not None] or [0])
     names0 = {r["name"] for r in before}
 
-    today = dt.datetime.now().strftime("%d/%m/%Y")
+    today = (day or dt.date.today()).strftime("%d/%m/%Y")
     eh = [("expHead[]", h) for h in EXP_HEADERS]
     flt = [("fromdate", today), ("todate", today), ("transactionid", ""), ("channeltype", "0"), ("product", "0"),
            ("transactiontype[]", "0"), ("bank[]", "0"), ("merchantid", ""), ("transactionstatus[]", "0"),
@@ -130,7 +130,7 @@ def fetch_atom(out_dir, ctx, wait_s=600):
     return p
 
 
-def fetch_bank(out_dir, ctx):
+def fetch_bank(out_dir, ctx, day=None):
     requests = H.need("requests")
     pd = H.need("pandas")
     H.need("cryptography")
@@ -152,7 +152,7 @@ def fetch_bank(out_dir, ctx):
         token = lg.json()["access_token"]
     except Exception:
         raise RuntimeError(f"Back-office login failed (HTTP {lg.status_code}) — check Connections → Back-office API.")
-    now = dt.datetime.now()
+    now = dt.datetime.combine(day, dt.time(0, 0)) if day else dt.datetime.now()
     fy = f"{now.year}-{now.year + 1}" if now.month >= 4 else f"{now.year - 1}-{now.year}"
     day = now.strftime("%Y-%m-%d")
     r = s.get(f"{base}/api/Vouchers/BankAlert/Get", headers={"Authorization": f"Bearer {token}", "FIRMID": "1001",
@@ -249,8 +249,20 @@ def _run(params, ctx):
     stamp = dt.datetime.now()
 
     # a broken connection restarts that whole portal login + download from the beginning (5 s wait, up to 5 times)
-    atom_f = H.restart_on_network_error(ctx, "ATOM", lambda: fetch_atom(inp, ctx))
-    bank_f = H.restart_on_network_error(ctx, "Back-office", lambda: fetch_bank(inp, ctx))
+    def _pair(day=None):
+        a = H.restart_on_network_error(ctx, "ATOM", lambda: fetch_atom(inp, ctx, day=day))
+        b = H.restart_on_network_error(ctx, "Back-office", lambda: fetch_bank(inp, ctx, day=day))
+        return a, b
+    try:
+        atom_f, bank_f = _pair()
+    except RuntimeError as e:
+        fb = H.todays_file_fallback_day()
+        low = str(e).lower()
+        if fb and H.is_manual(ctx) and ("no transactions" in low or "no bank alert rows" in low):
+            ctx.log(f"Special trading day: no ATOM / Bank Alert data for today - using the previous trading day {fb:%d-%m-%Y}.")
+            atom_f, bank_f = _pair(fb)
+        else:
+            raise
     txn_full, bank_full = pd.read_excel(atom_f), pd.read_excel(bank_f)
 
     txn = txn_full.rename(columns={"Client Code": "CLIENT_CODE", "Atom Txn ID": "ALERT_ID", "Amount": "AMOUNT_ATOM_FILE",
