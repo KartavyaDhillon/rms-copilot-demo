@@ -1,0 +1,18 @@
+{
+ "slots": {
+  "6": {
+   "auto_attempts": 1,
+   "last_auto": "2026-11-09 18:59:41",
+   "status": "running",
+   "started": "2026-11-09 18:59:42",
+   "ended": "",
+   "trigger": "auto",
+   "by": "timer",
+   "msg": "",
+   "steps": {},
+   "skipped": false,
+   "redo": false,
+   "override_done": false
+  }
+ }
+}

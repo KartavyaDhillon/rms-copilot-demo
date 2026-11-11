@@ -70,12 +70,23 @@
   var INP = 'style="' + INPS + '"';
   var INPW = 'style="' + INPS + 'width:100%;box-sizing:border-box"';
 
+  // Dates and times are typed as dd-mm-yyyy and HH:MM (24-hour) on EVERY PC. The browser's own date / time boxes follow the
+  // PC's regional settings (AM/PM, mm/dd/yyyy), which is how 11:59 PM turned into a 11:59 morning window.
+  function dTxt(k, iso) {
+    return '<input type="text" inputmode="numeric" maxlength="10" placeholder="dd-mm-yyyy" autocomplete="off" value="' + esc(dmy(iso)) + '" ' +
+      'style="' + INPS + 'width:112px;font-family:var(--mono)" oninput="allocDate(\'' + k + '\',this)">';
+  }
+  function tTxt(k, v, id) {
+    return '<input type="text" inputmode="numeric" maxlength="5" placeholder="HH:MM" autocomplete="off"' + (id ? ' id="' + id + '"' : '') + ' value="' + esc(v) + '" ' +
+      'style="' + INPS + 'width:74px;font-family:var(--mono)" oninput="allocTime(\'' + k + '\',this)">';
+  }
+
   function windowText() {
     var d = S.data || {}, today = dmy(d.today);
     if (S.mode === 'sofar') return today + ' 00:00 → now';
     if (S.mode === 'until') return today + ' 00:00 → ' + (S.until || '--:--');
     if (S.mode === 'reclose') return pretty(d.marker) + ' → ' + dmy(S.rd) + ' ' + (S.rt || '23:59') + '   (nightly marker moves there)';
-    return dmy(S.fd) + ' ' + S.ft + ' → ' + dmy(S.td) + ' ' + S.tt;
+    return (dmy(S.fd) || '--') + ' ' + (S.ft || '--:--') + ' → ' + (dmy(S.td) || '--') + ' ' + (S.tt || '--:--');
   }
   function paintMode() {
     var b = $('allocSeg'); if (!b) return;
@@ -122,13 +133,13 @@
       '<button class="sa-tool" onclick="allocSub(\'cred\')">&#128273; Credentials</button>' +
       '<button class="sa-tool" onclick="allocSub(\'logs\')">&#128220; Logs</button></div>' +
       lbl('Time range') + seg('allocSeg', [['sofar', 'Day so far'], ['until', 'Up to a time'], ['custom', 'Custom range'], ['reclose', 'Resend Scheduler Report']], S.mode, 'allocMode') +
-      '<div id="allocUntil" style="display:none;margin-top:10px">' + lbl('Up to (today)') + '<input type="time" id="allocUntilIn" value="' + esc(S.until) + '" ' + INP + ' oninput="allocSet(\'until\',this.value)"></div>' +
+      '<div id="allocUntil" style="display:none;margin-top:10px">' + lbl('Up to (today) &middot; 24-hour HH:MM') + tTxt('until', S.until, 'allocUntilIn') + '</div>' +
       '<div id="allocCustom" style="display:none;margin-top:10px"><div style="display:flex;gap:14px;flex-wrap:wrap">' +
-      '<div>' + lbl('From') + '<input type="date" value="' + esc(S.fd) + '" ' + INP + ' oninput="allocSet(\'fd\',this.value)"> <input type="time" value="' + esc(S.ft) + '" ' + INP + ' oninput="allocSet(\'ft\',this.value)"></div>' +
-      '<div>' + lbl('To') + '<input type="date" value="' + esc(S.td) + '" ' + INP + ' oninput="allocSet(\'td\',this.value)"> <input type="time" value="' + esc(S.tt) + '" ' + INP + ' oninput="allocSet(\'tt\',this.value)"></div></div>' +
+      '<div>' + lbl('From &middot; dd-mm-yyyy &middot; HH:MM (24-hour)') + dTxt('fd', S.fd) + ' ' + tTxt('ft', S.ft) + '</div>' +
+      '<div>' + lbl('To &middot; dd-mm-yyyy &middot; HH:MM (24-hour)') + dTxt('td', S.td) + ' ' + tTxt('tt', S.tt) + '</div></div>' +
       '<div style="font-size:10.5px;color:var(--dim);margin-top:8px">Ranges from the last 5 days are read from the mailbox first; if nothing is found there (or the range is older) they are rebuilt from the log files backed up by earlier runs.</div></div>' +
       '<div id="allocReclose" style="display:none;margin-top:10px">' + lbl('Send the report up to') +
-      '<input type="date" value="' + esc(S.rd) + '" ' + INP + ' oninput="allocSet(\'rd\',this.value)"> <input type="time" value="' + esc(S.rt) + '" ' + INP + ' oninput="allocSet(\'rt\',this.value)">' +
+      dTxt('rd', S.rd) + ' ' + tTxt('rt', S.rt) +
       '<div style="font-size:10.5px;color:var(--dim);margin-top:8px"><b style="color:var(--ink)">Use when the nightly report failed or didn\'t come.</b> It does exactly what the nightly (scheduler) report does: reads the mailbox from the marker up to this time, e-mails the official report to the saved Email To / CC, backs up the logs and <b>moves the nightly marker</b> to this time. All clients — the client-code box is ignored. Mailbox keeps only about 2 days, so do it soon.</div></div>' +
       '<div id="allocWin" style="font-size:12px;color:var(--muted);margin:10px 0 14px;font-family:var(--mono)"></div>' +
       '<div id="allocClientBox" style="border-top:1px solid var(--line);padding-top:12px">' +
@@ -256,6 +267,28 @@
   };
   window.allocMode = function (v) { S.mode = v; S.msg = ''; S.ask = ''; S.confirmed = false; paintMode(); };
   window.allocDeliver = function (v) { S.deliver = v; paintDeliver(); };
+  // dd-mm-yyyy: only digits are kept, the dashes are put in by themselves; S[k] holds the ISO date (or '' until it is a real date)
+  window.allocDate = function (k, el) {
+    var dg = String(el.value || '').replace(/\D/g, '').slice(0, 8), v = dg;
+    if (dg.length > 4) v = dg.slice(0, 2) + '-' + dg.slice(2, 4) + '-' + dg.slice(4);
+    else if (dg.length > 2) v = dg.slice(0, 2) + '-' + dg.slice(2);
+    el.value = v;
+    var iso = '';
+    if (dg.length === 8) {
+      var dd = +dg.slice(0, 2), mm = +dg.slice(2, 4), yy = +dg.slice(4), t = new Date(yy, mm - 1, dd);
+      if (yy >= 2000 && t.getFullYear() === yy && t.getMonth() === mm - 1 && t.getDate() === dd) iso = dg.slice(4) + '-' + dg.slice(2, 4) + '-' + dg.slice(0, 2);
+    }
+    el.style.borderColor = (dg.length === 8 && !iso) ? 'var(--red)' : '';
+    window.allocSet(k, iso);
+  };
+  // HH:MM, 24-hour
+  window.allocTime = function (k, el) {
+    var dg = String(el.value || '').replace(/\D/g, '').slice(0, 4), v = dg.length > 2 ? dg.slice(0, 2) + ':' + dg.slice(2) : dg;
+    el.value = v;
+    var ok = dg.length === 4 && +dg.slice(0, 2) <= 23 && +dg.slice(2) <= 59;
+    el.style.borderColor = (dg.length === 4 && !ok) ? 'var(--red)' : '';
+    window.allocSet(k, ok ? v : '');
+  };
   window.allocSet = function (k, v) { S[k] = v; if (k !== 'mailto') { var w = $('allocWin'); if (w) w.textContent = windowText(); } };
   window.allocAdd = function () {
     var i = $('allocCC'); if (!i) return;
@@ -297,7 +330,7 @@
       if (!/^\d{1,2}:\d{2}$/.test(S.until || '')) { setMsg('Choose the time to report up to.', 'bad'); return; }
       q += '&until=' + encodeURIComponent(S.until);
     } else if (S.mode === 'custom') {
-      if (!S.fd || !S.td || !S.ft || !S.tt) { setMsg('Fill in both dates and times.', 'bad'); return; }
+      if (!S.fd || !S.td || !S.ft || !S.tt) { setMsg('Type both dates as dd-mm-yyyy and both times as HH:MM (24-hour).', 'bad'); return; }
       var a = S.fd + ' ' + S.ft, b = S.td + ' ' + S.tt;
       if (a >= b) { setMsg('The start must be before the end.', 'bad'); return; }
       q += '&frm=' + encodeURIComponent(a) + '&to=' + encodeURIComponent(b);
