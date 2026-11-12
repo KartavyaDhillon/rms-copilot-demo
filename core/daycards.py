@@ -797,7 +797,10 @@ def run_proc(card: str, proc: str, d: dt.date, log: Callable[[str], None], cance
         outputs = _harvest(p, d, work, {s.rel.lower() for s in staged}, log)
         if is_diwali() and rc == 0 and proc not in ("master_file", "live_allocation_report"):   # those two feed the next process: left whole
             for o in outputs:
+                if re.match(r"Report_Live_Allocation|PEAKWISE_", o.name, re.I):   # working files handed to the next step: left whole
+                    continue
                 try:
+                    log(f"DIWALI trim: keeping only peak 01 + E in {o.name} (a big file can take a minute) ...")
                     diwali_trim(o, log)
                 except Exception as e:                           # noqa: BLE001
                     log(f"DIWALI trim failed for {o.name} ({type(e).__name__}: {e}) - the report is left as the script made it.")
@@ -858,8 +861,25 @@ def diwali_trim(path: Path, log: Callable[[str], None]) -> bool:
         col = next(i for i, v in enumerate(head) if isinstance(v, str) and v.strip().lower() == "indicator") + 1
         hr = next(r for r in range(1, 4) if any(isinstance(c.value, str) and c.value.strip().lower() == "indicator" for c in ws[r]))
         bad = [r for r in range(hr + 1, ws.max_row + 1) if str(ws.cell(r, col).value).strip().upper().lstrip("0") in ("2", "3", "4", "5", "6", "7", "8")]
-        for r in reversed(bad):
-            ws.delete_rows(r)
+        runs, start = [], None                       # delete whole blocks of rows at once (one call per block, not per row)
+        for r in bad:
+            if start is not None and r == prev + 1:
+                prev = r
+                continue
+            if start is not None:
+                runs.append((start, prev - start + 1))
+            start = prev = r
+        if start is not None:
+            runs.append((start, prev - start + 1))
+        if len(runs) <= 200:
+            for first, n in reversed(runs):
+                ws.delete_rows(first, n)
+        elif bad:                                    # many short blocks: rewrite the kept rows in one go (fast; row styles are not kept)
+            badset = set(bad)
+            kept = [[c.value for c in row] for r, row in enumerate(ws.iter_rows(min_row=hr + 1, max_row=ws.max_row), start=hr + 1) if r not in badset]
+            ws.delete_rows(hr + 1, ws.max_row - hr)
+            for vals in kept:
+                ws.append(vals)
         removed += len(bad)
         changed = changed or bool(bad)
     if not changed:

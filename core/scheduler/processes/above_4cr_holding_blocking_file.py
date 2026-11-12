@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from core.scheduler import helpers as H, paths
-from core.scheduler.catalog import register
+from core.scheduler.catalog import Param, register
 from core.scheduler.processes import _kit as K
 
 FOLDER = "ABOVE 4 CR HOLDING BLOCKING FILE"
@@ -158,6 +158,32 @@ def unblock_csv(removed: List[Key]) -> str:
     return "\r\n".join(rows) + "\r\n"
 
 
+def _weekly_mail(params, ctx, master: Path, lines: int):
+    """EVERY FRIDAY: the master file (as it stands after today's run) goes to its own To / Cc (Weekly To / Weekly Cc).
+    Its own e-mail, separate from the daily one; a problem here never fails the daily run."""
+    d = dt.date.today()
+    if d.weekday() != 4:
+        return
+    to, cc = H.parse_emails(params.get("weekly_to")), H.parse_emails(params.get("weekly_cc"))
+    if not to:
+        ctx.log("Friday: the weekly master-file e-mail has no 'Weekly To' address yet - not sent (add it with the Recipients button).")
+        return
+    if H.already_sent(FOLDER, "weekly", ctx):
+        ctx.log("Friday: the weekly master-file e-mail was already sent today.")
+        return
+    subject = f"More than 4 Cr Holding Blocking - Master file - {d:%d-%m-%Y}"
+    body = ("<html><body><p>Hi Team,</p>"
+            f"<p>Please find attached the weekly master file of the above 4 Cr holding blocking list as on {d:%d-%m-%Y} "
+            f"({lines:,} lines).</p><p>{K.sig(params)}</p></body></html>")
+    try:
+        ctx.log(f"Weekly (Friday) e-mail of the master file to {', '.join(to)}" + (f" (cc {', '.join(cc)})" if cc else "") + "…")
+        H.send_email(subject, body, to, cc, [master], ctx, html=True)
+        H.mark_sent(FOLDER, "weekly")
+        ctx.log(f"Weekly e-mail sent: “{subject}”.")
+    except Exception as e:                                       # noqa: BLE001
+        ctx.log(f"WARNING: the weekly master-file e-mail could NOT be sent ({type(e).__name__}: {e}). The daily run is not affected.")
+
+
 # ───────────────────────────── the run ─────────────────────────────
 @H.logged(FOLDER)
 def _run(params, ctx):
@@ -224,6 +250,7 @@ def _run(params, ctx):
     tmp.write_bytes((nl.join([header] + kept + [l for _, l in new]) + nl).encode("latin-1"))
     tmp.replace(m)
     ctx.log(f"Master file updated: {len(kept) + len(new):,} lines.")
+    _weekly_mail(params, ctx, m, len(kept) + len(new))
 
     ok = None
     if not new:
@@ -245,6 +272,9 @@ def _params():
     for p in ps:
         if p.name == "signature":
             p.default = SIGNATURE
+    ps += [Param("weekly_to", "Weekly (Friday) master file - To", "text", fmt="emails", scope="process",
+                 help="Every Friday the master file is e-mailed to these addresses (comma or new-line separated). Empty = no weekly e-mail."),
+           Param("weekly_cc", "Weekly (Friday) master file - Cc", "text", fmt="emails", scope="process")]
     return ps
 
 
