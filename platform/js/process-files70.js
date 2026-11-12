@@ -24,6 +24,23 @@
   function hideTip() { var t = $('globalTip'); if (t) { t.style.display = 'none'; t.classList.remove('show'); } }
   function modal(t, h) { hideTip(); if (typeof window.saShowModal === 'function') window.saShowModal(t, h); }
   function dmy(iso) { var p = String(iso || '').split('-'); return p.length === 3 ? p[2] + '-' + p[1] + '-' + p[0] : iso; }
+  // Date typed as dd-mm-yyyy (the browser's own date box shows mm/dd/yyyy on some PCs, which is easy to misread).
+  function dIn(id, iso, fn) {
+    return '<input type="text" inputmode="numeric" maxlength="10" placeholder="dd-mm-yyyy" autocomplete="off" id="' + id + '" class="f7-in" ' +
+      'style="width:112px;font-family:var(--mono)" value="' + esc(dmy(iso)) + '" oninput="f7TxtDate(this,\'' + fn + '\')">';
+  }
+  window.f7TxtDate = function (el, fn) {
+    var dg = String(el.value || '').replace(/\D/g, '').slice(0, 8), v = dg;
+    if (dg.length > 4) v = dg.slice(0, 2) + '-' + dg.slice(2, 4) + '-' + dg.slice(4);
+    else if (dg.length > 2) v = dg.slice(0, 2) + '-' + dg.slice(2);
+    el.value = v;
+    if (dg.length < 8) { el.style.borderColor = ''; return; }
+    var dd = +dg.slice(0, 2), mm = +dg.slice(2, 4), yy = +dg.slice(4), t = new Date(yy, mm - 1, dd);
+    if (yy >= 2000 && t.getFullYear() === yy && t.getMonth() === mm - 1 && t.getDate() === dd) {
+      el.style.borderColor = '';
+      window[fn](dg.slice(4) + '-' + dg.slice(2, 4) + '-' + dg.slice(0, 2));
+    } else el.style.borderColor = 'var(--red)';
+  };
 
   var css = document.createElement('style');
   css.textContent =
@@ -181,7 +198,7 @@
       : '<button class="f7-btn big" onclick="f7Run()" data-tip="Downloads only what is not already in the day folder - files that are there are skipped.">' + (missing ? '⬇ Download missing (' + missing + ')' : '↻ Check again') + '</button>';
     el.innerHTML =
       '<div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin:0 0 12px">' +
-        '<div><div class="f7-lbl">Trade date</div><input type="date" id="f7Date" class="f7-in" value="' + esc(d.iso) + '" onchange="f7SetDate(this.value)"></div>' +
+        '<div><div class="f7-lbl">Trade date (dd-mm-yyyy)</div>' + dIn('f7Date', d.iso, 'f7SetDate') + '</div>' +
         (d.iso !== d.default_iso ? '<button class="f7-link" style="margin-bottom:9px" onclick="f7SetDate(\'' + esc(d.default_iso) + '\')">↺ back to the previous trading day (' + esc(dmy(d.default_iso)) + ')</button>'
           : '<span style="font-size:11.5px;color:var(--dim);margin-bottom:9px">previous trading day</span>') +
         '<div style="margin-bottom:2px">' + runBtn + '</div>' +
@@ -297,7 +314,7 @@
     modal('📦 ' + TITLE + ' - backup files',
       '<div style="font-size:12.5px;color:var(--muted);line-height:1.55;margin-bottom:12px">Pick a date, then what to put in the zip. The zip keeps the same layout as the day folder ' +
       '(<span style="font-family:var(--mono)">date / CM, FO, CO, CD, MCX, NCDEX, MCX &amp; NCDEX EODSAR, 1-8 / files</span>), so it can be pasted on the server as it is. Folders 1-8 are the LIVE ALLOCATION CAPTURE slots of that day; a folder with no files is shown as \u2717.</div>' +
-      '<div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:12px"><div><div class="f7-lbl">Date</div><input type="date" id="f7BkDate" class="f7-in" value="' + esc(b.date) + '" onchange="f7BkDate(this.value)"></div>' +
+      '<div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:12px"><div><div class="f7-lbl">Date (dd-mm-yyyy)</div>' + dIn('f7BkDate', b.date, 'f7BkDate') + '</div>' +
       '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
         '<button class="f7-chip' + (b.mode === 'full' ? ' on' : '') + '" id="f7BkM_full" onclick="f7BkMode(\'full\')">Full day folder</button>' +
         '<button class="f7-chip' + (b.mode === 'groups' ? ' on' : '') + '" id="f7BkM_groups" onclick="f7BkMode(\'groups\')">Choose groups</button>' +

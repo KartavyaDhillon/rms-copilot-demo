@@ -390,7 +390,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
-                            '<script src="/platform/js/process-files70.js?v=5"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
+                            '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
@@ -5112,6 +5112,54 @@ def ms15_stop(request: Request):
     _ms15_sp("ms15")
     _ms15_clear_popup_state()
     return {"ok": True}
+
+
+@app.get("/ms15/auto/status")
+def ms15_auto_status():
+    from core import ms15_auto as _ma
+    return _ma.status()
+
+
+@app.post("/ms15/auto/settings")
+def ms15_auto_settings(body: dict, request: Request, password: str = ""):
+    """Auto ON/OFF, alert numbers and the lead/wait minutes. Password-gated like Credentials."""
+    from core.short_allocation import check_password as _pw
+    if not _pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    from core import ms15_auto as _ma
+    _who, _adm = _actor(request)
+    try:
+        _ma.save_settings(body or {}, _who or "")
+    except ValueError as _e:
+        return {"ok": False, "error": str(_e)}
+    return {"ok": True, **_ma.status()}
+
+
+@app.post("/ms15/auto/skip")
+def ms15_auto_skip(run: int, undo: bool = False):
+    from core import ms15_auto as _ma
+    _ma.skip_today(run, undo)
+    return {"ok": True, **_ma.status()}
+
+
+@app.post("/ms15/auto/test-alert")
+def ms15_auto_test_alert(password: str = ""):
+    from core.short_allocation import check_password as _pw
+    if not _pw(password):
+        return {"ok": False, "error": "Wrong password"}
+    from core import ms15_auto as _ma
+    r = _ma.send_alert(1, "THIS IS A TEST - nothing has failed.", "Margin Shortage auto-run failure alerts will look like this.", test=True)
+    return {"ok": bool(r.get("sent")), "reason": r.get("reason", "")}
+
+
+@app.on_event("startup")
+def _ms15_auto_startup():
+    try:
+        from core import ms15_auto as _ma
+        _ma.set_readiness(ms15_readiness)
+        _ma.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  Margin Shortage Auto Run timer not started: {type(_e).__name__}: {_e}")
 
 
 def _ms15_clear_popup_state():

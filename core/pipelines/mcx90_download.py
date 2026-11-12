@@ -216,7 +216,7 @@ def _friendly_auth_msg(server, reason):
             f"Update it in Credentials and try again.")
 
 
-def stream_mcx90_download(pipe="ctcl", both=False):
+def stream_mcx90_download(pipe="ctcl", both=False, extra_env=None):
     """Generator that runs the MCX90 download script and yields SSE event dicts.
 
     `pipe` is "ctcl" (default, CTCL vs NMASS box) or "ms15" (Margin Shortage
@@ -305,6 +305,7 @@ def stream_mcx90_download(pipe="ctcl", both=False):
                                     # look completely hung with a near-empty log for minutes
     if both:
         env["MCX_DOWNLOAD_BOTH"] = "1"     # script: RSK383 (Deposit) + RSK335 (90%) in one login
+    env.update(extra_env or {})        # e.g. MCX_TOKEN_MODE=auto for the unattended Margin Shortage auto run
     env["MCX90_SAVE_DIR"]  = own_dir  # tells MCX_90_PERCENT_FILE_API.py where to save
                                         # this run's file - ctcl's folder by default,
                                         # Margin Shortage's folder when pipe="ms15"
