@@ -1079,7 +1079,12 @@ def run_downloads():
 # MAIN
 # -----------------------------
 
-if not load_session():
+# NMASS_RUN_MODE=ncfe_only (NCDEX DEPOSIT card): only the NCDEX ClientNetEffectiveDeposits download - no NMASS login at all.
+_NCFE_ONLY = os.getenv("NMASS_RUN_MODE", "").strip().lower() == "ncfe_only"
+
+if _NCFE_ONLY:
+    log_header("NCDEX ONLY - NMASS login skipped")
+elif not load_session():
     login()
 else:
     log_header("BOT STARTED")
@@ -1089,7 +1094,8 @@ else:
 
 
 # ✅ Start session checker in background
-threading.Thread(target=keep_session_alive, daemon=True).start()
+if not _NCFE_ONLY:
+    threading.Thread(target=keep_session_alive, daemon=True).start()
 
 
 #---------------
@@ -2141,6 +2147,8 @@ def _is_net_err(e):
 
 # 🔹 NMASS DOWNLOADS (CM / FO / CO) — a broken connection restarts the whole login + download after 5 s (max 5 times)
 for _dl_try in range(1, 6):
+    if _NCFE_ONLY:
+        break
     try:
         run_downloads()
         break

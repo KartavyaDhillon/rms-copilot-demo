@@ -171,6 +171,11 @@ def _fresh_rsk335_file(output_dir, max_age_min=_TCS_MAX_AGE_MIN):
     return path if 0 <= age_min <= max_age_min else None
 
 
+def _r136_name():
+    from core.pipelines import tcs_rsk136 as _R
+    return _R.save_name()
+
+
 def _stage(msg):
     """Print a stage change for the dashboard status strip (see module
     docstring) AND the plain log line, so the saved log still reads normally."""
@@ -459,7 +464,7 @@ def _export_queue_page2_payload(rndaak, tab_id, trigger_time):
 
 # ── the one and only entry point ───────────────────────────────────────────
 
-def download_both(output_dir, force=False):
+def download_both(output_dir, force=False, search_dir=None):
     """Log in ONCE, trigger BOTH exports, wait for both together (re-logging
     in automatically if the session dies mid-wait), download both.
     Returns {"rsk383": path|None, "rsk335": path|None}.
@@ -478,6 +483,12 @@ def download_both(output_dir, force=False):
     so the dashboard can show a clean "already in use" message."""
     mdd = _mdd()
     os.environ["MCX_DEPOSIT_CALLER"] = "probable"
+    if search_dir is None and os.getenv("MCXCOMM_PROBABLE_LINK", "on").strip().lower() not in ("0", "off", "no", "false"):
+        try:                                   # MCX COMM LIMIT's Search Results file (RSK136) rides along in this same login
+            from core import mcx_comm_limit as _mcl
+            search_dir = str(_mcl.root())
+        except Exception:
+            search_dir = None
 
     if not force:
         _have_383 = _fresh_rsk383_file(output_dir)
@@ -603,12 +614,27 @@ def download_both(output_dir, force=False):
             raise RuntimeError("RSK335 export trigger failed")
         print(f"✅ RSK335 export QUEUED at {trigger_335.strftime('%H:%M:%S')}")
 
+        # ── 4b. RSK136 (MCX COMM LIMIT's Search Results): a third export in the same login. Never fatal for PROBABLE. ──
+        trigger_136 = None
+        R136 = None
+        if search_dir and not os.path.isfile(os.path.join(search_dir, _r136_name())):
+            try:
+                from core.pipelines import tcs_rsk136 as R136
+                _stage("📤 RSK335 queued — also queuing the RSK136 (MCX COMM LIMIT Search Results) export…")
+                trigger_136 = R136.queue(sess, rndaak, INIT_H)
+                print(f"✅ RSK136 export QUEUED at {trigger_136.strftime('%H:%M:%S')}")
+            except Exception as exc:               # noqa: BLE001
+                trigger_136 = None
+                print(f"⚠️ RSK136 not queued ({exc}) — PROBABLE goes on; MCX COMM LIMIT will fetch it itself.")
+
         # ── 5. ONE wait for BOTH (with auto re-login) ──────────────────────
         _stage("⏳ Both exports queued — waiting for TCS BANCS to generate them "
                "(usually a few minutes)…")
         print("\n⏳ WAITING FOR BOTH FILES (both exports are generating in parallel)...")
-        target_383 = target_335 = None
-        ready_383 = ready_335 = False
+        target_383 = target_335 = target_136 = None
+        ready_383 = ready_335 = ready_136 = False
+        t_both = None
+        net_errs = 0
         max_wait, interval, elapsed = 900, 15, 0
         relogins = 0
         MAX_RELOGINS = 3
@@ -617,8 +643,16 @@ def download_both(output_dir, force=False):
             print(f"\n🔄 Checking export queue... (elapsed: {elapsed}s)")
             rows = []
 
-            res_p1 = sess.post(ARCH_URL, headers=DL_H,
-                               data=_export_queue_payload(rndaak, tab_id, trigger_383))
+            try:
+                res_p1 = sess.post(ARCH_URL, headers=DL_H,
+                                   data=_export_queue_payload(rndaak, tab_id, trigger_383))
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as _ne:
+                net_errs += 1
+                if net_errs > 8:
+                    raise
+                print(f"⚠️ network hiccup ({type(_ne).__name__}) — same session, trying again in 10s ({net_errs}/8)")
+                time.sleep(10); elapsed += 10
+                continue
 
             # ── AUTO RE-LOGIN ──────────────────────────────────────────────
             # The exports are already queued server-side and keep generating
@@ -692,9 +726,19 @@ def download_both(output_dir, force=False):
                 if target_335 and file_name == target_335 and "Generated" in status:
                     ready_335 = True
 
+                if trigger_136 and not target_136 and R136.is_target(cols, trigger_136, ft):
+                    target_136 = file_name
+                    print(f"  🔒 LOCKED RSK136: {target_136}")
+                if target_136 and file_name == target_136 and "Generated" in status:
+                    ready_136 = True
+
             if ready_383 and ready_335:
-                print("\n🎉 BOTH FILES READY")
-                break
+                # RSK136 is a bonus: wait for it at most 2 more minutes, never hold PROBABLE's own files for it
+                if t_both is None:
+                    t_both = time.time()
+                if (not trigger_136) or ready_136 or time.time() - t_both > 120:
+                    print("\n🎉 BOTH FILES READY" + (" (+ Search Results)" if ready_136 else ""))
+                    break
 
             time.sleep(interval); elapsed += interval
 
@@ -749,6 +793,17 @@ def download_both(output_dir, force=False):
                         f.write(chunk)
             saved[key] = out_path
             print(f"  ✅ {label} DOWNLOADED: {out_path}")
+
+        saved["rsk136"] = None
+        if trigger_136:
+            if target_136 and ready_136:
+                try:
+                    saved["rsk136"] = R136.fetch_to(sess, rndaak, DL_H, target_136, os.path.join(search_dir, R136.save_name()))
+                    print(f"  ✅ RSK136 (Search Results) DOWNLOADED: {saved['rsk136']}")
+                except Exception as exc:           # noqa: BLE001
+                    print(f"  ⚠️ RSK136 download failed ({exc}) — MCX COMM LIMIT will fetch it itself.")
+            else:
+                print("  ℹ️ RSK136 (Search Results) was not ready yet — MCX COMM LIMIT will fetch it itself at its time.")
 
         print("\n🎉 ALL FILES DOWNLOADED SUCCESSFULLY")
         return saved

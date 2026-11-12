@@ -11,10 +11,14 @@ if _sv_os.getenv("MCX90_CHILD") != "1":
     _SV_NET = ("forcibly closed", "connection aborted", "connection reset", "remotedisconnected", "remote end closed",
                "10054", "10053", "connectionerror", "readtimeout", "connecttimeout", "chunkedencodingerror")
     _SV_NO = ("wrong password", "auth_fail", "_locked]", "invalid_login", "user locked")
-    _env = dict(_sv_os.environ, MCX90_CHILD="1")
+    import tempfile as _sv_tmp
+    _state_file = _sv_os.path.join(_sv_tmp.gettempdir(), f"mcx90_state_{_sv_os.getpid()}.json")
+    _env = dict(_sv_os.environ, MCX90_CHILD="1", MCX90_STATE_FILE=_state_file)
     _rc = 1
     for _try in range(1, 6):
         _tail = []
+        # restart n>1 RESUMES: the exports queued by the first try are still on the server - do not queue new ones
+        _env["MCX90_RESUME"] = "1" if _try > 1 else "0"
         _p = _sv_sp.Popen([_sv_sys.executable, "-u", _sv_os.path.abspath(__file__)], env=_env,
                           stdout=_sv_sp.PIPE, stderr=_sv_sp.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
         for _line in _p.stdout:
@@ -27,9 +31,13 @@ if _sv_os.getenv("MCX90_CHILD") != "1":
         _blob = " ".join(_tail)
         if _try >= 5 or not any(x in _blob for x in _SV_NET) or any(x in _blob for x in _SV_NO):
             break
-        print(f"⚠️ Connection problem — starting the whole MCX login again from the beginning in 5s "
+        print(f"⚠️ Connection problem — logging in again in 5s and RESUMING the exports already queued "
               f"(restart {_try}/4)...", flush=True)
         _sv_time.sleep(5)
+    try:
+        _sv_os.remove(_state_file)
+    except Exception:
+        pass
     _sv_sys.exit(_rc)
 
 import requests
@@ -547,7 +555,40 @@ FETCH_HEADERS = {
 # (RSK335 only).
 BOTH = os.getenv("MCX_DOWNLOAD_BOTH", "") == "1"
 export_trigger_time_383 = None
-if BOTH:
+export_trigger_time_335 = None
+RESUME = False
+_MCX90_STATE = os.getenv("MCX90_STATE_FILE", "")
+
+
+def _mcx90_save_state():
+    """Remember when the exports were queued, so a restart after a connection drop RESUMES (polls the same exports)
+    instead of queuing two new ones and ignoring the files that are already generated."""
+    if not _MCX90_STATE:
+        return
+    try:
+        import json as _j
+        with open(_MCX90_STATE, "w", encoding="utf-8") as _f:
+            _j.dump({"date": datetime.now().strftime("%Y%m%d"), "both": BOTH,
+                     "t335": export_trigger_time_335.isoformat() if export_trigger_time_335 else "",
+                     "t383": export_trigger_time_383.isoformat() if export_trigger_time_383 else ""}, _f)
+    except Exception:
+        pass
+
+
+if os.getenv("MCX90_RESUME") == "1" and _MCX90_STATE and os.path.isfile(_MCX90_STATE):
+    try:
+        import json as _j
+        _st = _j.load(open(_MCX90_STATE, encoding="utf-8"))
+        _t335 = datetime.fromisoformat(_st["t335"]) if _st.get("t335") else None
+        _t383 = datetime.fromisoformat(_st["t383"]) if _st.get("t383") else None
+        _fresh = _t335 and (datetime.now() - _t335).total_seconds() < 40 * 60 and _st.get("date") == datetime.now().strftime("%Y%m%d")
+        if _fresh and (_t383 or not BOTH):
+            export_trigger_time_335, export_trigger_time_383, RESUME = _t335, _t383, True
+            print(f"\n♻️ RESUMING - the exports queued at {_t335:%H:%M:%S} are still there; not queuing new ones, "
+                  f"just waiting for / downloading them.", flush=True)
+    except Exception as _e:
+        print("resume state unreadable:", _e)
+if BOTH and not RESUME:
     print("\n🌐 Opening RSK383 page (MCX Deposit)...")
     RSK383_URL = BASE_URL + "/Bancs/RSK/RSK383.do"
     init_383 = {
@@ -616,182 +657,184 @@ if BOTH:
                        "reqtoken": "", "parentToChildData": ""})
 
 
-# =========================
-# 🚀 OPEN RSK335 PAGE (CORRECT FLOW)
-# =========================
-print("\n🌐 Opening RSK335 page...")
+if not RESUME:
+    # =========================
+    # 🚀 OPEN RSK335 PAGE (CORRECT FLOW)
+    # =========================
+    print("\n🌐 Opening RSK335 page...")
 
-RSK335_URL = BASE_URL + "/Bancs/RSK/RSK335.do"
+    RSK335_URL = BASE_URL + "/Bancs/RSK/RSK335.do"
 
-FETCH_HEADERS["Referer"] = RSK335_URL
+    FETCH_HEADERS["Referer"] = RSK335_URL
 
-init_payload_335 = {
-    "app": "bancsapp?prefix=/RSK",
-    "page": "/RSK335.do",
-    "confViewSize": "50",
-    "reqType": "0",
-    "mode": "DEF_MODE",
-    "parentName": "blank",
-    "browserType": "IE55",
-    "GuiWinName": "RSK335",
-    "compname": "RSK",
-    "over_ride_button": "Cancel",
-    "AvlHt": "744",
-    "AvlWd": "1481",
-    "tblWd": "1465",
-    "GuiBrowserInst": "0",
-    "theme": "black",
-    "pageId": "RSK335",
-    "wintitle": "Margin Utilization View",
-    "availHeight": "816",
-    "availWidth": "1536",
-    "tabId": "panel3",   # 🔥 FIXED
-    "rndaak": rndaak
-}
+    init_payload_335 = {
+        "app": "bancsapp?prefix=/RSK",
+        "page": "/RSK335.do",
+        "confViewSize": "50",
+        "reqType": "0",
+        "mode": "DEF_MODE",
+        "parentName": "blank",
+        "browserType": "IE55",
+        "GuiWinName": "RSK335",
+        "compname": "RSK",
+        "over_ride_button": "Cancel",
+        "AvlHt": "744",
+        "AvlWd": "1481",
+        "tblWd": "1465",
+        "GuiBrowserInst": "0",
+        "theme": "black",
+        "pageId": "RSK335",
+        "wintitle": "Margin Utilization View",
+        "availHeight": "816",
+        "availWidth": "1536",
+        "tabId": "panel3",   # 🔥 FIXED
+        "rndaak": rndaak
+    }
 
-session.post(RSK335_URL, headers=INIT_HEADERS, data=init_payload_335)
-
-
-# =========================
-# 🔥 PRE-CALL (MANDATORY)
-# =========================
-print("⚙️ Running RSK335 pre-call...")
-
-pre_payload_335 = {
-    "xmlReq": "YES",
-    "reqType": "19",
-    "GuiWinName": "RSK335",
-    "GuiBrowserInst": "0",
-    "inParam1": "56720",
-    "inParam2": "DFLT",
-    "tabId": "panel3",
-    "functionName": "funcname",
-    "ifCallPaint": "false",
-    "ctrlId": "MCB_SearchWC_wca_associatedcm",
-    "filterCombo": "NO",
-    "filterS": "sample",
-    "rndaak": rndaak
-}
-
-session.post(RSK335_URL, headers=FETCH_HEADERS, data=pre_payload_335)
+    session.post(RSK335_URL, headers=INIT_HEADERS, data=init_payload_335)
 
 
-# =========================
-# 🔍 SEARCH (FULL CORRECT)
-# =========================
-print("🔍 Running RSK335 search...")
+    # =========================
+    # 🔥 PRE-CALL (MANDATORY)
+    # =========================
+    print("⚙️ Running RSK335 pre-call...")
 
-search_payload_335 = {
-    "propertyMap(MCB_SearchWC_wca_bpid_Cmb)": "DFLT",
-    "MCB_SearchWC_wca_bpid": "",
-    "propertyMap(MCB_SearchWC_wca_bpid_op)": "=",
+    pre_payload_335 = {
+        "xmlReq": "YES",
+        "reqType": "19",
+        "GuiWinName": "RSK335",
+        "GuiBrowserInst": "0",
+        "inParam1": "56720",
+        "inParam2": "DFLT",
+        "tabId": "panel3",
+        "functionName": "funcname",
+        "ifCallPaint": "false",
+        "ctrlId": "MCB_SearchWC_wca_associatedcm",
+        "filterCombo": "NO",
+        "filterS": "sample",
+        "rndaak": rndaak
+    }
 
-    "MCB_SearchWC_wca_actype": "",
-    "propertyMap(MCB_SearchWC_wca_actype_op)": "=",
-
-    "propertyMap(MCB_SearchWC_wca_associatedtm_Cmb)": "DFLT",
-    "MCB_SearchWC_wca_associatedtm": "",
-    "propertyMap(MCB_SearchWC_wca_associatedtm_op)": "=",
-
-    "propertyMap(MCB_SearchWC_wca_associatedcm_Cmb)": "DFLT",
-    "MCB_SearchWC_wca_associatedcm": "56720",
-    "propertyMap(MCB_SearchWC_wca_associatedcm_op)": "=",
-
-    "MCB_SearchWC_wca_valuedate": "",
-    "propertyMap(MCB_SearchWC_wca_valuedate_op)": "=",
-
-    "MCB_SearchWC_wca_category": "",
-    "propertyMap(MCB_SearchWC_wca_category_op)": "=",
-
-    "MCB_SearchWC_wca_CMName": "DFLT",
-    "propertyMap(MCB_SearchWC_wca_CMName_op)": "=",
-
-    "MCB_SearchWC_wca_TMName": "DFLT",
-    "propertyMap(MCB_SearchWC_wca_TMName_op)": "=",
-
-    "MCB_SearchWC_wca_datedummy1": "",
-    "propertyMap(MCB_SearchWC_wca_datedummy1_op)": "=",
-
-    "MCB_SearchWC_wca_datedummy2": "",
-    "propertyMap(MCB_SearchWC_wca_datedummy2_op)": "=",
-
-    "GRID_RESPONSE": "RSK335_Table",
-    "operationType": "ET",
-    "searchClicked": "true",
-    "PageNum": "0",
-
-    "service": "qryMarginUtilView",
-    "windowName": "RSK335",
-    "MODE": "DEF_MODE",
-    "compName": "RSK",
-
-    "lgbinst": "0",
-    "WRITE_APP": "true",
-
-    "REQ_TYPE": "0",
-    "reqType": "1",
-
-    "sQuery": "Client Code  Equals  DFLT AND TM / CP  Equals  DFLT AND CM  Equals  DFLT AND CM  Equals  56720",
-
-    "AvlWd": "1048",
-    "tblWd": "1026",
-
-    "MCBrowserEventInformation": "sourceElementName~|~Search#*#eventType~|~click#*#butId~|~null",
-
-    "IXHRts": str(int(time.time() * 1000)),
-    "XHR": "true",
-
-    "rndaak": rndaak,
-
-    "theme": "black",
-    "tabId": "panel3",
-
-    "mode": "DEF_MODE",
-    "GuiBrowserInst": "0",
-    "parentName": "blank",
-
-    "browserType": "IE55",
-    "GuiWinName": "RSK335",
-    "compname": "RSK",
-
-    "confViewSize": "50"
-}
-
-res_335 = session.post(RSK335_URL, headers=FETCH_HEADERS, data=search_payload_335)
-
-print("📥 RSK335 Status:", res_335.status_code)
-
-if "RSK335_Table" not in res_335.text:
-    print(res_335.text[:300])
-    raise Exception("❌ RSK335 search failed")
-
-print("✅ RSK335 search successful")
+    session.post(RSK335_URL, headers=FETCH_HEADERS, data=pre_payload_335)
 
 
-# =========================
-# 🚀 EXPORT
-# =========================
-export_payload_335 = search_payload_335.copy()
+    # =========================
+    # 🔍 SEARCH (FULL CORRECT)
+    # =========================
+    print("🔍 Running RSK335 search...")
 
-export_payload_335.update({
-    "Export": "Excel",
-    "enableBatchForExport": "yes",
-    "noPgsToExport": "100",
-    "PageNum": "1",
-    "undefined": "",
-    "MCBrowserEventInformation": "sourceElementName~|~undefined#*#eventType~|~callListExport#*#butId~|~null",
-    "IXHRts": str(int(time.time() * 1000)),
-})
+    search_payload_335 = {
+        "propertyMap(MCB_SearchWC_wca_bpid_Cmb)": "DFLT",
+        "MCB_SearchWC_wca_bpid": "",
+        "propertyMap(MCB_SearchWC_wca_bpid_op)": "=",
 
-res_export_335 = session.post(RSK335_URL, headers=FETCH_HEADERS, data=export_payload_335)
+        "MCB_SearchWC_wca_actype": "",
+        "propertyMap(MCB_SearchWC_wca_actype_op)": "=",
 
-if "ExportBatchSuccess" not in res_export_335.text:
-    raise Exception("❌ RSK335 export failed")
+        "propertyMap(MCB_SearchWC_wca_associatedtm_Cmb)": "DFLT",
+        "MCB_SearchWC_wca_associatedtm": "",
+        "propertyMap(MCB_SearchWC_wca_associatedtm_op)": "=",
 
-print("✅ RSK335 export triggered")
+        "propertyMap(MCB_SearchWC_wca_associatedcm_Cmb)": "DFLT",
+        "MCB_SearchWC_wca_associatedcm": "56720",
+        "propertyMap(MCB_SearchWC_wca_associatedcm_op)": "=",
 
-export_trigger_time_335 = datetime.now()
-print(f"⏱ RSK335 Export Time: {export_trigger_time_335.strftime('%Y%m%d%H%M%S')}")
+        "MCB_SearchWC_wca_valuedate": "",
+        "propertyMap(MCB_SearchWC_wca_valuedate_op)": "=",
+
+        "MCB_SearchWC_wca_category": "",
+        "propertyMap(MCB_SearchWC_wca_category_op)": "=",
+
+        "MCB_SearchWC_wca_CMName": "DFLT",
+        "propertyMap(MCB_SearchWC_wca_CMName_op)": "=",
+
+        "MCB_SearchWC_wca_TMName": "DFLT",
+        "propertyMap(MCB_SearchWC_wca_TMName_op)": "=",
+
+        "MCB_SearchWC_wca_datedummy1": "",
+        "propertyMap(MCB_SearchWC_wca_datedummy1_op)": "=",
+
+        "MCB_SearchWC_wca_datedummy2": "",
+        "propertyMap(MCB_SearchWC_wca_datedummy2_op)": "=",
+
+        "GRID_RESPONSE": "RSK335_Table",
+        "operationType": "ET",
+        "searchClicked": "true",
+        "PageNum": "0",
+
+        "service": "qryMarginUtilView",
+        "windowName": "RSK335",
+        "MODE": "DEF_MODE",
+        "compName": "RSK",
+
+        "lgbinst": "0",
+        "WRITE_APP": "true",
+
+        "REQ_TYPE": "0",
+        "reqType": "1",
+
+        "sQuery": "Client Code  Equals  DFLT AND TM / CP  Equals  DFLT AND CM  Equals  DFLT AND CM  Equals  56720",
+
+        "AvlWd": "1048",
+        "tblWd": "1026",
+
+        "MCBrowserEventInformation": "sourceElementName~|~Search#*#eventType~|~click#*#butId~|~null",
+
+        "IXHRts": str(int(time.time() * 1000)),
+        "XHR": "true",
+
+        "rndaak": rndaak,
+
+        "theme": "black",
+        "tabId": "panel3",
+
+        "mode": "DEF_MODE",
+        "GuiBrowserInst": "0",
+        "parentName": "blank",
+
+        "browserType": "IE55",
+        "GuiWinName": "RSK335",
+        "compname": "RSK",
+
+        "confViewSize": "50"
+    }
+
+    res_335 = session.post(RSK335_URL, headers=FETCH_HEADERS, data=search_payload_335)
+
+    print("📥 RSK335 Status:", res_335.status_code)
+
+    if "RSK335_Table" not in res_335.text:
+        print(res_335.text[:300])
+        raise Exception("❌ RSK335 search failed")
+
+    print("✅ RSK335 search successful")
+
+
+    # =========================
+    # 🚀 EXPORT
+    # =========================
+    export_payload_335 = search_payload_335.copy()
+
+    export_payload_335.update({
+        "Export": "Excel",
+        "enableBatchForExport": "yes",
+        "noPgsToExport": "100",
+        "PageNum": "1",
+        "undefined": "",
+        "MCBrowserEventInformation": "sourceElementName~|~undefined#*#eventType~|~callListExport#*#butId~|~null",
+        "IXHRts": str(int(time.time() * 1000)),
+    })
+
+    res_export_335 = session.post(RSK335_URL, headers=FETCH_HEADERS, data=export_payload_335)
+
+    if "ExportBatchSuccess" not in res_export_335.text:
+        raise Exception("❌ RSK335 export failed")
+
+    print("✅ RSK335 export triggered")
+
+    export_trigger_time_335 = datetime.now()
+    print(f"⏱ RSK335 Export Time: {export_trigger_time_335.strftime('%Y%m%d%H%M%S')}")
+    _mcx90_save_state()
 
 
 max_wait = 720      # total wait time in seconds
@@ -1180,6 +1223,7 @@ DOWNLOAD_HEADERS = {
     "Referer": BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do?app=bancsapp?prefix=/ARCHGUI"
 }
 downloaded = {}
+_net_errs = 0
 
 
 def download_one(label, file_name, save_name):
@@ -1343,6 +1387,11 @@ while elapsed < max_wait:
             print("🚨 Session expired → Re-login")
             do_relogin()
             continue
+        elif isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) and _net_errs < 8:
+            _net_errs += 1
+            print(f"⚠️ network hiccup ({type(e).__name__}) - same session, trying again in 10s ({_net_errs}/8)", flush=True)
+            time.sleep(10)
+            continue
         else:
             raise
 
@@ -1398,6 +1447,11 @@ while elapsed < max_wait:
         if "SESSION_EXPIRED" in str(e):
             print("🚨 Session expired → Re-login")
             do_relogin()
+            continue
+        elif isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) and _net_errs < 8:
+            _net_errs += 1
+            print(f"⚠️ network hiccup ({type(e).__name__}) - same session, trying again in 10s ({_net_errs}/8)", flush=True)
+            time.sleep(10)
             continue
         else:
             raise

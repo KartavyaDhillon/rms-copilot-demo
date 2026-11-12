@@ -584,6 +584,38 @@ PIPELINES["mcxcash"] = {
              "Report file password": {"single_key": "MCX_CASH_FILE_PASSWORD",
                                       "note": "opens the two Excel reports that are e-mailed (the recipients already know it)"}},
 }
+# MCX COMM LIMIT (core/mcx_comm_limit.py): the daily Kambala commodity-limit file. Logs: logs/mcxcomm/mcxcomm__<dd-mm-yyyy>__<time>.log
+PIPELINES["mcxcomm"] = {
+    "name": "MCX COMM LIMIT", "module": "core.mcx_comm_limit", "func": "run", "logdir": "mcxcomm", "runs": 0,
+    "state_dir_env": "MCX_COMM_DIR", "state_default": r"D:\CONSOLE\data\MCX COMM LIMIT", "state_file": "run_counter.txt",
+    "email_default": "rms_del@mastertrust.co.in",
+    "email_keys": {"Commodity limit file": ["MCXCOMM_TO", "MCXCOMM_CC"]},
+    "cred": {"MCX ACTIVE mailbox (POP3)": {"user_key": "MCXCOMM_POP_USER", "pass_key": "MCXCOMM_POP_PASS",
+                                           "note": "mailbox that receives the daily 'MCX ACTIVE CLIENT DETAILS' mail (pop9.netcore.co.in)"},
+             "MCX eclear login (RSK136 search result)": {"user_key": "SA_MCX_DEPOSIT_USER", "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
+                                                         "note": "eclear.mcxccl.com - normally saved by PROBABLE's TCS download; used here only as a fallback. Shared."},
+             "NSCCL / NMASS login": {"user_key": "CTCL_NMASS_USER", "pass_key": "CTCL_NMASS_PASSWORD",
+                                     "note": "CO / FO / CM client-level collaterals - shared with Margin Shortage and CTCL vs NMASS"},
+             "Back-office API login (CASH_MARGIN)": {"user_key": "SCHED_BACKOFFICE_USERNAME", "pass_key": "SCHED_BACKOFFICE_PASSWORD",
+                                                     "note": "boapi custom report export - shared with the Scheduler's Back-office connection"},
+             "Kambala FTP (upload of the limit file)": {"user_key": "SCHED_KAMBALA_FTP_USER", "pass_key": "SCHED_KAMBALA_FTP_PASSWORD",
+                                                        "note": "202.58.232.29 - the finished Kambala_OMNY_COM_DEPO_ADHOC file is uploaded here"},
+             "Depo file FTP (today's Kambala TXT)": {"user_key": "FTP_USER", "pass_key": "FTP_PASS",
+                                                    "note": "source of Kambala_OMNY_COM_DEPO_ADHOC_<date>.TXT (/TRADING/CTCL_FILES/KORP_LIVE/KAMB/DEPO) - shared with the daily FTP job"}},
+}
+# NCDEX COMM LIMIT (core/ncdex_comm_limit.py): NCXDEX_DEPOSIT_FILE.txt. Logs: logs/ncdexcomm/ncdexcomm__<dd-mm-yyyy>__<time>.log
+PIPELINES["ncdexcomm"] = {
+    "name": "NCDEX COMM LIMIT", "module": "core.ncdex_comm_limit", "func": "run", "logdir": "ncdexcomm", "runs": 0,
+    "state_dir_env": "NCDEX_COMM_DIR", "state_default": r"D:\CONSOLE\data\NCDEX COMM LIMIT", "state_file": "run_counter.txt",
+    "email_default": "rms_del@mastertrust.co.in",
+    "email_keys": {"NCDEX RMS Limits File": ["NCDEXCOMM_TO", "NCDEXCOMM_CC"]},
+    "cred": {"NCDEX NCFE login (ClientNetEffectiveDeposits)": {"user_key": "CTCL_NCDEX_USER", "pass_key": "CTCL_NCDEX_PASSWORD",
+                                                               "note": "ncfe.ncdex.com - same login as Margin Shortage / CTCL vs NMASS; the captcha is filled in by itself"},
+             "Mailbox (POP3) - 3-month active file": {"user_key": "MCXCOMM_POP_USER", "pass_key": "MCXCOMM_POP_PASS",
+                                                      "note": "the same mailbox as MCX COMM LIMIT (NCDEX_3MONTH_ACTIVE_DETAILS mail)"},
+             "Kambala FTP (upload of the limit file)": {"user_key": "SCHED_KAMBALA_FTP_USER", "pass_key": "SCHED_KAMBALA_FTP_PASSWORD",
+                                                        "note": "202.58.232.29 - shared with MCX COMM LIMIT"}},
+}
 # 2CAPTCHA low-balance alert (core/captcha_balance.py): only here so the shared e-mail / settings window works for it
 PIPELINES["captchabal"] = {
     "name": "2CAPTCHA BALANCE ALERT", "module": "core.captcha_balance", "func": "check", "logdir": "captchabal", "runs": 0,

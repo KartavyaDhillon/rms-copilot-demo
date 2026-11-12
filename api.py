@@ -391,7 +391,8 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
-                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script></body>', 1)
+                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
+                            '<script src="/platform/js/process-ms15card.js?v=2"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -948,6 +949,117 @@ async def mc_skip(request: Request):
 def mc_stop():
     from core import mcx_cash_maintenance as _mc
     return {"ok": True, "stopped": _mc.stop_running()}
+
+# ── MCX COMM LIMIT (core/mcx_comm_limit.py) and NCDEX COMM LIMIT (core/ncdex_comm_limit.py) cards ──
+# Same routes for both: /mcx-comm/* and /ncdex-comm/*. Both start by themselves 10 s after PROBABLE's Run (see /px/run-stream).
+def _comm_card_routes(prefix, modname):
+    import importlib as _il
+
+    def _m():
+        return _il.import_module(modname)
+
+    @app.get(f"/{prefix}/status", name=f"{prefix}_status")
+    def _status():
+        try:
+            return _m().status()
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}", "steps": [], "inputs": []}
+
+    @app.get(f"/{prefix}/files", name=f"{prefix}_files")
+    def _files(date: str = ""):
+        m = _m()
+        try:
+            sub = m._check_date(date) if date else ""
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {"date": date, "folder": str(m.root() if not sub else m.backup_root() / sub),
+                "files": m.list_files(sub), "dates": m.list_backup_dates()}
+
+    @app.get(f"/{prefix}/file", name=f"{prefix}_file")
+    def _file(name: str, date: str = ""):
+        try:
+            p = _m().file_path(name, date)
+        except (ValueError, FileNotFoundError):
+            raise HTTPException(404, "file not found")
+        return FileResponse(str(p), filename=p.name)
+
+    @app.post(f"/{prefix}/run", name=f"{prefix}_run")
+    async def _run(request: Request):
+        """The Run button. {password} is needed only when today's run already succeeded."""
+        m = _m()
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            return m.request_run(by=(_actor(request)[0] or ""), password=str(body.get("password") or ""))
+        except m.Busy as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
+
+    @app.post(f"/{prefix}/fetch", name=f"{prefix}_fetch")
+    async def _fetch(request: Request):
+        """One download by hand: {what: ...} (see the module's fetch_one)."""
+        m = _m()
+        body = await request.json()
+        try:
+            return m.fetch_one(str(body.get("what") or ""), by=(_actor(request)[0] or ""))
+        except m.Busy as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post(f"/{prefix}/stop", name=f"{prefix}_stop")
+    def _stop(request: Request):
+        return {"ok": True, "stopped": _m().stop_running(by=(_actor(request)[0] or ""))}
+
+    @app.get(f"/{prefix}/settings", name=f"{prefix}_settings_get")
+    def _settings_get():
+        return _m().get_settings()
+
+    @app.post(f"/{prefix}/settings", name=f"{prefix}_settings_set")
+    async def _settings_set(request: Request):
+        """Password-gated settings (auto, FTP, delay, alert numbers, ...)."""
+        from core.short_allocation import check_password as _cp
+        body = await request.json()
+        if not _cp(str(body.get("password") or "")):
+            return {"ok": False, "error": "Wrong password"}
+        try:
+            s = _m().save_settings({k: v for k, v in body.items() if k != "password"}, by=(_actor(request)[0] or ""))
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": True, "settings": s}
+
+    @app.post(f"/{prefix}/upload", name=f"{prefix}_upload")
+    async def _upload(request: Request, files: _LA_List[_LA_UploadFile] = _LA_File(...)):
+        """Put files you got by hand into the working folder (kept under their own names)."""
+        m = _m()
+        if m.is_running():
+            return JSONResponse({"ok": False, "error": "A run is going - Stop it first."}, status_code=409)
+        by = (_actor(request)[0] or "")
+        ok, rejected = [], []
+        for f in files:
+            try:
+                ok.append(m.accept_upload(f.filename or "", await f.read(), by=by)["name"])
+            except ValueError as e:
+                rejected.append(str(e))
+        return {"ok": ok, "rejected": rejected, "inputs": m.input_status()}
+
+    @app.get(f"/{prefix}/range", name=f"{prefix}_range")
+    def _range(from_date: str = "", to_date: str = ""):
+        m = _m()
+        d1, d2 = _la_date(from_date), _la_date(to_date or from_date)
+        return {"from": m.dstr(d1), "to": m.dstr(d2), "files": m.range_listing(d1, d2), "dates": m.list_backup_dates()}
+
+    @app.get(f"/{prefix}/zip-range", name=f"{prefix}_zip_range")
+    def _zip_range(from_date: str = "", to_date: str = ""):
+        m = _m()
+        d1, d2 = _la_date(from_date), _la_date(to_date or from_date)
+        z = m.zip_range(d1, d2)
+        return FileResponse(str(z), filename=m.FOLDER_NAME.replace(" ", "_") + f"_{m.dstr(d1)}" + (f"_to_{m.dstr(d2)}" if d1 != d2 else "") + ".zip",
+                            media_type="application/zip")
+
+_comm_card_routes("mcx-comm", "core.mcx_comm_limit")
+_comm_card_routes("ncdex-comm", "core.ncdex_comm_limit")
 
 # ── 76 FILES DOWNLOADER (one day folder, no copies elsewhere; see core/files70.py) ───────────────────────────────
 def _f70_date(s: str = ""):
@@ -3106,6 +3218,17 @@ def px_run_stream(request: Request, pipe: str = "", run_no: int = 0, market_time
         # Any other user's run finishes before that step (file stays on disk, backed up).
         _extra_env = {"MS15_ALLOW_UPLOAD": "1" if _actor(request)[1] else "0"}
     def gen():
+        if pipe == "probable":                  # MCX COMM LIMIT follows PROBABLE: starts 10 s after this Run (once a day)
+            try:
+                from core import mcx_comm_limit as _mcl
+                _mcl.hook_probable()
+            except Exception as _e:
+                print(f"[mcxcomm] link to PROBABLE failed: {type(_e).__name__}: {_e}", flush=True)
+            try:                                # NCDEX COMM LIMIT follows PROBABLE the same way
+                from core import ncdex_comm_limit as _ncl
+                _ncl.hook_probable()
+            except Exception as _e:
+                print(f"[ncdexcomm] link to PROBABLE failed: {type(_e).__name__}: {_e}", flush=True)
         for ev in _px_stream(pipe, run_no=run_no if run_no else None, extra_env=_extra_env,
                               by=_by, ip=_ip, force=force):
             yield f"data: {_px_json.dumps(ev)}\n\n"

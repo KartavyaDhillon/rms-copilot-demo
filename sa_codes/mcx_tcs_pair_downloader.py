@@ -360,17 +360,31 @@ def download_pair(out_dir, log=print, cancel=lambda: False, max_wait=None, inter
                 raise PairError("The MCX session kept expiring while exporting")
             ses.relogin()
     log("Both exports clicked - now waiting for MCX to generate them.")
-    targets, relog, elapsed = {}, 0, 0
+    targets, relog, elapsed, net = {}, 0, 0, 0
     while elapsed <= max_wait:
         if cancel():
             raise PairError("Stopped")
         try:
             targets = pick_targets(ses.export_rows(day), t383, t335)
+            net = 0
         except _Expired:
             relog += 1
             if relog > 3:
                 raise PairError("The MCX session kept expiring while waiting for the files")
-            ses.relogin()
+            ses.relogin()                              # same t383 / t335: we keep waiting for the SAME exports
+            continue
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            net += 1                                   # connection dropped: never click Export again - wait and look again
+            if net > 8:
+                raise PairError(f"Connection to MCX kept failing while waiting for the files: {e}")
+            log(f"Connection problem ({type(e).__name__}) - checking the same exports again in 10 s ({net}/8)")
+            time.sleep(10)
+            elapsed += 10
+            if net % 3 == 0:
+                try:
+                    ses.relogin()
+                except Exception:
+                    pass
             continue
         ready = [k for k, v in targets.items() if v[1]]
         desc = ", ".join("%s %s" % (k, "ready" if v[1] else "generating") for k, v in targets.items())
@@ -385,10 +399,15 @@ def download_pair(out_dir, log=print, cancel=lambda: False, max_wait=None, inter
         raise PairError(f"MCX did not finish generating the files within {max_wait // 60} minutes")
     out = {}
     for label in ("RSK383", "RSK335"):
-        try:
-            out[label] = ses.download(targets[label][0], out_dir)
-        except requests.RequestException as e:
-            raise PairError(f"{label} download failed: {e}")
+        for n in range(1, 4):                          # a dropped download is fetched again - same file, no new export
+            try:
+                out[label] = ses.download(targets[label][0], out_dir)
+                break
+            except requests.RequestException as e:
+                if n == 3:
+                    raise PairError(f"{label} download failed: {e}")
+                log(f"{label} download interrupted ({type(e).__name__}) - fetching the same file again in 10 s")
+                time.sleep(10)
         log(f"{label} downloaded: {os.path.basename(out[label])}")
     return out
 

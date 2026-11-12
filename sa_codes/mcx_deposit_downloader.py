@@ -218,7 +218,7 @@ class MCXDepositBusyError(Exception):
 
 
 # Every box that can drive a TCS BANCS download. Each gets its OWN lock file.
-_MCX_OWNERS = ("sa", "cli", "probable")
+_MCX_OWNERS = ("sa", "cli", "probable", "mcxcomm")
 
 
 def _mcx_lock_path(owner="sa"):

@@ -1310,6 +1310,7 @@ ready_136 = False
 file_locked_136 = False
 
 latest_export_time = export_trigger_time_136
+_net_errs = 0   # connection drops while waiting: wait and look for the SAME export again (never export again)
 
 
 while elapsed < max_wait:
@@ -1430,6 +1431,17 @@ while elapsed < max_wait:
             print("🚨 Session expired during Page 1 → Re-login")
             do_relogin()
             continue
+        elif isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) and _net_errs < 8:
+            _net_errs += 1
+            print(f"⚠️ Connection problem on Page 1 ({type(e).__name__}) — checking the SAME export again in 10s ({_net_errs}/8)")
+            time.sleep(10)
+            elapsed += 10
+            if _net_errs % 3 == 0:
+                try:
+                    do_relogin()
+                except Exception as _re:
+                    print(f"⚠️ Re-login failed: {_re}")
+            continue
         else:
             raise
 
@@ -1495,6 +1507,17 @@ while elapsed < max_wait:
         if "SESSION_EXPIRED" in str(e):
             print("🚨 Session expired during Page 2 → Re-login")
             do_relogin()
+            continue
+        elif isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) and _net_errs < 8:
+            _net_errs += 1
+            print(f"⚠️ Connection problem on Page 2 ({type(e).__name__}) — checking the SAME export again in 10s ({_net_errs}/8)")
+            time.sleep(10)
+            elapsed += 10
+            if _net_errs % 3 == 0:
+                try:
+                    do_relogin()
+                except Exception as _re:
+                    print(f"⚠️ Re-login failed: {_re}")
             continue
         else:
             raise
