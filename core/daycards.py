@@ -22,6 +22,7 @@ log and can stop it.  Run logs: logs/daycard_<card>/<process>__<dd-mm-yyyy>__<ti
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import os
@@ -76,7 +77,61 @@ def card_dir(card: str) -> Path:
 
 
 def out_dir(card: str, proc: str, d: dt.date) -> Path:
-    return card_dir(card) / dstr(d) / PROCS[proc].label
+    base = card_dir(card) / dstr(d)
+    if is_diwali():
+        base = base / "DIWALI"
+    return base / PROCS[proc].label
+
+
+# ───────────────────────────── DIWALI / MUHURAT mode ─────────────────────────────
+# One button ("DIWALI") that makes the day's reports from ONLY the files of the special trading day, which sit in
+#   <DIWALI_BASE>\<dd-mm-yyyy>\   (same layout as a 76 FILES DOWNLOADER day folder: CM, FO, CO, CD, MCX, NCDEX, EPI.xlsx ...;
+#                                  default DIWALI_BASE = D:\CLAUDE\new)
+#   <DIWALI_BASE>\<dd-mm-yyyy>\LIVE ALLOCATION\   the ONE live-allocation folder you upload yourself
+#   manual files (RESPONSE_2_mcx.csv, Allocation_Detail_<ddmmyyyy>.csv): MANUAL FILES\<date>, or the day folder itself.
+# A special day has ONE session, so the scripts' numbered files (peak 01-08, SA01 i01-i04, CM/FO peaks 1100-1530, live folders
+# 1-8) exist only once: the missing numbers are copies of the one that exists (the maximum over identical files is that file),
+# and the single live folder is used for every live slot.  Outputs go to <CARD>\<date>\DIWALI\<PROCESS>\ - never mixed with a normal day.
+_TL = threading.local()
+DIWALI_DEFAULT = dt.date(2026, 11, 8)
+
+
+def is_diwali() -> bool:
+    return bool(getattr(_TL, "on", False)) or os.getenv("DC_DIWALI", "").strip() == "1"
+
+
+@contextlib.contextmanager
+def diwali_mode():
+    old = getattr(_TL, "on", False)
+    _TL.on = True
+    try:
+        yield
+    finally:
+        _TL.on = old
+
+
+def diwali_base() -> Path:
+    return Path(os.getenv("DIWALI_BASE", r"D:\CLAUDE\new"))
+
+
+def diwali_dir(d: dt.date) -> Path:
+    return diwali_base() / dstr(d)
+
+
+def diwali_live_dir(d: dt.date) -> Path:
+    return diwali_dir(d) / "LIVE ALLOCATION"
+
+
+def diwali_date() -> dt.date:
+    """The latest special trading day (special_trading_days.csv) that is not in the future; the Muhurat Sunday by default."""
+    try:
+        from core.scheduler import holidays as HL
+        days = [x for x in HL.list_special() if x <= dt.date.today()]
+        if days:
+            return max(days)
+    except Exception:
+        pass
+    return DIWALI_DEFAULT
 
 
 def manual_dir(d: dt.date) -> Path:
@@ -332,6 +387,13 @@ def _files(p: Path) -> List[Path]:
 
 def day_sources(d: dt.date) -> List[Src]:
     from core import files70 as F
+    if is_diwali() and not _files(F.day_dir(d) / "CM") and not _files(F.day_dir(d) / "MCX"):
+        # the 76 FILES DOWNLOADER has nothing for the special day: use the copy of its day folder kept in <DIWALI_BASE>\<date>
+        base, out = diwali_dir(d), []
+        for sub in ("CM", "FO", "CO", "CD", "MCX", "NCDEX", "MCX & NCDEX EODSAR"):
+            out += [Src(x.name, x, "day", f"{dstr(d)}/{sub}/{x.name}") for x in _files(base / sub)]
+        out += [Src(x.name, x, "day", f"{dstr(d)}/{x.name}") for x in _files(base) if x.name.lower() == "epi.xlsx"]
+        return out
     base, out = F.day_dir(d), []
     for _k, _l, sub in F.GROUPS:
         if sub:
@@ -353,6 +415,33 @@ def live_sources(d: dt.date) -> List[tuple]:
     return out
 
 
+def live_named(d: dt.date) -> List[tuple]:
+    """[(slot, name, Path)] - what the processes see as LIVE ALLOCATION CAPTURE folders 1-8.
+    Normal day: the real folders.  DIWALI: the ONE live folder is used for every slot (the MCX web allocation file is
+    named MCX_Web_Allocation_0<slot> for each slot, its own number when the folder has a file for that slot)."""
+    real = [(i, x.name, x) for i, x in live_sources(d)]
+    if not is_diwali():
+        return real
+    # DIWALI: the real LIVE ALLOCATION CAPTURE folders of that day first; a slot without files (the special day had one
+    # session) is filled from the first folder that has files, else from the single folder you upload.
+    have = {i for i, _n, _x in real}
+    if have:
+        src = [x for i, _n, x in real if i == min(have)]
+    else:
+        src = _files(diwali_live_dir(d))
+    mcx = [x for x in src if re.match(r"MCX_Web_Allocation", x.name, re.I)]
+    rest = [x for x in src if x not in mcx]
+    out = list(real)
+    for i in range(1, 9):
+        if i in have:
+            continue
+        if mcx:
+            own = next((x for x in mcx if re.match(rf"MCX_Web_Allocation_0?{i}(?!\d)", x.name, re.I)), mcx[0])
+            out.append((i, f"MCX_Web_Allocation_{i:02d}{own.suffix}", own))
+        out += [(i, x.name, x) for x in rest]
+    return out
+
+
 def risk_sources(d: dt.date) -> List[Src]:
     """RISK_REPORT of the day: COMMON FILES itself (today's file) or its dated backup folder
     COMMON FILES\\BACKUP FILES AUTOMATED\\<dd-mm-yyyy> (every earlier day)."""
@@ -363,13 +452,20 @@ def risk_sources(d: dt.date) -> List[Src]:
         folder = Path(os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES"))
     rx = re.compile(rf"^RISK_REPORT_{_dmy(d)}\.csv$", re.I)
     out: List[Src] = []
-    for f in (folder, folder / "BACKUP FILES AUTOMATED" / dstr(d)):
+    places = [folder, folder / "BACKUP FILES AUTOMATED" / dstr(d)]
+    if is_diwali():
+        places = [diwali_dir(d), diwali_dir(d) / "RISK REPORT"] + places
+    for f in places:
         out += [Src(x.name, x, "risk", f"{dstr(d)}/RISK REPORT/{x.name}") for x in _files(f) if rx.match(x.name) and x.stat().st_size > 0]
     return out
 
 
 def manual_sources(d: dt.date) -> List[Src]:
-    return [Src(x.name, x, "manual", f"{dstr(d)}/{MANUAL_FOLDER}/{x.name}") for x in _files(manual_dir(d))]
+    out = [Src(x.name, x, "manual", f"{dstr(d)}/{MANUAL_FOLDER}/{x.name}") for x in _files(manual_dir(d))]
+    if is_diwali():                                   # the special day's folder may hold them too
+        out += [Src(x.name, x, "manual", f"{dstr(d)}/{MANUAL_FOLDER}/{x.name}") for x in _files(diwali_dir(d))
+                if re.fullmatch(rf"RESPONSE_2_mcx\.csv|Allocation_Detail_{_dmy(d)}\.csv", x.name, re.I)]
+    return out
 
 
 def outputs_of(proc: str, d: dt.date) -> List[Path]:
@@ -390,11 +486,11 @@ def stage_plan(proc: str, d: dt.date) -> List[Src]:
             rx = re.compile(rest, re.I)
             out += [s for s in manual_sources(d) if rx.fullmatch(s.rel)]
         elif kind == "live_tree":
-            out += [Src(f"{i}/{x.name}", x, "live", f"{dstr(d)}/{i}/{x.name}") for i, x in live_sources(d)]
+            out += [Src(f"{i}/{nm}", x, "live", f"{dstr(d)}/{i}/{nm}") for i, nm, x in live_named(d)]
         elif kind == "live_flat":
             slots, _, rx_s = rest.partition(":")
             want, rx = {int(x) for x in slots.split(",")}, re.compile(rx_s, re.I)
-            out += [Src(x.name, x, "live", f"{dstr(d)}/{i}/{x.name}") for i, x in live_sources(d) if i in want and rx.fullmatch(x.name)]
+            out += [Src(nm, x, "live", f"{dstr(d)}/{i}/{nm}") for i, nm, x in live_named(d) if i in want and rx.fullmatch(nm)]
         elif kind == "prev":
             key, _, rx_s = rest.partition(":")
             rx = re.compile(rx_s, re.I)
@@ -409,7 +505,34 @@ def stage_plan(proc: str, d: dt.date) -> List[Src]:
         if k not in seen:
             seen.add(k)
             uniq.append(s)
+    if is_diwali():
+        uniq += _diwali_fill(uniq, d)
     return uniq
+
+
+def _diwali_fill(staged: List[Src], d: dt.date) -> List[Src]:
+    """A special day has one session: where a numbered file exists only once, the other numbers are copies of it."""
+    have = {s.rel.lower(): s for s in staged}
+    y, s_, m = _ymd(d), _dmy(d), MEMBER
+    fams: List[List[str]] = [[f"MCX_PeakMargin{MCX_USER}_{y}_{i:02d}.csv" for i in range(1, 9)],
+                             [f"NCCL_MARGIN_REP_{NCDEX_UCC}_{y}_{i:02d}.csv" for i in range(1, 9)]]
+    for pre in ("F", "C", "O"):
+        fams.append([f"{pre}_SA01_P_{m}_{s_}_i0{i}.lis" for i in range(1, 5)])
+    for seg in ("CM", "FO", "CO"):
+        for ext in ("csv", "xlsx"):
+            fams.append([f"Margin_NCL_{seg}_0_CM_{m}_{y}_P_{t}.{ext}" for t in ("1100", "1230", "1430", "1530")])
+    added: List[Src] = []
+    for names in fams:
+        there = [have[n.lower()] for n in names if n.lower() in have]
+        if not there:
+            continue
+        tpl = there[-1]
+        for n in names:
+            if n.lower() not in have:
+                s = Src(n, tpl.path, "synth", f"{dstr(d)}/DIWALI COPIES/{n}")
+                have[n.lower()] = s
+                added.append(s)
+    return added
 
 
 def _readable(rx: str) -> str:
@@ -618,6 +741,12 @@ def run_proc(card: str, proc: str, d: dt.date, log: Callable[[str], None], cance
                 break
         rc = proc_.wait()
         outputs = _harvest(p, d, work, {s.rel.lower() for s in staged}, log)
+        if is_diwali() and rc == 0 and proc not in ("master_file", "live_allocation_report"):   # those two feed the next process: left whole
+            for o in outputs:
+                try:
+                    diwali_trim(o, log)
+                except Exception as e:                           # noqa: BLE001
+                    log(f"DIWALI trim failed for {o.name} ({type(e).__name__}: {e}) - the report is left as the script made it.")
         ok = rc == 0 and bool(outputs)
         if rc == 0 and not outputs:
             log("The script finished but no output file was found - treated as failed.")
@@ -630,6 +759,63 @@ def run_proc(card: str, proc: str, d: dt.date, log: Callable[[str], None], cance
         if not keep:
             shutil.rmtree(work, ignore_errors=True)
         _prune_failed(work_base, proc)
+
+
+_NUM_SHEET = re.compile(r"(?:^|[\s_\-])0?([2-8])$|^[A-Za-z]+0?([2-8])$")
+
+
+def diwali_trim(path: Path, log: Callable[[str], None]) -> bool:
+    """A special day has ONE peak: keep only peak 01 and the end-of-day (E) data in a finished report.
+    - rows whose 'Indicator' is 2-8 are removed (1 and E stay);
+    - sheets that only repeat peaks 2-8 (names ending in 2..8, e.g. MCX_WEB_02, NCD5, FA_3) are removed.
+    Nothing is touched when a formula points at a sheet that would go.  The untouched report is kept in 'FULL (all sheets)'.
+    -> True when the file was changed."""
+    if path.suffix.lower() != ".xlsx":
+        return False
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+    except Exception as e:                                           # noqa: BLE001
+        log(f"DIWALI trim skipped ({path.name}): {type(e).__name__}: {e}")
+        return False
+    drop = [ws.title for ws in wb.worksheets if len(wb.worksheets) > 1 and _NUM_SHEET.search(ws.title) and ws.title.strip().upper() not in ("MAIN",)]
+    # a sheet is only a repeat when a peak-1 sibling exists (CM2 needs CM1, MCX_WEB_02 needs MCX_WEB_01 ...)
+    def sibling(t):
+        m = re.sub(r"([2-8])$", "1", t) if not re.search(r"0[2-8]$", t) else re.sub(r"0[2-8]$", "01", t)
+        return m in wb.sheetnames
+    drop = [t for t in drop if sibling(t)]
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                if isinstance(c.value, str) and c.value.startswith("="):
+                    if any(f"'{t}'!" in c.value or f"{t}!" in c.value for t in drop):
+                        log(f"DIWALI trim skipped ({path.name}): a formula uses sheet {ws.title}")
+                        return False
+    changed = False
+    for t in drop:
+        del wb[t]
+        changed = True
+    removed = 0
+    for ws in wb.worksheets:
+        head = next(([c.value for c in ws[r]] for r in range(1, 4) if ws.max_row >= r and any(
+            isinstance(c.value, str) and c.value.strip().lower() == "indicator" for c in ws[r])), None)
+        if not head:
+            continue
+        col = next(i for i, v in enumerate(head) if isinstance(v, str) and v.strip().lower() == "indicator") + 1
+        hr = next(r for r in range(1, 4) if any(isinstance(c.value, str) and c.value.strip().lower() == "indicator" for c in ws[r]))
+        bad = [r for r in range(hr + 1, ws.max_row + 1) if str(ws.cell(r, col).value).strip().upper().lstrip("0") in ("2", "3", "4", "5", "6", "7", "8")]
+        for r in reversed(bad):
+            ws.delete_rows(r)
+        removed += len(bad)
+        changed = changed or bool(bad)
+    if not changed:
+        return False
+    full = path.parent / "FULL (all sheets)"
+    full.mkdir(exist_ok=True)
+    shutil.copy2(path, full / path.name)
+    wb.save(path)
+    log(f"DIWALI trim ({path.name}): kept peak 01 + E; removed {len(drop)} repeated sheet(s) and {removed} repeated row(s). Untouched copy: {full / path.name}")
+    return True
 
 
 def _prune_failed(work_base: Path, proc: str, keep_n: int = 2):
@@ -664,7 +850,7 @@ def _harvest(p: Proc, d: dt.date, work: Path, staged_names: set, log) -> List[Pa
 
 # ───────────────────────────── status for the card ─────────────────────────────
 def _state_file(card: str, proc: str, d: dt.date) -> Path:
-    return _state_dir(card) / f"{dstr(d)}__{proc}.json"
+    return _state_dir(card) / f"{'DIWALI__' if is_diwali() else ''}{dstr(d)}__{proc}.json"
 
 
 def _write_result(card: str, proc: str, d: dt.date, res: dict, started: str, by: str, log: str):
@@ -886,7 +1072,45 @@ def job_status(card: str) -> dict:
             "current": st.get("current") if running else None, "lines": lines[-80:], "ended": st.get("ended")}
 
 
-def start(card: str, procs: List[str], d: dt.date, by: str = "", ip: str = "") -> dict:
+def diwali_status(card: str, d: Optional[dt.date] = None) -> dict:
+    """The card's status for the special day, as the DIWALI button sees it."""
+    d = d or diwali_date()
+    with diwali_mode():
+        st = status(card, d)
+        live = _files(diwali_live_dir(d))
+        st["diwali"] = {"folder": str(diwali_dir(d)), "exists": diwali_dir(d).is_dir(), "live_folder": str(diwali_live_dir(d)),
+                        "live_files": [{"name": x.name, "size": x.stat().st_size} for x in live],
+                        "to": os.getenv("DC_DIWALI_TO", "").strip(), "out_folder": str(card_dir(card) / dstr(d) / "DIWALI")}
+    return st
+
+
+def save_diwali_live(d: dt.date, name: str, data: bytes) -> dict:
+    """The ONE live-allocation folder of the special day (collaterals, MCX web allocation, net deposits ...)."""
+    name = os.path.basename(name or "")
+    if not name or name.startswith("."):
+        raise ValueError("no file name")
+    if not data:
+        raise ValueError(f"{name} is empty.")
+    if name.lower() == RESPONSE_NAME.lower():                         # checked (name + date) like on the normal cards
+        return {**save_manual(d, "response", name, data), "where": "MANUAL FILES"}
+    if re.fullmatch(rf"Allocation_Detail_{_dmy(d)}\.csv", name, re.I):
+        return {**save_manual(d, "alloc", name, data), "where": "MANUAL FILES"}
+    if re.match(r"Allocation_Detail_", name, re.I):
+        raise ValueError(f"The name must be Allocation_Detail_{_dmy(d)}.csv for {dstr(d)}. You picked '{name}'.")
+    if re.match(r"RISK_REPORT_", name, re.I):
+        if not re.fullmatch(rf"RISK_REPORT_{_dmy(d)}\.csv", name, re.I):
+            raise ValueError(f"The risk report must be RISK_REPORT_{_dmy(d)}.csv for {dstr(d)}. You picked '{name}'.")
+        folder, where = diwali_dir(d), "the DIWALI day folder"
+    else:
+        folder, where = diwali_live_dir(d), "DIWALI live allocation folder"
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = folder / (name + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(folder / name)
+    return {"ok": True, "name": name, "size": len(data), "where": where}
+
+
+def start(card: str, procs: List[str], d: dt.date, by: str = "", ip: str = "", diwali: bool = False) -> dict:
     if card not in CARDS:
         return {"ok": False, "error": "unknown card"}
     procs = [x for x in procs if x in CARDS[card]["procs"]]
@@ -901,7 +1125,7 @@ def start(card: str, procs: List[str], d: dt.date, by: str = "", ip: str = "") -
         ld = log_dir(card)
         ld.mkdir(parents=True, exist_ok=True)
         ts = dt.datetime.now()
-        logp = ld / f"{'+'.join(procs) if len(procs) > 1 else procs[0]}__{dstr(d)}__{ts:%Y%m%d_%H%M%S}.log"
+        logp = ld / f"{'DIWALI_' if diwali else ''}{'+'.join(procs) if len(procs) > 1 else procs[0]}__{dstr(d)}__{ts:%Y%m%d_%H%M%S}.log"
         try:
             from core.pipeline_box import who_started_line
             who = who_started_line(by or None, ip or None)
@@ -909,8 +1133,8 @@ def start(card: str, procs: List[str], d: dt.date, by: str = "", ip: str = "") -
             who = f"# started by: {by or 'nobody recorded'}\n"
         with open(logp, "w", encoding="utf-8") as f:
             f.write(f"# {CARDS[card]['title']}  processes={','.join(procs)}  date={dstr(d)}  start={ts:%Y-%m-%d %H:%M:%S}\n{who}")
-        cmd = [sys.executable, "-u", "-m", "core.daycards", "--card", card, "--procs", ",".join(procs), "--date", d.isoformat(), "--by", by or ""]
-        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+        cmd = [sys.executable, "-u", "-m", "core.daycards", "--card", card, "--procs", ",".join(procs), "--date", d.isoformat(), "--by", by or ""] + (["--diwali"] if diwali else [])
+        env =dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
         flags = (0x08000000 | 0x00004000) if os.name == "nt" else 0
         p = subprocess.Popen(cmd, cwd=str(REPO), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              encoding="utf-8", errors="replace", creationflags=flags)
@@ -1103,7 +1327,7 @@ def backup_files(card: str, d: dt.date, procs: Optional[List[str]] = None) -> Li
             continue
         lab = PROCS[key].label
         for s in stage_plan(key, d):
-            if s.kind == "risk":                    # the risk report belongs to COMMON FILES - never put into these backups
+            if s.kind in ("risk", "synth"):         # the risk report belongs to COMMON FILES; copies made for a special day are not real files
                 continue
             out.append({"rel": s.zip_rel, "path": s.path, "size": s.path.stat().st_size, "proc": key, "io": "in", "kind": s.kind})
         for f in outputs_of(key, d):
@@ -1155,8 +1379,12 @@ def _main(argv=None) -> int:
     ap.add_argument("--procs", required=True)
     ap.add_argument("--date", required=True)
     ap.add_argument("--by", default="")
+    ap.add_argument("--diwali", action="store_true")
     a = ap.parse_args(argv)
     d = dt.date.fromisoformat(a.date)
+    if a.diwali:
+        os.environ["DC_DIWALI"] = "1"                # special trading day: see "DIWALI / MUHURAT mode"
+    values = {"to": os.environ["DC_DIWALI_TO"]} if a.diwali and os.getenv("DC_DIWALI_TO", "").strip() else None
     try:                                           # the env of the child already holds the saved settings; defaults for the rest
         apply_defaults()
     except Exception:
@@ -1171,7 +1399,7 @@ def _main(argv=None) -> int:
             print(m, flush=True)
 
         try:
-            res = run_proc(a.card, key, d, log)
+            res = run_proc(a.card, key, d, log, values=values)
         except Exception as e:                    # noqa: BLE001
             print(f"FAILED: {type(e).__name__}: {e}", flush=True)
             res = {"ok": False, "outputs": [], "missing": [], "rc": None, "error": f"{type(e).__name__}: {e}"}

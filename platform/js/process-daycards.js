@@ -106,7 +106,8 @@
     window._saReturn = null;
     var q = "'" + card + "'";
     modal(c.title,
-      '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0 0 14px">' +
+      '<div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:0 0 14px">' +
+        tb('🪔 DIWALI', 'dcSub(' + q + ',function(){dcDiwali(' + q + ')})', 'Special trading day (Muhurat): makes every report of this card from ONLY the special day\'s own files.', ';border-color:rgba(251,191,36,.6);color:var(--amber)') +
         tb('✉️ Email To / CC', 'dcSub(' + q + ',function(){pxConfig(\'dc_' + card + '\')})', 'Who each report is e-mailed to (To and CC), per process.') +
         tb('🔑 Credentials', 'dcSub(' + q + ',function(){pxCredentials(\'dc_' + card + '\')})', 'The e-mail login these reports are sent from. Empty = the shared login of Scheduler > Connections.') +
         tb('📦 Backup files', 'dcSub(' + q + ',function(){dcBackup(' + q + ')})', 'Zip of the files a process used and the file it made, for any date.') +
@@ -157,7 +158,7 @@
       return '<div class="dc-out">📄 <a href="' + API + '/daycards/output?card=' + card + '&proc=' + p.key + '&date=' + encodeURIComponent(S(card).data.iso) + '&name=' + encodeURIComponent(o.name) + '" download>' + esc(o.name) + '</a><span style="color:var(--dim);font-size:11px">' + kb(o.size) + '</span></div>';
     }).join('');
     return '<div class="dc-p ' + cls + '"><div class="dc-h"><span class="dc-t">' + esc(p.label) + '</span>' + chip +
-      '<span style="margin-left:auto;display:flex;gap:8px"><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
+      '<span style="margin-left:auto;display:flex;gap:8px"><button class="dc-btn ghost" style="border-color:rgba(251,191,36,.6);color:var(--amber)" onclick="dcDiwali(\'' + card + '\',\'' + p.key + '\')" data-tip="Special trading day: make only this report from the special day\'s own files.">🪔 DIWALI</button><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
       '<div class="dc-note">' + esc(p.note) + '</div>' +
       '<div style="font-size:12px"><b>' + p.found + '</b><span style="color:var(--dim)"> / ' + p.total + ' required files ready</span> ' +
       (miss ? '<button class="dc-link" onclick="dcToggle(\'' + card + '\',\'' + p.key + '\')">' + (open ? 'hide' : 'show') + ' missing files (' + miss + ')</button>' : '<span style="color:var(--green)">✓ pre-check passes</span>') +
@@ -393,6 +394,102 @@
       .catch(function (e) { if (m) m.innerHTML = '<span style="color:var(--red)">' + esc(e.message || e) + '</span>'; })
       .then(function () { bkPaint(card); });
   };
+
+  // ───────────────────────── DIWALI (special trading day) ─────────────────────────
+  // One button on the card and one on every process: makes the reports from ONLY the files of the special day
+  // (folder <DIWALI_BASE>\<dd-mm-yyyy>) - see "DIWALI / MUHURAT mode" in core/daycards.py.
+  var DW = { card: '', proc: '', data: null, timer: null, upl: [], lastRunAt: 0 };
+  function dwOut(d, p) {
+    return (p.outputs || []).map(function (o) {
+      return '<div class="dc-out">📄 <a href="' + API + '/daycards/output?card=' + DW.card + '&proc=' + p.key + '&diwali=1&name=' + encodeURIComponent(o.name) + '" download>' + esc(o.name) + '</a><span style="color:var(--dim);font-size:11px">' + kb(o.size) + '</span></div>';
+    }).join('');
+  }
+  function dwPaint() {
+    var el = $('dwDyn'), d = DW.data; if (!el) return;
+    if (!d || !d.procs) { el.innerHTML = '<div style="color:var(--muted);font-size:12px">' + esc((d && d.error) || 'Checking…') + '</div>'; return; }
+    var dw = d.diwali || {}, job = d.job || {};
+    var procs = d.procs.filter(function (p) { return !DW.proc || p.key === DW.proc; });
+    var missingAny = procs.some(function (p) { return p.found < p.total; });
+    var runBtn = job.running
+      ? '<button class="dc-btn amber" disabled><span class="dc-spin"></span>Running ' + esc(job.current || '') + '…</button>'
+      : '<button class="dc-btn" onclick="dwRun()">🪔 Generate ' + (DW.proc ? esc(procs[0].label) : 'all ' + procs.length + ' process' + (procs.length > 1 ? 'es' : '')) + '</button>';
+    var showLog = job.running || (Date.now() - DW.lastRunAt < 40000);
+    var live = (dw.live_files || []).map(function (f) { return '<span class="dc-pill ok">✓ ' + esc(f.name) + '</span>'; }).join(' ');
+    var res = (DW.upl || []).length ? '<div class="dc-res">' + DW.upl.map(function (r) {
+      return r.ok ? '<div class="g">✓ ' + esc(r.name) + ' <span style="color:var(--dim)">→ ' + esc(r.where) + '</span></div>' : '<div class="e">✗ ' + esc(r.name) + ' - ' + esc(r.error) + '</div>';
+    }).join('') + '</div>' : '';
+    el.innerHTML =
+      '<div class="dc-msg" style="border-color:rgba(251,191,36,.5);color:var(--ink);line-height:1.6">🪔 <b>Special trading day ' + esc(d.date) + '</b> (date format dd-mm-yyyy). Files are taken <b>automatically</b> from the 76 FILES DOWNLOADER day folder and the LIVE ALLOCATION CAPTURE folders of that date' +
+        (dw.exists ? ' (if one has nothing, from <span style="font-family:var(--mono)">' + esc(dw.folder) + '</span>)' : '') + '. The reports keep only <b>peak 01 and the E (end-of-day) data</b> - the repeated peaks 2-8 are left out (an untouched copy is kept in the "FULL (all sheets)" folder). ' +
+        'Reports are saved in <span style="font-family:var(--mono)">' + esc(dw.out_folder) + '</span> and e-mailed to ' + (dw.to ? esc(dw.to) : 'each process\'s usual To / CC') + '.</div>' +
+      '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 12px">' + runBtn +
+        '<span style="font-size:11.5px;color:var(--dim)">' + (missingAny ? 'Some files are missing - add them below; a process with a missing file stops at its pre-check and sends nothing.' : '✓ Every required file is there.') + '</span></div>' +
+      (showLog ? '<div class="dc-lbl">Live log</div><div class="dc-log" id="dwLog">' + ((job.lines || []).length ? job.lines.slice(-60).map(esc).join('\n') : 'Starting…') + '</div>' : '') +
+      '<div class="dc-drop" onclick="dwPick()" ondragover="event.preventDefault();this.classList.add(\'over\')" ondragleave="this.classList.remove(\'over\')" ondrop="dwDrop(event)">' +
+        '<span class="ic">⬆️</span><div style="flex:1;min-width:220px"><div style="font-weight:700;font-size:13.5px">Upload files for the special day</div>' +
+        '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Drop or choose: the <b>live allocation</b> files (this ONE folder is used for every live slot: CM / FO collaterals, MCX_Web_Allocation, ClientNetEffectiveDeposits), ' +
+        '<span style="font-family:var(--mono)">RESPONSE_2_mcx.csv</span>, <span style="font-family:var(--mono)">Allocation_Detail_' + esc(d.date.replace(/-/g, '')) + '.csv</span> and <span style="font-family:var(--mono)">RISK_REPORT_' + esc(d.date.replace(/-/g, '')) + '.csv</span>.</div></div></div>' + res +
+      '<div style="font-size:11.5px;color:var(--muted);margin:0 0 12px">Live allocation folder (<span style="font-family:var(--mono)">' + esc(dw.live_folder) + '</span>): ' + (live || '<span class="dc-pill bad">✗ empty</span>') + '</div>' +
+      procs.map(function (p) {
+        var last = p.last || {}, chip = '<span class="dc-chip">not run yet</span>';
+        if (job.running && job.current === p.key) chip = '<span class="dc-chip run"><span class="dc-spin" style="width:9px;height:9px;margin-right:5px"></span>running</span>';
+        else if (last.finished) chip = last.ok ? '<span class="dc-chip ok">✓ done ' + String(last.finished).replace('T', ' ').slice(11, 16) + '</span>'
+          : '<span class="dc-chip bad">✗ ' + (last.stage === 'pre-check' ? 'stopped - files missing' : 'failed') + '</span>';
+        var miss = (p.groups || []).filter(function (g) { return g.missing && g.missing.length && !g.optional; }).map(function (g) {
+          return '<div><b style="color:var(--ink)">' + esc(g.name) + '</b><br>' + g.missing.map(function (m) { return '<span class="m">✗ ' + esc(m) + '</span>'; }).join('<br>') + '</div>';
+        }).join('<div style="height:5px"></div>');
+        return '<div class="dc-p ' + (last.finished ? (last.ok ? 'ok' : 'bad') : '') + '"><div class="dc-h"><span class="dc-t">' + esc(p.label) + '</span>' + chip + '</div>' +
+          '<div style="font-size:12px;margin-top:4px"><b>' + p.found + '</b><span style="color:var(--dim)"> / ' + p.total + ' required files ready</span>' + (p.found >= p.total ? ' <span style="color:var(--green)">✓ pre-check passes</span>' : '') +
+          ((p.later || []).length ? ' <span style="color:var(--dim);font-size:11px">· ' + p.later.length + ' file(s) made by ' + esc(p.later[0].from) + ' first</span>' : '') + '</div>' +
+          '<div class="dc-bar"><i style="width:' + (p.total ? Math.round(100 * p.found / p.total) : 0) + '%"></i></div>' +
+          (miss ? '<div class="dc-list">' + miss + '</div>' : '') + (dwOut(d, p) ? '<div style="margin-top:8px"><div class="dc-lbl">Output</div>' + dwOut(d, p) + '</div>' : '') + '</div>';
+      }).join('');
+    var nb = $('dwLog'); if (nb) nb.scrollTop = nb.scrollHeight;
+  }
+  function dwLoad() {
+    clearTimeout(DW.timer);
+    if (!$('dwDyn')) return;
+    get('/daycards/diwali/status?card=' + DW.card).then(function (d) { DW.data = d; dwPaint(); })
+      .catch(function () { DW.data = { error: 'Could not read the status.' }; dwPaint(); })
+      .then(function () { DW.timer = setTimeout(dwLoad, DW.data && DW.data.job && DW.data.job.running ? 2500 : 6000); });
+  }
+  window.dcDiwali = function (card, proc) {
+    var c = cardMeta(card); if (!c) return;
+    DW.card = card; DW.proc = proc || ''; DW.data = null; DW.upl = [];
+    window._saReturn = function () { dcOpen(card); }; hideTip();
+    modal('🪔 DIWALI - ' + c.title + (proc ? ' - ' + (c.procs.filter(function (p) { return p.key === proc; })[0] || {}).label : ''), '<div id="dwDyn"><div style="color:var(--muted);font-size:12px">Checking…</div></div>');
+    widen(true);
+    dwLoad();
+  };
+  window.dwRun = function () {
+    var d = DW.data; if (!d || !d.procs) return;
+    var keys = d.procs.filter(function (p) { return !DW.proc || p.key === DW.proc; }).map(function (p) { return p.key; });
+    post('/daycards/run', { card: DW.card, diwali: true, procs: keys }).then(function (j) {
+      if (j && j.ok) DW.lastRunAt = Date.now();
+      else window.alert((j && (j.error || j.detail)) || 'Could not start.');
+      dwLoad();
+    });
+  };
+  function dwSend(files) {
+    var list = Array.prototype.slice.call(files || []); if (!list.length) return;
+    DW.upl = [];
+    var chain = Promise.resolve();
+    list.forEach(function (f) {
+      chain = chain.then(function () {
+        return fetch(API + '/daycards/diwali/upload?card=' + DW.card + '&name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
+          .then(function (r) { return r.json(); })
+          .then(function (j) { DW.upl.push(j && j.ok ? { ok: true, name: j.name, where: j.where } : { ok: false, name: f.name, error: (j && (j.error || j.detail)) || 'not saved' }); })
+          .catch(function (e) { DW.upl.push({ ok: false, name: f.name, error: String(e) }); });
+      });
+    });
+    chain.then(dwLoad);
+  }
+  window.dwPick = function () {
+    var i = document.createElement('input'); i.type = 'file'; i.multiple = true; i.style.display = 'none';
+    i.onchange = function () { dwSend(i.files); i.remove(); };
+    document.body.appendChild(i); i.click();
+  };
+  window.dwDrop = function (ev) { ev.preventDefault(); ev.currentTarget.classList.remove('over'); dwSend(ev.dataTransfer && ev.dataTransfer.files); };
 
   // ───────────────────────── start ─────────────────────────
   function start() {

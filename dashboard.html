@@ -678,6 +678,7 @@ body {
 
       <!-- ===== Margin Shortage (15-min) — own full box, 9 runs/day ===== -->
       <div class="sec">Margin Shortage (15-min)</div>
+      <div class="sa-box" id="pxBox-ms15">
       <style>
         /* all top buttons of this card on ONE line: smaller + no wrapping (scrolls sideways only on a very narrow screen) */
         #pxBox-ms15 .sa-tools{flex-wrap:nowrap;gap:5px;overflow-x:auto;scrollbar-width:thin}
@@ -688,8 +689,10 @@ body {
         .ms15-pick button.on{border-color:rgba(59,130,246,.7);background:rgba(59,130,246,.16);color:var(--blue)}
         .ms15-pick .note{flex-basis:100%;color:var(--dim);font-size:11px;line-height:1.5}
         .ms15-pick .auto{margin-left:auto;font-size:11.5px}
+        .ms15-sw{display:inline-flex;border:1px solid var(--line-2);border-radius:22px;overflow:hidden}
+        .ms15-sw button{padding:8px 26px;border:0;background:transparent;color:var(--dim);font-weight:700;font-size:13px;cursor:pointer}
+        .ms15-sw button.on-y{background:#22c55e;color:#04210f}.ms15-sw button.on-n{background:#ef4444;color:#fff}
       </style>
-      <div class="sa-box" id="pxBox-ms15">
         <div class="sa-head" style="flex-direction:column;gap:10px">
           <div class="sa-title-wrap"><div class="sa-logo">MS</div><div><div class="sa-title">Margin Shortage (15-min)</div><div class="sa-sub">Compute → main + zone emails → WhatsApp margin alerts → backup. Runs 17x/day.</div></div></div>
           <div class="sa-tools">
@@ -700,7 +703,7 @@ body {
             <button class="sa-tool" onclick="pxStop('ms15')" data-tip="Stops whatever's currently running for Margin Shortage." style="border-color:rgba(248,113,113,.45);color:var(--red)">⛔ Stop</button>
             <button class="sa-tool" onclick="pxLogs('ms15')" data-tip="View the full saved output of past runs.">🗂️ Logs</button>
             <button class="sa-tool" id="ms15NmassBtn" onclick="ms15NmassDownload()" data-tip="Downloads CM/FO/CO ClientLevelCollaterals + ClientNetEffectiveDeposits into this box's own folder — separate download from CTCL vs NMASS's copy." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 NMASS/NCDEX</button>
-            <button class="sa-tool" id="ms15Mcx90Btn" onclick="ms15Mcx90Download('both')" data-tip="Downloads BOTH MCX files from TCS BANCS (MCX 90% and MCX Deposit) into this folder in ONE login (one RSA token). The file to USE is the one picked in the blue strip below." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX files</button>
+            <button class="sa-tool" id="ms15Mcx90Btn" onclick="ms15McxMenu()" data-tip="Opens a small window: download BOTH MCX files (MCX 90% and MCX Deposit) in one go, and choose which of the two Margin Shortage uses." style="border-color:rgba(96,165,250,.45);color:var(--blue)">📥 MCX files</button>
             <button class="sa-tool" id="ms15TestBtn" onclick="ms15TestRun()" data-tip="Runs the FULL pipeline exactly like a real run — file check, calculations, and the main + zone emails (which currently go to your test inbox) — but does NOT send any WhatsApp to clients. Each eligible client is listed as '[TEST] would send' in the log so you can verify everything works safely." style="border-color:rgba(251,191,36,.5);color:var(--amber)">🧪 Test run</button>
           </div>
         </div>
@@ -2418,7 +2421,6 @@ async function ms15McxSourceRefresh(){
 // Plain-English "which MCX file does Margin Shortage use" strip + auto-run status, above the readiness banner.
 function ms15PickPaint(){
   const el=document.getElementById('ms15Pick'); if(!el) return;
-  const k=_ms15McxSource, on=function(x){ return k===x?' on':''; };
   let auto='';
   const a=_ms15Auto;
   if(a&&a.settings){
@@ -2427,20 +2429,32 @@ function ms15PickPaint(){
       auto='<span class="auto" style="color:var(--green,#4ade80)">● Auto run ON'+(nxt?' · next run '+nxt.time+' (MCX files '+nxt.mcx_at+', NMASS/NCDEX '+nxt.nmass_at+')':' · no more runs today')+'</span>';
     } else auto='<span class="auto" style="color:var(--dim)">○ Auto run OFF — switch it on in 🔑 Credentials</span>';
   }
-  el.innerHTML='<span class="lbl">MCX file used for the calculation:</span>'
-    +'<button type="button" class="'+on('mcx90').trim()+'" onclick="ms15SetMcx(\'mcx90\')">MCX 90% file</button>'
-    +'<button type="button" class="'+on('deposit').trim()+'" onclick="ms15SetMcx(\'deposit\')">MCX Deposit file</button>'+auto
-    +'<span class="note">In simple words: every Margin Shortage run needs one client-limit file from MCX. <b>'+(k==='deposit'?'Right now it uses the MCX Deposit file.':'Right now it uses the MCX 90% file (the normal one).')+'</b> '
-    +'The 📥 MCX files button (and the auto run) always downloads BOTH, so you can change this any time — it applies from the next run.</span>';
+  el.innerHTML='<span class="lbl">MCX file in use: <b style="color:var(--ink)">'+(_ms15McxSource==='deposit'?'MCX Deposit file':'MCX 90% file')+'</b> <span style="color:var(--dim)">(change it under 📥 MCX files)</span></span>'+auto;
 }
 async function ms15SetMcx(kind){
-  if(kind===_ms15McxSource) return;
-  try{
-    const d=await (await fetch(API+'/ms15/mcx-source',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:kind})})).json();
-    if(d.ok===false){ alert(d.error||'Could not save the choice.'); return; }
-    _ms15McxSource=kind;
-  }catch(e){ alert('Network error — the choice was not saved.'); return; }
-  ms15PickPaint();
+  if(kind!==_ms15McxSource){
+    try{
+      const d=await (await fetch(API+'/ms15/mcx-source',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:kind})})).json();
+      if(d.ok===false){ alert(d.error||'Could not save the choice.'); return; }
+      _ms15McxSource=kind;
+    }catch(e){ alert('Network error — the choice was not saved.'); return; }
+  }
+  ms15PickPaint(); if(document.getElementById('ms15McxMenuBody')) ms15McxMenu(true);
+}
+// "📥 MCX files" button: download both files + choose which one Margin Shortage uses
+function ms15McxMenu(repaint){
+  const k=_ms15McxSource;
+  const opt=function(v,title,txt){ const on=k===v; return '<button type="button" onclick="ms15SetMcx(\''+v+'\')" style="display:block;width:100%;text-align:left;margin:0 0 10px;padding:14px 16px;border-radius:12px;cursor:pointer;color:var(--ink);background:'+(on?'rgba(34,197,94,.12)':'transparent')+';border:2px solid '+(on?'#22c55e':'var(--line-2)')+'"><div style="font-weight:700;font-size:14px">'+(on?'✓ ':'○ ')+title+(on?' — IN USE':'')+'</div><div style="font-size:12px;color:var(--muted);margin-top:3px;line-height:1.5">'+txt+'</div></button>'; };
+  const html='<div id="ms15McxMenuBody">'
+    +'<div style="font-weight:700;margin:0 0 8px">1. Download</div>'
+    +'<button class="sa-save" data-no-busy="1" style="width:100%;margin:0 0 18px" onclick="saCloseModal();ms15Mcx90Download(\'both\')">📥 Download both MCX files now</button>'
+    +'<div style="font-weight:700;margin:0 0 4px">2. Which file should Margin Shortage use?</div>'
+    +'<div style="font-size:12px;color:var(--muted);margin:0 0 10px">Both files are always downloaded. Only the one you tick here is used for the calculation — from the next run on.</div>'
+    +opt('mcx90','MCX 90% file','The normal file. Each client\'s margin limit is taken from it.')
+    +opt('deposit','MCX Deposit file','The deposit report from TCS BANCS. Each client\'s margin limit is taken from it instead.')
+    +'</div>';
+  if(repaint){ const b=document.getElementById('ms15McxMenuBody'); if(b) b.outerHTML=html; return; }
+  saShowModal('📥 MCX files', html);
 }
 // Auto-run block inside Margin Shortage > Credentials
 async function ms15AutoCredHtml(pw){
@@ -2450,19 +2464,28 @@ async function ms15AutoCredHtml(pw){
   return '<div style="margin:18px 0 6px;padding:12px 14px;border:1px solid rgba(96,165,250,.3);border-radius:10px">'
     +'<div style="font-weight:700;margin-bottom:6px">⏱ Auto run</div>'
     +'<div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:10px">When ON, every run starts by itself at its time ('+times+'). <b>'+s.mcx_lead_min+' min before</b> it downloads both MCX files, <b>'+s.nmass_lead_min+' min before</b> it downloads NMASS/NCDEX. At run time it waits up to <b>'+s.wait_min+' min</b> for any download still going; if files are still missing it sends a WhatsApp failure alert saying why.</div>'
-    +'<label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px"><input type="checkbox" id="ms15AutoOn" '+(s.auto?'checked':'')+'> Auto run is <b id="ms15AutoLbl">'+(s.auto?'ON':'OFF')+'</b></label>'
+    +'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px"><div class="ms15-sw" id="ms15Sw"><button type="button" id="ms15SwOn" class="'+(s.auto?'on-y':'')+'" onclick="ms15AutoSet(true,\''+p+'\')">ON</button><button type="button" id="ms15SwOff" class="'+(s.auto?'':'on-n')+'" onclick="ms15AutoSet(false,\''+p+'\')">OFF</button></div>'
+    +'<span id="ms15AutoLbl" style="font-size:13px;font-weight:700;color:'+(s.auto?'#22c55e':'#ef4444')+'">'+(s.auto?'Auto run is ON':'Auto run is OFF')+'</span></div>'
     +'<div style="font-size:12px;color:var(--muted);margin-bottom:4px">Failure alert WhatsApp numbers (comma separated)</div>'
     +'<input type="text" id="ms15AlertNums" class="sa-input" style="width:100%" placeholder="+91XXXXXXXXXX, +91XXXXXXXXXX" value="'+String(s.alert_numbers||'').replace(/"/g,'&quot;')+'">'
-    +'<div style="display:flex;gap:8px;margin-top:10px"><button class="sa-save" style="flex:1" onclick="ms15AutoSave(\''+p+'\')">Save auto run</button>'
-    +'<button class="sa-tool" onclick="ms15AutoTest(\''+p+'\')">Send test alert</button></div><div class="sa-msg" id="ms15AutoMsg"></div></div>';
+    +'<div style="display:flex;gap:8px;margin-top:10px"><button class="sa-tool" data-no-busy="1" style="flex:1" onclick="ms15AutoSave(\''+p+'\')">Save numbers</button>'
+    +'<button class="sa-tool" data-no-busy="1" onclick="ms15AutoTest(\''+p+'\')">Send test alert</button></div><div class="sa-msg" id="ms15AutoMsg"></div></div>';
+}
+// ON / OFF: saved the moment you press it
+async function ms15AutoSet(on,pw){
+  const msg=document.getElementById('ms15AutoMsg');
+  let d; try{ d=await (await fetch(API+'/ms15/auto/settings?password='+encodeURIComponent(pw),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({auto:on})})).json(); }catch(e){ msg.innerHTML='<span style="color:var(--red)">'+e+'</span>'; return; }
+  if(!d.ok){ msg.innerHTML='<span style="color:var(--red)">✕ '+(d.error||'Failed')+'</span>'; return; }
+  _ms15Auto=d;
+  document.getElementById('ms15SwOn').className=on?'on-y':''; document.getElementById('ms15SwOff').className=on?'':'on-n';
+  const l=document.getElementById('ms15AutoLbl'); l.textContent=on?'Auto run is ON':'Auto run is OFF'; l.style.color=on?'#22c55e':'#ef4444';
+  msg.innerHTML='<span style="color:'+(on?'#22c55e':'#ef4444')+'">✓ Saved — Auto run is '+(on?'ON':'OFF')+'</span>'; ms15PickPaint();
 }
 async function ms15AutoSave(pw){
   const msg=document.getElementById('ms15AutoMsg');
-  const body={auto:document.getElementById('ms15AutoOn').checked, alert_numbers:document.getElementById('ms15AlertNums').value.trim()};
-  let d; try{ d=await (await fetch(API+'/ms15/auto/settings?password='+encodeURIComponent(pw),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json(); }catch(e){ msg.innerHTML='<span style="color:var(--red)">'+e+'</span>'; return; }
+  let d; try{ d=await (await fetch(API+'/ms15/auto/settings?password='+encodeURIComponent(pw),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alert_numbers:document.getElementById('ms15AlertNums').value.trim()})})).json(); }catch(e){ msg.innerHTML='<span style="color:var(--red)">'+e+'</span>'; return; }
   if(!d.ok){ msg.innerHTML='<span style="color:var(--red)">✕ '+(d.error||'Failed')+'</span>'; return; }
-  _ms15Auto=d; document.getElementById('ms15AutoLbl').textContent=body.auto?'ON':'OFF';
-  msg.innerHTML='<span style="color:var(--green,#4ade80)">✓ Saved — Auto run is '+(body.auto?'ON':'OFF')+'</span>'; ms15PickPaint();
+  _ms15Auto=d; msg.innerHTML='<span style="color:var(--green,#4ade80)">✓ Numbers saved</span>';
 }
 async function ms15AutoTest(pw){
   const msg=document.getElementById('ms15AutoMsg'); msg.innerHTML='<span style="color:var(--muted)">Sending…</span>';

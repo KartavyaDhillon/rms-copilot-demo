@@ -390,7 +390,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
-                            '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=8"></script>'
+                            '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=9"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
@@ -1085,16 +1085,37 @@ async def dc_run(request: Request):
     """{card, date ('' = previous trading day), procs: [keys]} - several keys run one after the other, stopping at the first failure."""
     body = await request.json()
     _d = _dc(str(body.get("card") or ""))
+    diwali = bool(body.get("diwali"))
     try:
-        d = _d.parse_date(body.get("date") or "")
+        d = _d.diwali_date() if diwali else _d.parse_date(body.get("date") or "")
     except ValueError as e:
         raise HTTPException(400, str(e))
     try:
         by = _actor(request)[0] or ""
     except Exception:
         by = ""
-    res = _d.start(str(body["card"]), [str(x) for x in (body.get("procs") or [])], d, by=by, ip=request.client.host if request.client else "")
+    res = _d.start(str(body["card"]), [str(x) for x in (body.get("procs") or [])], d, by=by, ip=request.client.host if request.client else "", diwali=diwali)
     return JSONResponse(res, status_code=200 if res.get("ok") else 409)
+
+
+@app.get("/daycards/diwali/status")
+def dc_diwali_status(card: str):
+    """Status of the card for the special trading day (DIWALI button): files found / missing, outputs, job log."""
+    _d = _dc(card)
+    try:
+        return _d.diwali_status(card)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "procs": []}
+
+
+@app.post("/daycards/diwali/upload")
+async def dc_diwali_upload(request: Request, card: str, name: str):
+    """One file for the special day (raw body): RISK_REPORT / RESPONSE_2_mcx / Allocation_Detail, else the single live folder."""
+    _d = _dc(card)
+    try:
+        return _d.save_diwali_live(_d.diwali_date(), name, await request.body())
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
 @app.post("/daycards/stop")
 async def dc_stop(request: Request):
@@ -1130,9 +1151,13 @@ def dc_files(card: str, date: str = "", procs: str = ""):
             "missing": _d.missing_for_backup(card, d, plist or _d.CARDS[card]["procs"])}
 
 @app.get("/daycards/output")
-def dc_output(card: str, proc: str, name: str, date: str = ""):
+def dc_output(card: str, proc: str, name: str, date: str = "", diwali: int = 0):
     _d = _dc(card)
-    p = _d.output_path(card, proc, _d.parse_date(date), name)
+    if diwali:
+        with _d.diwali_mode():
+            p = _d.output_path(card, proc, _d.diwali_date(), name)
+    else:
+        p = _d.output_path(card, proc, _d.parse_date(date), name)
     if not p:
         raise HTTPException(404, "file not found")
     return FileResponse(str(p), filename=p.name)
