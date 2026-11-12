@@ -73,8 +73,36 @@ def _box_holders():
 
 # Standalone download buttons that log in to TCS BANCS (pipeline_box action slots). They do not use the lock files, so
 # their own "running" slot is what tells us the login is in use.
-_ACTION_USERS = {("ctcl", "mcx90"): "CTCL vs NMASS (MCX 90% download)", ("ms15", "mcx90"): "MARGIN SHORTAGE 15-min (MCX 90% download)",
-                 ("probable", "tcs"): "PROBABLE (TCS button)"}
+_ACTION_USERS = {("ctcl", "mcx90"): "CTCL vs NMASS (MCX files download)", ("ms15", "mcx90"): "MARGIN SHORTAGE 15-min (MCX files download)",
+                 ("probable", "tcs"): "PROBABLE (TCS button: RSK383 + RSK335 + RSK136 search result)"}
+
+
+def _uses(pipe):
+    """Which of the two MCX files that box's run USES (its "MCX file" choice) -> 'MCX 90%' | 'MCX Deposit'."""
+    try:
+        from core import ctcl_mcx_source as src
+        return src.LABELS.get(src.get_source(pipe), "MCX 90%")
+    except Exception:
+        return "MCX 90%"
+
+
+def _auto_mcx_user(pipe):
+    """The MCX download that is going right now was started BY THE AUTO RUN -> a clear name, else None."""
+    try:
+        from core import ms15_auto as A
+        if pipe == "ms15":
+            for (n, what), job in list(A._JOBS.items()):
+                if what == "mcx" and A._job_alive(n, "mcx"):
+                    return (f"MARGIN SHORTAGE 15-min - AUTO run {int(n):02d}: MCX 90% + MCX Deposit download "
+                            f"(the run uses {_uses('ms15')})")
+        if pipe == "ctcl":
+            for n, v in ((A.read_state().get("ctcl") or {}).items()):
+                if v == "running":
+                    return (f"CTCL vs NMASS - AUTO MCX download for run {int(n):02d}: MCX 90% + MCX Deposit "
+                            f"(the run uses {_uses('ctcl')})")
+    except Exception:
+        pass
+    return None
 
 
 def _action_holders():
@@ -85,6 +113,8 @@ def _action_holders():
             name = _ACTION_USERS.get((pipe, action))
             if not name:
                 continue
+            if action == "mcx90":                       # auto run or a person's button? and which file does the run use?
+                name = _auto_mcx_user(pipe) or f"{name[:-1]} - started by hand, the run uses {_uses(pipe)})"
             el, since = None, ""
             try:
                 t0 = dt.datetime.fromisoformat(str(started))
@@ -166,15 +196,40 @@ def _next_users(now: dt.datetime) -> list:
     except Exception:
         pass
 
-    # 3) Manual boxes: a person presses their buttons around the run windows, and the run needs the MCX file by then
+    # 3) MARGIN SHORTAGE auto run: its MCX download (MCX 90% + MCX Deposit) starts by itself a few minutes before each run.
+    #    CTCL vs NMASS: the auto MCX download before each run (only when no fresh Margin Shortage file is there).
+    auto_pipes = set()
+    try:
+        from core import ms15_auto as A
+        ms = A.status()
+        if ms["settings"].get("auto"):
+            auto_pipes.add("ms15")
+            for r in ms["runs"]:
+                if r.get("state") in A.TERMINAL or r.get("state") == "running" or r.get("mcx") in ("done", "running"):
+                    continue
+                add(f"MARGIN SHORTAGE 15-min - AUTO run {r['run']:02d}: MCX 90% + MCX Deposit download (the run uses {_uses('ms15')})",
+                    r["mcx_at"], kind="auto", note=f"run starts by itself at {r['time']}")
+        if ms["settings"].get("ctcl_prefetch"):
+            auto_pipes.add("ctcl")
+            for r in ms.get("ctcl", []):
+                if r.get("state"):
+                    continue
+                add(f"CTCL vs NMASS - AUTO MCX download for run {r['run']:02d} (the run uses {_uses('ctcl')})", r["mcx_at"],
+                    kind="auto", note=f"only if no fresh MCX file is there · the run itself is manual ({r['time']})")
+    except Exception:
+        pass
+
+    # 4) Manual boxes (auto OFF): a person presses their buttons around the run windows, and the run needs the MCX file by then
     try:
         for pipe, label in (("ms15", "MARGIN SHORTAGE 15-min"), ("ctcl", "CTCL vs NMASS")):
+            if pipe in auto_pipes:
+                continue
             for i in range(1, 40):
                 v = os.getenv(f"{pipe.upper()}_RUN{i}_WINDOW", "").strip()
                 if not v:
                     continue
                 m = v.split("-")[0]
-                add(f"{label} run {i} (manual, needs the MCX file)", m, kind="manual", note=f"window {v}")
+                add(f"{label} run {i} (manual, needs the {_uses(pipe)} file)", m, kind="manual", note=f"window {v}")
     except Exception:
         pass
     found.sort(key=lambda x: x["minutes"])

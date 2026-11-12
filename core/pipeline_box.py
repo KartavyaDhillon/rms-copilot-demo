@@ -589,6 +589,7 @@ PIPELINES["mcxcomm"] = {
     "name": "MCX COMM LIMIT", "module": "core.mcx_comm_limit", "func": "run", "logdir": "mcxcomm", "runs": 0,
     "state_dir_env": "MCX_COMM_DIR", "state_default": r"D:\CONSOLE\data\MCX COMM LIMIT", "state_file": "run_counter.txt",
     "email_default": "rms_del@mastertrust.co.in",
+    "cc_default": "",  # rms_del is the default TO only - never put in CC by itself
     "email_keys": {"Commodity limit file": ["MCXCOMM_TO", "MCXCOMM_CC"]},
     "cred": {"MCX ACTIVE mailbox (POP3)": {"user_key": "MCXCOMM_POP_USER", "pass_key": "MCXCOMM_POP_PASS",
                                            "note": "mailbox that receives the daily 'MCX ACTIVE CLIENT DETAILS' mail (pop9.netcore.co.in)"},
@@ -608,6 +609,7 @@ PIPELINES["ncdexcomm"] = {
     "name": "NCDEX COMM LIMIT", "module": "core.ncdex_comm_limit", "func": "run", "logdir": "ncdexcomm", "runs": 0,
     "state_dir_env": "NCDEX_COMM_DIR", "state_default": r"D:\CONSOLE\data\NCDEX COMM LIMIT", "state_file": "run_counter.txt",
     "email_default": "rms_del@mastertrust.co.in",
+    "cc_default": "",  # rms_del is the default TO only - never put in CC by itself
     "email_keys": {"NCDEX RMS Limits File": ["NCDEXCOMM_TO", "NCDEXCOMM_CC"]},
     "cred": {"NCDEX NCFE login (ClientNetEffectiveDeposits)": {"user_key": "CTCL_NCDEX_USER", "pass_key": "CTCL_NCDEX_PASSWORD",
                                                                "note": "ncfe.ncdex.com - same login as Margin Shortage / CTCL vs NMASS; the captcha is filled in by itself"},
@@ -1886,7 +1888,8 @@ def pb_status(pipe):
 def pb_get_config(pipe):
     p = PIPELINES.get(pipe, {}); g = os.getenv
     _ed = p.get("email_default", "")
-    emails = {lbl: {"to": g(tk, _ed), "cc": g(ck, _ed), "to_key": tk, "cc_key": ck}
+    _cd = p.get("cc_default", _ed)                  # a pipe can keep its default for TO only ("cc_default": "")
+    emails = {lbl: {"to": g(tk, _ed), "cc": g(ck, _cd), "to_key": tk, "cc_key": ck}
               for lbl, (tk, ck) in p.get("email_keys", {}).items()}
     creds = {}
     for lbl, c in p.get("cred", {}).items():

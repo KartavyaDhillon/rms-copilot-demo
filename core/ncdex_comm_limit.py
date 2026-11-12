@@ -50,7 +50,7 @@ STEP_LABEL = {"clientnet": "ClientNet deposits (NCDEX)", "active": "3-month acti
 
 _STATE_LOCK = threading.RLock()
 _RUN_LOCK = threading.Lock()
-_FETCH_LOCK = threading.Lock()
+_STEP_LOCKS = collections.defaultdict(threading.Lock)   # one lock PER download: different downloads run side by side
 _LOG = collections.deque(maxlen=400)
 _ACTIVE = {"procs": [], "cancel": False, "log_file": None}
 
@@ -780,18 +780,27 @@ def needs_password() -> bool:
     return read_state().get("status") == "done"
 
 
-def _do_step(name: str, base: Path) -> dict:
-    _set_step(name, "running")
+def _do_step(name: str, base: Path, have_lock: bool = False) -> dict:
+    """Runs one step. The same download never runs twice at once: a run that reaches a step whose button download is
+    still going waits for it (and then finds the file there and skips)."""
+    lk = _STEP_LOCKS[name]
+    if not have_lock:
+        lk.acquire()
     try:
-        r = STEPS[name](base)
-    except Cancelled:
-        _set_step(name, "stopped", "Stopped.")
-        return {"ok": False, "msg": "Stopped."}
-    except Exception as e:                                       # noqa: BLE001
-        r = {"ok": False, "msg": f"{type(e).__name__}: {e}"}
-    _set_step(name, "skipped" if r.get("skipped") else ("ok" if r.get("ok") else "failed"), r.get("msg", ""))
-    log(f"{STEP_LABEL[name]}: {'OK' if r.get('ok') else 'FAILED'} - {r.get('msg', '')}")
-    return r
+        _set_step(name, "running")
+        try:
+            r = STEPS[name](base)
+        except Cancelled:
+            _set_step(name, "stopped", "Stopped.")
+            return {"ok": False, "msg": "Stopped."}
+        except Exception as e:                                   # noqa: BLE001
+            r = {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+        _set_step(name, "skipped" if r.get("skipped") else ("ok" if r.get("ok") else "failed"), r.get("msg", ""))
+        log(f"{STEP_LABEL[name]}: {'OK' if r.get('ok') else 'FAILED'} - {r.get('msg', '')}")
+        return r
+    finally:
+        if not have_lock:
+            lk.release()
 
 
 def run(trigger="manual", by="", alert=None) -> dict:
@@ -886,27 +895,33 @@ def request_run(by="", password=None, background=True) -> dict:
     return run("manual", by)
 
 
+def any_fetching(exclude: str = "") -> bool:
+    return any(k != exclude and l.locked() for k, l in list(_STEP_LOCKS.items()))
+
+
 def fetch_one(what: str, by="") -> dict:
     if what not in STEPS:
         raise ValueError("unknown download")
     if is_running():
         raise Busy("A full run is going - wait for it or Stop it.")
-    if not _FETCH_LOCK.acquire(blocking=False):
-        raise Busy("A download is already going.")
+    lk = _STEP_LOCKS[what]
+    if not lk.acquire(blocking=False):
+        raise Busy(f"{STEP_LABEL[what]} is already downloading - wait for it to finish.")
 
     def go():
-        _ACTIVE["cancel"] = False
+        if not any_fetching(exclude=what):
+            _ACTIVE["cancel"] = False
         try:
             log(f"{STEP_LABEL[what]}: started by {by or 'user'}")
-            _do_step(what, root())
+            _do_step(what, root(), have_lock=True)
         finally:
-            _FETCH_LOCK.release()
+            lk.release()
     threading.Thread(target=go, name=f"ncdexcomm-fetch-{what}", daemon=True).start()
     return {"ok": True, "started": what}
 
 
 def stop_running(by="") -> bool:
-    if not is_running() and not _FETCH_LOCK.locked():
+    if not is_running() and not any_fetching():
         return False
     _ACTIVE["cancel"] = True
     for p in list(_ACTIVE["procs"]):
@@ -1016,7 +1031,7 @@ def status() -> dict:
     se = get_settings()
     steps = st.get("steps", {})
     return {"name": NAME, "date": st.get("date"), "status": "running" if running else s, "running": running,
-            "fetching": _FETCH_LOCK.locked(), "started": st.get("started", ""), "finished": st.get("finished", ""),
+            "fetching": any_fetching(), "started": st.get("started", ""), "finished": st.get("finished", ""),
             "error": st.get("error", ""), "trigger": st.get("trigger", ""), "by": st.get("by", ""),
             "rows": st.get("rows"), "with_collateral": st.get("with_collateral"), "added": st.get("added"),
             "mailed": bool(st.get("mailed")), "uploaded": bool(st.get("uploaded")),

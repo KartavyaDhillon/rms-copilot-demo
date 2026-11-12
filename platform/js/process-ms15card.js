@@ -119,11 +119,11 @@
   function compute(px, au) {
     var runs = (px && px.runs) || 0, done = Math.max(0, Math.min(runs, (px && px.run_state) || 0));
     var rows = (au && au.runs) || [];
-    var bad = rows.filter(function (r) { return r.state === 'failed' || r.state === 'missed'; });
+    var bad = rows.filter(function (r) { return (r.state === 'failed' || r.state === 'missed') && r.run > done; });
     var nx = rows.filter(function (r) { return r.run === done + 1; })[0];
     var running = (typeof window._pxIsRunning === 'function') ? !!window._pxIsRunning('ms15') : false;
     var auto = !!(au && au.settings && au.settings.auto);
-    return { runs: runs, done: done, bad: bad, next: nx, running: running, auto: auto, hasAuto: !!au };
+    return { runs: runs, done: done, bad: bad, next: nx, running: running, auto: auto, hasAuto: !!au, rows: rows };
   }
   function paintKpis(c) {
     var el = $('msKpis'); if (!el) return;
@@ -146,13 +146,38 @@
       c.done + ' / ' + (c.runs || 0) + ' done' + (c.bad.length ? ' · ' + c.bad.length + ' need attention' : '') +
       (c.next ? ' · next ' + c.next.time : '') + ((c.hasAuto && !c.auto) ? ' · auto OFF' : '');
   }
+  // under the View button of every DONE run tile: "⚙ auto run" or "✋ run by hand"
+  function tagTiles() {
+    var b = box(), c = S.data; if (!b || !c || !c.rows) return;
+    var by = {}; c.rows.forEach(function (r) { by[r.run] = r.by || ''; });
+    [].slice.call(b.querySelectorAll('.sa-run')).forEach(function (t) {
+      var idEl = t.querySelector('.sa-run-id'); if (!idEl) return;
+      var n = parseInt(String(idEl.textContent).replace(/\D+/g, ''), 10); if (!n) return;
+      var done = n <= c.done, who = done ? (by[n] === 'auto' ? 'auto' : 'manual') : '';
+      var tag = t.querySelector('.ms-by');
+      if (!done) { if (tag) tag.remove(); return; }
+      var txt = who === 'auto' ? '⚙ auto run' : '✋ run by hand';
+      if (tag && tag.getAttribute('data-who') === who) return;
+      if (!tag) { tag = document.createElement('div'); tag.className = 'ms-by'; t.appendChild(tag); }
+      tag.setAttribute('data-who', who);
+      tag.textContent = txt;
+      tag.style.cssText = 'margin-top:6px;font-family:var(--mono);font-size:10px;letter-spacing:.6px;text-transform:uppercase;text-align:center;color:' + (who === 'auto' ? 'var(--green)' : 'var(--amber)');
+    });
+  }
+  (function watchTiles() {                     // the run tiles are re-drawn every few seconds: put the tags back each time
+    var b = box(); if (!b) { setTimeout(watchTiles, 1000); return; }
+    var pending = false;
+    new MutationObserver(function () { if (pending) return; pending = true; setTimeout(function () { pending = false; tagTiles(); }, 50); })
+      .observe(b, { childList: true, subtree: true });
+  })();
+
   function load() {
     var next = 30000;
     return Promise.all([
       get('/px/status?pipe=ms15').catch(function () { return null; }),
       get('/ms15/auto/status').catch(function () { return null; })
     ]).then(function (r) {
-      if (r[0]) { var c = compute(r[0], r[1]); S.data = c; paintTile(c); if (inModal()) { paintKpis(c); next = 4000; } }
+      if (r[0]) { var c = compute(r[0], r[1]); S.data = c; paintTile(c); tagTiles(); if (inModal()) { paintKpis(c); next = 4000; } }
     }).catch(function () { next = 30000; }).then(function () { schedule(next); });
   }
   function schedule(ms) {

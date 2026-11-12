@@ -1348,6 +1348,13 @@ if not df_sect.empty:
 if not df_v2.empty:
     sections.append(make_block(df_v2, "Scenario Analysis LAS Account (in lac.) (V2)", "V2"))
 
+# A day where V1, NONSALES and V2 are ALL empty (no LAS account passed the filters) used to crash here with
+# "IndexError: At least one sheet must be visible" (an Excel file with no sheet at all). Write the file with a clear
+# "nothing to report" line instead, so the rest of the run (zone files, mails) carries on.
+if not sections:
+    print("ℹ️ No LAS account in V1 / NONSALES / V2 today - the Risk Assessment file says 'no accounts to report'")
+    sections.append(("Scenario Analysis LAS Account (in lac.) - no accounts to report today", pd.DataFrame(columns=cols)))
+
 
 # ---------- WRITE EXCEL ----------
 with pd.ExcelWriter(output_file, engine="openpyxl") as writer:

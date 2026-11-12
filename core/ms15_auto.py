@@ -427,7 +427,7 @@ def run_slot(n, st=None, now_fn=time.time, sleep=time.sleep, missing=None, run=N
         _late_mcx_watch(n, run_t0)
     if ok:
         log(f"Run {n:02d}: finished successfully.")
-        return _upd(n, status="done", ended=dt.datetime.now().strftime("%H:%M:%S"), msg="finished")
+        return _upd(n, status="done", ended=dt.datetime.now().strftime("%H:%M:%S"), msg="finished", by="auto")
     if "stopped by a person" in msg:
         log(f"Run {n:02d}: stopped by a person.")
         return _upd(n, status="stopped", ended=dt.datetime.now().strftime("%H:%M:%S"), msg=msg)
@@ -585,7 +585,7 @@ def tick(now=None, **kw):
     if kind in ("mcx", "nmass"):
         start_download(n, kind, **{k: v for k, v in kw.items() if k == "fn"})
     elif kind == "mark_done":
-        _upd(n, status="done", msg="already completed before the auto run")
+        _upd(n, status="done", msg="already completed before the auto run", by="manual")
     elif kind == "missed":
         _upd(n, status="missed", msg="not started in time")
         log(f"Run {n:02d}: its time passed more than {st['grace_min']} minutes ago and it did not run - marked missed.")
@@ -635,13 +635,22 @@ def status():
     state = read_state()
     times = run_times()
     rows = []
+    counter = _counter_n()
     for n in sorted(times):
         t = times[n]
         rs = state["runs"].get(str(n), {})
+        # missed / failed by the timer, but the run was then done by hand (the run counter moved past it): it is DONE now
+        if counter >= n and (rs.get("status") or "") in ("missed", "failed", "stopped", "skipped", ""):
+            was = rs.get("status") or ""
+            try:
+                rs = _upd(n, status="done", by="manual", msg="run by hand" + (f" (the auto run was {was})" if was else ""))
+            except Exception:
+                rs = dict(rs, status="done", by="manual")
+        by = rs.get("by") or ("auto" if rs.get("status") == "done" else "")
         rows.append({"run": n, "time": hhmm(t), "mcx_at": hhmm(max(0, t - st["mcx_lead_min"])),
                      "nmass_at": hhmm(max(0, t - st["nmass_lead_min"])), "state": rs.get("status", ""),
                      "mcx": rs.get("mcx", ""), "nmass": rs.get("nmass", ""), "msg": rs.get("msg", ""),
-                     "alert_sent": rs.get("alert_sent"), "alert_reason": rs.get("alert_reason", "")})
+                     "alert_sent": rs.get("alert_sent"), "alert_reason": rs.get("alert_reason", ""), "by": by})
     return {"settings": st, "runs": rows, "now": dt.datetime.now().strftime("%H:%M"),
             "ctcl": [{"run": n, "time": hhmm(t), "mcx_at": hhmm(max(0, t - st["ctcl_lead_min"])),
                       "state": (state.get("ctcl") or {}).get(str(n), "")} for n, t in sorted(ctcl_times().items())],
