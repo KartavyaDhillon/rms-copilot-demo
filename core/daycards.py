@@ -415,6 +415,27 @@ def live_sources(d: dt.date) -> List[tuple]:
     return out
 
 
+def diwali_live_files(d: dt.date) -> List[Path]:
+    """The ONE live-allocation folder of the special day, whatever it is called: files lying in
+    LIVE ALLOCATION CAPTURE\\BACKUPFILES AUTOMATED\\<date>\\ itself or in any folder inside it (the newest folder wins)."""
+    try:
+        from core import live_allocation as L
+        base = L.day_dir(d)
+    except Exception:
+        return []
+    groups: Dict[Path, List[Path]] = {}
+    try:
+        for x in base.rglob("*"):
+            if x.is_file() and not x.name.startswith(".") and len(x.relative_to(base).parts) <= 2:
+                groups.setdefault(x.parent, []).append(x)
+    except OSError:
+        return []
+    if not groups:
+        return []
+    best = max(groups, key=lambda g: max(f.stat().st_mtime for f in groups[g]))
+    return sorted(groups[best])
+
+
 def live_named(d: dt.date) -> List[tuple]:
     """[(slot, name, Path)] - what the processes see as LIVE ALLOCATION CAPTURE folders 1-8.
     Normal day: the real folders.  DIWALI: the ONE live folder is used for every slot (the MCX web allocation file is
@@ -428,7 +449,7 @@ def live_named(d: dt.date) -> List[tuple]:
     if have:
         src = [x for i, _n, x in real if i == min(have)]
     else:
-        src = _files(diwali_live_dir(d))
+        src = diwali_live_files(d) or _files(diwali_live_dir(d))
     mcx = [x for x in src if re.match(r"MCX_Web_Allocation", x.name, re.I)]
     rest = [x for x in src if x not in mcx]
     out = list(real)
@@ -1072,6 +1093,14 @@ def job_status(card: str) -> dict:
             "current": st.get("current") if running else None, "lines": lines[-80:], "ended": st.get("ended")}
 
 
+def _live_backup_dir(d: dt.date) -> str:
+    try:
+        from core import live_allocation as L
+        return str(L.day_dir(d))
+    except Exception:
+        return ""
+
+
 def diwali_status(card: str, d: Optional[dt.date] = None) -> dict:
     """The card's status for the special day, as the DIWALI button sees it."""
     d = d or diwali_date()
@@ -1080,6 +1109,8 @@ def diwali_status(card: str, d: Optional[dt.date] = None) -> dict:
         live = _files(diwali_live_dir(d))
         st["diwali"] = {"folder": str(diwali_dir(d)), "exists": diwali_dir(d).is_dir(), "live_folder": str(diwali_live_dir(d)),
                         "live_files": [{"name": x.name, "size": x.stat().st_size} for x in live],
+                        "backup_folder": _live_backup_dir(d),
+                        "backup_files": [{"name": x.name, "size": x.stat().st_size} for x in diwali_live_files(d)],
                         "to": os.getenv("DC_DIWALI_TO", "").strip(), "out_folder": str(card_dir(card) / dstr(d) / "DIWALI")}
     return st
 

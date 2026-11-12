@@ -429,7 +429,9 @@
         '<span class="ic">⬆️</span><div style="flex:1;min-width:220px"><div style="font-weight:700;font-size:13.5px">Upload files for the special day</div>' +
         '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Drop or choose: the <b>live allocation</b> files (this ONE folder is used for every live slot: CM / FO collaterals, MCX_Web_Allocation, ClientNetEffectiveDeposits), ' +
         '<span style="font-family:var(--mono)">RESPONSE_2_mcx.csv</span>, <span style="font-family:var(--mono)">Allocation_Detail_' + esc(d.date.replace(/-/g, '')) + '.csv</span> and <span style="font-family:var(--mono)">RISK_REPORT_' + esc(d.date.replace(/-/g, '')) + '.csv</span>.</div></div></div>' + res +
-      '<div style="font-size:11.5px;color:var(--muted);margin:0 0 12px">Live allocation folder (<span style="font-family:var(--mono)">' + esc(dw.live_folder) + '</span>): ' + (live || '<span class="dc-pill bad">✗ empty</span>') + '</div>' +
+      '<div style="font-size:11.5px;color:var(--muted);margin:0 0 6px"><b style="color:var(--ink)">Live allocation capture backup</b> (checked first, any folder name, <span style="font-family:var(--mono)">' + esc(dw.backup_folder) + '</span>): ' +
+        ((dw.backup_files || []).length ? (dw.backup_files || []).map(function (f) { return '<span class="dc-pill ok">✓ ' + esc(f.name) + '</span>'; }).join(' ') : '<span class="dc-pill bad">✗ no files there - put the one live folder inside that date folder (or upload below)</span>') + '</div>' +
+      '<div style="font-size:11.5px;color:var(--muted);margin:0 0 12px">Used only if the backup above is empty - uploaded live files (<span style="font-family:var(--mono)">' + esc(dw.live_folder) + '</span>): ' + (live || '<span class="dc-pill">none</span>') + '</div>' +
       procs.map(function (p) {
         var last = p.last || {}, chip = '<span class="dc-chip">not run yet</span>';
         if (job.running && job.current === p.key) chip = '<span class="dc-chip run"><span class="dc-spin" style="width:9px;height:9px;margin-right:5px"></span>running</span>';

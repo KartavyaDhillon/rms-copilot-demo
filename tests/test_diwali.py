@@ -68,6 +68,17 @@ class DiwaliTests(unittest.TestCase):
         for i in (1, 2, 3, 4, 8):
             self.assertIn(f"MCX_Web_Allocation_{i:02d}.xlsx", sa)
 
+    def test_backup_folder_any_name_is_used(self):
+        os.environ["LIVE_ALLOC_DIR"] = str(self.tmp / "live")
+        f = self.tmp / "live" / "BACKUPFILES AUTOMATED" / "08-11-2026" / "peak"
+        f.mkdir(parents=True)
+        for n in ("MCX_Web_Allocation_03.xlsx", "ClientNetEffectiveDeposits_08112026.csv"):
+            (f / n).write_text("x")
+        with D.diwali_mode():
+            names = {s.rel for s in D.stage_plan("sa_cm", DAY)}
+        for i in (1, 2, 3, 4, 8):
+            self.assertIn(f"MCX_Web_Allocation_{i:02d}.xlsx", names)
+
     def test_upload_routing(self):
         r = D.save_diwali_live(DAY, "MCX_Web_Allocation_01.xlsx", b"abc")
         self.assertTrue((self.tmp / "new" / "08-11-2026" / "LIVE ALLOCATION" / "MCX_Web_Allocation_01.xlsx").exists())

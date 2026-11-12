@@ -390,7 +390,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
-                            '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=9"></script>'
+                            '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=10"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
