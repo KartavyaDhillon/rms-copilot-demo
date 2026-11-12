@@ -28,7 +28,9 @@
     '.ms-kpi .f{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
     '.ms-bar{height:5px;border-radius:9px;background:var(--line);margin-top:7px;overflow:hidden}.ms-bar i{display:block;height:100%;background:var(--green);transition:width .6s}' +
     '@media(max-width:820px){.ms-kpis{grid-template-columns:repeat(2,1fr)}}' +
-    '#saModalBody #pxBox-ms15{margin:0}';
+    '#saModalBody #pxBox-ms15{margin:0}' +
+    // the box may be shown ONLY inside the window - wherever else the page puts it (re-draw, reload, standalone) it stays hidden
+    '#pxBox-ms15:not(#saModalBody #pxBox-ms15){display:none!important}';
   document.head.appendChild(css);
 
   // ───────────────────────── the tile ─────────────────────────
@@ -185,10 +187,24 @@
     S.timer = setTimeout(function () { if (document.hidden) schedule(ms); else load(); }, ms);
   }
 
+  // The page can re-draw the Process Center and put a fresh copy of the box (and its heading) back in the page.
+  // Every second: if the box is not inside the window, park it again and hide the old heading.
+  function guard() {
+    try {
+      Array.prototype.forEach.call(document.querySelectorAll('.sec'), function (s) {
+        if (/^\s*Margin Shortage \(15-min\)\s*$/i.test(s.textContent)) s.style.display = 'none';
+      });
+      var b = box(); if (!b || inModal()) return;
+      var ph = S.ph;
+      if (!ph || !ph.isConnected || b.parentNode !== ph) { S.ph = null; park(); }
+    } catch (e) { /* ignore */ }
+  }
+  setInterval(guard, 1000);
+
   // ───────────────────────── start ─────────────────────────
   function start() {
     if (build()) {
-      ensurePark(); load();
+      ensurePark(); guard(); load();
       var n = 0, iv = setInterval(function () { keepLast(); if (++n > 20) clearInterval(iv); }, 1500);   // others inject their tiles a little later
     } else setTimeout(start, 600);
   }

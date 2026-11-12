@@ -86,6 +86,22 @@ def _uses(pipe):
         return "MCX 90%"
 
 
+def short_name(name: str) -> str:
+    """One short line for the TCS BANCS button: 'MARGIN SHORTAGE AUTO 11', 'CTCL MANUAL', 'PROBABLE', 'MCX COMM LIMIT' ..."""
+    import re as _re
+    n = str(name or "")
+    m = _re.search(r"AUTO (?:MCX download for )?run (\d+)", n)
+    for key, short in (("MARGIN SHORTAGE", "MARGIN SHORTAGE"), ("CTCL vs NMASS", "CTCL"), ("PROBABLE", "PROBABLE"),
+                       ("SHORT ALLOCATION", "SHORT ALLOCATION"), ("CLI PRUDENTIAL", "CLI")):
+        if n.upper().startswith(key.upper()):
+            if m:
+                return f"{short} AUTO {int(m.group(1)):02d}"
+            if "by hand" in n:
+                return f"{short} MANUAL"
+            return short
+    return n.split(" (")[0].split(" - ")[0][:32]
+
+
 def _auto_mcx_user(pipe):
     """The MCX download that is going right now was started BY THE AUTO RUN -> a clear name, else None."""
     try:
@@ -261,6 +277,8 @@ def _build(now: dt.datetime) -> dict:
         if h["name"] not in seen:                       # the same download can show up in two places
             holders.append(h)
             seen.add(h["name"])
+    for h in holders:
+        h["short"] = short_name(h["name"])
     state = "free" if not holders else ("busy" if len(holders) == 1 else "clash")
     nxt = _next_cached(now)
     return {"state": state, "holders": holders, "next": nxt[0] if nxt else None, "upcoming": nxt[:12],

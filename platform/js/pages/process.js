@@ -90,7 +90,7 @@
       el.innerHTML = "<span>free</span>";
     } else if (d.state === "busy") {
       const h = d.holders[0];
-      el.innerHTML = "<span>in use: " + esc(h.name) + (h.elapsed_s != null ? " \u00b7 " + tcsMin(tcsLive(h)) : "") + "</span>";
+      el.innerHTML = "<span title=\"" + esc(h.name) + "\">in use: " + esc(h.short || h.name) + (h.elapsed_s != null ? " \u00b7 " + tcsMin(tcsLive(h)) : "") + "</span>";
     } else {
       el.innerHTML = "<span>" + d.holders.length + " at once \u2014 clash</span>";
     }
