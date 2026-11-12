@@ -239,7 +239,8 @@
       var el = box.querySelector(".lm-steps");
       if (!stillLocked || !document.contains(box)) {
         // the run is over: say so right here (no refresh needed), then it disappears after 20 seconds
-        if (el) { el.innerHTML = '<div class="ok" style="font-weight:700">✓ The run has finished.</div>' + el.innerHTML.replace(/<span class="lm-spin"><\/span>/g, '<span class="ok">✓</span> '); setTimeout(function () { if (el.parentNode) el.remove(); }, 20000); }
+        // only the "finished" line is left: the old step lines ("Starting…") read as if it were still going
+        if (el) { el.innerHTML = '<div class="ok" style="font-weight:700">✓ The run has finished.</div>'; setTimeout(function () { if (el.parentNode) el.remove(); }, 20000); }
         clearInterval(STEP_TIMER[target]); delete STEP_TIMER[target]; delete STEP_SIG[target]; return;
       }
       fetch("/ops/progress?pipe=" + encodeURIComponent(target) + (isAct ? "&kind=action&since=" + (since || 0) : ""), { credentials: "same-origin" }).then(function (r) { return r.json(); }).then(function (d) {

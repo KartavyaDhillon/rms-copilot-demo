@@ -1169,6 +1169,52 @@ if not tab_match:
 tab_id = tab_match.group(1)
 print("✅ TAB ID:", tab_id)
 
+# Each file is downloaded THE MOMENT it is "Report Generated" - one never waits for the other. So when only the file that
+# Margin Shortage / CTCL uses is ready in time, the run can go on with it; the other one is fetched when it comes.
+DOWNLOAD_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+    "X-Requested-With": "XMLHttpRequest",
+    "Origin": BASE_URL,
+    "Referer": BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do?app=bancsapp?prefix=/ARCHGUI"
+}
+downloaded = {}
+
+
+def download_one(label, file_name, save_name):
+    print(f"\n🔽 Processing {label} → {file_name}")
+    check_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=checkForFile"
+    file_ready = False
+    for retry in range(1, 11):
+        print(f"🔍 Checking file ({retry}/10)...")
+        check_res = session.post(check_url, headers=DOWNLOAD_HEADERS, data={"rndaak": rndaak})
+        if "FileExists" in check_res.text:
+            file_ready = True
+            print("✅ File is ready")
+            break
+        print("⏳ Not ready yet, waiting 5 sec...")
+        time.sleep(5)
+    if not file_ready:
+        raise Exception(f"❌ {label} file not ready for download")
+    download_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=downloadFile"
+    print("⬇️ Downloading...")
+    download_res = session.post(download_url, headers=DOWNLOAD_HEADERS, data={"rndaak": rndaak}, stream=True)
+    print("📥 Status:", download_res.status_code)
+    if download_res.status_code != 200:
+        print(download_res.text[:200])
+        raise Exception(f"❌ Download failed for {label}")
+    save_path = os.path.join(INPUT_FOLDER, save_name)
+    tmp_path = save_path + ".part"
+    with open(tmp_path, "wb") as f:
+        for chunk in download_res.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+    os.replace(tmp_path, save_path)          # appears complete or not at all - a run never reads half a file
+    downloaded[label] = save_path
+    print(f"✅ {label} DOWNLOADED: {save_path}", flush=True)
+
+
 max_wait = 900
 interval = 15
 elapsed = 0
@@ -1410,8 +1456,13 @@ while elapsed < max_wait:
         except:
             continue
 
-    if ready_335 and (ready_383 or not BOTH):
-        print("\n🎉 " + ("BOTH FILES READY" if BOTH else "RSK335 FILE READY"))
+    if BOTH and ready_383 and "RSK383" not in downloaded:
+        print("\n🎉 MCX Deposit (RSK383) READY - downloading it now")
+        download_one("RSK383", target_file_383, f"MCX_DEPOSIT_{datetime.now().strftime('%I.%M')}.xlsx")
+    if ready_335 and "RSK335" not in downloaded:
+        print("\n🎉 MCX 90% (RSK335) READY - downloading it now")
+        download_one("RSK335", target_file_335, target_file_335)
+    if "RSK335" in downloaded and ("RSK383" in downloaded or not BOTH):
         break
 
     time.sleep(interval)
@@ -1419,81 +1470,14 @@ while elapsed < max_wait:
 
 
 # =========================
-# VALIDATION
+# RESULT
 # =========================
-if not target_file_335:
-    raise Exception("❌ RSK335 not found")
-
-if not ready_335:
-    raise Exception("❌ RSK335 not generated in time")
-
-if BOTH:
-    if not target_file_383:
-        raise Exception("❌ RSK383 not found")
-    if not ready_383:
-        raise Exception("❌ RSK383 not generated in time")
-
-
-
-
-# =========================
-# ⬇️ STEP 3: DOWNLOAD FILE(S)  (RSK335, plus RSK383 when BOTH)
-# =========================
-
-print("\n⬇️ STARTING DOWNLOAD PROCESS FOR " + ("BOTH FILES..." if BOTH else "RSK335..."))
-
-# (label, name on the server, name it is saved under)
-files_to_download = [("RSK335", target_file_335, target_file_335)]
-if BOTH:
-    # the console's MCX Deposit file name: MCX_DEPOSIT_<hh.mm>.xlsx (12-hour clock, no AM/PM)
-    files_to_download.insert(0, ("RSK383", target_file_383, f"MCX_DEPOSIT_{datetime.now().strftime('%I.%M')}.xlsx"))
-
-DOWNLOAD_HEADERS = {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "*/*",
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    "X-Requested-With": "XMLHttpRequest",
-    "Origin": BASE_URL,
-    "Referer": BASE_URL + "/Bancs/ARCHGUI/ar_w_DataExport.do?app=bancsapp?prefix=/ARCHGUI"
-}
-
-for label, file_name, save_name in files_to_download:
-    print(f"\n🔽 Processing {label} → {file_name}")
-
-    # 🔍 CHECK FILE EXISTS (RETRY LOGIC)
-    check_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=checkForFile"
-    file_ready = False
-    retry = 0
-    max_retry = 10
-    while retry < max_retry:
-        retry += 1
-        print(f"🔍 Checking file ({retry}/{max_retry})...")
-        check_res = session.post(check_url, headers=DOWNLOAD_HEADERS, data={"rndaak": rndaak})
-        if "FileExists" in check_res.text:
-            file_ready = True
-            print("✅ File is ready")
-            break
-        print("⏳ Not ready yet, waiting 5 sec...")
-        time.sleep(5)
-    if not file_ready:
-        raise Exception(f"❌ {label} file not ready for download")
-
-    # ⬇️ DOWNLOAD FILE
-    download_url = f"{BASE_URL}/Bancs/DownloadFileAction1.do?fileName={file_name}&action=downloadFile"
-    print("⬇️ Downloading...")
-    download_res = session.post(download_url, headers=DOWNLOAD_HEADERS, data={"rndaak": rndaak}, stream=True)
-    print("📥 Status:", download_res.status_code)
-    if download_res.status_code != 200:
-        print(download_res.text[:200])
-        raise Exception(f"❌ Download failed for {label}")
-
-    # 💾 SAVE FILE
-    save_path = os.path.join(INPUT_FOLDER, save_name)
-    with open(save_path, "wb") as f:
-        for chunk in download_res.iter_content(chunk_size=8192):
-            if chunk:
-                f.write(chunk)
-    print(f"✅ {label} DOWNLOADED: {save_path}")
+missing = [lbl for lbl in (["RSK383"] if BOTH else []) + ["RSK335"] if lbl not in downloaded]
+if missing:
+    names = {"RSK383": "MCX Deposit (RSK383)", "RSK335": "MCX 90% (RSK335)"}
+    got = [names[x] for x in downloaded]
+    raise Exception("❌ Not generated in time: " + ", ".join(names[x] for x in missing)
+                    + (" - downloaded: " + ", ".join(got) if got else ""))
 
 print("\n🎉 " + ("BOTH FILES (MCX Deposit + MCX 90%) DOWNLOADED SUCCESSFULLY" if BOTH else "RSK335 FILE DOWNLOADED SUCCESSFULLY"))
 print("\n🛑 Script finished — closing now")

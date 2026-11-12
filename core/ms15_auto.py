@@ -55,6 +55,8 @@ def defaults():
         "nmass_lead_min": _env_int("MS15_AUTO_NMASS_LEAD_MIN", 1),   # NMASS / NCDEX start this long before the run
         "wait_min": _env_int("MS15_AUTO_WAIT_MIN", 4),               # at run time: wait this long for downloads still going
         "grace_min": _env_int("MS15_AUTO_GRACE_MIN", 20),            # not started within this long after its time = "missed"
+        "ctcl_prefetch": os.getenv("CTCL_MCX_PREFETCH", "on").strip().lower() not in ("0", "off", "no", "false"),
+        "ctcl_lead_min": _env_int("CTCL_MCX_LEAD_MIN", 7),           # CTCL vs NMASS: MCX files this long before ITS run time
         "alert_numbers": os.getenv("MS15_WA_FAILURE_ALERT", ""),
     }
 
@@ -66,11 +68,12 @@ def get_settings():
             saved = json.load(f)
     except Exception:
         saved = {}
-    if "auto" in saved:
-        d["auto"] = bool(saved["auto"])
+    for b in ("auto", "ctcl_prefetch"):
+        if b in saved:
+            d[b] = bool(saved[b])
     if "alert_numbers" in saved:
         d["alert_numbers"] = str(saved["alert_numbers"] or "")
-    for k in ("mcx_lead_min", "nmass_lead_min", "wait_min", "grace_min"):
+    for k in ("mcx_lead_min", "nmass_lead_min", "wait_min", "grace_min", "ctcl_lead_min"):
         if k in saved:
             try:
                 d[k] = max(0, int(saved[k]))
@@ -82,15 +85,16 @@ def get_settings():
 def save_settings(update: dict, who: str = ""):
     """Validated save. Raises ValueError with a plain message."""
     cur = get_settings()
-    if "auto" in update:
-        cur["auto"] = bool(update["auto"])
+    for b in ("auto", "ctcl_prefetch"):
+        if b in update:
+            cur[b] = bool(update[b])
     if "alert_numbers" in update:
         from core.scheduler import failure_alert
         raw = str(update["alert_numbers"] or "").strip()
         if raw and not failure_alert.parse_numbers(raw):
             raise ValueError("no valid WhatsApp number found - use 10-digit or +91 numbers separated by commas")
         cur["alert_numbers"] = raw
-    for k in ("mcx_lead_min", "nmass_lead_min", "wait_min", "grace_min"):
+    for k in ("mcx_lead_min", "nmass_lead_min", "wait_min", "grace_min", "ctcl_lead_min"):
         if k in update:
             try:
                 v = int(update[k])
@@ -101,7 +105,9 @@ def save_settings(update: dict, who: str = ""):
             cur[k] = v
     cur["saved_by"], cur["saved_at"] = who, dt.datetime.now().isoformat(timespec="seconds")
     os.makedirs(LOG_DIR, exist_ok=True)
-    tmp = _state_tmp = _settings_path() + ".tmp"
+    if cur["nmass_lead_min"] > cur["mcx_lead_min"] + 30:
+        raise ValueError("NMASS/NCDEX lead looks wrong (more than 30 min above the MCX lead)")
+    tmp = _settings_path() + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cur, f, indent=1)
     os.replace(tmp, _settings_path())
@@ -299,6 +305,49 @@ def missing_files():
     return out
 
 
+def _is_mcx_file(name: str) -> bool:
+    from core import stale_files as sf
+    return name.lower().endswith(".xlsx") and (bool(sf._MCX_STAMPED.search(name)) or name.upper().startswith(sf._MCX_OWN_DEPOSIT))
+
+
+def park_late_mcx(n, since: float, until: float, base=None, backup=None) -> list:
+    """An MCX file that arrived AFTER run n had already started was not used by it: rename it NOT_USED__<name> and move it
+    into run n's backup folder (the same place the run puts its own unused MCX file).  -> list of moved names."""
+    base = base or os.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
+    if backup is None:
+        from core import mcx_cash_maintenance as mc
+        backup = str(mc.ms15_folder(dt.date.today(), _counter_n() or n))
+    moved = []
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return moved
+    for f in names:
+        p = os.path.join(base, f)
+        try:
+            if not (os.path.isfile(p) and _is_mcx_file(f) and since <= os.path.getmtime(p) <= until + 5):
+                continue
+            os.makedirs(backup, exist_ok=True)
+            dest = os.path.join(backup, f if f.startswith("NOT_USED__") else "NOT_USED__" + f)
+            os.replace(p, dest)
+            moved.append(f)
+        except OSError:
+            continue
+    if moved:
+        log(f"Run {int(n):02d}: MCX file(s) that came after the run had started were not used - moved to {backup} as NOT_USED: {', '.join(moved)}")
+    return moved
+
+
+def _late_mcx_watch(n, run_t0):
+    """The run did not wait for the second MCX file. When that download ends, the file it brought is parked as NOT_USED."""
+    def w():
+        j = _JOBS.get((int(n), "mcx"))
+        if j and j.get("thread"):
+            j["thread"].join(timeout=30 * 60)
+        park_late_mcx(n, run_t0, time.time())
+    threading.Thread(target=w, name=f"ms15-auto-late-{n}", daemon=True).start()
+
+
 # ───────────────────────── one automatic run ─────────────────────────
 def _run_pipeline():
     """Runs the Margin Shortage pipeline exactly like the Run button does. -> (ok, message)."""
@@ -332,12 +381,18 @@ def run_slot(n, st=None, now_fn=time.time, sleep=time.sleep, missing=None, run=N
             start(n, what)
     deadline = now_fn() + st["wait_min"] * 60
     waited = False
+
+    def _state():
+        # only the files the run really needs count: the MCX file in use (MCX 90% OR Deposit) and the NMASS/NCDEX files.
+        # The other MCX file may still be downloading - the run does not wait for it.
+        gaps = missing() or []
+        need_mcx = any(g.startswith("MCX") for g in gaps)
+        need_nmass = any(not g.startswith("MCX") for g in gaps)
+        busy = [w for w, need in (("mcx", need_mcx), ("nmass", need_nmass)) if need and _job_alive(n, w)]
+        return busy, gaps
     while True:
-        busy = [w for w in ("mcx", "nmass") if _job_alive(n, w)]
-        gaps = [] if busy else (missing() or [])
-        if not busy and not gaps:
-            break
-        if now_fn() >= deadline:
+        busy, gaps = _state()
+        if not gaps or now_fn() >= deadline:
             break
         if not waited:
             waited = True
@@ -345,8 +400,7 @@ def run_slot(n, st=None, now_fn=time.time, sleep=time.sleep, missing=None, run=N
             log(f"Run {n:02d}: {why}. Waiting up to {st['wait_min']} min.")
             _upd(n, status=f"waiting for files (max {st['wait_min']} min)")
         sleep(5)
-    busy = [w for w in ("mcx", "nmass") if _job_alive(n, w)]
-    gaps = missing() or []
+    busy, gaps = _state()
     if busy or gaps:
         reasons = []
         for w in ("mcx", "nmass"):
@@ -364,10 +418,13 @@ def run_slot(n, st=None, now_fn=time.time, sleep=time.sleep, missing=None, run=N
                     alert_sent=bool(rec.get("sent")), alert_reason=rec.get("reason", ""))
     _upd(n, status="running")
     log(f"Run {n:02d}: all files ready - starting the run.")
+    run_t0 = time.time()
     try:
         ok, msg = run()
     except Exception as e:                                       # noqa: BLE001
         ok, msg = False, f"{type(e).__name__}: {e}"
+    if _job_alive(n, "mcx"):
+        _late_mcx_watch(n, run_t0)
     if ok:
         log(f"Run {n:02d}: finished successfully.")
         return _upd(n, status="done", ended=dt.datetime.now().strftime("%H:%M:%S"), msg="finished")
@@ -422,6 +479,93 @@ def due_action(now: dt.datetime, st=None, state=None, times=None, counter=None):
     return None
 
 
+# ───────────────────────── CTCL vs NMASS: MCX files before ITS runs ─────────────────────────
+MAX_AGE_MIN = 45
+
+
+def ctcl_times() -> dict:
+    """{run number: minute of day} from CTCL_RUN<n>_WINDOW (start of the window)."""
+    out = {}
+    for i in range(1, 40):
+        m = re.match(r"(\d{1,2}):(\d{2})", os.getenv(f"CTCL_RUN{i}_WINDOW", "").strip())
+        if m:
+            out[i] = int(m.group(1)) * 60 + int(m.group(2))
+    return out
+
+
+def ctcl_file_age_min(now_ts=None):
+    """Minutes since the newest MCX file OF THE KIND CTCL USES (MCX 90% or Deposit) came into the CTCL folder; None = none."""
+    try:
+        from core import ctcl_mcx_source as src
+        kind = src.get_source("ctcl")
+    except Exception:
+        kind = "mcx90"
+    folder = os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    best = None
+    try:
+        for f in os.listdir(folder):
+            low = f.lower()
+            ok = low.startswith("mcx_deposit_") if kind == "deposit" else bool(re.search(r"-\d{14}\.xlsx$", low))
+            if ok and low.endswith(".xlsx") and not low.startswith("not_used__"):
+                t = os.path.getmtime(os.path.join(folder, f))
+                best = t if best is None or t > best else best
+    except OSError:
+        return None
+    return None if best is None else ((now_ts or time.time()) - best) / 60.0
+
+
+def due_ctcl(now: dt.datetime, st=None, state=None, times=None, age=None):
+    """-> CTCL run number whose MCX files must be downloaded now, or None.  At T - ctcl_lead_min, ONLY when the newest file
+    CTCL would use would be older than 45 minutes at its run time (a fresh Margin Shortage file is used instead)."""
+    st = st or get_settings()
+    if not st.get("ctcl_prefetch"):
+        return None
+    state = state if state is not None else read_state()
+    times = times if times is not None else ctcl_times()
+    cur = now.hour * 60 + now.minute
+    lead = st["ctcl_lead_min"]
+    for n in sorted(times):
+        t = times[n]
+        if (state.get("ctcl") or {}).get(str(n)) or not (t - lead <= cur < t):
+            continue
+        a = ctcl_file_age_min() if age is None else age
+        if a is not None and a + lead <= MAX_AGE_MIN:
+            return ("skip", n, a)
+        return ("download", n, a)
+    return None
+
+
+def _ctcl_mark(n, what):
+    with _LOCK:
+        d = read_state()
+        d.setdefault("ctcl", {})[str(n)] = what
+        _write_state(d)
+
+
+def _ctcl_download(n):
+    def work():
+        from core.pipelines.mcx90_download import stream_mcx90_download
+        log(f"CTCL vs NMASS run {n:02d}: downloading both MCX files for it now.")
+        ok, msg = _consume(stream_mcx90_download(pipe="ctcl", both=True, extra_env={"MCX_TOKEN_MODE": "auto"}))
+        _ctcl_mark(n, "done" if ok else "failed")
+        log(f"CTCL vs NMASS run {n:02d}: MCX download " + ("finished." if ok else f"FAILED: {msg}"))
+    _ctcl_mark(n, "running")
+    threading.Thread(target=work, name=f"ctcl-mcx-{n}", daemon=True).start()
+
+
+def tick_ctcl(now=None):
+    act = due_ctcl(now or dt.datetime.now())
+    if not act:
+        return None
+    kind, n, age = act
+    if kind == "skip":
+        _ctcl_mark(n, "skipped")
+        log(f"CTCL vs NMASS run {n:02d}: its MCX file is {age:.0f} min old (fresh enough, from Margin Shortage) - no download.")
+    else:
+        _ctcl_download(n)
+    return act
+
+
 def _pipeline_busy():
     try:
         from core.pipeline_box import _PB
@@ -450,7 +594,12 @@ def tick(now=None, **kw):
     elif kind == "run":
         if _pipeline_busy():
             return None                                          # someone is running it by hand: look again in a moment
-        run_slot(n, st, **{k: v for k, v in kw.items() if k in ("run", "sleep", "alert", "missing", "start", "now_fn")})
+        extra = {k: v for k, v in kw.items() if k in ("run", "sleep", "alert", "missing", "start", "now_fn")}
+        if extra:
+            run_slot(n, st, **extra)
+        else:                                                    # own thread: the timer keeps ticking (CTCL downloads) meanwhile
+            _upd(n, status="running", started=dt.datetime.now().strftime("%H:%M:%S"))
+            threading.Thread(target=run_slot, args=(n, st), name=f"ms15-auto-run-{n}", daemon=True).start()
     return act
 
 
@@ -462,6 +611,10 @@ def start_ticker(interval_s: int = 15):
     def loop():
         log("Margin Shortage Auto Run timer started.")
         while not _TICK["stop"].wait(interval_s):
+            try:
+                tick_ctcl()
+            except Exception as e:                               # noqa: BLE001
+                print(f"[ms15-auto] ctcl error: {type(e).__name__}: {e}", flush=True)
             try:
                 tick()
             except Exception as e:                               # noqa: BLE001
@@ -490,6 +643,8 @@ def status():
                      "mcx": rs.get("mcx", ""), "nmass": rs.get("nmass", ""), "msg": rs.get("msg", ""),
                      "alert_sent": rs.get("alert_sent"), "alert_reason": rs.get("alert_reason", "")})
     return {"settings": st, "runs": rows, "now": dt.datetime.now().strftime("%H:%M"),
+            "ctcl": [{"run": n, "time": hhmm(t), "mcx_at": hhmm(max(0, t - st["ctcl_lead_min"])),
+                      "state": (state.get("ctcl") or {}).get(str(n), "")} for n, t in sorted(ctcl_times().items())],
             "timer": bool(_TICK["thread"] and _TICK["thread"].is_alive()),
             "alert_numbers_count": len(alert_numbers())}
 

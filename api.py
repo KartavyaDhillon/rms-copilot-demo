@@ -383,7 +383,7 @@ def serve_dashboard(embed: int = 0):
         # dashboard.html on disk is never modified.
         html = html.replace("</body>",
                             '<script src="/platform/js/rms-busy.js?v=3"></script>'
-                            '<script src="/platform/js/process-locks.js?v=10"></script>'
+                            '<script src="/platform/js/process-locks.js?v=11"></script>'
                             '<script src="/platform/js/process-probable-box.js?v=4"></script>'
                             '<script src="/platform/js/process-mtfic.js?v=12"></script>'
                             '<script src="/platform/js/process-alloc.js?v=12"></script>'

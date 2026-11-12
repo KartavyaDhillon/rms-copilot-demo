@@ -2466,10 +2466,28 @@ async function ms15AutoCredHtml(pw){
     +'<div style="font-size:12px;color:var(--muted);line-height:1.6;margin-bottom:10px">When ON, every run starts by itself at its time ('+times+'). <b>'+s.mcx_lead_min+' min before</b> it downloads both MCX files, <b>'+s.nmass_lead_min+' min before</b> it downloads NMASS/NCDEX. At run time it waits up to <b>'+s.wait_min+' min</b> for any download still going; if files are still missing it sends a WhatsApp failure alert saying why.</div>'
     +'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px"><div class="ms15-sw" id="ms15Sw"><button type="button" id="ms15SwOn" class="'+(s.auto?'on-y':'')+'" onclick="ms15AutoSet(true,\''+p+'\')">ON</button><button type="button" id="ms15SwOff" class="'+(s.auto?'':'on-n')+'" onclick="ms15AutoSet(false,\''+p+'\')">OFF</button></div>'
     +'<span id="ms15AutoLbl" style="font-size:13px;font-weight:700;color:'+(s.auto?'#22c55e':'#ef4444')+'">'+(s.auto?'Auto run is ON':'Auto run is OFF')+'</span></div>'
+    +'<div style="font-weight:700;margin:4px 0 6px">Timings (minutes)</div>'
+    +'<div style="display:grid;grid-template-columns:1fr 80px;gap:6px 10px;align-items:center;font-size:12.5px;margin-bottom:8px">'
+    +'<span>MCX files (both) start this long before each run</span><input type="number" min="0" max="120" id="ms15LeadMcx" class="sa-input" value="'+s.mcx_lead_min+'">'
+    +'<span>NMASS / NCDEX start this long before each run</span><input type="number" min="0" max="120" id="ms15LeadNmass" class="sa-input" value="'+s.nmass_lead_min+'">'
+    +'<span>At run time, wait at most this long for files</span><input type="number" min="0" max="120" id="ms15Wait" class="sa-input" value="'+s.wait_min+'">'
+    +'<span>CTCL vs NMASS: MCX files start this long before ITS runs</span><input type="number" min="0" max="120" id="ms15LeadCtcl" class="sa-input" value="'+s.ctcl_lead_min+'">'
+    +'</div>'
+    +'<label style="display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--muted);margin-bottom:8px"><input type="checkbox" id="ms15CtclPre" '+(s.ctcl_prefetch?'checked':'')+'> <span>CTCL vs NMASS uses the nearest Margin Shortage MCX file (shared to its folder automatically). Only when that file would be <b>older than 45 min</b> at a CTCL run, download fresh MCX files for CTCL by itself.</span></label>'
+    +'<button class="sa-tool" data-no-busy="1" style="width:100%;margin-bottom:12px" onclick="ms15TimesSave(\''+p+'\')">Save timings</button>'
     +'<div style="font-size:12px;color:var(--muted);margin-bottom:4px">Failure alert WhatsApp numbers (comma separated)</div>'
     +'<input type="text" id="ms15AlertNums" class="sa-input" style="width:100%" placeholder="+91XXXXXXXXXX, +91XXXXXXXXXX" value="'+String(s.alert_numbers||'').replace(/"/g,'&quot;')+'">'
     +'<div style="display:flex;gap:8px;margin-top:10px"><button class="sa-tool" data-no-busy="1" style="flex:1" onclick="ms15AutoSave(\''+p+'\')">Save numbers</button>'
     +'<button class="sa-tool" data-no-busy="1" onclick="ms15AutoTest(\''+p+'\')">Send test alert</button></div><div class="sa-msg" id="ms15AutoMsg"></div></div>';
+}
+async function ms15TimesSave(pw){
+  const msg=document.getElementById('ms15AutoMsg'), v=function(id){ return parseInt(document.getElementById(id).value,10); };
+  const body={mcx_lead_min:v('ms15LeadMcx'), nmass_lead_min:v('ms15LeadNmass'), wait_min:v('ms15Wait'), ctcl_lead_min:v('ms15LeadCtcl'), ctcl_prefetch:document.getElementById('ms15CtclPre').checked};
+  if(Object.keys(body).some(function(k){ return k!=='ctcl_prefetch' && isNaN(body[k]); })){ msg.innerHTML='<span style="color:var(--red)">✕ Enter whole minutes in every box.</span>'; return; }
+  let d; try{ d=await (await fetch(API+'/ms15/auto/settings?password='+encodeURIComponent(pw),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json(); }catch(e){ msg.innerHTML='<span style="color:var(--red)">'+e+'</span>'; return; }
+  if(!d.ok){ msg.innerHTML='<span style="color:var(--red)">✕ '+(d.error||'Failed')+'</span>'; return; }
+  _ms15Auto=d; ms15PickPaint();
+  msg.innerHTML='<span style="color:var(--green,#4ade80)">✓ Timings saved — MCX '+body.mcx_lead_min+' min, NMASS/NCDEX '+body.nmass_lead_min+' min before; wait '+body.wait_min+' min; CTCL MCX '+body.ctcl_lead_min+' min before'+(body.ctcl_prefetch?'':' (CTCL own download OFF)')+'.</span>';
 }
 // ON / OFF: saved the moment you press it
 async function ms15AutoSet(on,pw){

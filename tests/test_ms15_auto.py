@@ -108,5 +108,32 @@ class RunSlotTests(unittest.TestCase):
         self.assertIn("boom", self.alerts[0][2])
 
 
+
+class CtclAndLateTests(unittest.TestCase):
+    ST = {**ST, "ctcl_prefetch": True, "ctcl_lead_min": 7}
+
+    def test_ctcl_skips_when_ms15_file_is_fresh(self):
+        times = {3: 11 * 60 + 40}
+        self.assertIsNone(M.due_ctcl(at(11, 32), self.ST, {"runs": {}}, times, age=10))
+        self.assertEqual(M.due_ctcl(at(11, 33), self.ST, {"runs": {}}, times, age=10)[0], "skip")
+        self.assertEqual(M.due_ctcl(at(11, 33), self.ST, {"runs": {}}, times, age=40)[0], "download")
+        self.assertEqual(M.due_ctcl(at(11, 33), self.ST, {"runs": {}}, times, age=None)[0], "download")
+        self.assertIsNone(M.due_ctcl(at(11, 33), self.ST, {"runs": {}, "ctcl": {"3": "done"}}, times, age=40))
+        self.assertIsNone(M.due_ctcl(at(11, 33), {**self.ST, "ctcl_prefetch": False}, {"runs": {}}, times, age=40))
+
+    def test_late_mcx_file_is_parked_as_not_used(self):
+        import time as _t
+        base, bk = tempfile.mkdtemp(), tempfile.mkdtemp()
+        old = os.path.join(base, "MCX_DEPOSIT_09.20.xlsx"); open(old, "w").close()
+        os.utime(old, (_t.time() - 3600, _t.time() - 3600))
+        late = os.path.join(base, "abcXYZ-20261112093100.xlsx"); open(late, "w").close()
+        other = os.path.join(base, "CM_ClientLevelCollaterals_12112026093000.csv"); open(other, "w").close()
+        M.LOG_DIR = tempfile.mkdtemp()
+        moved = M.park_late_mcx(1, _t.time() - 60, _t.time(), base=base, backup=bk)
+        self.assertEqual(moved, ["abcXYZ-20261112093100.xlsx"])
+        self.assertTrue(os.path.exists(os.path.join(bk, "NOT_USED__abcXYZ-20261112093100.xlsx")))
+        self.assertTrue(os.path.exists(old) and os.path.exists(other))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import datetime
 from core.pipeline_box import _PB, act_slot
 from core.error_translator import translate_error
@@ -206,6 +207,29 @@ def _maybe_share_with_sibling(pipe, downloaded_file):
         return stale_lines + [f"Could not share MCX 90% file with {sib_pipe}: {e}"]
 
 
+def _is_mcx_name(name):
+    n = name.lower()
+    return n.endswith(".xlsx") and not n.startswith("not_used__") and (
+        bool(re.search(r"-\d{14}\.xlsx$", n)) or n.startswith("mcx_deposit_"))
+
+
+def share_new_mcx_with_ctcl(ms15_dir, since):
+    """Copy the MCX file(s) Margin Shortage downloaded since `since` into the CTCL vs NMASS folder. -> log lines."""
+    out = []
+    try:
+        ctcl_dir = _pipe_folder("ctcl")
+        if os.path.normcase(os.path.abspath(ctcl_dir)) == os.path.normcase(os.path.abspath(ms15_dir)):
+            return out
+        for f in os.listdir(ms15_dir):
+            p = os.path.join(ms15_dir, f)
+            if os.path.isfile(p) and _is_mcx_name(f) and os.path.getmtime(p) >= since:
+                shutil.copy2(p, os.path.join(ctcl_dir, f))
+                out.append(f"Shared with CTCL vs NMASS: {f} -> {ctcl_dir}")
+    except Exception as e:                                   # noqa: BLE001
+        out.append(f"Could not share the MCX file(s) with CTCL vs NMASS: {e}")
+    return out
+
+
 def _friendly_auth_msg(server, reason):
     name = _FRIENDLY_SERVER.get((server or "").upper(), server or "the exchange")
     if reason == "LOCKED":
@@ -325,6 +349,7 @@ def stream_mcx90_download(pipe="ctcl", both=False, extra_env=None):
         yield {"type": "log", "msg": _m}
 
     q = queue.Queue()
+    _dl_t0 = time.time() - 5
     _auth_fail = None  # set to {"server":.., "reason":..} if a login_failed tag is seen
     _log_buffer = []   # last lines the script printed - used by the AI fallback below
                         # when the failure is a new/unrecognized kind (no known tag matched)
@@ -387,6 +412,13 @@ def stream_mcx90_download(pipe="ctcl", both=False, extra_env=None):
             break
 
     _pb["proc"] = None; _pb["running"] = False
+
+    if pipe == "ms15":
+        # Every MCX file Margin Shortage brings (MCX 90% and/or MCX Deposit, also when only one of them came) is copied into
+        # CTCL vs NMASS too, so CTCL always has the NEAREST one (its own 45-minute rule still applies).
+        for _sm in share_new_mcx_with_ctcl(own_dir, _dl_t0):
+            _log(_sm)
+            yield {"type": "log", "msg": _sm}
 
     if rc == 0:
         _log("MCX 90% + MCX Deposit files downloaded successfully" if both else "MCX 90% file downloaded successfully")
