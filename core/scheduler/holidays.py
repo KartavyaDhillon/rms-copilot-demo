@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import datetime as dt
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -27,7 +28,7 @@ def holiday_file() -> Optional[Path]:
 
 
 def _parse(raw: str) -> Optional[dt.date]:
-    raw = raw.strip().strip('"').strip("'")
+    raw = raw.split("#")[0].strip().strip('"').strip("'")      # "08112026 #DIWALI" is the date 08112026
     if not raw or raw.lower() == "date":
         return None
     if raw.isdigit() and len(raw) == 7:
@@ -123,7 +124,44 @@ def remove_special(d: dt.date) -> None:
     _write_special(rows)
 
 
+_TAG = re.compile(r"diwali|muhurat|muhurta", re.I)
+
+
+def diwali_days() -> dict:
+    """{date: note} of the special (Muhurat / DIWALI) trading days: every row of the HOLIDAY CALENDAR that is tagged
+    DIWALI, e.g.  08112026,#DIWALI   (also  08112026 #DIWALI  or  08112026,DIWALI),  and every row of special_trading_days.csv
+    whose note says Diwali / Muhurat.  Add next year's day to the holiday list with the tag and it is picked up by itself."""
+    out = {}
+    sources = []
+    _load_special_file()                      # creates special_trading_days.csv (with the 2026 Muhurat Sunday) on first use
+    h = holiday_file()
+    if h:
+        sources.append(h)
+    s = special_file()
+    if s:
+        sources.append(s)
+    for p in sources:
+        try:
+            if not p.exists():
+                continue
+            with open(p, "r", encoding="utf-8-sig", errors="replace") as fh:
+                for line in fh:
+                    if not _TAG.search(line):
+                        continue
+                    first = re.split(r"[,;\t#]", line.strip(), maxsplit=1)[0].split()[0] if line.strip() else ""
+                    d = _parse(first)
+                    if d:
+                        out[d] = line.strip()
+        except OSError:
+            continue
+    return out
+
+
 def load_special() -> set:
+    return set(_load_special_file()) | set(diwali_days())
+
+
+def _load_special_file() -> set:
     p = special_file()
     if p and not p.exists():
         try:                                                  # first use: create the file with the Muhurat Sunday in it

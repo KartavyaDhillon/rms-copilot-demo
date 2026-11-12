@@ -36,9 +36,20 @@ class DiwaliTests(unittest.TestCase):
     def test_date_defaults_to_muhurat_sunday(self):
         self.assertEqual(D.diwali_date(), DAY)
 
+    def test_date_comes_from_the_tagged_calendar_row(self):
+        (self.tmp / "h.csv").write_text("DATE,NOTE\n01012027,New year\n29102027,#DIWALI\n08112026 #DIWALI\n")
+        os.environ["SCHED_SPECIAL_FILE"] = str(self.tmp / "none.csv")
+        from core.scheduler import holidays as HL
+        HL._CACHE.update({"path": None, "mtime": None, "days": set()})
+        days = HL.diwali_days()
+        self.assertIn(dt.date(2027, 10, 29), days)
+        self.assertIn(dt.date(2026, 11, 8), days)
+        self.assertNotIn(dt.date(2027, 1, 1), days)
+        self.assertIn(dt.date(2026, 11, 8), HL.load())       # a tagged row is still a holiday
+
     def test_numbered_files_are_copies_of_the_single_session_file(self):
         with D.diwali_mode():
-            names = {s.rel for s in D.stage_plan("master_file", DAY)}
+            names = {s.rel for s in D.stage_plan("sa_cm", DAY)}
         for i in range(1, 9):
             self.assertIn(f"MCX_PeakMargin56720_20261108_{i:02d}.csv", names)
             self.assertIn(f"NCCL_MARGIN_REP_01292_20261108_{i:02d}.csv", names)
@@ -46,6 +57,17 @@ class DiwaliTests(unittest.TestCase):
             self.assertIn(f"Margin_NCL_CM_0_CM_06436_20261108_P_{t}.csv", names)
         with D.diwali_mode():
             self.assertIn("C_SA01_P_06436_08112026_i04.lis", {s.rel for s in D.stage_plan("sa_cm", DAY)})
+
+    def test_master_file_makes_no_copies_and_patch_applies(self):
+        with D.diwali_mode():
+            names = {s.rel for s in D.stage_plan("master_file", DAY)}
+            self.assertNotIn("MCX_PeakMargin56720_20261108_01.csv", names)
+            need = D.check_needs("master_file", DAY)
+            self.assertTrue(all(n["present"] or n["optional"] or n["label"] in D._DIWALI_MASTER_MUST for n in need))
+            txt = (D.SCRIPTS / "master_file.py").read_text(encoding="utf-8")
+            out = D.patch_script("master_file", txt, self.tmp)
+        self.assertIn("DIWALI: one-session day", out)
+        self.assertIn("_blank_cols", out)
 
     def test_normal_mode_untouched(self):
         self.assertFalse(D.is_diwali())

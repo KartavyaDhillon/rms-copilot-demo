@@ -1090,6 +1090,8 @@ async def dc_run(request: Request):
         d = _d.diwali_date() if diwali else _d.parse_date(body.get("date") or "")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if d is None:
+        return JSONResponse({"ok": False, "error": _d.NO_DIWALI}, status_code=409)
     try:
         by = _actor(request)[0] or ""
     except Exception:
@@ -1113,7 +1115,10 @@ async def dc_diwali_upload(request: Request, card: str, name: str):
     """One file for the special day (raw body): RISK_REPORT / RESPONSE_2_mcx / Allocation_Detail, else the single live folder."""
     _d = _dc(card)
     try:
-        return _d.save_diwali_live(_d.diwali_date(), name, await request.body())
+        _dd = _d.diwali_date()
+        if _dd is None:
+            return JSONResponse({"ok": False, "error": _d.NO_DIWALI}, status_code=400)
+        return _d.save_diwali_live(_dd, name, await request.body())
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
 
@@ -1154,8 +1159,11 @@ def dc_files(card: str, date: str = "", procs: str = ""):
 def dc_output(card: str, proc: str, name: str, date: str = "", diwali: int = 0):
     _d = _dc(card)
     if diwali:
+        _dd = _d.diwali_date()
+        if _dd is None:
+            raise HTTPException(404, "no DIWALI day")
         with _d.diwali_mode():
-            p = _d.output_path(card, proc, _d.diwali_date(), name)
+            p = _d.output_path(card, proc, _dd, name)
     else:
         p = _d.output_path(card, proc, _d.parse_date(date), name)
     if not p:

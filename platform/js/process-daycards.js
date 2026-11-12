@@ -158,7 +158,7 @@
       return '<div class="dc-out">📄 <a href="' + API + '/daycards/output?card=' + card + '&proc=' + p.key + '&date=' + encodeURIComponent(S(card).data.iso) + '&name=' + encodeURIComponent(o.name) + '" download>' + esc(o.name) + '</a><span style="color:var(--dim);font-size:11px">' + kb(o.size) + '</span></div>';
     }).join('');
     return '<div class="dc-p ' + cls + '"><div class="dc-h"><span class="dc-t">' + esc(p.label) + '</span>' + chip +
-      '<span style="margin-left:auto;display:flex;gap:8px"><button class="dc-btn ghost" style="border-color:rgba(251,191,36,.6);color:var(--amber)" onclick="dcDiwali(\'' + card + '\',\'' + p.key + '\')" data-tip="Special trading day: make only this report from the special day\'s own files.">🪔 DIWALI</button><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
+      '<span style="margin-left:auto;display:flex;gap:8px"><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dcRun(\'' + card + '\',[\'' + p.key + '\'])">▶ Run</button></span></div>' +
       '<div class="dc-note">' + esc(p.note) + '</div>' +
       '<div style="font-size:12px"><b>' + p.found + '</b><span style="color:var(--dim)"> / ' + p.total + ' required files ready</span> ' +
       (miss ? '<button class="dc-link" onclick="dcToggle(\'' + card + '\',\'' + p.key + '\')">' + (open ? 'hide' : 'show') + ' missing files (' + miss + ')</button>' : '<span style="color:var(--green)">✓ pre-check passes</span>') +

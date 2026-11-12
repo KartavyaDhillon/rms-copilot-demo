@@ -122,16 +122,21 @@ def diwali_live_dir(d: dt.date) -> Path:
     return diwali_dir(d) / "LIVE ALLOCATION"
 
 
-def diwali_date() -> dt.date:
-    """The latest special trading day (special_trading_days.csv) that is not in the future; the Muhurat Sunday by default."""
+def diwali_date() -> Optional[dt.date]:
+    """The DIWALI day, picked by itself from the holiday calendar: the latest row tagged DIWALI (e.g. 08112026,#DIWALI) that is
+    not in the future; if none is that old, the nearest one coming up.  None when the calendar has no DIWALI row."""
     try:
         from core.scheduler import holidays as HL
-        days = [x for x in HL.list_special() if x <= dt.date.today()]
-        if days:
-            return max(days)
+        days = sorted(HL.diwali_days())
     except Exception:
-        pass
-    return DIWALI_DEFAULT
+        return None
+    past = [x for x in days if x <= dt.date.today()]
+    if past:
+        return past[-1]
+    return days[0] if days else None
+
+
+NO_DIWALI = "There is no DIWALI day in the holiday calendar - add a row like  08112026,#DIWALI  to the holiday list."
 
 
 def manual_dir(d: dt.date) -> Path:
@@ -526,7 +531,7 @@ def stage_plan(proc: str, d: dt.date) -> List[Src]:
         if k not in seen:
             seen.add(k)
             uniq.append(s)
-    if is_diwali():
+    if is_diwali() and proc != "master_file":          # MASTER FILE leaves the missing peaks blank instead (see DIWALI_PATCH)
         uniq += _diwali_fill(uniq, d)
     return uniq
 
@@ -579,6 +584,9 @@ def _where(rx: str) -> str:
     return "76 FILES DOWNLOADER (day folder of that date)"
 
 
+_DIWALI_MASTER_MUST = {"C_MG13 end file", "FO final (F_0000)", "NCDEX end file (01292_MGN)"}      # the end-of-day (E) files
+
+
 def check_needs(proc: str, d: dt.date, staged: Optional[List[Src]] = None) -> List[dict]:
     staged = staged if staged is not None else stage_plan(proc, d)
     names = [s.rel for s in staged]
@@ -586,6 +594,8 @@ def check_needs(proc: str, d: dt.date, staged: Optional[List[Src]] = None) -> Li
     for n in PROCS[proc].needs(d):
         rx = re.compile(n.rx, re.I)
         hit = next((x for x in names if rx.fullmatch(x)), None)
+        if is_diwali() and proc == "master_file" and n.label not in _DIWALI_MASTER_MUST:
+            n = Need(n.group, n.label, n.rx, True)       # a peak that did not happen is simply blank in the Master file
         out.append({"group": n.group, "label": n.label, "optional": n.optional, "present": bool(hit), "name": hit or "",
                     "expect": _readable(n.rx), "where": _where(n.rx), "upstream": _upstream(proc, n.rx)})
     return out
@@ -675,7 +685,30 @@ def patch_script(proc: str, text: str, work: Path, values: Optional[dict] = None
         if old not in text:
             raise PatchError(f"{p.label}: expected line not found in the script: {old}")
         text = text.replace(old, new)
+    # 5. special trading day: only what really exists is filled, the rest stays blank
+    if is_diwali():
+        for old, new in DIWALI_PATCH.get(proc, []):
+            if old not in text:
+                raise PatchError(f"{p.label}: DIWALI: expected line not found in the script: {old}")
+            text = text.replace(old, new)
     return text
+
+
+# MASTER FILE on a special day (one session): no copies are made.  The numbered columns / sheets of the peaks that did not
+# happen (CM2-4, FM2-4, MCX2-8, NCDEX2-8 ...) stay BLANK instead of 0, and the "all numbered files must be there" stop is lifted.
+DIWALI_PATCH: Dict[str, List[tuple]] = {
+    "master_file": [
+        ("strict_file_check(FOLDER, required_files_for_check)\n", 'print("DIWALI: one-session day - peaks that did not happen are left blank")\n'),
+        ('main_df["FM" + sheet_name[-1]] = 0', 'main_df["FM" + sheet_name[-1]] = None'),
+        ('main_df[f"MCX{i}"] = 0', 'main_df[f"MCX{i}"] = None'),
+        ('main_df[f"NCDEX{i}"] = 0', 'main_df[f"NCDEX{i}"] = None'),
+        ("    if not file_found:\n        main_df[col_name] = 0\n", "    if not file_found:\n        main_df[col_name] = None\n"),
+        ("        main_df[c] = 0\n\n# Reorder columns and fill NaNs with 0\nmain_df = main_df[main_columns].fillna(0)\n",
+         "        main_df[c] = None\n\n# Reorder columns; a peak column with no data at all stays blank, the rest is filled with 0\n"
+         "main_df = main_df[main_columns]\n_blank_cols = [c for c in main_columns[1:] if main_df[c].isna().all()]\n"
+         "main_df = main_df.fillna(0)\nfor _c in _blank_cols:\n    main_df[_c] = None\n"),
+    ],
+}
 
 
 def _set_str(text, name, value, p):
@@ -1104,6 +1137,8 @@ def _live_backup_dir(d: dt.date) -> str:
 def diwali_status(card: str, d: Optional[dt.date] = None) -> dict:
     """The card's status for the special day, as the DIWALI button sees it."""
     d = d or diwali_date()
+    if d is None:
+        return {"error": NO_DIWALI, "procs": []}
     with diwali_mode():
         st = status(card, d)
         live = _files(diwali_live_dir(d))
