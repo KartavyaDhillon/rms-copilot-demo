@@ -903,7 +903,8 @@ with pd.ExcelWriter(out_file,engine='xlsxwriter') as writer:
     # ✅ Auto width Final sheet
     ws = writer.sheets["Final_Shortage_MCX_INTRA"]
     for col_idx,col in enumerate(output_df.columns):
-        values = output_df[col].astype(str).tolist()
+        # a blank (NaN) cell stays a float even after astype(str) with a recent pandas, so len() failed: blanks count as ""
+        values = ["" if (v is None or (isinstance(v, float) and v != v)) else str(v) for v in output_df[col].tolist()]
         width = max([len(col)] + [len(v) for v in values]) + 2
         ws.set_column(col_idx,col_idx,width)
 

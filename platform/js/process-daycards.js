@@ -410,9 +410,12 @@
     var dw = d.diwali || {}, job = d.job || {};
     var procs = d.procs.filter(function (p) { return !DW.proc || p.key === DW.proc; });
     var missingAny = procs.some(function (p) { return p.found < p.total; });
+    var left = procs.filter(function (p) { return !isDone(p); });
     var runBtn = job.running
       ? '<button class="dc-btn amber" disabled><span class="dc-spin"></span>Running ' + esc(job.current || '') + '…</button>'
-      : '<button class="dc-btn" onclick="dwRun()">🪔 Generate ' + (DW.proc ? esc(procs[0].label) : 'all ' + procs.length + ' process' + (procs.length > 1 ? 'es' : '')) + '</button>';
+      : (left.length
+        ? '<button class="dc-btn" onclick="dwRun()">🪔 ' + (left.length === procs.length ? 'Generate all ' + procs.length + ' process' + (procs.length > 1 ? 'es' : '') : 'Generate the rest (' + left.length + ' left)') + '</button>'
+        : '<button class="dc-btn" disabled>✓ All done</button>');
     var showLog = job.running || (Date.now() - DW.lastRunAt < 40000);
     var live = (dw.live_files || []).map(function (f) { return '<span class="dc-pill ok">✓ ' + esc(f.name) + '</span>'; }).join(' ');
     var res = (DW.upl || []).length ? '<div class="dc-res">' + DW.upl.map(function (r) {
@@ -440,7 +443,8 @@
         var miss = (p.groups || []).filter(function (g) { return g.missing && g.missing.length && !g.optional; }).map(function (g) {
           return '<div><b style="color:var(--ink)">' + esc(g.name) + '</b><br>' + g.missing.map(function (m) { return '<span class="m">✗ ' + esc(m) + '</span>'; }).join('<br>') + '</div>';
         }).join('<div style="height:5px"></div>');
-        return '<div class="dc-p ' + (last.finished ? (last.ok ? 'ok' : 'bad') : '') + '"><div class="dc-h"><span class="dc-t">' + esc(p.label) + '</span>' + chip + '</div>' +
+        return '<div class="dc-p ' + (last.finished ? (last.ok ? 'ok' : 'bad') : '') + '"><div class="dc-h"><span class="dc-t">' + esc(p.label) + '</span>' + chip +
+          '<span style="margin-left:auto"><button class="dc-btn" ' + (job.running ? 'disabled' : '') + ' onclick="dwRun(\'' + p.key + '\')">▶ Run</button></span></div>' +
           '<div style="font-size:12px;margin-top:4px"><b>' + p.found + '</b><span style="color:var(--dim)"> / ' + p.total + ' required files ready</span>' + (p.found >= p.total ? ' <span style="color:var(--green)">✓ pre-check passes</span>' : '') +
           ((p.later || []).length ? ' <span style="color:var(--dim);font-size:11px">· ' + p.later.length + ' file(s) made by ' + esc(p.later[0].from) + ' first</span>' : '') + '</div>' +
           '<div class="dc-bar"><i style="width:' + (p.total ? Math.round(100 * p.found / p.total) : 0) + '%"></i></div>' +
@@ -463,9 +467,11 @@
     widen(true);
     dwLoad();
   };
-  window.dwRun = function () {
+  window.dwRun = function (only) {
     var d = DW.data; if (!d || !d.procs) return;
-    var keys = d.procs.filter(function (p) { return !DW.proc || p.key === DW.proc; }).map(function (p) { return p.key; });
+    // a process's own ▶ Run repeats just that one; the top button runs what is not done yet, in order
+    var keys = only ? [only] : d.procs.filter(function (p) { return (!DW.proc || p.key === DW.proc) && !isDone(p); }).map(function (p) { return p.key; });
+    if (!keys.length) return;
     post('/daycards/run', { card: DW.card, diwali: true, procs: keys }).then(function (j) {
       if (j && j.ok) DW.lastRunAt = Date.now();
       else window.alert((j && (j.error || j.detail)) || 'Could not start.');
