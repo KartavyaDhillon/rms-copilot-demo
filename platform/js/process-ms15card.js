@@ -67,7 +67,8 @@
 
 
   // ───────────────────────── park / show the existing box ─────────────────────────
-  function box() { return $('pxBox-ms15'); }
+  // the live box: the one in the page, else the one we kept hold of (it may have been wiped out of the page by a redraw)
+  function box() { var b = $('pxBox-ms15'); if (b) S.box = b; return b || S.box || null; }
   function ensurePark() {
     var b = box(); if (!b) return null;
     if (S.ph && S.ph.isConnected) return S.ph;
@@ -78,8 +79,9 @@
     S.ph = ph;
     return ph;
   }
-  function inModal() { var b = box(); return !!(b && b.closest && b.closest('#saModalBody')); }
+  function inModal() { var b = box(); return !!(b && b.isConnected && b.closest && b.closest('#saModalBody')); }
   function park() {
+    S.open = false;
     var b = box(), ph = ensurePark();
     if (b && ph && b.parentNode !== ph) ph.appendChild(b);
     widen(false);
@@ -110,6 +112,7 @@
     var show = S.show || window.saShowModal;
     show(TITLE, '<div id="msKpis"><div style="color:var(--muted);font-size:12px;margin-bottom:12px">Checking…</div></div><div id="msBoxHost"></div>');
     var host = $('msBoxHost'); if (host) host.appendChild(b);
+    S.open = true;
     widen(true);
     if (S.data) paintKpis(S.data);
     load();
@@ -194,12 +197,34 @@
       Array.prototype.forEach.call(document.querySelectorAll('.sec'), function (s) {
         if (/^\s*Margin Shortage \(15-min\)\s*$/i.test(s.textContent)) s.style.display = 'none';
       });
-      var b = box(); if (!b || inModal()) return;
+      var b = box(); if (!b) return;
+      if (S.open) {                               // the window is open: the box MUST be in it, and the window stays full size
+        var host = $('msBoxHost');
+        if (!host) { S.open = false; }            // the window was replaced/closed by something else
+        else {
+          if (b.parentNode !== host) host.appendChild(b);
+          widen(true);
+          return;
+        }
+      }
+      if (inModal()) return;
       var ph = S.ph;
       if (!ph || !ph.isConnected || b.parentNode !== ph) { S.ph = null; park(); }
     } catch (e) { /* ignore */ }
   }
   setInterval(guard, 1000);
+
+  // A tooltip can stay stuck on screen when the button under the mouse is moved or the window closes (no "mouse out" ever
+  // arrives). Hide it whenever the pointer is no longer over something that has a tip.
+  function tipGuard() {
+    try {
+      var t = $('globalTip'); if (!t || t.style.display === 'none') return;
+      var hov = document.querySelectorAll(':hover'), last = hov.length ? hov[hov.length - 1] : null;
+      if (!last || !(last.closest && last.closest('[data-tip]'))) t.style.display = 'none';
+    } catch (e) { /* ignore */ }
+  }
+  setInterval(tipGuard, 400);
+  document.addEventListener('click', function () { setTimeout(tipGuard, 150); }, true);
 
   // ───────────────────────── start ─────────────────────────
   function start() {

@@ -1250,9 +1250,17 @@ def to_dec(text) -> Decimal:
     return Decimal(0) if t in ("zero", "nil", "nill") else Decimal(t)
 
 
+_NA_RE = re.compile(r"(?<![a-z])n\s*[./]\s*a\b\.?", re.I)
+
+
+def _norm_na(text: str) -> str:
+    """'N.A.', 'N. A.', 'n.a', 'N/A' -> 'na' (so every spelling of 'not applicable' reads the same)."""
+    return _NA_RE.sub("na", text or "")
+
+
 def is_nothing(text: str) -> bool:
-    """'NA', 'N/A', 'Nil', 'ZERO', '0', 'NA / NA' ... (blank is NOT nothing - blank means not answered)."""
-    t = re.sub(r"n\s*/\s*a", "na", (text or "").lower())
+    """'NA', 'N/A', 'N.A.', 'Nil', 'ZERO', '0', 'NA / NA' ... (blank is NOT nothing - blank means not answered)."""
+    t = _norm_na((text or "").lower())
     tokens = [x for x in re.split(r"[\s,;/&]+", t) if x]
     return bool(tokens) and all(x in ZERO_TOKENS for x in tokens)
 
@@ -1270,7 +1278,7 @@ NEGATIVE_RE = re.compile(
 def says_nothing(text: str) -> bool:
     """A plain-words 'there is nothing': 'No s/f..', 'No trading code found', 'Nil', 'None found', 'no dealer id'.
     Only when the words carry NO account code and NO number - 'no s/f but 7ABC123 is 5000' is NOT 'nothing'."""
-    t = (text or "").strip()
+    t = _norm_na((text or "").strip())
     if not t or len(t) > 120 or not NEGATIVE_RE.search(t):
         return False
     if CODE_RE.search(t):

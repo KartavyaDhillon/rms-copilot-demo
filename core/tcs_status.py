@@ -19,7 +19,8 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BOX_NAMES = {"sa": "SHORT ALLOCATION (manual MCX deposit)", "cli": "CLI PRUDENTIAL (MCX Web Allocation)",
-             "probable": "PROBABLE (TCS button)"}
+             "probable": "PROBABLE (TCS button)", "mcxcomm": "MCX COMM LIMIT (RSK136 search result)",
+             "ncdexcomm": "NCDEX COMM LIMIT"}
 
 
 def _elapsed(started_epoch):
@@ -92,7 +93,8 @@ def short_name(name: str) -> str:
     n = str(name or "")
     m = _re.search(r"AUTO (?:MCX download for )?run (\d+)", n)
     for key, short in (("MARGIN SHORTAGE", "MARGIN SHORTAGE"), ("CTCL vs NMASS", "CTCL"), ("PROBABLE", "PROBABLE"),
-                       ("SHORT ALLOCATION", "SHORT ALLOCATION"), ("CLI PRUDENTIAL", "CLI")):
+                       ("SHORT ALLOCATION", "SHORT ALLOCATION"), ("CLI PRUDENTIAL", "CLI"),
+                       ("MCX COMM LIMIT", "MCX COMM LIMIT"), ("NCDEX COMM LIMIT", "NCDEX COMM LIMIT")):
         if n.upper().startswith(key.upper()):
             if m:
                 return f"{short} AUTO {int(m.group(1)):02d}"

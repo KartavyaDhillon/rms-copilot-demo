@@ -243,6 +243,17 @@ def log(msg: str):
     print("[mcxcomm] " + msg, flush=True)
 
 
+def _file_only(msg: str):
+    """Write a line to the run's log file only (not to the on-screen live log)."""
+    f = _ACTIVE.get("log_file")
+    if f:
+        try:
+            f.write(f"[{dt.datetime.now():%H:%M:%S}]   {msg}\n")
+            f.flush()
+        except Exception:
+            pass
+
+
 def recent_log(n: int = 120) -> list:
     return list(_LOG)[-n:]
 
@@ -701,7 +712,9 @@ def _run_child(cmd, env, timeout_s):
             tail.append(line)
             del tail[:-60]
             if _INTEREST.search(line):
-                log(line[:300])
+                log(line[:300])               # on screen + file
+            else:
+                _file_only(line[:600])        # the rest goes to the log file too: the saved log is the FULL output
     t = threading.Thread(target=pump, daemon=True)
     t.start()
     t0 = time.time()
@@ -1431,7 +1444,20 @@ def status() -> dict:
         s = "failed"
         st["error"] = st.get("error") or "Interrupted (the server restarted while it was running)."
     set_ = get_settings()
-    steps = st.get("steps", {})
+    steps = {k: dict(v) for k, v in (st.get("steps") or {}).items()}
+    inputs = input_status()
+    # A step that FAILED (or has not run) but whose file is now in the folder - uploaded by hand, or downloaded by a
+    # button / another card later - is shown as present, exactly like the file list below it does.
+    if not running:
+        by_key = {r["key"]: r for r in inputs}
+        for step, keys in (("risk", ("RISK_REPORT",)), ("kambala", ("KAMBALA_TXT",)), ("exclusion", ("EXCLUSION",)),
+                           ("nmass", ("FO_CLIENT_LEVEL", "CO_CLIENT_LEVEL", "CM_CLIENT_LEVEL")),
+                           ("korp", ("CASH_MARGIN",)), ("mail", ("MCX_ACTIVE_DETAILS",)), ("tcs", ("SEARCH_RESULTS",))):
+            cur = (steps.get(step) or {}).get("status", "")
+            rows = [by_key.get(k) for k in keys]
+            if cur in ("failed", "") and all(r and r["found"] and r["ok"] for r in rows):
+                names = ", ".join(r["name"] for r in rows)
+                steps[step] = {"status": "done", "msg": f"file is in the folder: {names}"[:300], "at": (steps.get(step) or {}).get("at", "")}
     return {"name": NAME, "date": st.get("date"), "status": "running" if running else s, "running": running,
             "fetching": any_fetching(),
             "started": st.get("started", ""), "finished": st.get("finished", ""), "error": st.get("error", ""),
@@ -1442,4 +1468,4 @@ def status() -> dict:
             "settings": {k: set_[k] for k in ("auto", "delay_s", "ftp_enabled", "mail_day", "alert_numbers")},
             "steps": [dict(key=k, label=STEP_LABEL[k], **steps.get(k, {"status": "", "msg": ""}))
                       for k in ("risk", "kambala", "exclusion", "nmass", "korp", "mail", "tcs", "calc", "email", "ftp", "backup")],
-            "inputs": input_status(), "folder": str(root()), "log": recent_log(60)}
+            "inputs": inputs, "folder": str(root()), "log": recent_log(60)}

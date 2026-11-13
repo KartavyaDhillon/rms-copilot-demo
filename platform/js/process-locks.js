@@ -425,7 +425,8 @@
       var saLocal = false, cliLocal = false;
       try { saLocal = typeof _saMcxLocalRunning !== "undefined" && _saMcxLocalRunning; } catch (e) {}
       try { cliLocal = typeof _cliMcxLocalRunning !== "undefined" && _cliMcxLocalRunning; } catch (e) {}
-      var ownerLabel = d.owner === "cli" ? "Client Prudential Limit" : "Short Allocation";
+      var ownerLabel = ({ cli: "Client Prudential Limit", sa: "Short Allocation", probable: "PROBABLE",
+                          mcxcomm: "MCX COMM LIMIT", ncdexcomm: "NCDEX COMM LIMIT" })[d.owner] || String(d.owner || "another box");
       var saBtn = document.getElementById("saMcxDepositBtn");
       var cliBtn = document.getElementById("cliMcxBtn");
       if (saBtn && !saLocal && !saBtn.disabled) {

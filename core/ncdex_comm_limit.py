@@ -201,6 +201,17 @@ def log(msg: str):
     print("[ncdexcomm] " + msg, flush=True)
 
 
+def _file_only(msg: str):
+    """Write a line to the run's log file only (not to the on-screen live log)."""
+    f = _ACTIVE.get("log_file")
+    if f:
+        try:
+            f.write(f"[{dt.datetime.now():%H:%M:%S}]   {msg}\n")
+            f.flush()
+        except Exception:
+            pass
+
+
 def _cancel() -> bool:
     return bool(_ACTIVE.get("cancel"))
 
@@ -284,6 +295,8 @@ def _run_child(cmd, env, timeout_s):
                 del tail[:-60]
                 if _INTEREST.search(line):
                     log(line[:300])
+                else:
+                    _file_only(line[:600])    # the saved log is the FULL output
     t = threading.Thread(target=pump, daemon=True)
     t.start()
     t0 = time.time()
@@ -1029,7 +1042,14 @@ def status() -> dict:
         s = "failed"
         st["error"] = st.get("error") or "Interrupted (the server restarted while it was running)."
     se = get_settings()
-    steps = st.get("steps", {})
+    steps = {k: dict(v) for k, v in (st.get("steps") or {}).items()}
+    inputs = input_status()
+    # a step shown as failed whose file is now in the folder (uploaded by hand / downloaded later) -> shown as present
+    if not running and len(inputs) >= 2:
+        for step, row in (("clientnet", inputs[0]), ("active", inputs[1])):
+            if (steps.get(step) or {}).get("status", "") in ("failed", "") and row["found"] and row["ok"]:
+                steps[step] = {"status": "done", "msg": f"file is in the folder: {row['name']}"[:300],
+                               "at": (steps.get(step) or {}).get("at", "")}
     return {"name": NAME, "date": st.get("date"), "status": "running" if running else s, "running": running,
             "fetching": any_fetching(), "started": st.get("started", ""), "finished": st.get("finished", ""),
             "error": st.get("error", ""), "trigger": st.get("trigger", ""), "by": st.get("by", ""),
@@ -1039,4 +1059,4 @@ def status() -> dict:
             "auto": bool(se["auto"]), "auto_tried": bool(st.get("auto_tried")), "needs_password": s == "done" and not running,
             "settings": {k: se[k] for k in ("auto", "delay_s", "ftp_enabled", "alert_numbers", "excluded")},
             "steps": [dict(key=k, label=STEP_LABEL[k], **steps.get(k, {"status": "", "msg": ""})) for k in STEP_LABEL],
-            "inputs": input_status(), "folder": str(root()), "log": list(_LOG)[-60:]}
+            "inputs": inputs, "folder": str(root()), "log": list(_LOG)[-60:]}
