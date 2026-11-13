@@ -135,6 +135,25 @@ class BackOfficeSnapshots(unittest.TestCase):
         self.assertEqual(latest["C1"]["CM"], 170.0)
         self.assertEqual(tl[-1][3], "EVENING allocation")
 
+    def test_snapshot_resets_absent_segment_to_zero(self):
+        m = self.m
+        rec = lambda t, seg, amt, order: {"ClientCode": "C1", "Segment": seg, "ActionType": "U", "Amount": amt,
+                                          "RequestTime": t, "Minutes": m.parse_time_to_minutes(t), "_order": order,
+                                          "ResponseStatus": "SUCCESS"}
+        rows = [rec("10:00:00", "CM", 120.0, 0), rec("16:05:00", "CM", 160.0, 1), rec("20:10:00", "CM", 175.0, 2)]
+        tl, segs, summ, latest, _lt = m.build_timeline(
+            rows, {"CM": {"C1": 100.0}, "CO": {"C1": 50.0}}, {"CM": "08:40:00", "CO": "08:40:00"},
+            [("AFTERNOON allocation", {"CM": {"C1": 150.0}, "CO": {}}, {"CM": "16:00:00", "CO": "16:00:00"}),
+             ("EVENING allocation", {"CM": {"C1": 170.0}, "CO": {"C1": 60.0}}, {"CM": "20:00:00", "CO": "20:00:00"})])
+        ci = 8 + segs.index("CO")
+        by = {(r[3], r[2]): r for r in tl}
+        self.assertEqual(by[("BOD allocation", "CO")][ci], 50.0)
+        self.assertEqual(by[("AFTERNOON allocation", "CM")][ci], 0.0)       # no CO record in the afternoon -> 0
+        self.assertEqual(next(r for r in tl if r[1] == "16:05:00")[ci], 0.0)
+        self.assertEqual(by[("EVENING allocation", "CO")][ci], 60.0)         # evening has a record -> its value
+        self.assertEqual(latest["C1"]["CO"], 60.0)
+        self.assertEqual(summ["CO"]["alloc_cnt"] if "CO" in summ else 0, 0)  # nothing counted for the reset
+
 
 if __name__ == "__main__":
     unittest.main()

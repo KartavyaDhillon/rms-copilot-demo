@@ -251,8 +251,11 @@ class _UploadAuth:
         raise RuntimeError(f"Upload API login failed 10 times - {last}")
 
 
-def upload(folder: str, zip_path: Path, template_name: str, d: dt.date, ctx) -> str:
-    """POST customFileImport (file = the zip, fileName = the literal template, date = DD-MM-YYYY). -> the answer text."""
+def upload(folder: str, zip_path: Path, template_name: str, d: dt.date, ctx, mime: str = "application/zip",
+           part_name: Optional[str] = None) -> str:
+    """POST customFileImport (file = the zip, fileName = the literal template, date = DD-MM-YYYY). -> the answer text.
+    mime / part_name: for a file that is not a zip (the FO files upload) - the content type and the file name sent in
+    the multipart `file` part (default: the zip's own name)."""
     requests = _requests_with_windows_certs(ctx)
     auth = _UploadAuth(folder, ctx)
     force, last = False, ""
@@ -264,7 +267,7 @@ def upload(folder: str, zip_path: Path, template_name: str, d: dt.date, ctx) -> 
         try:
             with open(zip_path, "rb") as fh:
                 r = requests.post(auth.base + UPLOAD_FILE, headers={"Authorization": f"Bearer {tok}"},
-                                  files={"file": (zip_path.name, fh, "application/zip")},
+                                  files={"file": (part_name or zip_path.name, fh, mime)},
                                   data={"fileName": template_name, "date": f"{d:%d-%m-%Y}"}, timeout=180)
         except Exception as e:
             if _is_cert_error(e):

@@ -2227,6 +2227,30 @@ def build_timeline(rows, opening_totals=None, opening_time=None, snapshots=None)
                                     round(snap_totals[seg][client], 2), stamp))
         pending.sort(key=lambda x: x[0])
 
+        # AFTERNOON / EVENING allocation = a fresh start for every segment that has a file in that snapshot folder:
+        # a client WITHOUT a record in that segment's file has no allocation there any more, so its level becomes 0
+        # (no row, no Allocated / Deallocated, nothing counted - those belong to the log rows only). A client WITH a
+        # record gets that value through its snapshot row (emit_snapshot below). A snapshot folder is always complete
+        # (all its files) or absent, so every segment of the folder is treated the same way. The reset happens at the
+        # snapshot's earliest file time, i.e. already on the first AFTERNOON / EVENING row.
+        queue = []                                # (time, 0=reset / 1=snapshot row, order, payload) - one chronological line
+        for _n, (_label, _tot, _tm) in enumerate(snapshots):
+            _secs = [s for s in (_hms_to_seconds(v) for v in _tm.values()) if s is not None]
+            queue.append((min(_secs) if _secs else 10**9, 0, _n, _tot))
+        for _n, _item in enumerate(pending):
+            queue.append((_item[0], 1, _n, _item))
+        queue.sort(key=lambda x: x[:3])
+
+        def drain(upto_secs):
+            while queue and (upto_secs is None or queue[0][0] <= upto_secs):
+                _t, _kind, _n, _pl = queue.pop(0)
+                if _kind == 1:
+                    emit_snapshot(_pl)
+                    continue
+                for _seg, _clients in _pl.items():
+                    if client not in _clients:
+                        current_level[_seg] = 0.0
+
         def emit_snapshot(item):
             _secs, label, seg, val, stamp = item
             current_level[seg] = val              # later log rows are calculated from this level
@@ -2238,8 +2262,8 @@ def build_timeline(rows, opening_totals=None, opening_time=None, snapshots=None)
 
         for rec in events:
             ev_secs = _hms_to_seconds(rec.get("RequestTime"))
-            while pending and ev_secs is not None and pending[0][0] <= ev_secs:
-                emit_snapshot(pending.pop(0))
+            if ev_secs is not None:
+                drain(ev_secs)
 
             seg = rec.get("Segment") or "(blank)"
             new_level = round(rec["Amount"], 2)
@@ -2272,8 +2296,7 @@ def build_timeline(rows, opening_totals=None, opening_time=None, snapshots=None)
                 rec.get("InquiryStatusCode", ""), rec.get("InquiryReceivedTime", ""),
             ]
             timeline_rows.append(row_out)
-        for item in pending:                      # snapshots later than every log row of this client
-            emit_snapshot(item)
+        drain(None)                               # snapshots later than every log row of this client
 
         # after walking all of this client's rows, current_level holds the
         # last known value per segment - i.e. the value as of their last

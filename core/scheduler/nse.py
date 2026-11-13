@@ -246,6 +246,40 @@ def _download_one(kind: str, segment: str, folder: str, filename: str, dest_dir:
     return out
 
 
+def list_dir(kind: str, segment: str, folder: str, ctx) -> list:
+    """File names NSE lists in a folder (used only to find a file whose exact name was refused - different letter case,
+    plain instead of .gz, ...). [] when the folder is empty / not listed / the listing cannot be read. Never raises."""
+    import time
+    if kind not in ("member", "common"):
+        return []
+    url = f"{BASE}/{kind}/content/2.0?segment={segment}&folderPath={folder}"
+    try:
+        with _LOCK:
+            force = False
+            for n in range(1, 6):
+                r = _send("GET", url, ctx, f"listing {folder} ({segment})", tries=3,
+                          headers={"Authorization": f"Bearer {_token(ctx, force)}"}, timeout=DOWNLOAD_TIMEOUT)
+                if r.status_code in (500, 502, 503, 504, 429):
+                    time.sleep(4)
+                    continue
+                if _bad_token(r):
+                    force = True
+                    time.sleep(3)
+                    continue
+                if r.status_code != 200:
+                    return []
+                data = r.json().get("data") or []
+                names = []
+                for e in data:
+                    nm = (e.get("name") or e.get("fileName") or e.get("filename")) if isinstance(e, dict) else str(e)
+                    if nm:
+                        names.append(str(nm))
+                return names
+    except Exception as e:
+        ctx.log(f"NSE: folder listing of {folder} failed ({type(e).__name__}) - carrying on without it.")
+    return []
+
+
 def download_wait(kind, segment, folder, filename, dest_dir, ctx, wait_minutes: int = 0,
                   date: Optional[str] = None) -> Path:
     """download(), repeated every 60 s for up to wait_minutes; raises FileNotFoundError when it never shows up."""
