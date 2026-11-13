@@ -288,14 +288,25 @@
     });
   };
   window.mcStop = function () {
-    if (!window.confirm('Stop the run that is going now?')) return;
-    post('/mcx-cash/stop').then(function (j) { say(j && j.stopped ? 'Stopping…' : 'Nothing is running.'); reload(); });
+    post('/mcx-cash/stop').then(function (j) {
+      if (!(j && j.stopped)) { say('Nothing is running.'); reload(); return; }
+      say('Stopping…');
+      var n = 0;
+      (function wait() {                                       // say clearly when it has really stopped
+        get('/mcx-cash/status').then(function (d) {
+          S.data = d;
+          if (d && !d.running) { say('⛔ Stopped. Nothing is running now (auto will not restart it - use Run now when you want it).'); reload(); }
+          else if (++n < 90) setTimeout(wait, 1000);
+          else say('Still stopping - it is inside a step that cannot be interrupted; it will end by itself.', 'err');
+        }).catch(function () { if (++n < 90) setTimeout(wait, 1000); });
+      })();
+    });
   };
   window.mcAuto = function () {
     var on = !(S.data && S.data.auto);
     ask(on ? 'Switch auto runs ON' : 'Switch auto runs OFF', function (pw) {
       post('/mcx-cash/settings', { password: pw, auto: on }).then(function (j) {
-        if (j && j.ok) { mcOpen(); say(on ? 'Auto is ON - each time starts by itself.' : 'Auto is OFF - nothing starts by itself.'); }
+        if (j && j.ok) { if (S.data) S.data.auto = on; mcOpen(); reload(); say(on ? 'Auto is ON - each time starts by itself.' : 'Auto is OFF - nothing starts by itself.'); }
         else { mcOpen(); say((j && j.error) || 'Failed', 'err'); }
       });
     });

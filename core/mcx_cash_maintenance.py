@@ -570,7 +570,10 @@ def step_ms15(folder: Path, d: dt.date, key: str, log, cancel) -> dict:
         if time.time() - noted > 120:
             log(f"Waiting for the 15-minute run {n} to finish (its backup folder is not there yet)...")
             noted = time.time()
-        time.sleep(float(os.getenv("MCX_CASH_MS15_POLL_SEC", "20")))
+        for _ in range(int(float(os.getenv("MCX_CASH_MS15_POLL_SEC", "20")))):   # 1-second steps: Stop works at once
+            if cancel():
+                break
+            time.sleep(1)
     if st == "gone":
         log(f"15-minute run {n} was skipped / ran elsewhere - no backup to take files from.")
         return {"ok": False, "msg": f"15-minute run {n} left no backup here"}
@@ -987,6 +990,12 @@ def unskip_slot(key) -> dict:
 def stop_running(by="") -> bool:
     if not _RUN_LOCK.locked():
         return False
+    slot = _ACTIVE.get("slot")
+    if slot:                                                   # a manual Stop must not be undone by the timer's retry
+        try:
+            _update(dt.date.today(), slot, auto_attempts=_retry_cfg()[0] + 1, last_auto=dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        except Exception:                                      # noqa: BLE001
+            pass
     request_cancel()
     return True
 

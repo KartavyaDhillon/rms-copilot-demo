@@ -388,8 +388,8 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mtfic.js?v=12"></script>'
                             '<script src="/platform/js/process-alloc.js?v=12"></script>'
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
-                            '<script src="/platform/js/process-liveallocation.js?v=7"></script>'
-                            '<script src="/platform/js/process-mcxcash.js?v=4"></script>'
+                            '<script src="/platform/js/process-liveallocation.js?v=8"></script>'
+                            '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
                             '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script></body>', 1)

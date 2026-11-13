@@ -281,14 +281,29 @@
     });
   };
   window.laStop = function () {
-    if (!window.confirm('Stop the capture that is running now?')) return;
-    post('/live-alloc/stop').then(function (j) { say(j && j.stopped ? 'Stopping…' : 'Nothing is running.'); reload(); });
+    post('/live-alloc/stop').then(function (j) {
+      if (!(j && j.stopped)) { say('Nothing is running.'); reload(); return; }
+      say('Stopping…');
+      var n = 0;
+      (function wait() {
+        get('/live-alloc/status').then(function (d) {
+          S.data = d;
+          if (d && !d.running) { say('⛔ Stopped. Nothing is running now.'); reload(); }
+          else if (++n < 90) setTimeout(wait, 1000);
+          else say('Still stopping - it is inside a step that cannot be interrupted; it will end by itself.', 'err');
+        }).catch(function () { if (++n < 90) setTimeout(wait, 1000); });
+      })();
+    });
   };
   window.laAuto = function () {
     var on = !(S.data && S.data.auto);
     ask(on ? 'Switch auto capture ON' : 'Switch auto capture OFF', function (pw) {
       post('/live-alloc/settings', { password: pw, auto: on }).then(function (j) {
-        if (j && j.ok) { laOpen(); say(on ? 'Auto is ON - folders start by themselves.' : 'Auto is OFF - nothing starts by itself.'); }
+        if (j && j.ok) {
+          if (S.data) S.data.auto = on;               // the button must change colour at once, not after the next status poll
+          laOpen(); say(on ? 'Auto is ON - folders start by themselves.' : 'Auto is OFF - nothing starts by itself.');
+          reload();
+        }
         else { laOpen(); say((j && j.error) || 'Failed', 'err'); }
       });
     });
