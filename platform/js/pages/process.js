@@ -147,8 +147,16 @@
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + b("auto", "Automatic") + b("kartavya", "Kartavya + note") + b("noreply", "noreply") + "</div>" +
       '<div style="opacity:.75;font-size:12px"><b>Automatic</b>: Kartavya with the "moving to noreply" note until ' + esc(d.switch_date) + ", then noreply by itself.<br>" +
       "<b>Kartavya + note</b>: always Kartavya, note above the signature.<br><b>noreply</b>: every mail sent as Kartavya goes out as " + esc(d.noreply_user) + " (replies still go to Kartavya).<br>" +
-      "Mails of other people are never changed. It applies from the next mail." +
-      (d.noreply_ready ? "" : '<div style="color:#f87171;margin-top:6px">The noreply password (NOREPLY_SMTP_PASS) is not set on this server yet. Until it is, mails are still sent as Kartavya so nothing is lost.</div>') + "</div></div>";
+      "Mails of other people are never changed. It applies from the next mail.</div>" +
+      '<div style="border-top:1px solid rgba(128,128,128,.3);margin-top:12px;padding-top:10px">' +
+      '<div style="margin-bottom:4px"><b>noreply password</b> <span id="mailPassState" style="font-size:12px;color:' + (d.noreply_ready ? "#4ade80" : "#f87171") + '">' +
+      (d.noreply_ready ? "saved" : "not set – until it is, mails are still sent as Kartavya so nothing is lost") + "</span></div>" +
+      '<div style="display:flex;gap:8px;margin-bottom:10px"><input id="mailPass" type="password" autocomplete="new-password" placeholder="Password of ' + esc(d.noreply_user) + '" style="flex:1;padding:6px 8px;border-radius:8px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit">' +
+      '<button class="btn sm primary" data-mailpass="1">Save</button></div>' +
+      '<div style="margin-bottom:4px"><b>Send a test mail</b></div>' +
+      '<div style="display:flex;gap:8px;margin-bottom:6px"><input id="mailTo" type="text" value="' + esc(d.old_user || "") + '" placeholder="Send the test to" style="flex:1;padding:6px 8px;border-radius:8px;border:1px solid rgba(128,128,128,.4);background:transparent;color:inherit"></div>' +
+      '<div style="display:flex;gap:8px"><button class="btn sm ghost" data-mailtest="current">Test (current setting)</button><button class="btn sm ghost" data-mailtest="noreply">Test as noreply</button></div>' +
+      '<div id="mailTestOut" style="margin-top:8px;font-size:12px;opacity:.9"></div></div></div>';
   }
   async function mailIdRefresh() {
     try { mailLast = await (await fetch("/ops/mail-identity", { credentials: "same-origin" })).json(); mailIdPaint(); } catch (e) { /* chip keeps its last text */ }
@@ -160,6 +168,29 @@
     setInterval(() => { if (!document.hidden) mailIdRefresh(); }, 60000);
   }
   document.addEventListener("click", async (ev) => {
+    const sv = ev.target && ev.target.closest ? ev.target.closest("[data-mailpass]") : null;
+    if (sv) {
+      const inp = document.getElementById("mailPass"), st = document.getElementById("mailPassState");
+      try {
+        const r = await (await fetch("/ops/mail-identity/password", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ password: inp ? inp.value : "" }) })).json();
+        if (r && r.ok) { mailLast = r; if (inp) inp.value = ""; if (st) { st.textContent = "saved"; st.style.color = "#4ade80"; } }
+        else if (st) { st.textContent = (r && r.error) || "could not save"; st.style.color = "#f87171"; }
+      } catch (e) { if (st) { st.textContent = "could not reach the server"; st.style.color = "#f87171"; } }
+      return;
+    }
+    const ts = ev.target && ev.target.closest ? ev.target.closest("[data-mailtest]") : null;
+    if (ts) {
+      const out = document.getElementById("mailTestOut"), to = document.getElementById("mailTo");
+      if (out) { out.style.color = ""; out.textContent = "Sending…"; }
+      try {
+        const r = await (await fetch("/ops/mail-identity/test", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ to: to ? to.value : "", as_noreply: ts.dataset.mailtest === "noreply" }) })).json();
+        if (out) {
+          out.style.color = r && r.ok ? "#4ade80" : "#f87171";
+          out.textContent = r && r.ok ? "Sent to " + r.to + " from " + r.sent_as + (r.note_added ? " (with the note)" : "") + ". Check that inbox (and Junk)." : ((r && r.error) || "Failed");
+        }
+      } catch (e) { if (out) { out.style.color = "#f87171"; out.textContent = "Could not reach the server: " + e.message; } }
+      return;
+    }
     const b = ev.target && ev.target.closest ? ev.target.closest("[data-mailid]") : null;
     if (!b) return;
     try {

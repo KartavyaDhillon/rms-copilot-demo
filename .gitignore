@@ -68,6 +68,7 @@ captcha_auto_log.csv
 
 # Per-machine switches pressed in the Process Center (a pull must never overwrite what was chosen on the server)
 .mail_identity.json
+.mail_identity_secret.json
 .mcx_download_mode.json
 
 # Backup merge: parquet cache + per-search job folders (per-machine)

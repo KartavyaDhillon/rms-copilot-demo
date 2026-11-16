@@ -1908,6 +1908,33 @@ def ops_mail_identity_set(body: _MailIdentityBody, request: Request):
         return {"ok": False, "error": f"Could not save the choice: {_e}"}
 
 
+class _MailIdPassBody(_OpsBaseModel):
+    password: str
+
+
+@app.post("/ops/mail-identity/password")
+def ops_mail_identity_password(body: _MailIdPassBody, request: Request):
+    from core import mail_identity as _mi
+    _who, _adm = _actor(request)
+    try:
+        return {"ok": True, **_mi.set_password(body.password, _who or "")}
+    except ValueError as _e:
+        return {"ok": False, "error": str(_e)}
+    except OSError as _e:
+        return {"ok": False, "error": f"Could not save the password: {_e}"}
+
+
+class _MailIdTestBody(_OpsBaseModel):
+    to: str = ""
+    as_noreply: bool = False
+
+
+@app.post("/ops/mail-identity/test")
+def ops_mail_identity_test(body: _MailIdTestBody, request: Request):
+    from core import mail_identity as _mi
+    return _mi.send_test(body.to, body.as_noreply)          # sync route: runs in the worker pool, the SMTP call can take a few seconds
+
+
 @app.get("/ops/locks")
 @_ttl_cached(2)
 def ops_locks():

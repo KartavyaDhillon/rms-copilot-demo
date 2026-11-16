@@ -192,6 +192,24 @@ class Wrapper(Base):
         html = [p for p in parsed.walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
         self.assertIn("safe sender", html)
 
+    def test_saved_password_and_test_mail(self):
+        d = Path(tempfile.mkdtemp())
+        with mock.patch.object(mi, "SECRET_FILE", d / "s.json"), mock.patch.object(mi, "_env", lambda n: "kpw" if n == "SENDER_PASSWORD" else ""):
+            self.assertFalse(mi.describe()["noreply_ready"])
+            with self.assertRaises(ValueError):
+                mi.set_password("  ")
+            self.assertTrue(mi.set_password("secret")["noreply_ready"])
+            self.assertNotIn("secret", str(mi.describe()))                       # never sent back to the browser
+            r = mi.send_test("me@x.y", as_noreply=True)                          # direct noreply login
+            self.assertTrue(r["ok"] and r["sent_as"] == NEW)
+            self.assertEqual(FakeSMTP.log[-1].logins, [NEW])
+            mi.set_mode("kartavya")
+            r = mi.send_test("me@x.y")                                           # follows the mode: Kartavya + note
+            self.assertTrue(r["ok"] and r["note_added"] and r["sent_as"] == OLD)
+            mi.set_mode("noreply")
+            r = mi.send_test("me@x.y")
+            self.assertTrue(r["ok"] and r["sent_as"] == NEW and not r["note_added"])
+
     def test_install_twice_wraps_once(self):
         before = smtplib.SMTP
         mi.install()

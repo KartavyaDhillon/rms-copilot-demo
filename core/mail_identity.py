@@ -97,9 +97,69 @@ def _env(name):
     return ""
 
 
+SECRET_FILE = REPO / ".mail_identity_secret.json"          # password typed in the Process Center (gitignored, never returned by the API)
+
+
+def _saved_password():
+    try:
+        return str(json.loads(SECRET_FILE.read_text(encoding="utf-8")).get("noreply_password") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def set_password(pw, who=""):
+    pw = (pw or "").strip()
+    if not pw:
+        raise ValueError("Type the noreply password first")
+    tmp = SECRET_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"noreply_password": pw, "saved_by": who or "", "saved_at": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+    os.replace(tmp, SECRET_FILE)
+    return describe()
+
+
 def noreply_creds(cfg=None):
     cfg = cfg or get_config()
-    return (_env("NOREPLY_SMTP_USER") or cfg["noreply_user"]), (_env("NOREPLY_SMTP_PASS") or _env("NOREPLY_SMTP_PASSWORD"))
+    return (_env("NOREPLY_SMTP_USER") or cfg["noreply_user"]), (_env("NOREPLY_SMTP_PASS") or _env("NOREPLY_SMTP_PASSWORD") or _saved_password())
+
+
+def send_test(to, as_noreply=False):
+    """Send one test mail through the same wrapper the real mails use. as_noreply=True logs in as noreply directly (checks the
+    password without changing the mode); otherwise it follows the current mode (Kartavya + note, or noreply)."""
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    cfg = get_config()
+    to = (to or "").strip() or cfg["old_user"]
+    if "@" not in to:
+        return {"ok": False, "error": "Type a valid e-mail address"}
+    host = _env("SMTP_SERVER") or "smtp3.netcore.co.in"
+    port = int(_env("SMTP_PORT") or 587)
+    nu, npw = noreply_creds(cfg)
+    if as_noreply:
+        user, pw, frm = nu, npw, nu
+        if not npw:
+            return {"ok": False, "error": "The noreply password is not saved yet"}
+    else:
+        user, pw, frm = cfg["old_user"], (_env("SENDER_PASSWORD") or _env("SMTP_PASSWORD") or _env("ALLOC_SMTP_PASS") or ""), cfg["old_user"]
+        if effective(cfg) == "kartavya" and not pw:
+            return {"ok": False, "error": "Kartavya's own SMTP password is not in .env (SENDER_PASSWORD), so the 'as Kartavya' test cannot log in. Use 'Test as noreply'."}
+    m = MIMEMultipart("alternative")
+    m["From"], m["To"], m["Subject"] = formataddr(("RMS Console", frm)), to, "Test - RMS Console mail sender"
+    m.attach(MIMEText("This is a test mail from the RMS console.\n\nBest regards,\nRMS Console", "plain"))
+    m.attach(MIMEText("<html><body><p>This is a test mail from the RMS console.</p><br>Best regards,<br>RMS Console</body></html>", "html"))
+    install()
+    try:
+        with smtplib.SMTP(host, port, timeout=30) as s:
+            s.ehlo()
+            s.starttls()
+            s.ehlo()
+            s.login(user, pw)
+            sent_as = nu if getattr(s, "_rms_swapped", False) else user
+            s.send_message(m)
+        return {"ok": True, "to": to, "sent_as": sent_as, "note_added": effective(cfg) == "kartavya" and not as_noreply}
+    except smtplib.SMTPAuthenticationError as e:
+        return {"ok": False, "error": f"The server refused the login for {user} ({e.smtp_code}). Check the password and that SMTP AUTH is enabled for this mailbox."}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def describe():
@@ -107,7 +167,7 @@ def describe():
     eff = effective(cfg)
     user, pw = noreply_creds(cfg)
     return {"mode": cfg["mode"], "effective": eff, "switch_date": cfg["switch_date"], "sender": user if eff == "noreply" else cfg["old_user"],
-            "noreply_user": user, "noreply_ready": bool(pw),
+            "noreply_user": user, "noreply_ready": bool(pw), "old_user": cfg["old_user"],
             "label": {"auto": "Automatic (noreply from " + str(cfg["switch_date"]) + ")", "kartavya": "Always Kartavya (with note)",
                       "noreply": "Always noreply"}[cfg["mode"]]}
 
