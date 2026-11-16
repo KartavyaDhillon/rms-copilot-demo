@@ -210,19 +210,32 @@ class Wrapper(Base):
             r = mi.send_test("me@x.y")
             self.assertTrue(r["ok"] and r["sent_as"] == NEW and not r["note_added"])
 
-    def test_standard_signature_replaces_short_signoff_with_phone_before_system_line(self):
-        mi.set_mode("kartavya")
-        s = self.send(html_msg())
+    def test_until_the_switch_each_person_keeps_their_own_signature_with_the_phone_line(self):
         import email
-        m = email.message_from_string(s.sent[0][1])
+        mi.set_mode("kartavya")
+        for sender, name in ((OLD, "Kartavya Dhillon"), ("sandeep.kumar2@mastertrust.co.in", "Sandeep Kumar")):
+            s = self.send(html_msg(sender=sender), login=sender)
+            m = email.message_from_string(s.sent[0][1])
+            html = [p for p in m.walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
+            self.assertNotIn("RMS Automated Reports", html)
+            self.assertNotIn("system-generated", html)
+            for a, b in (("safe sender", "Best regards"), ("Best regards", name), (name, "Master Capital Services Ltd"),
+                         ("Master Capital Services Ltd", "011-66331000 | Ext. 84")):
+                self.assertLess(html.index(a), html.index(b), (a, b))
+            txt = [p for p in m.walk() if p.get_content_type() == "text/plain"][0].get_payload(decode=True).decode()
+            self.assertLess(txt.index(name), txt.index("011-66331000"))
+
+    def test_from_noreply_the_system_signature_with_phone_before_system_line(self):
+        import email
+        mi.set_mode("noreply")
+        m = email.message_from_string(self.send(html_msg()).sent[0][1])
         html = [p for p in m.walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
         self.assertNotIn("Kartavya Dhillon", html)                                   # old sign-off replaced
-        for a, b in (("safe sender", "Best regards"), ("Best regards", "RMS Automated Reports"),
-                     ("RMS Automated Reports", "011-66331000 | Ext. 84"), ("011-66331000 | Ext. 84", "This is a system-generated mail.")):
+        self.assertNotIn("safe sender", html)
+        for a, b in (("Best regards", "RMS Automated Reports"), ("RMS Automated Reports", "011-66331000 | Ext. 84"),
+                     ("011-66331000 | Ext. 84", "This is a system-generated mail.")):
             self.assertLess(html.index(a), html.index(b), (a, b))
         self.assertEqual(html.count("RMS Automated Reports"), 1)
-        txt = [p for p in m.walk() if p.get_content_type() == "text/plain"][0].get_payload(decode=True).decode()
-        self.assertLess(txt.index("011-66331000"), txt.index("system-generated"))
 
     def test_long_tail_after_signoff_is_kept(self):
         mi.set_mode("kartavya")
@@ -251,7 +264,7 @@ class Wrapper(Base):
         import email
         html = [p for p in email.message_from_string(raw).walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
         self.assertIn("safe sender", html)
-        self.assertIn("RMS Automated Reports", html)
+        self.assertIn("Sandeep Kumar", html)                                         # his own signature until the switch
         mi.set_mode("noreply")
         s = self.send(html_msg(sender=sand), login=sand)
         self.assertEqual(s.logins, [NEW])

@@ -11,9 +11,9 @@ WHY THIS FILE EXISTS
     2. SENDER - when the sender is noreply (switch date reached, or the button pressed) the SMTP login becomes the
                 noreply account and the From header / envelope sender are rewritten. Reply-To stays Kartavya.
 
-  3. SIGNATURE - every such mail ends with the standard signature (set "signature": false in .mail_identity.json to stop):
-                Best regards, / RMS Automated Reports / phone line / This is a system-generated mail.
-                It replaces the old sign-off only when that sign-off is short (a name); a long tail is left alone.
+  3. SIGNATURE - until the mails come from noreply: the person's own (Best regards, / Kartavya Dhillon / Master Capital Services Ltd /
+                phone line); from noreply: Best regards, / RMS Automated Reports / phone line / This is a system-generated mail.
+                ("signature": false in .mail_identity.json stops all of it). It replaces the old sign-off only when that sign-off is short (a name); a long tail is left alone.
 
   The Darwinbox mailer is excluded on purpose (keep_sender): it stays Sandeep, because replies are expected there.
   Mails of other people (Anand ...) are never touched: only mails logged in as / sent from the addresses in OLD_USERS
@@ -57,7 +57,9 @@ _lock = threading.Lock()
 def _defaults():
     return {"mode": "auto", "switch_date": SWITCH_DATE, "old_user": OLD_USER, "old_users": list(OLD_USERS), "noreply_user": NEW_USER,
             "note_date_text": "1 Dec 2026",
-            "signature": True, "signature_name": "RMS Automated Reports", "signature_phone": "011-66331000 | Ext. 84"}
+            "signature": True, "signature_name": "RMS Automated Reports", "signature_phone": "011-66331000 | Ext. 84",
+            "company": "Master Capital Services Ltd",
+            "people": {OLD_USERS[0]: "Kartavya Dhillon", OLD_USERS[1]: "Sandeep Kumar"}}
 
 
 def get_config():
@@ -152,8 +154,12 @@ def send_test(to, as_noreply=False):
             return {"ok": False, "error": "Kartavya's own SMTP password is not in .env (SENDER_PASSWORD), so the 'as Kartavya' test cannot log in. Use 'Test as noreply'."}
     m = MIMEMultipart("alternative")
     m["From"], m["To"], m["Subject"] = formataddr(("RMS Automated Reports", frm)), to, "Test - RMS mail sender"
-    m.attach(MIMEText("This is a test mail from RMS Automated Reports.\n\n" + signature_text(cfg), "plain", "utf-8"))
-    m.attach(MIMEText("<html><body><p>This is a test mail from RMS Automated Reports.</p>" + signature_html(cfg) + "</body></html>", "html", "utf-8"))
+    if as_noreply:
+        tt, th = signature_text(cfg), signature_html(cfg)
+    else:                                                       # the wrapper turns this sign-off into the right signature for the current mode
+        tt, th = "Best regards,\nKartavya Dhillon\n", "<br>Best regards,<br>Kartavya Dhillon"
+    m.attach(MIMEText("This is a test mail from the RMS system.\n\n" + tt, "plain", "utf-8"))
+    m.attach(MIMEText("<html><body><p>This is a test mail from the RMS system.</p>" + th + "</body></html>", "html", "utf-8"))
     install()
     try:
         with smtplib.SMTP(host, port, timeout=30) as s:
@@ -228,14 +234,20 @@ _SIG_TEXT = re.compile(r"^[ \t]*(?:" + _SIG_WORDS + ")", re.I | re.M)
 SIG_MARK = "<!--rms-signature-->"
 
 
-def signature_html(cfg=None):
+def signature_html(cfg=None, person=None):
+    """person=None: the standard system signature (used once mails come from noreply).
+    person="Kartavya Dhillon": the personal signature used until then (name, company, phone)."""
     cfg = cfg or get_config()
+    mid = f"{person}<br>{cfg['company']}" if person else f"<b>{cfg['signature_name']}</b>"
+    last = "" if person else "<br>This is a system-generated mail."
     return (SIG_MARK + '<p style="margin:10px 0 0 0;font-family:Calibri,Arial,sans-serif;font-size:14px;">Best regards,<br>'
-            '<b>' + cfg["signature_name"] + '</b><br>&#128222; ' + cfg["signature_phone"] + '<br>This is a system-generated mail.</p>')
+            + mid + '<br>&#128222; ' + cfg["signature_phone"] + last + '</p>')
 
 
-def signature_text(cfg=None):
+def signature_text(cfg=None, person=None):
     cfg = cfg or get_config()
+    if person:
+        return f"Best regards,\n{person}\n{cfg['company']}\n\U0001F4DE {cfg['signature_phone']}\n"
     return f"Best regards,\n{cfg['signature_name']}\n\U0001F4DE {cfg['signature_phone']}\nThis is a system-generated mail.\n"
 
 
@@ -258,7 +270,8 @@ def put_note_html(html, cfg=None, note=True, sig=False):
     """note: amber box just ABOVE the signature. sig: replace the old sign-off with the standard signature (only when what
     follows the sign-off is short - a name; a long tail is kept as it is). No sign-off: both go before </body>."""
     cfg = cfg or get_config()
-    want_note, want_sig = note and MARK not in html, sig and SIG_MARK not in html
+    person = sig if isinstance(sig, str) else None
+    want_note, want_sig = note and MARK not in html, bool(sig) and SIG_MARK not in html
     if not (want_note or want_sig):
         return html
     box = note_html(cfg) if want_note else ""
@@ -266,18 +279,19 @@ def put_note_html(html, cfg=None, note=True, sig=False):
     end = len(html) if end < 0 else end
     pos = _signoff_pos(html)
     if pos is None:
-        return html[:end] + box + (signature_html(cfg) if want_sig else "") + html[end:]
+        return html[:end] + box + (signature_html(cfg, person) if want_sig else "") + html[end:]
     tail = html[pos:end]
     short = len(re.sub(r"<[^>]+>", " ", tail).strip()) <= 300 and "<table" not in tail.lower()
     if want_sig and short:
-        return html[:pos] + box + signature_html(cfg) + html[end:]
+        return html[:pos] + box + signature_html(cfg, person) + html[end:]
     return html[:pos] + box + html[pos:]
 
 
 def put_note_text(text, cfg=None, note=True, sig=False):
     cfg = cfg or get_config()
     want_note = note and TEXT_MARK not in text and not ("Note: From" in text and "safe sender" in text)
-    want_sig = sig and cfg["signature_name"] not in text
+    person = sig if isinstance(sig, str) else None
+    want_sig = bool(sig) and cfg["signature_name"] not in text and cfg["signature_phone"] not in text
     if not (want_note or want_sig):
         return text
     box = note_text(cfg) + "\n\n" if want_note else ""
@@ -285,10 +299,10 @@ def put_note_text(text, cfg=None, note=True, sig=False):
     for m in _SIG_TEXT.finditer(text):
         last = m
     if last is None:
-        return text.rstrip("\n") + "\n\n" + box + (signature_text(cfg) if want_sig else "")
+        return text.rstrip("\n") + "\n\n" + box + (signature_text(cfg, person) if want_sig else "")
     tail = text[last.start():]
     if want_sig and len(tail.strip()) <= 300:
-        return text[:last.start()] + box + signature_text(cfg)
+        return text[:last.start()] + box + signature_text(cfg, person)
     return text[:last.start()] + box + text[last.start():]
 
 
@@ -345,11 +359,16 @@ def prepare(msg, swapped, user=None, cfg=None):
     if not _is_old(msg["From"], cfg):
         return False
     changed = False
+    sender = parseaddr(str(msg["From"] or ""))[1].lower()
     if swapped:
         _to_noreply(msg, cfg, user or cfg["noreply_user"])
         changed = True
     note = (not swapped) and effective(cfg) == "kartavya"
-    sig = bool(cfg.get("signature", True))
+    sig = False
+    if cfg.get("signature", True):
+        # from noreply: the system signature; until then: the person's own name, company and the phone line
+        sig = True if swapped else (dict(cfg.get("people") or {}).get(sender) or False)
+        sig = sig if sig is True else (sig or False)
     if note or sig:
         changed = _inject_note(msg, cfg, note, sig) or changed
     return changed
