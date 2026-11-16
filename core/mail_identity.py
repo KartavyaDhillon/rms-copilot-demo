@@ -11,7 +11,13 @@ WHY THIS FILE EXISTS
     2. SENDER - when the sender is noreply (switch date reached, or the button pressed) the SMTP login becomes the
                 noreply account and the From header / envelope sender are rewritten. Reply-To stays Kartavya.
 
-  Mails of other people (Sandeep, Anand ...) are never touched: only mails logged in as / sent from OLD_USER.
+  3. SIGNATURE - every such mail ends with the standard signature (set "signature": false in .mail_identity.json to stop):
+                Best regards, / RMS Automated Reports / phone line / This is a system-generated mail.
+                It replaces the old sign-off only when that sign-off is short (a name); a long tail is left alone.
+
+  The Darwinbox mailer is excluded on purpose (keep_sender): it stays Sandeep, because replies are expected there.
+  Mails of other people (Anand ...) are never touched: only mails logged in as / sent from the addresses in OLD_USERS
+  (Kartavya and Sandeep; "old_users" in .mail_identity.json can list more). Reply-To is the person the mail was sent as.
 
 MODES  (file .mail_identity.json in the repo root, or the button in the Process Center)
     auto      before switch_date: sender Kartavya + note;   from switch_date: sender noreply (no note)    <- default
@@ -39,6 +45,7 @@ REPO = Path(__file__).resolve().parent.parent
 CONF_FILE = REPO / ".mail_identity.json"
 MODES = ("auto", "kartavya", "noreply")
 OLD_USER = "kartavya.dhillon@mastertrust.co.in"
+OLD_USERS = (OLD_USER, "sandeep.kumar2@mastertrust.co.in")        # every sender that moves to noreply
 NEW_USER = "noreply_rms@mastertrust.co.in"
 SWITCH_DATE = "2026-12-01"
 MARK = "<!--rms-sender-note-->"
@@ -48,8 +55,9 @@ _lock = threading.Lock()
 
 # ── settings ──────────────────────────────────────────────────────────────────────────────────────────────────
 def _defaults():
-    return {"mode": "auto", "switch_date": SWITCH_DATE, "old_user": OLD_USER, "noreply_user": NEW_USER,
-            "reply_to": OLD_USER, "note_date_text": "1 Dec 2026"}
+    return {"mode": "auto", "switch_date": SWITCH_DATE, "old_user": OLD_USER, "old_users": list(OLD_USERS), "noreply_user": NEW_USER,
+            "note_date_text": "1 Dec 2026",
+            "signature": True, "signature_name": "RMS Automated Reports", "signature_phone": "011-66331000 | Ext. 84"}
 
 
 def get_config():
@@ -143,9 +151,9 @@ def send_test(to, as_noreply=False):
         if effective(cfg) == "kartavya" and not pw:
             return {"ok": False, "error": "Kartavya's own SMTP password is not in .env (SENDER_PASSWORD), so the 'as Kartavya' test cannot log in. Use 'Test as noreply'."}
     m = MIMEMultipart("alternative")
-    m["From"], m["To"], m["Subject"] = formataddr(("RMS Console", frm)), to, "Test - RMS Console mail sender"
-    m.attach(MIMEText("This is a test mail from the RMS console.\n\nBest regards,\nRMS Console", "plain"))
-    m.attach(MIMEText("<html><body><p>This is a test mail from the RMS console.</p><br>Best regards,<br>RMS Console</body></html>", "html"))
+    m["From"], m["To"], m["Subject"] = formataddr(("RMS Automated Reports", frm)), to, "Test - RMS mail sender"
+    m.attach(MIMEText("This is a test mail from RMS Automated Reports.\n\n" + signature_text(cfg), "plain", "utf-8"))
+    m.attach(MIMEText("<html><body><p>This is a test mail from RMS Automated Reports.</p>" + signature_html(cfg) + "</body></html>", "html", "utf-8"))
     install()
     try:
         with smtplib.SMTP(host, port, timeout=30) as s:
@@ -217,46 +225,85 @@ _SIG_HTML = re.compile(_SIG_WORDS, re.I)
 _SIG_TEXT = re.compile(r"^[ \t]*(?:" + _SIG_WORDS + ")", re.I | re.M)
 
 
-def put_note_html(html, cfg=None):
-    """Insert the note box just above the signature ('Regards' / 'Thanks' ...). No signature: just before </body>, else at the end."""
-    if MARK in html:
-        return html
-    box = note_html(cfg)
+SIG_MARK = "<!--rms-signature-->"
+
+
+def signature_html(cfg=None):
+    cfg = cfg or get_config()
+    return (SIG_MARK + '<p style="margin:10px 0 0 0;font-family:Calibri,Arial,sans-serif;font-size:14px;">Best regards,<br>'
+            '<b>' + cfg["signature_name"] + '</b><br>&#128222; ' + cfg["signature_phone"] + '<br>This is a system-generated mail.</p>')
+
+
+def signature_text(cfg=None):
+    cfg = cfg or get_config()
+    return f"Best regards,\n{cfg['signature_name']}\n\U0001F4DE {cfg['signature_phone']}\nThis is a system-generated mail.\n"
+
+
+def _signoff_pos(html):
+    """Where the existing sign-off ('Best regards' / 'Thanks' ...) starts (the whole line/paragraph), or None."""
     last = None
     for m in _SIG_HTML.finditer(html):
         last = m
-    if last is not None:
-        start = last.start()
-        win = html[max(0, start - 200):start]
-        cut = max(win.lower().rfind(t) for t in ("<br", "<p", "<div", "<table"))
-        pos = start - (len(win) - cut) if cut >= 0 else start
-        lt = html.rfind("<", 0, start)                       # never split a tag that holds the word
-        gt = html.rfind(">", 0, start)
-        if lt > gt:
-            pos = lt
-        return html[:pos] + box + html[pos:]
-    i = html.lower().rfind("</body>")
-    return html[:i] + box + html[i:] if i >= 0 else html + box
+    if last is None:
+        return None
+    start = last.start()
+    win = html[max(0, start - 200):start]
+    cut = max(win.lower().rfind(t) for t in ("<br", "<p", "<div", "<table"))
+    pos = start - (len(win) - cut) if cut >= 0 else start
+    lt, gt = html.rfind("<", 0, start), html.rfind(">", 0, start)
+    return lt if lt > gt else pos                              # never split a tag that holds the word
 
 
-def put_note_text(text, cfg=None):
-    if TEXT_MARK in text or "Note: From" in text and "safe sender" in text:
+def put_note_html(html, cfg=None, note=True, sig=False):
+    """note: amber box just ABOVE the signature. sig: replace the old sign-off with the standard signature (only when what
+    follows the sign-off is short - a name; a long tail is kept as it is). No sign-off: both go before </body>."""
+    cfg = cfg or get_config()
+    want_note, want_sig = note and MARK not in html, sig and SIG_MARK not in html
+    if not (want_note or want_sig):
+        return html
+    box = note_html(cfg) if want_note else ""
+    end = html.lower().rfind("</body>")
+    end = len(html) if end < 0 else end
+    pos = _signoff_pos(html)
+    if pos is None:
+        return html[:end] + box + (signature_html(cfg) if want_sig else "") + html[end:]
+    tail = html[pos:end]
+    short = len(re.sub(r"<[^>]+>", " ", tail).strip()) <= 300 and "<table" not in tail.lower()
+    if want_sig and short:
+        return html[:pos] + box + signature_html(cfg) + html[end:]
+    return html[:pos] + box + html[pos:]
+
+
+def put_note_text(text, cfg=None, note=True, sig=False):
+    cfg = cfg or get_config()
+    want_note = note and TEXT_MARK not in text and not ("Note: From" in text and "safe sender" in text)
+    want_sig = sig and cfg["signature_name"] not in text
+    if not (want_note or want_sig):
         return text
-    line = note_text(cfg) + "\n\n"
+    box = note_text(cfg) + "\n\n" if want_note else ""
     last = None
     for m in _SIG_TEXT.finditer(text):
         last = m
-    if last is not None:
-        return text[:last.start()] + line + text[last.start():]
-    return text.rstrip("\n") + "\n\n" + line.rstrip("\n") + "\n"
+    if last is None:
+        return text.rstrip("\n") + "\n\n" + box + (signature_text(cfg) if want_sig else "")
+    tail = text[last.start():]
+    if want_sig and len(tail.strip()) <= 300:
+        return text[:last.start()] + box + signature_text(cfg)
+    return text[:last.start()] + box + text[last.start():]
 
 
 # ── rewriting one message ────────────────────────────────────────────────────────────────────────────────────────
+def _old_users(cfg=None):
+    cfg = cfg or get_config()
+    us = cfg.get("old_users") or [cfg["old_user"]]
+    return [str(u).strip().lower() for u in us if str(u).strip()]
+
+
 def _is_old(addr, cfg=None):
-    return parseaddr(str(addr or ""))[1].strip().lower() == (cfg or get_config())["old_user"].lower()
+    return parseaddr(str(addr or ""))[1].strip().lower() in _old_users(cfg)
 
 
-def _inject_note(msg, cfg):
+def _inject_note(msg, cfg, note=True, sig=False):
     changed = False
     for part in msg.walk():
         if part.is_multipart():
@@ -274,7 +321,7 @@ def _inject_note(msg, cfg):
             text = payload.decode(cs, "replace")
         except LookupError:
             text = payload.decode("utf-8", "replace")
-        new = put_note_html(text, cfg) if ct == "text/html" else put_note_text(text, cfg)
+        new = put_note_html(text, cfg, note, sig) if ct == "text/html" else put_note_text(text, cfg, note, sig)
         if new == text:
             continue
         if "Content-Transfer-Encoding" in part:
@@ -285,11 +332,11 @@ def _inject_note(msg, cfg):
 
 
 def _to_noreply(msg, cfg, user):
-    name = parseaddr(str(msg["From"] or ""))[0]
+    name, orig = parseaddr(str(msg["From"] or ""))
     del msg["From"]
     msg["From"] = formataddr((name, user)) if name else user
     if not msg["Reply-To"]:
-        msg["Reply-To"] = cfg["reply_to"]
+        msg["Reply-To"] = orig                                   # replies still reach the person it was sent as
 
 
 def prepare(msg, swapped, user=None, cfg=None):
@@ -297,19 +344,22 @@ def prepare(msg, swapped, user=None, cfg=None):
     cfg = cfg or get_config()
     if not _is_old(msg["From"], cfg):
         return False
+    changed = False
     if swapped:
         _to_noreply(msg, cfg, user or cfg["noreply_user"])
-        return True
-    if effective(cfg) == "kartavya":
-        return _inject_note(msg, cfg)
-    return False
+        changed = True
+    note = (not swapped) and effective(cfg) == "kartavya"
+    sig = bool(cfg.get("signature", True))
+    if note or sig:
+        changed = _inject_note(msg, cfg, note, sig) or changed
+    return changed
 
 
 def prepare_raw(raw, from_addr, swapped, user=None):
     """Same for sendmail(): raw is a str or bytes message. Returns (raw, from_addr)."""
     cfg = get_config()
     head = raw[:4000].decode("latin-1", "replace") if isinstance(raw, (bytes, bytearray)) else raw[:4000]
-    if cfg["old_user"].lower() not in head.lower():
+    if not any(u in head.lower() for u in _old_users(cfg)):
         return raw, from_addr
     msg = message_from_bytes(bytes(raw)) if isinstance(raw, (bytes, bytearray)) else message_from_string(raw)
     if not prepare(msg, swapped, user, cfg):
@@ -324,8 +374,11 @@ class _Mixin:
     _rms_swapped = False
     _rms_user = None
     _rms_busy = False
+    _rms_skip = False                                          # keep_sender(server): this connection is left exactly as the script wrote it
 
     def login(self, user, password, *a, **k):
+        if self._rms_skip:
+            return super(_Mixin, self).login(user, password, *a, **k)
         try:
             cfg = get_config()
             if effective(cfg) == "noreply" and _is_old(user, cfg):
@@ -336,13 +389,13 @@ class _Mixin:
                         self._rms_swapped, self._rms_user = True, nu
                         return r
                     except smtplib.SMTPAuthenticationError as e:
-                        _log(f"noreply login refused ({e.smtp_code}) - sending as {cfg['old_user']} this time")
+                        _log(f"noreply login refused ({e.smtp_code}) - sending as {user} this time")
                         try:
                             self.ehlo()
                         except Exception:
                             pass
                 else:
-                    _log("NOREPLY_SMTP_PASS is not set - sending as " + cfg["old_user"] + " this time")
+                    _log("NOREPLY_SMTP_PASS is not set - sending as " + str(user) + " this time")
         except smtplib.SMTPException:
             raise
         except Exception as e:                               # never let this module break a mail
@@ -350,6 +403,8 @@ class _Mixin:
         return super(_Mixin, self).login(user, password, *a, **k)
 
     def send_message(self, msg, from_addr=None, to_addrs=None, *a, **k):
+        if self._rms_skip:
+            return super(_Mixin, self).send_message(msg, from_addr, to_addrs, *a, **k)
         try:
             prepare(msg, self._rms_swapped, self._rms_user)
             if self._rms_swapped and from_addr and _is_old(from_addr):
@@ -363,6 +418,8 @@ class _Mixin:
             self._rms_busy = False
 
     def sendmail(self, from_addr, to_addrs, msg, *a, **k):
+        if self._rms_skip:
+            return super(_Mixin, self).sendmail(from_addr, to_addrs, msg, *a, **k)
         if not self._rms_busy:                               # send_message() calls sendmail() itself: already handled
             try:
                 msg, from_addr = prepare_raw(msg, from_addr, self._rms_swapped, self._rms_user)
@@ -371,6 +428,16 @@ class _Mixin:
         elif self._rms_swapped and _is_old(from_addr):
             from_addr = self._rms_user
         return super(_Mixin, self).sendmail(from_addr, to_addrs, msg, *a, **k)
+
+
+def keep_sender(server):
+    """Call on a freshly created smtplib connection that must stay EXACTLY as the script wrote it: no sender change, no note,
+    no signature (used for the Darwinbox mailer: people reply to Sandeep there). Harmless if the wrapper is not installed."""
+    try:
+        server._rms_skip = True
+    except Exception:
+        pass
+    return server
 
 
 def install():

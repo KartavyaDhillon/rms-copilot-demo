@@ -174,10 +174,10 @@ class Wrapper(Base):
     def test_other_senders_never_touched(self):
         for mode in ("kartavya", "noreply"):
             mi.set_mode(mode)
-            m = html_msg(sender="sandeep.kumar2@mastertrust.co.in")
+            m = html_msg(sender="anand.singh@mastertrust.co.in")
             before = m.as_string()
-            s = self.send(m, login="sandeep.kumar2@mastertrust.co.in")
-            self.assertEqual(s.logins, ["sandeep.kumar2@mastertrust.co.in"])
+            s = self.send(m, login="anand.singh@mastertrust.co.in")
+            self.assertEqual(s.logins, ["anand.singh@mastertrust.co.in"])
             self.assertEqual(s.sent[0][1], before)
 
     def test_email_message_object(self):
@@ -209,6 +209,84 @@ class Wrapper(Base):
             mi.set_mode("noreply")
             r = mi.send_test("me@x.y")
             self.assertTrue(r["ok"] and r["sent_as"] == NEW and not r["note_added"])
+
+    def test_standard_signature_replaces_short_signoff_with_phone_before_system_line(self):
+        mi.set_mode("kartavya")
+        s = self.send(html_msg())
+        import email
+        m = email.message_from_string(s.sent[0][1])
+        html = [p for p in m.walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
+        self.assertNotIn("Kartavya Dhillon", html)                                   # old sign-off replaced
+        for a, b in (("safe sender", "Best regards"), ("Best regards", "RMS Automated Reports"),
+                     ("RMS Automated Reports", "011-66331000 | Ext. 84"), ("011-66331000 | Ext. 84", "This is a system-generated mail.")):
+            self.assertLess(html.index(a), html.index(b), (a, b))
+        self.assertEqual(html.count("RMS Automated Reports"), 1)
+        txt = [p for p in m.walk() if p.get_content_type() == "text/plain"][0].get_payload(decode=True).decode()
+        self.assertLess(txt.index("011-66331000"), txt.index("system-generated"))
+
+    def test_long_tail_after_signoff_is_kept(self):
+        mi.set_mode("kartavya")
+        html = "<html><body><p>Hi</p><br>Thanks,<br>" + ("Important detail line. " * 30) + "</body></html>"
+        out = mi.put_note_html(html, note=True, sig=True)
+        self.assertIn("Important detail line.", out)
+        self.assertNotIn("RMS Automated Reports", out)
+        self.assertLess(out.index("safe sender"), out.index("Thanks"))
+
+    def test_signature_in_noreply_mode_and_can_be_turned_off(self):
+        mi.set_mode("noreply")
+        raw = self.send(html_msg()).sent[0][1]
+        import email
+        m = email.message_from_string(raw)
+        html = [p for p in m.walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
+        self.assertIn("RMS Automated Reports", html)
+        self.assertNotIn("safe sender", html)
+        self.conf.write_text('{"mode": "noreply", "signature": false}', encoding="utf-8")
+        html2 = [p for p in email.message_from_string(self.send(html_msg()).sent[0][1]).walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
+        self.assertIn("Kartavya Dhillon", html2)                                    # original sign-off untouched
+
+    def test_sandeep_gets_the_same_treatment_and_replies_go_to_him(self):
+        sand = "Sandeep.Kumar2@mastertrust.co.in"                                    # the scripts write it with capitals
+        mi.set_mode("kartavya")
+        raw = self.send(html_msg(sender=sand), login=sand).sent[0][1]
+        import email
+        html = [p for p in email.message_from_string(raw).walk() if p.get_content_type() == "text/html"][0].get_payload(decode=True).decode()
+        self.assertIn("safe sender", html)
+        self.assertIn("RMS Automated Reports", html)
+        mi.set_mode("noreply")
+        s = self.send(html_msg(sender=sand), login=sand)
+        self.assertEqual(s.logins, [NEW])
+        self.assertEqual(s.sent[0][0], NEW)
+        self.assertIn("Reply-To: " + sand, s.sent[0][1])                             # not Kartavya
+        s2 = self.send(html_msg(), login=OLD)
+        self.assertIn("Reply-To: " + OLD, s2.sent[0][1])
+
+    def test_scheduler_style_send_with_explicit_from_addr(self):
+        """core/scheduler/helpers.py and darwin_lib.py call send_message(msg, from_addr=<login>, to_addrs=[...]) after login(); same result."""
+        mi.set_mode("noreply")
+        m = html_msg()
+        with smtplib.SMTP("h", 587) as s:
+            s.ehlo(); s.starttls(); s.ehlo()
+            s.login(OLD, "x")
+            s.send_message(m, from_addr=OLD, to_addrs=["a@b.c", "c@d.e"])
+        sm = FakeSMTP.log[-1]
+        self.assertEqual(sm.logins, [NEW])
+        self.assertEqual(sm.sent[0][0], NEW)
+        self.assertIn("From: Kartavya <" + NEW + ">", sm.sent[0][1])
+
+    def test_keep_sender_leaves_the_connection_untouched(self):
+        sand = "sandeep.kumar2@mastertrust.co.in"
+        for mode in ("kartavya", "noreply"):
+            mi.set_mode(mode)
+            m = html_msg(sender=sand)
+            before = m.as_string()
+            with smtplib.SMTP("h", 587) as s:
+                mi.keep_sender(s)
+                s.login(sand, "x")
+                s.send_message(m, from_addr=sand, to_addrs=["a@b.c"])
+            sm = FakeSMTP.log[-1]
+            self.assertEqual(sm.logins, [sand])
+            self.assertEqual(sm.sent[0][0], sand)
+            self.assertEqual(sm.sent[0][1], before)                                  # no note, no signature, no Reply-To
 
     def test_install_twice_wraps_once(self):
         before = smtplib.SMTP

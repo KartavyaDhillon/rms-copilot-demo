@@ -1195,6 +1195,11 @@ def send_with_retry(msg: EmailMessage, recipients: list | None = None) -> None:
                 server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=TIMEOUT, context=ssl.create_default_context())
             else:
                 server = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=TIMEOUT)
+            try:                                  # Darwinbox mails stay as Sandeep (replies are expected): the console's noreply switch skips this connection
+                from core.mail_identity import keep_sender
+                keep_sender(server)
+            except Exception:
+                pass
             with server:
                 server.ehlo()
                 if SMTP_SECURITY == "starttls":
