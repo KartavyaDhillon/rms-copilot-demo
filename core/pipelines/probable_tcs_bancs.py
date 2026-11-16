@@ -518,6 +518,34 @@ def download_both(output_dir, force=False, search_dir=None):
 
     mdd._acquire_mcx_lock("probable")
     try:
+        # ── GRID VIEW (new, fast): both files straight from the search grid - no export queue, no waiting. Everything
+        #    below this block is the PREVIOUS method (queue the exports, wait, download) and is untouched: it runs when the
+        #    switch (TCS BANCS button in the Process Center) is on "queue". RSK136 (MCX COMM LIMIT's Search Results) is an
+        #    export-only file: in grid mode it is not queued here, MCX COMM LIMIT fetches it itself at its time. ──
+        try:
+            from core import mcx_grid as _gm
+        except Exception as _ge:                                   # noqa: BLE001
+            _gm = None
+            print(f"[grid] grid view not available ({type(_ge).__name__}: {_ge}) - using the previous method.")
+        if _gm is not None and _gm.enabled():
+            _stage("⚡ Grid view (fast) — logging in once and reading both reports…")
+            try:
+                _got = _gm.run_grid(["deposit", "margin"], output_dir, USER_ID, PASSWORD, mdd._token_popup, print, tries=5,
+                                    token_attempts=(2 if mdd._auto_mode() else 3), auth_tag="MCX_DEPOSIT",
+                                    names={"deposit": _gm.portal_name, "margin": "Clientwise_mcx_margin.xlsx"})
+            except _gm.GridAuthError:
+                return {"rsk383": None, "rsk335": None}            # [MCX_DEPOSIT_AUTH_FAIL] was printed -> the password popup
+            except _gm.GridTokenError as _te:
+                print(f"❌ TCS BANCS download failed: RSA code problem: {_te}")
+                return {"rsk383": None, "rsk335": None}
+            if "deposit" in _got and "margin" in _got:
+                print(f"  ✅ RSK383 DOWNLOADED (grid view): {_got['deposit']}")
+                print(f"  ✅ RSK335 DOWNLOADED (grid view): {_got['margin']}")
+                print("\n🎉 ALL FILES DOWNLOADED SUCCESSFULLY")
+                return {"rsk383": _got["deposit"], "rsk335": _got["margin"], "rsk136": None}
+            print("❌ TCS BANCS download failed: grid view could not get both files after 5 tries")
+            return {"rsk383": _got.get("deposit"), "rsk335": _got.get("margin")}
+
         # ── 1. LOGIN (once) ────────────────────────────────────────────────
         _stage("🔐 Logging in to TCS BANCS…")
         print("\n🌐 Opening session (TCS BANCS)...")

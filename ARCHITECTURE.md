@@ -791,3 +791,17 @@ git push origin main
 ---
 
 *Last updated: July 2026 (through the CLI Prudential Limit OLD/NEW split, MCX relogin/tab-id fix, PYTHONUNBUFFERED subprocess fix, NCDEX captcha validation fix, Git history cleanup, the Margin Shortage (15-min) pipeline, RISK_REPORT COMMON FILES lookup, the generic View/Explain-error feature, deterministic-first error explanation (`extract_known_failure_reason`), the server-wide `_PB_LOCK` concurrency guard now shared by ctcl/ms15/cli/sa/sa's MCX Deposit, `server_busy`/`server_busy_pipe`/`server_busy_label` polling so Run buttons disable on every connected screen, and captcha/token modal pipe/box labeling). Update this file whenever you add a new pipeline, rename a key variable, or significantly change a function's behaviour.*
+
+
+## MCX Deposit (RSK383) + MCX 90% (RSK335) download method - grid view vs queue
+
+`core/mcx_grid.py` reads both files straight from the TCS BANCS search grid (ONE request with a bigger rows-per-page value,
+read-only) instead of queueing an Excel export and waiting for it in the exported-files list. 5 tries; every try is a fresh
+login with the NEXT RSA code and only the missing file is fetched. Names: Deposit `MCX_DEPOSIT_HH.MM.xlsx`, 90% the portal
+style `<10 random>-<YYYYMMDDHHMMSS>.xlsx` (PROBABLE keeps `Clientwise_mcx_margin.xlsx`).
+One switch for everybody (`.mcx_download_mode.json`, `/ops/mcx-download-mode`, buttons in the TCS BANCS chip of the Process
+Center): `grid` (default) or `queue` (the previous code, untouched). Hooks: `sa_codes/mcx_deposit_downloader.py` (Short
+Allocation, CLI, CTCL, Margin Shortage, Live Allocation), `ctcl_codes/MCX_90_PERCENT_FILE_API.py` (CTCL, Margin Shortage),
+`sa_codes/mcx_tcs_pair_downloader.py` (MCX Cash Maintenance), `core/pipelines/probable_tcs_bancs.py` (PROBABLE).
+LIVE ALLOCATION only: when the grid view fails 5 times it falls back to the previous (queued export) method. Tests:
+`tests/test_mcx_grid.py`.

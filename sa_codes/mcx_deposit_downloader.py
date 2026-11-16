@@ -386,6 +386,21 @@ def mcx_lock_status(owner=None):
 
 # ── main download function ────────────────────────────────────────────────────
 
+def _load_mcx_grid():
+    """core/mcx_grid.py (the grid-view method), loaded by path - this file runs from sa_codes/, 'core' is one level up.
+    None when it cannot be loaded: the previous method is used then."""
+    try:
+        import importlib.util as _iu
+        _p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core", "mcx_grid.py")
+        _s = _iu.spec_from_file_location("mcx_grid_standalone", _p)
+        _m = _iu.module_from_spec(_s)
+        _s.loader.exec_module(_m)
+        return _m
+    except Exception as _e:
+        print(f"[grid] grid view not available ({type(_e).__name__}: {_e}) - using the previous method.", flush=True)
+        return None
+
+
 def download_mcx_deposit(output_dir=None):
     """Whole MCX login + download. A broken connection ("connection forcibly closed", reset, timeout) starts the
     whole login again from the beginning after 5 s, up to 5 times. A refused password is NOT retried."""
@@ -609,6 +624,33 @@ def _download_mcx_deposit_once(output_dir=None):
         return new_sess, new_rndaak, new_tab_id
 
     try:
+        # ── GRID VIEW (new, fast): read the rows straight from the search grid - no export queue. Everything below this
+        #    block is the PREVIOUS method (queue an export, wait for it in the list, download it) and is untouched: it runs
+        #    when the switch (TCS BANCS button in the Process Center) is on "queue", and as the LIVE ALLOCATION fallback. ──
+        _gm = _load_mcx_grid()
+        if _gm is not None and _gm.enabled():
+            print("⚡ MCX download method: GRID VIEW (fast) - change it in the TCS BANCS button of the Process Center", flush=True)
+            try:
+                _got = _gm.run_grid(["deposit"], output_dir, USER_ID, PASSWORD, _token_popup, print, tries=5,
+                                    token_attempts=(2 if _auto_mode() else 3), auth_tag="MCX_DEPOSIT")
+            except _gm.GridAuthError:
+                raise RuntimeError("MCX Deposit login failed — wrong password (INVALID_LOGIN_OR_PASSWORD)")
+            except _gm.GridTokenError as _te:
+                raise RuntimeError(f"RSA code problem: {_te}")
+            if _got.get("deposit"):
+                print(f"🎉 MCX DEPOSIT DOWNLOADED (grid view): {_got['deposit']}")
+                _release_mcx_lock()
+                return _got["deposit"]
+            if _mcx_caller == "liveallocation":
+                # LIVE ALLOCATION must not lose the snapshot: use the previous method (it queues the export on the portal,
+                # so the file also shows up in the exported-files list) - the code right below.
+                print("⚠️ Grid view failed 5 times - LIVE ALLOCATION now uses the PREVIOUS method (queued export) "
+                      "so the data is not lost.", flush=True)
+            else:
+                print("❌ MCX Deposit: grid view failed 5 times.")
+                _release_mcx_lock()
+                return None
+
         # ── state: which export is ours (so a retry NEVER presses Export again for the same capture) ──
         _STATE_PATH = os.getenv("MCX_EXPORT_STATE_FILE", "").strip()
 

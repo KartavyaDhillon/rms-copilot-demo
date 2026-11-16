@@ -4,6 +4,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 os.environ["SA_MCX_DEPOSIT_PASSWORD"] = "pw"
 os.environ.pop("MCX_TOKEN_MODE", None)
+os.environ["MCX_DOWNLOAD_MODE"] = "queue"      # these tests cover the PREVIOUS method (queue an export); grid view: test_mcx_grid.py
 
 def load():
     spec = importlib.util.spec_from_file_location("mdd", os.path.join(REPO, "sa_codes", "mcx_deposit_downloader.py"))

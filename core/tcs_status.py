@@ -283,8 +283,13 @@ def _build(now: dt.datetime) -> dict:
         h["short"] = short_name(h["name"])
     state = "free" if not holders else ("busy" if len(holders) == 1 else "clash")
     nxt = _next_cached(now)
+    try:                                                  # how the two MCX files are downloaded (core/mcx_grid.py)
+        from core import mcx_grid as _mg
+        mode = _mg.describe()
+    except Exception:
+        mode = None
     return {"state": state, "holders": holders, "next": nxt[0] if nxt else None, "upcoming": nxt[:12],
-            "now": now.strftime("%H:%M:%S")}
+            "now": now.strftime("%H:%M:%S"), "download_mode": mode}
 
 
 def status(now: dt.datetime = None) -> dict:

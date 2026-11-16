@@ -7,6 +7,22 @@ import subprocess as _sv_sp
 import sys as _sv_sys
 import time as _sv_time
 
+# GRID VIEW (fast method, core/mcx_grid.py) makes its own 5 tries - each with a fresh login - so the restart supervisor
+# below is not needed for it: this process becomes the "child" right away. When the switch is on "queue" (the previous
+# method) nothing changes at all.
+_MCX_GRID = None
+try:
+    import importlib.util as _g_iu
+    _g_rt = _sv_os.getenv("RMS_REPO_ROOT") or _sv_os.path.dirname(_sv_os.path.dirname(_sv_os.path.abspath(__file__)))
+    _g_spec = _g_iu.spec_from_file_location("mcx_grid_standalone", _sv_os.path.join(_g_rt, "core", "mcx_grid.py"))
+    _MCX_GRID = _g_iu.module_from_spec(_g_spec)
+    _g_spec.loader.exec_module(_MCX_GRID)
+    if _MCX_GRID.enabled():
+        _sv_os.environ["MCX90_CHILD"] = "1"
+except Exception as _g_e:
+    _MCX_GRID = None
+    print(f"[grid] grid view not available ({type(_g_e).__name__}: {_g_e}) - using the previous method.", flush=True)
+
 if _sv_os.getenv("MCX90_CHILD") != "1":
     _SV_NET = ("forcibly closed", "connection aborted", "connection reset", "remotedisconnected", "remote end closed",
                "10054", "10053", "connectionerror", "readtimeout", "connecttimeout", "chunkedencodingerror")
@@ -211,6 +227,33 @@ DOWNLOAD_URL = BASE_URL + "/Bancs/DownloadFileAction1.do"
 
 USER_ID = os.getenv("CTCL_MCX90_USER", "56720CMMKR014139")
 PASSWORD = os.getenv("CTCL_MCX90_PASSWORD", "Mcx@2907")
+
+
+# =========================
+# ⚡ GRID VIEW (fast) - the code below this block is the PREVIOUS method (queue the export, wait, download) and is
+# untouched. It runs when the switch (TCS BANCS button in the Process Center) is on "queue".
+# MCX 90% (RSK335) -> <random>-<YYYYMMDDHHMMSS>.xlsx ; MCX Deposit (RSK383, BOTH mode) -> MCX_DEPOSIT_HH.MM.xlsx
+# =========================
+if _MCX_GRID is not None and _MCX_GRID.enabled():
+    _want = ["margin"] + (["deposit"] if os.getenv("MCX_DOWNLOAD_BOTH") == "1" else [])
+    print("⚡ MCX download method: GRID VIEW (fast) - change it in the TCS BANCS button of the Process Center", flush=True)
+    try:
+        _got = _MCX_GRID.run_grid(_want, INPUT_FOLDER, USER_ID, PASSWORD, get_token_popup, print, tries=5,
+                                  token_attempts=3, auth_tag="MCX90")
+    except _MCX_GRID.GridAuthError:
+        raise SystemExit(1)                       # [MCX90_AUTH_FAIL] was printed: the dashboard shows the password message
+    except _MCX_GRID.GridTokenError as _te:
+        print(f"[MCX_TOKEN_FAIL] {_te}", flush=True)
+        raise SystemExit(1)
+    _lost = [k for k in _want if k not in _got]
+    if _lost:
+        print(f"❌ MCX grid view: not downloaded after 5 tries: {', '.join(_lost)}", flush=True)
+        raise SystemExit(1)
+    for _k, _p in _got.items():
+        print(f"✅ {'MCX 90%' if _k == 'margin' else 'MCX Deposit'} DOWNLOADED (grid view): {_p}", flush=True)
+    print("🎉 " + ("BOTH FILES (MCX Deposit + MCX 90%) DOWNLOADED SUCCESSFULLY" if len(_want) == 2
+                  else "RSK335 FILE DOWNLOADED SUCCESSFULLY"), flush=True)
+    raise SystemExit(0)
 
 
 # =========================

@@ -1834,6 +1834,39 @@ def ops_tcs_status():
         return {"state": "unknown", "error": str(e), "holders": [], "next": None, "upcoming": []}
 
 
+# How the two MCX files (MCX Deposit RSK383 + MCX 90% RSK335) are downloaded - ONE switch for every process that logs in to
+# TCS BANCS (Short Allocation, CLI, CTCL vs NMASS, Margin Shortage, Live Allocation, MCX Cash Maintenance, PROBABLE).
+#   grid  = read the rows straight from the search grid (fast, no export queue)        - core/mcx_grid.py
+#   queue = the previous method: queue an export on the portal, wait for it, download it
+# Takes effect on the next download. Buttons: TCS BANCS chip in the Process Center.
+@app.get("/ops/mcx-download-mode")
+def ops_mcx_download_mode_get():
+    from core import mcx_grid as _mg
+    return _mg.describe()
+
+
+class _McxDownloadModeBody(_OpsBaseModel):
+    mode: str
+
+
+@app.post("/ops/mcx-download-mode")
+def ops_mcx_download_mode_set(body: _McxDownloadModeBody, request: Request):
+    from core import mcx_grid as _mg
+    _who, _adm = _actor(request)
+    try:
+        _mg.set_mode(body.mode, _who or "")
+    except ValueError as _e:
+        return {"ok": False, "error": str(_e)}
+    except OSError as _e:
+        return {"ok": False, "error": f"Could not save the choice: {_e}"}
+    try:                                      # the chip's cached answer must show the new choice at once
+        from core import tcs_status as _ts
+        _ts._STATUS_CACHE.update(t=0.0, val=None)
+    except Exception:
+        pass
+    return {"ok": True, **_mg.describe()}
+
+
 @app.get("/ops/locks")
 @_ttl_cached(2)
 def ops_locks():

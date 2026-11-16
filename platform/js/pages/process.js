@@ -101,10 +101,40 @@
     tcsNoteStarts(tcsLast);
     tcsPaint();
   }
+  /* ── How the two MCX files (MCX Deposit + MCX 90%) are downloaded: ONE switch for every process that logs in to TCS BANCS.
+        grid = rows straight from the search grid (fast) | queue = the previous method (queue an export, wait, download).
+        Server side: /ops/mcx-download-mode (core/mcx_grid.py). Takes effect on the next download. ── */
+  function mcxModeBtn(mode, txt, cur) {
+    return '<button class="btn sm ' + (cur === mode ? "primary" : "ghost") + '" data-mcxmode="' + mode + '" style="justify-content:center">' + txt + "</button>";
+  }
+  function mcxModeHtml(dm) {
+    if (!dm || !dm.mode) return "";
+    return '<div id="mcxModeBox" style="border:1px solid rgba(128,128,128,.3);border-radius:10px;padding:10px 12px;margin-bottom:12px">' +
+      '<div style="margin-bottom:6px"><b>How the MCX Deposit + MCX 90% files are downloaded</b></div>' +
+      '<div style="display:flex;gap:8px;margin-bottom:6px">' + mcxModeBtn("grid", "Grid view (fast)", dm.mode) + mcxModeBtn("queue", "Queue + export (previous)", dm.mode) + "</div>" +
+      '<div style="opacity:.75;font-size:12px">Now: <b id="mcxModeNow">' + esc(dm.label || dm.mode) + "</b>" + (dm.env_override ? " · fixed by the MCX_DOWNLOAD_MODE setting on the server" : "") +
+      '<br>Grid view reads the rows straight from the portal grid (about a minute, no export queue; 5 tries, a new login with the next RSA code if the session ends). Queue + export is the previous way: it queues an export on the portal and waits for it. ' +
+      "One choice for every process that downloads these files (Short Allocation, CLI, CTCL, Margin Shortage, Live Allocation, MCX Cash, PROBABLE). It applies from the next download.</div></div>";
+  }
+  function mcxModePaint(dm) {
+    document.querySelectorAll("[data-mcxmode]").forEach((b) => { b.className = "btn sm " + (b.dataset.mcxmode === dm.mode ? "primary" : "ghost"); });
+    const n = document.getElementById("mcxModeNow"); if (n) n.textContent = dm.label || dm.mode;
+  }
+  document.addEventListener("click", async (ev) => {
+    const b = ev.target && ev.target.closest ? ev.target.closest("[data-mcxmode]") : null;
+    if (!b) return;
+    try {
+      const r = await (await fetch("/ops/mcx-download-mode", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ mode: b.dataset.mcxmode }) })).json();
+      if (r && r.ok) { if (tcsLast) tcsLast.download_mode = r; mcxModePaint(r); }
+      else popup("MCX download method", (r && r.error) || "Could not change it", false);
+    } catch (e) { popup("MCX download method", "Could not reach the server: " + e.message, false); }
+  });
+
   function tcsDetailHtml() {
     const d = tcsLast || { state: "unknown", holders: [], upcoming: [] };
     const badge = d.state === "free" ? ["#4ade80", "Free"] : d.state === "busy" ? ["#fbbf24", "In use"] : d.state === "clash" ? ["#f87171", "Clash"] : ["#9ca3af", "Unknown"];
     let h = '<div style="font-size:13px;line-height:1.6"><div style="margin-bottom:10px">Status: <b style="color:' + badge[0] + '">' + badge[1] + "</b></div>";
+    h += mcxModeHtml(d.download_mode);
     if (d.holders && d.holders.length) {
       h += '<div style="margin-bottom:6px;opacity:.7">Using the login now</div>';
       d.holders.forEach((x) => { h += '<div style="padding:6px 10px;border:1px solid rgba(128,128,128,.3);border-radius:8px;margin-bottom:6px"><b>' + esc(x.name) + "</b><br><span style=\"opacity:.75\">started " + esc(x.since || "?") + (x.elapsed_s != null ? " \u00b7 running " + tcsMin(tcsLive(x)) : "") + "</span></div>"; });

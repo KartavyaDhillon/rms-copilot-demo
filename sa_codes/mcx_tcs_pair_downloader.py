@@ -43,6 +43,18 @@ def _load_base():
     return mod
 
 
+def _load_grid():
+    """core/mcx_grid.py (grid-view method). None when it cannot be loaded: the previous method is used then."""
+    try:
+        spec = importlib.util.spec_from_file_location("mcx_grid_standalone", os.path.join(REPO, "core", "mcx_grid.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as e:
+        print(f"[grid] grid view not available ({type(e).__name__}: {e}) - using the previous method.", flush=True)
+        return None
+
+
 B = _load_base()
 BASE_URL = B.BASE_URL
 CM_CODE = os.getenv("MCX_CASH_CM_CODE", "56720")
@@ -343,6 +355,33 @@ def download_pair(out_dir, log=print, cancel=lambda: False, max_wait=None, inter
     password = os.getenv("SA_MCX_DEPOSIT_PASSWORD", "").strip()
     if not password:
         raise PairError("SA_MCX_DEPOSIT_PASSWORD is not set - add it in Credentials")
+    # GRID VIEW (new, fast): both files straight from the search grid - no export queue. The code below is the PREVIOUS
+    # method (export both, wait in the list, download both) and is untouched: it runs when the switch (TCS BANCS button
+    # of the Process Center) is on "queue", or when the grid module cannot be loaded.
+    _gm = _load_grid()
+    if _gm is not None and _gm.enabled():
+        log("MCX download method: GRID VIEW (fast) - change it in the TCS BANCS button of the Process Center.")
+
+        def _pause(attempt):                    # unattended rule: after a lost session wait before the next login (others may be in)
+            from core import mcx_soft_token as _mst
+            if os.getenv("MCX_TOKEN_MODE", "").strip().lower() == "auto" and not _mst.relogin_wait(cancelled=cancel, log=log):
+                raise PairError("Stopped while waiting to log in again")
+
+        try:
+            got = _gm.run_grid(["deposit", "margin"], out_dir, user, password, B._token_popup, log, tries=5,
+                               token_attempts=(2 if B._auto_mode() else 3), auth_tag="MCX_DEPOSIT", cm=CM_CODE,
+                               before_relogin=_pause)
+        except _gm.GridAuthError:
+            raise PairError("MCX login failed - wrong password")
+        except _gm.GridTokenError:
+            raise PairError("MCX RSA code refused after the allowed tries")
+        if "deposit" in got and "margin" in got:
+            for lbl, key in (("RSK383", "deposit"), ("RSK335", "margin")):
+                log(f"{lbl} downloaded (grid view): {os.path.basename(got[key])}")
+            return {"RSK383": got["deposit"], "RSK335": got["margin"]}
+        raise PairError("Grid view could not download " + " and ".join(
+            {"deposit": "RSK383", "margin": "RSK335"}[k] for k in ("deposit", "margin") if k not in got) + " after 5 tries")
+
     max_wait = max_wait or int(os.getenv("MCX_CASH_EXPORT_WAIT_SEC", "900"))
     interval = interval or int(os.getenv("MCX_CASH_EXPORT_POLL_SEC", "30"))
     ses = _Session(user, password, log, cancel)
