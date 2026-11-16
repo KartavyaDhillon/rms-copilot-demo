@@ -7184,7 +7184,7 @@ def reco_stop(request: Request):
 # Own "mtfic" run slot: never blocks (or is blocked by) any other box.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _mtfic_sse(code, prefix, action=None):
+def _mtfic_sse(code, prefix, action=None, on_end=None):
     import json as _mj
     from core import pipeline_box as _pbx
     def gen():
@@ -7195,6 +7195,11 @@ def _mtfic_sse(code, prefix, action=None):
                 yield f"data: {_mj.dumps(ev)}\n\n"
         except Exception as e:
             yield f"data: {_mj.dumps({'type':'error','msg':str(e)})}\n\n"
+        if on_end:
+            try:
+                on_end()
+            except Exception:
+                pass
         yield 'data: {"type":"end"}\n\n'
     return StreamingResponse(gen(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"})
@@ -7213,6 +7218,8 @@ _MTFIC_UNLOCK = {"until": 0.0}      # admin re-run permission (one run, 15 minut
 def mtfic_status(request: Request, date: str = ""):
     from core.pipelines import mtf_impact_cost as _m
     st = _m.status(_mtfic_date(date))
+    import time as _mt0
+    st["unlocked"] = _MTFIC_UNLOCK["until"] > _mt0.time()      # the SERVER says whether an admin re-run is open (the window follows it)
     try:
         st["admin"] = bool(_actor(request)[1])
     except Exception:
@@ -7246,17 +7253,21 @@ async def mtfic_unlock(request: Request):
 def mtfic_run_stream(request: Request, date: str = "", wa: int = 1):
     import time as _mt
     d = _mtfic_date(date)
-    force = "0"
-    if _MTFIC_UNLOCK["until"] > _mt.time():
-        force = "1"
-        _MTFIC_UNLOCK["until"] = 0.0          # one run per unlock
+    force = "1" if _MTFIC_UNLOCK["until"] > _mt.time() else "0"
     try:
         by = _actor(request)[0] or ""
     except Exception:
         by = ""
+
+    def _done():
+        # one successful run per unlock: the permission closes only when the run really finished OK, so a run that failed
+        # (e.g. NSE down) can simply be started again without asking an admin again (it still expires after 15 minutes)
+        from core.pipelines import mtf_impact_cost as _mm
+        if force == "1" and _mm.progress().get("ok") is True:
+            _MTFIC_UNLOCK["until"] = 0.0
     return _mtfic_sse(
         f"from core.pipelines.mtf_impact_cost import run_all as _f; "
-        f"_f({d!r}, {'1' if wa else '0'!r}, {force!r}, {by!r})", "mtfic_run")
+        f"_f({d!r}, {'1' if wa else '0'!r}, {force!r}, {by!r})", "mtfic_run", on_end=_done)
 
 
 @app.get("/mtfic/download-stream")

@@ -160,18 +160,71 @@ def _month_tag(d: datetime.date) -> str:
     return d.strftime("%b%Y").upper()          # SEP2026
 
 
+def _saved_day(p: Path):
+    """The day a file arrived in this folder. mtime alone is wrong for a file copied in with Explorer (copy keeps the OLD
+    modified date), so the later of modified / created-or-changed is used: a copy made today counts as today's,
+    a file that has been sitting here since an earlier day does not."""
+    st = p.stat()
+    t = max(st.st_mtime, st.st_ctime) if os.name == "nt" else st.st_mtime      # Windows st_ctime = when the file was created here
+    return datetime.date.fromtimestamp(t)
+
+
 def find_catg(d: datetime.date):
-    """(path, ''). ONLY a C_CATG_*.T01 in the base folder that was saved TODAY (downloaded from NSE or uploaded
-    by hand). Older files — left over in the folder or sitting in Backup — are never used or shown."""
+    """(path, ''). ONLY a C_CATG_*.T01 in the base folder that arrived TODAY (downloaded from NSE, uploaded, or copied in by
+    hand today). Older files - left over in the folder or sitting in Backup - are never used."""
     today = datetime.date.today()
     cands = sorted(base_dir().glob("C_CATG_*.T01"), key=lambda p: p.stat().st_mtime, reverse=True)
     for p in cands:
         try:
-            if datetime.date.fromtimestamp(p.stat().st_mtime) == today:
+            if _saved_day(p) == today:
                 return p, ""
         except OSError:
             pass
     return None, ""
+
+
+MAX_BACKUP_DAYS = 3          # NSE down: a copy this many calendar days old (or newer) from Backup may be used - covers a weekend
+
+
+def find_backup_catg(d: datetime.date, max_days: int = MAX_BACKUP_DAYS):
+    """(path, age_days, why). When NSE cannot be reached: the newest C_CATG_<MON><YYYY>.T01 in Backup\\<dd-mm-yyyy>\\<HHMMSS>\\ that
+    is at most max_days old AND is for the SAME month as `d`. The file is monthly - on the 1st of a new month last month's
+    copy is wrong for every ISIN, so it is never used then (path None, `why` says so)."""
+    tag = _month_tag(d).lower()
+    best, other_month = None, None
+    root = backup_root()
+    if not root.is_dir():
+        return None, 0, "there is no Backup folder yet"
+    for day_dir in root.iterdir():
+        day = parse_date(day_dir.name) if day_dir.is_dir() else None
+        if day is None:
+            continue
+        age = (d - day).days
+        if age < 0 or age > max_days:
+            continue
+        for f in day_dir.rglob("C_CATG_*.T01"):
+            key = (day, f.parent.name, f.name)
+            if f.name.lower() != f"c_catg_{tag}.t01":
+                other_month = other_month or (f.name, day)
+                continue
+            if f.stat().st_size > 0 and (best is None or key > best[0]):
+                best = (key, f, age)
+    if best:
+        return best[1], best[2], ""
+    if other_month:
+        return None, 0, (f"the only recent backup copy ({other_month[0]}, {other_month[1]:%d-%m-%Y}) is for another month - "
+                         f"the file changes every month, so it is not used")
+    return None, 0, f"no C_CATG_{_month_tag(d)}.T01 backup from the last {max_days} days"
+
+
+def _old_catg_note() -> str:
+    """Why the file that IS in the folder is not accepted (so the dashboard can say it instead of 'not here yet')."""
+    try:
+        for p in sorted(base_dir().glob("C_CATG_*.T01"), key=lambda q: q.stat().st_mtime, reverse=True):
+            return f"{p.name} is in the folder but arrived on {_saved_day(p):%d-%m-%Y}, not today - upload today's file (it replaces this one)"
+    except OSError:
+        pass
+    return ""
 
 
 def status(date_str: str = "") -> dict:
@@ -188,7 +241,7 @@ def status(date_str: str = "") -> dict:
          "file": hd.name if hd else "", "where": "COMMON FILES (read only, never deleted)"},
         {"key": "catg", "label": "Impact-cost file", "need": f"C_CATG_{_month_tag(d)}.T01",
          "ok": bool(cg),
-         "file": cg.name if cg else "", "note": "today's file" if cg else "",
+         "file": cg.name if cg else "", "note": "today's file" if cg else _old_catg_note(),
          "where": "this folder (downloaded from NSE, or upload here)"},
     ]
     pr = progress()
@@ -321,12 +374,36 @@ def download_catg(d: datetime.date | None = None) -> Path:
         name = os.path.basename(url.split("?")[0]) or f"C_CATG_{tag}.T01"
         dest = base_dir() / name
         part = dest.with_suffix(dest.suffix + ".part")
-        log(f"Downloading {url}")
-        with s.get(url, headers={"Referer": _REPORTS_PAGE}, stream=True, timeout=30) as resp:
-            resp.raise_for_status()
-            with open(part, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
+        # NSE lists the file on its NEW archive host (nsearchives.nseindia.in), but from the console machine that host drops the
+        # connection during the TLS handshake (WinError 10054, before any request is sent - proven 16-11-2026) while the same path
+        # on nsearchives.nseindia.com answers normally. So the .com host goes FIRST; the listed host is the fallback.
+        com = url.replace("nseindia.in", "nseindia.com")
+        urls = [com] + ([url] if url != com else [])
+        # Two ways of asking: (1) a bare request with the plain "Mozilla/5.0" agent + Referer (the way the circuit-validation
+        # download asks - proven to give HTTP 200 for this file on the console machine), then (2) the session that visited the NSE pages.
+        last_err = None
+        for u in urls:
+            for how in ("plain request", "browser session"):
+                try:
+                    log(f"Downloading {u}  ({how})")
+                    if how == "browser session":
+                        ctx = s.get(u, headers={"Referer": _REPORTS_PAGE}, stream=True, timeout=30)
+                    else:
+                        ctx = requests.get(u, headers={"User-Agent": "Mozilla/5.0", "Referer": _REPORTS_PAGE}, stream=True, timeout=30)
+                    with ctx as resp:
+                        resp.raise_for_status()
+                        with open(part, "wb") as f:
+                            for chunk in resp.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                    last_err = None
+                    break
+                except requests.RequestException as e:
+                    last_err = e
+                    log(f"  {u.split('/')[2]} / {how}: {type(e).__name__}")
+            if last_err is None:
+                break
+        if last_err is not None:
+            raise last_err
         if part.stat().st_size == 0:
             part.unlink()
             raise RuntimeError("NSE sent an empty file.")
@@ -908,8 +985,14 @@ def _run_all(date_str, send_wa, force=False, by=""):
             catg = download_catg(d)
         except Exception as e:
             log(f"⚠ NSE download failed: {e}")
-            _fail("Could not get today's impact-cost file from NSE. Download it yourself and use Upload files — "
-                  "an older copy is never used.")
+            bp, age, why = find_backup_catg(d)
+            if bp is None:
+                log(f"   No backup copy can be used: {why}.")
+                _fail("Could not get today's impact-cost file from NSE. Download it yourself and use Upload files "
+                      f"(a backup copy is used only if it is at most {MAX_BACKUP_DAYS} days old and from the same month: {why}).")
+            catg = bp
+            log(f"⚠⚠ NSE is not giving the file - USING THE BACKUP COPY {bp.name} saved {age} day(s) ago "
+                f"({bp.parent.parent.name}). Same month, so the categories are still valid; check NSE and re-run for today's file if it matters.")
     log(f"Impact-cost file: {catg.name}")
     in_base_catg = catg.resolve().parent == base_dir().resolve()
 

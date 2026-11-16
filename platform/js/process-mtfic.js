@@ -99,7 +99,7 @@
     var d = S.data;
     if (!d || !modalOpen()) return;
     var running = !!d.running;
-    if (!d.done_today) S.rerun = false;
+    S.rerun = !!d.unlocked;                          // the server decides whether an admin re-run is open (no local guess)
     var p = d.progress || {};
     var sig = JSON.stringify([d, S.msg, S.busy]);
     if (!force && sig === S.sig) return;
@@ -158,7 +158,7 @@
       fetch(API + '/mtfic/unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw || '' }) })
         .then(function (r) { return r.json(); })
         .then(function (j) {
-          if (j.ok) { S.rerun = true; window.mtficOpen(); }
+          if (j.ok) { S.rerun = true; window.mtficOpen(); }                       // the next status answer confirms it (unlocked)
           else window.mtficOpen(esc(j.error || 'Not allowed'), 'bad');
         }).catch(function () { window.mtficOpen('Could not reach the server.', 'bad'); });
     };
@@ -262,7 +262,7 @@
     }
     stream(API + '/mtfic/run-stream?wa=' + (S.wa ? 1 : 0), 'Run started…').then(function () {
       var p = (S.data || {}).progress || {};
-      if (p.ok === true) { S.rerun = false; setMsg('', ''); }
+      if (p.ok === true) { setMsg('', ''); }
       else if (p.ok === false) setMsg(esc(p.msg || 'The run failed — see Logs.'), 'bad');
     });
   };
