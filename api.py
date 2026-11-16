@@ -43,6 +43,23 @@ AUTO_SEND = os.getenv("AUTO_SEND", "false").strip().lower() == "true"
 
 os.environ.setdefault("RMS_REPO_ROOT", os.path.dirname(os.path.abspath(__file__)))   # child scripts (sa_codes/, generated copies) use it to import core.*
 
+# Sender switch + "moving to noreply" note for every mail sent as kartavya.dhillon (core/mail_identity.py). Scripts started
+# as separate processes get the same wrapper through sitecustomize.py (found because the repo folder is on PYTHONPATH:
+# appended LAST so nothing in the repo can shadow a library; processes that already set their own PYTHONPATH keep it).
+# Never stops the console from booting.
+try:
+    _repo_dir = os.path.dirname(os.path.abspath(__file__))
+    _pp = os.environ.get("PYTHONPATH", "")
+    if _repo_dir.lower() not in [p.strip().lower() for p in _pp.split(os.pathsep)]:
+        os.environ["PYTHONPATH"] = (_pp + os.pathsep if _pp else "") + _repo_dir
+except Exception:
+    pass
+try:
+    from core import mail_identity as _mail_id
+    _mail_id.install()
+except Exception as _e:
+    print(f"⚠️  mail identity not installed: {type(_e).__name__}: {_e}")
+
 app = FastAPI(title="RMS Co-pilot API")
 
 
@@ -1865,6 +1882,30 @@ def ops_mcx_download_mode_set(body: _McxDownloadModeBody, request: Request):
     except Exception:
         pass
     return {"ok": True, **_mg.describe()}
+
+
+# ── MAIL SENDER: who the console's mails come from (core/mail_identity.py) ──────────────────────────────────────────
+#   auto = Kartavya + note until the switch date, then noreply | kartavya = always Kartavya + note | noreply = always noreply
+@app.get("/ops/mail-identity")
+def ops_mail_identity_get():
+    from core import mail_identity as _mi
+    return _mi.describe()
+
+
+class _MailIdentityBody(_OpsBaseModel):
+    mode: str
+
+
+@app.post("/ops/mail-identity")
+def ops_mail_identity_set(body: _MailIdentityBody, request: Request):
+    from core import mail_identity as _mi
+    _who, _adm = _actor(request)
+    try:
+        return {"ok": True, **_mi.set_mode(body.mode, _who or "")}
+    except ValueError as _e:
+        return {"ok": False, "error": str(_e)}
+    except OSError as _e:
+        return {"ok": False, "error": f"Could not save the choice: {_e}"}
 
 
 @app.get("/ops/locks")

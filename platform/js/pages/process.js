@@ -39,6 +39,7 @@
         '<div class="pc-bar"><div class="l"></div>' +
         '<div style="display:flex;gap:8px">' +
         '<button class="btn sm ghost pc-tcs" id="pcTcs" data-state="unknown" title="Who is using the TCS BANCS (MCX eclear) login right now, and who is next. Click for details."><span class="dot"></span><span class="lbl">TCS BANCS</span><b id="pcTcsState">\u2026</b></button>' +
+        '<button class="btn sm ghost" id="pcMail" title="Who the console\'s e-mails are sent from: Kartavya (with the moving-to-noreply note) or noreply_rms. Click to change.">\u2709 MAIL <b id="pcMailState">\u2026</b></button>' +
         '<button class="btn sm ghost" id="pcAuto" title="Automatic captcha and RSA-token filling, and the low-balance e-mail">\u26a1 AUTOFILL</button>' +
         '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
@@ -53,6 +54,7 @@
       $("#pcCommon").onclick = openCommon;
       captchaAutoInit();
       tcsInit();
+      mailIdInit();
       booted = true;
     },
   };
@@ -128,6 +130,45 @@
       if (r && r.ok) { if (tcsLast) tcsLast.download_mode = r; mcxModePaint(r); }
       else popup("MCX download method", (r && r.error) || "Could not change it", false);
     } catch (e) { popup("MCX download method", "Could not reach the server: " + e.message, false); }
+  });
+
+  /* ── MAIL SENDER switch: who every console e-mail (sent as Kartavya) comes from. Server side: /ops/mail-identity (core/mail_identity.py).
+        auto = Kartavya + a note until 1 Dec 2026, then noreply | kartavya = always Kartavya + note | noreply = always noreply.
+        Takes effect on the next mail. ── */
+  let mailLast = null;
+  function mailIdPaint() {
+    const s = document.getElementById("pcMailState"); if (!s || !mailLast) return;
+    s.textContent = mailLast.effective === "noreply" ? "noreply" : "Kartavya";
+    s.style.color = mailLast.effective === "noreply" ? "#4ade80" : "#fbbf24";
+  }
+  function mailIdHtml(d) {
+    const b = (m, t) => '<button class="btn sm ' + (d.mode === m ? "primary" : "ghost") + '" data-mailid="' + m + '" style="justify-content:center">' + t + "</button>";
+    return '<div style="font-size:13px;line-height:1.6"><div style="margin-bottom:8px">Mails now go out from: <b>' + esc(d.sender) + "</b></div>" +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + b("auto", "Automatic") + b("kartavya", "Kartavya + note") + b("noreply", "noreply") + "</div>" +
+      '<div style="opacity:.75;font-size:12px"><b>Automatic</b>: Kartavya with the "moving to noreply" note until ' + esc(d.switch_date) + ", then noreply by itself.<br>" +
+      "<b>Kartavya + note</b>: always Kartavya, note above the signature.<br><b>noreply</b>: every mail sent as Kartavya goes out as " + esc(d.noreply_user) + " (replies still go to Kartavya).<br>" +
+      "Mails of other people are never changed. It applies from the next mail." +
+      (d.noreply_ready ? "" : '<div style="color:#f87171;margin-top:6px">The noreply password (NOREPLY_SMTP_PASS) is not set on this server yet. Until it is, mails are still sent as Kartavya so nothing is lost.</div>') + "</div></div>";
+  }
+  async function mailIdRefresh() {
+    try { mailLast = await (await fetch("/ops/mail-identity", { credentials: "same-origin" })).json(); mailIdPaint(); } catch (e) { /* chip keeps its last text */ }
+  }
+  function mailIdInit() {
+    const b = document.getElementById("pcMail"); if (!b) return;
+    b.onclick = async () => { await mailIdRefresh(); if (mailLast) RMS.modal("Mail sender", mailIdHtml(mailLast), { width: 480, icon: "mail" }); };
+    mailIdRefresh();
+    setInterval(() => { if (!document.hidden) mailIdRefresh(); }, 60000);
+  }
+  document.addEventListener("click", async (ev) => {
+    const b = ev.target && ev.target.closest ? ev.target.closest("[data-mailid]") : null;
+    if (!b) return;
+    try {
+      const r = await (await fetch("/ops/mail-identity", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ mode: b.dataset.mailid }) })).json();
+      if (r && r.ok) {
+        mailLast = r; mailIdPaint();
+        document.querySelectorAll("[data-mailid]").forEach((x) => { x.className = "btn sm " + (x.dataset.mailid === r.mode ? "primary" : "ghost"); });
+      } else popup("Mail sender", (r && r.error) || "Could not change it", false);
+    } catch (e) { popup("Mail sender", "Could not reach the server: " + e.message, false); }
   });
 
   function tcsDetailHtml() {

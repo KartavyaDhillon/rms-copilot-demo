@@ -805,3 +805,12 @@ Allocation, CLI, CTCL, Margin Shortage, Live Allocation), `ctcl_codes/MCX_90_PER
 `sa_codes/mcx_tcs_pair_downloader.py` (MCX Cash Maintenance), `core/pipelines/probable_tcs_bancs.py` (PROBABLE).
 LIVE ALLOCATION only: when the grid view fails 5 times it falls back to the previous (queued export) method. Tests:
 `tests/test_mcx_grid.py`.
+
+## Mail sender switch (core/mail_identity.py)
+smtplib.SMTP / SMTP_SSL are wrapped once per process (api.py at start-up; child scripts through the repo-root
+`sitecustomize.py`, found because the repo folder is on PYTHONPATH). Only mails sent as kartavya.dhillon@mastertrust.co.in
+are touched. Mode (`.mail_identity.json`, gitignored; button "MAIL" in the Process Center; `/ops/mail-identity`):
+`auto` = Kartavya + an amber note above the signature until 2026-12-01, then noreply_rms@mastertrust.co.in; `kartavya`
+= always Kartavya + note; `noreply` = always noreply (login, From and envelope rewritten, Reply-To stays Kartavya).
+Needs `NOREPLY_SMTP_PASS` (and optionally `NOREPLY_SMTP_USER`) in `.env.local`. If the password is missing or the login
+is refused, the mail goes out the old way and nothing is lost. Tests: tests/test_mail_identity.py.
