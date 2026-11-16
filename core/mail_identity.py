@@ -181,7 +181,7 @@ def describe():
     eff = effective(cfg)
     user, pw = noreply_creds(cfg)
     return {"mode": cfg["mode"], "effective": eff, "switch_date": cfg["switch_date"], "sender": user if eff == "noreply" else cfg["old_user"],
-            "noreply_user": user, "noreply_ready": bool(pw), "old_user": cfg["old_user"],
+            "noreply_user": user, "noreply_ready": bool(pw), "old_user": cfg["old_user"], "old_users": _old_users(cfg),
             "label": {"auto": "Automatic (noreply from " + str(cfg["switch_date"]) + ")", "kartavya": "Always Kartavya (with note)",
                       "noreply": "Always noreply"}[cfg["mode"]]}
 

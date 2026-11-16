@@ -143,11 +143,14 @@
   }
   function mailIdHtml(d) {
     const b = (m, t) => '<button class="btn sm ' + (d.mode === m ? "primary" : "ghost") + '" data-mailid="' + m + '" style="justify-content:center">' + t + "</button>";
-    return '<div style="font-size:13px;line-height:1.6"><div style="margin-bottom:8px">Mails now go out from: <b>' + esc(d.sender) + "</b></div>" +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + b("auto", "Automatic") + b("kartavya", "Kartavya + note") + b("noreply", "noreply") + "</div>" +
-      '<div style="opacity:.75;font-size:12px"><b>Automatic</b>: Kartavya with the "moving to noreply" note until ' + esc(d.switch_date) + ", then noreply by itself.<br>" +
-      "<b>Kartavya + note</b>: always Kartavya, note above the signature.<br><b>noreply</b>: every mail sent as Kartavya goes out as " + esc(d.noreply_user) + " (replies still go to Kartavya).<br>" +
-      "Mails of other people are never changed. It applies from the next mail.</div>" +
+    const who = (d.old_users && d.old_users.length ? d.old_users : [d.old_user]);
+    return '<div style="font-size:13px;line-height:1.6"><div style="margin-bottom:4px">Applies to mails sent as:</div>' +
+      '<div style="margin-bottom:8px">' + who.map((u) => "<b>" + esc(u) + "</b>").join("<br>") + '</div>' +
+      '<div style="margin-bottom:8px">They go out from: <b>' + esc(d.effective === "noreply" ? d.noreply_user : "their own address (with the note)") + "</b></div>" +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + b("auto", "Automatic") + b("kartavya", "Kartavya/Sandeep + note") + b("noreply", "noreply") + "</div>" +
+      '<div style="opacity:.75;font-size:12px"><b>Automatic</b>: their own address with the "moving to noreply" note until ' + esc(d.switch_date) + ", then noreply by itself.<br>" +
+      "<b>Kartavya/Sandeep + note</b>: always their own address, note above the signature.<br><b>noreply</b>: every mail sent as the addresses above goes out as " + esc(d.noreply_user) + " (replies still go to the person it was sent as).<br>" +
+      "Not changed: other people's mails and the Darwinbox mailer (it stays Sandeep). It applies from the next mail.</div>" +
       '<div style="border-top:1px solid rgba(128,128,128,.3);margin-top:12px;padding-top:10px">' +
       '<div style="margin-bottom:4px"><b>noreply password</b> <span id="mailPassState" style="font-size:12px;color:' + (d.noreply_ready ? "#4ade80" : "#f87171") + '">' +
       (d.noreply_ready ? "saved" : "not set – until it is, mails are still sent as Kartavya so nothing is lost") + "</span></div>" +
