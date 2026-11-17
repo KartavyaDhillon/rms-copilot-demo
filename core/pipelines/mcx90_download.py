@@ -217,6 +217,10 @@ def share_new_mcx_with_ctcl(ms15_dir, since):
     """Copy the MCX file(s) Margin Shortage downloaded since `since` into the CTCL vs NMASS folder. -> log lines."""
     out = []
     try:
+        from core import ms15_auto as _ma
+        _n = _ma.ctcl_run_soon()
+        if _n is None:                       # no CTCL run is close: its folder must not fill up with files it will never use
+            return [f"Not shared with CTCL vs NMASS - none of its runs starts within {_ma.MAX_AGE_MIN} minutes."]
         ctcl_dir = _pipe_folder("ctcl")
         if os.path.normcase(os.path.abspath(ctcl_dir)) == os.path.normcase(os.path.abspath(ms15_dir)):
             return out
@@ -225,6 +229,10 @@ def share_new_mcx_with_ctcl(ms15_dir, since):
             if os.path.isfile(p) and _is_mcx_name(f) and os.path.getmtime(p) >= since:
                 shutil.copy2(p, os.path.join(ctcl_dir, f))
                 out.append(f"Shared with CTCL vs NMASS: {f} -> {ctcl_dir}")
+        if out:                              # a newer file has arrived: the older ones of the same kind go now
+            from core import stale_files as _sf
+            _res = _sf.purge_mcx(ctcl_dir, datetime.datetime.now().strftime("%Y%m%d"), log=lambda *_a, **_k: None)
+            out += [f"Deleted older CTCL vs NMASS MCX file: {os.path.basename(str(d))}" for d in _res.get("deleted", [])]
     except Exception as e:                                   # noqa: BLE001
         out.append(f"Could not share the MCX file(s) with CTCL vs NMASS: {e}")
     return out
@@ -240,7 +248,7 @@ def _friendly_auth_msg(server, reason):
             f"Update it in Credentials and try again.")
 
 
-def stream_mcx90_download(pipe="ctcl", both=False, extra_env=None):
+def stream_mcx90_download(pipe="ctcl", both=False, extra_env=None, max_age_min=None):
     """Generator that runs the MCX90 download script and yields SSE event dicts.
 
     `pipe` is "ctcl" (default, CTCL vs NMASS box) or "ms15" (Margin Shortage
@@ -265,17 +273,21 @@ def stream_mcx90_download(pipe="ctcl", both=False, extra_env=None):
     python = os.getenv("CTCL_PYTHON", os.getenv("SA_PYTHON", "python"))
 
     own_dir = _pipe_folder(pipe)
+    # A pre-fetch (CTCL vs NMASS, minutes before its run) passes a stricter age: a file that is 44 min old NOW is 51 min old
+    # when the run starts, so it must not count as "already present".
+    _maxage = float(max_age_min) if max_age_min else (
+        float(os.getenv("CTCL_MCX_MAX_AGE_MIN", "30")) if pipe == "ctcl" else _MCX90_MAX_AGE_MIN)
     # Clear out anything from today that is already too old to use, BEFORE the
     # "already present" check — otherwise a stale file satisfies that check and
     # blocks the download, which is exactly what happened when a 09:51 file
     # stopped the 11:30 run from fetching current numbers.
-    for _pl in _purge_stale_mcx_files(own_dir):
+    for _pl in _purge_stale_mcx_files(own_dir, _maxage):
         yield {"type": "log", "msg": _pl}
-    _existing = _today_mcx_file(own_dir, _MCX90_MAX_AGE_MIN)
+    _existing = _today_mcx_file(own_dir, _maxage)
     if _existing and both:
         # both files wanted: only skip when a fresh MCX Deposit file is in the folder too
         _dep = [f for f in glob.glob(os.path.join(own_dir, "MCX_DEPOSIT_*.xlsx"))
-                if (_file_age_min(f) or 1e9) <= _MCX90_MAX_AGE_MIN]
+                if (_file_age_min(f) or 1e9) <= _maxage]
         if not _dep:
             _existing = None
     if _existing:
@@ -284,6 +296,14 @@ def stream_mcx90_download(pipe="ctcl", both=False, extra_env=None):
         _msg1 = ("Today's MCX 90% file already present (" + os.path.basename(_existing)
                  + _agetxt + ") - skipping download.")
         yield {"type": "log", "msg": _msg1}
+        try:                                  # a skipped download still leaves a log in this box's Logs
+            _ld = os.path.join(_REPO, "logs", pipe if pipe in ("ctcl", "ms15") else "ctcl")
+            os.makedirs(_ld, exist_ok=True)
+            with open(os.path.join(_ld, f"{pipe if pipe in ('ctcl', 'ms15') else 'ctcl'}_{'mcx_both' if both else 'mcx90'}__"
+                                   f"{datetime.datetime.now():%Y%m%d_%H%M%S}.log"), "w", encoding="utf-8") as _sf:
+                _sf.write(f"# MCX download skipped\n{_msg1}\n")
+        except Exception:
+            pass
         yield {"type": "done", "ok": True,
                "msg": ("MCX 90% and MCX Deposit files already available" if both else "MCX 90% file already available")}
         yield {"type": "end"}

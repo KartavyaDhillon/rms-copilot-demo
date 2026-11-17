@@ -5425,7 +5425,8 @@ def _readiness_for(_dir, pipe="ctcl"):
     _mcx = _ff.newest(_dir, lambda f: f.lower().endswith(".xlsx") and "update limits" not in f.lower()
                       and (_sfm._MCX_STAMPED.search(f) or f.upper().startswith(_sfm._MCX_OWN_DEPOSIT))
                       and _sfm.has_columns(_ros.path.join(_dir, f), _cols), kind="mcx90")
-    _r = _ff.check(_mcx, kind="mcx90") if _mcx else {
+    _mx_limit = _ff.max_age_ctcl_mcx() if pipe == "ctcl" else _ff.max_age_mcx90()
+    _r = _ff.check(_mcx, kind="mcx90", max_age_min=_mx_limit) if _mcx else {
         "ok": False, "age_min": None, "name": "", "why": "not present"}
     items.append({"key": "MCX_90_PERCENT", "ok": _r["ok"],
                   "example": ("MCX Deposit / MCX 90% — using Deposit (.xlsx)" if _want == "deposit"
@@ -5435,7 +5436,7 @@ def _readiness_for(_dir, pipe="ctcl"):
 
     return {"items": items, "folder": _dir,
             "max_age_min": {"collateral": _ff.max_age_collateral(),
-                            "mcx90": _ff.max_age_mcx90()}}
+                            "mcx90": _mx_limit}}
 
 
 # ── Margin Shortage (15-min) download + captcha/token + readiness ──────────

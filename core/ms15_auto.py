@@ -480,7 +480,26 @@ def due_action(now: dt.datetime, st=None, state=None, times=None, counter=None):
 
 
 # ───────────────────────── CTCL vs NMASS: MCX files before ITS runs ─────────────────────────
-MAX_AGE_MIN = 45
+MAX_AGE_MIN = _env_int("CTCL_MCX_MAX_AGE_MIN", 30)              # CTCL vs NMASS: its MCX file must be at most this old
+
+
+def ctcl_run_soon(now=None, window=None):
+    """CTCL run number that is about to start (T - window <= now <= T + 10 min) and has not run yet, else None.
+    Margin Shortage only hands its MCX files to CTCL vs NMASS when one of its runs is this close."""
+    now = now or dt.datetime.now()
+    window = MAX_AGE_MIN if window is None else window
+    cur = now.hour * 60 + now.minute
+    counter = 0
+    try:
+        folder = os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+        a, b = open(os.path.join(folder, "run_counter.txt"), encoding="utf-8", errors="replace").read().strip().split("|", 1)
+        counter = int(b) if a.strip() == now.strftime("%Y-%m-%d") else 0
+    except Exception:
+        counter = 0
+    for n, t in sorted(ctcl_times().items()):
+        if n > counter and t - window <= cur <= t + 10:
+            return n
+    return None
 
 
 def ctcl_times() -> dict:
@@ -542,25 +561,79 @@ def _ctcl_mark(n, what):
         _write_state(d)
 
 
+def ctcl_log(msg):
+    """CTCL vs NMASS auto-prefetch lines go to the CTCL box's own Logs (logs/ctcl), not to Margin Shortage's."""
+    line = f"[{dt.datetime.now():%H:%M:%S}] {msg}"
+    print("[ctcl-auto] " + line, flush=True)
+    try:
+        d = os.path.join(REPO, "logs", "ctcl")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"AUTORUN__{dt.date.today():%Y%m%d}.log"), "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
 def _ctcl_download(n):
     def work():
         from core.pipelines.mcx90_download import stream_mcx90_download
-        log(f"CTCL vs NMASS run {n:02d}: downloading both MCX files for it now.")
-        ok, msg = _consume(stream_mcx90_download(pipe="ctcl", both=True, extra_env={"MCX_TOKEN_MODE": "auto"}))
+        ctcl_log(f"CTCL vs NMASS run {n:02d}: downloading both MCX files for it now.")
+        lead = get_settings()["ctcl_lead_min"]
+        ok, msg = _consume(stream_mcx90_download(pipe="ctcl", both=True, extra_env={"MCX_TOKEN_MODE": "auto"},
+                                                 max_age_min=max(5, MAX_AGE_MIN - lead - 1)))
         _ctcl_mark(n, "done" if ok else "failed")
-        log(f"CTCL vs NMASS run {n:02d}: MCX download " + ("finished." if ok else f"FAILED: {msg}"))
+        if ok and "already available" in msg:
+            ctcl_log(f"CTCL vs NMASS run {n:02d}: current MCX files were already in the folder - nothing downloaded.")
+        else:
+            ctcl_log(f"CTCL vs NMASS run {n:02d}: MCX download " + ("finished." if ok else f"FAILED: {msg}"))
     _ctcl_mark(n, "running")
     threading.Thread(target=work, name=f"ctcl-mcx-{n}", daemon=True).start()
 
 
+def purge_stale_ctcl_mcx(now_ts=None):
+    """MCX files left in the CTCL vs NMASS folder that are older than the CTCL limit can never be used: delete them.
+    Not while a CTCL run is going. -> names deleted."""
+    gone = []
+    try:
+        from core.pipeline_box import _PB
+        if _PB.get("ctcl", {}).get("running"):
+            return gone
+    except Exception:
+        pass
+    from core.pipelines.mcx90_download import _is_mcx_name
+    folder = os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS")
+    now_ts = now_ts or time.time()
+    try:
+        for f in os.listdir(folder):
+            p = os.path.join(folder, f)
+            if os.path.isfile(p) and _is_mcx_name(f) and (now_ts - os.path.getmtime(p)) / 60.0 > MAX_AGE_MIN:
+                try:
+                    os.remove(p)
+                    gone.append(f)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    if gone:
+        ctcl_log(f"Deleted old MCX file(s) from the CTCL vs NMASS folder (older than {MAX_AGE_MIN} min, no longer usable): {', '.join(gone)}")
+    return gone
+
+
 def tick_ctcl(now=None):
+    if not get_settings().get("ctcl_prefetch"):
+        pass
+    else:
+        try:
+            purge_stale_ctcl_mcx()
+        except Exception as e:                                   # noqa: BLE001
+            print(f"[ms15-auto] ctcl purge error: {type(e).__name__}: {e}", flush=True)
     act = due_ctcl(now or dt.datetime.now())
     if not act:
         return None
     kind, n, age = act
     if kind == "skip":
         _ctcl_mark(n, "skipped")
-        log(f"CTCL vs NMASS run {n:02d}: its MCX file is {age:.0f} min old (fresh enough, from Margin Shortage) - no download.")
+        ctcl_log(f"CTCL vs NMASS run {n:02d}: its MCX file is {age:.0f} min old (fresh enough, from Margin Shortage) - no download.")
     else:
         _ctcl_download(n)
     return act

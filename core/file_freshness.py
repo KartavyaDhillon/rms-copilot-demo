@@ -62,6 +62,11 @@ def max_age_collateral():
     return _env_float("NMASS_MAX_FILE_AGE_MIN", 4)
 
 
+def max_age_ctcl_mcx():
+    """CTCL vs NMASS only: its MCX file may be at most this old (default 30 min; Margin Shortage keeps its own limit)."""
+    return _env_float("CTCL_MCX_MAX_AGE_MIN", 30)
+
+
 def max_age_mcx90():
     return _env_float("MCX90_MAX_FILE_AGE_MIN", 45)
 
