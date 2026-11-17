@@ -108,7 +108,7 @@
       '<input class="wt-in" id="trkQ" placeholder="Search tasks…" style="width:220px">' +
       '<select class="wt-sel" id="trkWho"></select><span id="trkKchip"></span><div class="spacer"></div>' +
       '<button class="btn ghost" id="trkPeople" title="Mobile, e-mail and reminder settings">' + RMS.icon("bell") + " People and alerts</button>" +
-      '<button class="btn primary" id="trkNew">' + RMS.icon("check") + " New task</button></div>" +
+      '<button class="btn primary" id="trkNew"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> New task</button></div>' +
       '<div id="trkBody"><div class="card-sub" style="padding:40px;text-align:center">Loading…</div></div>';
   }
 
@@ -405,7 +405,7 @@
       '<td><input class="wt-in" data-f="mobile" style="width:130px" placeholder="9876543210" value="' + esc(p.mobile) + '"></td>' +
       '<td><input class="wt-in" data-f="email" style="width:210px" placeholder="name@company.com" value="' + esc(p.email) + '"></td>' +
       "<td>" + (mgr && !p.admin ? '<select class="wt-sel" data-f="role"><option value="member"' + (p.role === "member" ? " selected" : "") + '>Member</option><option value="manager"' + (p.role === "manager" ? " selected" : "") + ">Manager</option></select>" :
-        '<span class="wt-pill">' + (p.role === "manager" ? "Manager" : "Member") + "</span>") + '</td><td><button class="btn sm" data-save="' + esc(p.id) + '">Save</button></td></tr>').join("");
+        '<span class="wt-pill">' + (p.admin ? "Admin" : p.role === "manager" ? "Manager" : "Member") + "</span>") + '</td><td><button class="btn sm" data-save="' + esc(p.id) + '">Save</button></td></tr>').join("");
     const close = RMS.modal("People and alerts",
       '<div class="card-sub" style="margin-bottom:12px;line-height:1.6">The mobile number and e-mail are where a person gets the WhatsApp picture and the mail when a task is assigned to them, when somebody comments, and in the daily list. ' +
       (mgr ? "Managers see every task that is not a private note." : "You can change your own details here.") + "</div>" +
