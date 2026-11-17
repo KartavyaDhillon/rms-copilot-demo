@@ -511,13 +511,18 @@
           loadOther(note);
         } catch (e) { $("#pcOtherMsg").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; }
       };
-      box.querySelectorAll("[data-pcdel]").forEach((a) => a.onclick = async (ev) => {
+      box.querySelectorAll("[data-pcdel]").forEach((a) => a.onclick = (ev) => {
         ev.preventDefault();
         const n = a.getAttribute("data-pcdel");
-        const pw = window.prompt("Delete " + n + " from OTHER FILES?\nEnter the console password to confirm:");
-        if (!pw) return;
-        const r = await (await fetch("/common/other/delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n, password: pw }) })).json().catch(() => ({}));
-        loadOther(r.ok ? "Deleted " + esc(n) : '<span style="color:var(--err)">' + esc(r.error || "failed") + "</span>");
+        $("#pcOtherMsg").innerHTML = "Delete <b>" + esc(n) + "</b>? Console password: " +
+          '<input type="password" id="pcDelPw" style="margin:0 6px;padding:4px 8px;border-radius:7px;border:1px solid var(--line,#2a3342);background:transparent;color:inherit"> ' +
+          '<button class="btn sm" id="pcDelGo" style="background:var(--err);color:#fff">Delete</button> <button class="btn sm ghost" id="pcDelNo">Cancel</button>';
+        $("#pcDelPw").focus();
+        $("#pcDelNo").onclick = () => { $("#pcOtherMsg").innerHTML = ""; };
+        $("#pcDelGo").onclick = async () => {
+          const r = await (await fetch("/common/other/delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n, password: $("#pcDelPw").value }) })).json().catch(() => ({}));
+          loadOther(r.ok ? '<span style="color:var(--ok,#34d399)">✔ Deleted ' + esc(n) + "</span>" : '<span style="color:var(--err)">' + esc(r.error || "failed") + "</span>");
+        };
       });
     }
     let getBooted = false;

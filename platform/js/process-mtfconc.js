@@ -27,6 +27,30 @@
   function modal(t, h) { hideTip(); if (typeof window.saShowModal === 'function') window.saShowModal(t, h); }
   function iso(n) { var d = new Date(Date.now() - (n || 0) * 864e5); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 
+  // ---- in-console popups (never the browser's own alert / confirm) ----
+  function toast(text, kind) {
+    var old = $('cqToast'); if (old) old.remove();
+    var el = document.createElement('div'); el.id = 'cqToast';
+    var col = kind === 'err' ? 'var(--red,#f87171)' : kind === 'warn' ? 'var(--amber,#fbbf24)' : 'var(--green,#34d399)';
+    el.style.cssText = 'position:fixed;top:22px;left:50%;transform:translateX(-50%);z-index:100000;max-width:min(560px,92vw);padding:12px 18px;border-radius:12px;' +
+      'background:var(--panel,#141821);color:var(--ink,#e8ecf3);border:1px solid ' + col + ';box-shadow:0 10px 34px rgba(0,0,0,.5);font-size:13px;line-height:1.45;display:flex;gap:10px;align-items:flex-start';
+    el.innerHTML = '<span style="color:' + col + ';font-weight:800">' + (kind === 'err' ? '✕' : kind === 'warn' ? '!' : '✓') + '</span><span>' + esc(text) + '</span>';
+    document.body.appendChild(el);
+    setTimeout(function () { if (el.parentNode) el.remove(); }, kind === 'err' ? 7000 : 3800);
+  }
+  function confirmBox(title, text, okLabel, cb) {
+    var old = $('cqConfirm'); if (old) old.remove();
+    var bg = document.createElement('div'); bg.id = 'cqConfirm';
+    bg.style.cssText = 'position:fixed;inset:0;z-index:100001;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+    bg.innerHTML = '<div style="background:var(--panel,#141821);color:var(--ink,#e8ecf3);border:1px solid var(--line-2,#2a3342);border-radius:14px;padding:20px 22px;width:min(420px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.6)">' +
+      '<div style="font-size:15px;font-weight:700;margin-bottom:8px">' + esc(title) + '</div><div style="font-size:13px;color:var(--muted,#9aa4b5);line-height:1.5;margin-bottom:16px">' + esc(text) + '</div>' +
+      '<div style="display:flex;gap:10px;justify-content:flex-end"><button class="sa-tool" id="cqNo" style="min-width:90px">Cancel</button><button class="sa-tool" id="cqYes" style="min-width:90px;background:var(--red,#f87171);color:#2a0a0a;border-color:transparent">' + esc(okLabel || 'OK') + '</button></div></div>';
+    document.body.appendChild(bg);
+    $('cqNo').onclick = function () { bg.remove(); };
+    $('cqYes').onclick = function () { bg.remove(); cb(); };
+    bg.onclick = function (e) { if (e.target === bg) bg.remove(); };
+  }
+
   var css = document.createElement('style');
   css.textContent =
     '.cq-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:0 0 12px}' +
@@ -136,6 +160,7 @@
   window.cqOpen = cqOpen;
 
   function say(txt, kind) {
+    if (txt) toast(txt, kind);
     var el = $('cqMsg');
     if (el) el.innerHTML = txt ? '<div class="cq-msg" style="color:' + (kind === 'err' ? 'var(--red)' : 'var(--green)') + '">' + esc(txt) + '</div>' : '';
     clearTimeout(S.msgTimer);
@@ -154,7 +179,7 @@
   }
   function kpis(d) {
     var ins = d.inputs || [], ok = ins.filter(function (x) { return x.ok; }).length;
-    var run = d.running ? 'Running' : (ST[d.status] || d.status);
+    var run = d.stopping ? 'Stopping…' : d.running ? 'Running' : (ST[d.status] || d.status);
     var zones = (d.made || []).filter(function (x) { return x !== 'FULL'; }).length;
     return '<div class="cq-kpis">' +
       kpi('Today', '<span style="color:' + (d.status === 'failed' ? 'var(--red)' : d.status === 'done' ? 'var(--green)' : 'var(--ink)') + '">' + run + '</span>', (d.started ? 'started ' + d.started.slice(11, 16) : 'not started') + (d.trigger ? ' · ' + d.trigger : '') + (d.by ? ' · ' + d.by : '')) +
@@ -194,16 +219,16 @@
   function paintTile(d) {
     var chip = $('cqChip'), mini = $('cqMini');
     if (!chip || !d || !d.steps) return;
-    chip.textContent = d.running ? 'running' : d.status === 'failed' ? 'failed' : d.status === 'done' ? 'done' : !d.auto ? 'auto off' : 'idle';
+    chip.textContent = d.stopping ? 'stopping' : d.running ? 'running' : d.status === 'failed' ? 'failed' : d.status === 'done' ? 'done' : !d.auto ? 'auto off' : 'idle';
     chip.style.color = d.running ? 'var(--blue)' : d.status === 'failed' ? 'var(--red)' : d.status === 'done' ? 'var(--green)' : !d.auto ? 'var(--amber)' : 'var(--dim)';
     var ok = (d.inputs || []).filter(function (x) { return x.ok; }).length, s = d.settings || {};
-    mini.textContent = d.running ? 'Running…' : d.status === 'done' ? 'Done · ' + (d.made || []).length + ' file(s) · ' + (d.sent || []).length + ' mail(s)' : d.status === 'failed' ? 'Failed - open for details' : ok + ' / ' + (d.inputs || []).length + ' files in' + (d.auto ? ' · run at ' + s.run_at : ' · auto OFF');
+    mini.textContent = d.stopping ? 'Stopping…' : d.running ? 'Running…' : d.status === 'done' ? 'Done · ' + (d.made || []).length + ' file(s) · ' + (d.sent || []).length + ' mail(s)' : d.status === 'failed' ? 'Failed - open for details' : ok + ' / ' + (d.inputs || []).length + ' files in' + (d.auto ? ' · run at ' + s.run_at : ' · auto OFF');
   }
   function load() {
     var next = 8000;
     return get(BASE + '/status').then(function (d) {
       S.data = d;
-      if (d && d.steps) { paintTile(d); if (modalOpen()) paintDyn(); if (d.running || d.fetching) next = 2500; }
+      if (d && d.steps) { paintTile(d); if (modalOpen()) paintDyn(); if (d.running || d.fetching || d.stopping) next = 2000; }
     }).catch(function () { next = 15000; }).then(function () { schedule(next); });
   }
   function schedule(ms) {
@@ -222,14 +247,15 @@
   function startRun(pw) {
     post(BASE + '/run', pw ? { password: pw } : {}).then(function (j) {
       if (j && j.need_password) { ask('Run again (today\'s run already succeeded)', function (p) { startRun(p); }); return; }
-      if (j && j.ok) say('Started - watch the steps and the live log.'); else say((j && (j.error || j.msg || j.detail)) || 'Could not start.', 'err');
+      if (j && j.ok) say('Run started - watch the steps and the live log.'); else say((j && (j.error || j.msg || j.detail)) || 'Could not start.', 'err');
       reload();
     });
   }
   window.cqRun = function () { startRun(''); };
   window.cqStop = function () {
-    if (!window.confirm('Stop the run / download that is going now?')) return;
-    post(BASE + '/stop').then(function (j) { say(j && j.stopped ? 'Stopping…' : 'Nothing is running.'); reload(); });
+    confirmBox('Stop MTF CONCENTRATION?', 'The run or download that is going now will be stopped. Files already downloaded are kept.', 'Stop', function () {
+      post(BASE + '/stop').then(function (j) { say(j && j.stopped ? 'Stop requested - it ends in a few seconds.' : 'Nothing is running.', j && j.stopped ? 'ok' : 'warn'); reload(); });
+    });
   };
   window.cqAuto = function () {
     var on = !(S.data && S.data.auto);
@@ -263,6 +289,7 @@
     var btn = $('cqSetBtn'), m = $('cqSetMsg'); if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     post(BASE + '/settings', { password: S.pw, download_at: $('cqT1').value, mtf_at: $('cqT2').value, run_at: $('cqT3').value, send_mail: $('cqMail').checked, copy_dir: $('cqCopy').value, alert_numbers: $('cqAlert').value }).then(function (j) {
       if (btn) { btn.disabled = false; btn.textContent = j && j.ok ? '✓ Saved' : 'Save settings'; }
+      if (j && j.ok) toast('Settings saved.'); else toast((j && j.error) || 'Could not save the settings.', 'err');
       if (m) m.innerHTML = j && j.ok ? '<span style="color:var(--green)">Saved.</span>' : '<span style="color:var(--red)">' + esc((j && j.error) || 'Failed') + '</span>';
       reload();
     });
@@ -296,7 +323,7 @@
       var go = $('cqBkGo'); if (go) { go.disabled = !tot; go.style.opacity = tot ? '1' : '.45'; }
     });
   };
-  window.cqBkDownload = function () { window.location.href = API + BASE + '/zip-range?from_date=' + encodeURIComponent(S.bk.from) + '&to_date=' + encodeURIComponent(S.bk.to); };
+  window.cqBkDownload = function () { toast('Preparing the zip - the download starts in a moment.'); window.location.href = API + BASE + '/zip-range?from_date=' + encodeURIComponent(S.bk.from) + '&to_date=' + encodeURIComponent(S.bk.to); };
 
   // ───────────────────────── Upload files ─────────────────────────
   window.cqUpload = function () {
@@ -320,6 +347,7 @@
       var h = '<div class="cq-msg" style="color:' + ((j.rejected || []).length ? 'var(--amber)' : 'var(--green)') + '">' + (j.ok || []).length + ' file(s) saved' + ((j.rejected || []).length ? ' · ' + j.rejected.length + ' not accepted' : '') + '</div>';
       (j.ok || []).forEach(function (m) { h += '<div class="cq-frow"><span style="color:var(--green)">✓</span><span class="n">' + esc(m) + '</span></div>'; });
       (j.rejected || []).forEach(function (m) { h += '<div class="cq-frow"><span style="color:var(--red)">✕</span><span class="n">' + esc(m) + '</span></div>'; });
+      toast((j.ok || []).length ? (j.ok.length + ' file(s) saved.') : 'No file was saved.', (j.ok || []).length ? (((j.rejected || []).length) ? 'warn' : 'ok') : 'err');
       res.innerHTML = h; reload();
     }).catch(function (e) { if (res) res.innerHTML = '<div style="color:var(--red)">Upload failed: ' + esc(e.message || e) + '</div>'; });
   }

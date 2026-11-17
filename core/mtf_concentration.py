@@ -416,6 +416,31 @@ def _fy(d: dt.date) -> str:
     return f"{d.year}-{d.year + 1}" if d.month >= 4 else f"{d.year - 1}-{d.year}"
 
 
+def cancellable(fn, what: str, every: float = 30.0, poll: float = 0.5):
+    """Run a long, blocking call (a slow report request) in a helper thread so that Stop works and the log shows it is alive.
+    Returns fn()'s result, re-raises its error, raises Cancelled when Stop is pressed (the helper thread is abandoned)."""
+    box = {}
+
+    def work():
+        try:
+            box["r"] = fn()
+        except BaseException as e:                               # noqa: BLE001
+            box["e"] = e
+    th = threading.Thread(target=work, name="mtfconc-call", daemon=True)
+    th.start()
+    t0, last = time.time(), time.time()
+    while th.is_alive():
+        th.join(poll)
+        if _cancel():
+            raise Cancelled("Stopped.")
+        if time.time() - last >= every:
+            last = time.time()
+            log(f"{what}: still waiting for the answer… ({int(time.time() - t0)} s)")
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
+
+
 def step_korp(base: Path, force: bool = False) -> dict:
     """MTF CRR report 5 from the back-office API -> <ddmmyyyyHHMMSS>_SHORTAGE.xlsx (same columns / order as the hand script)."""
     if not force and find_shortage(base):
@@ -453,7 +478,9 @@ def step_korp(base: Path, force: bool = False) -> dict:
     for attempt in range(1, 4):
         _check_cancel()
         try:
-            r = s.post(f"{b}/api/Reports/MTFCRRReport/Post", headers=hdr, json=payload, timeout=(10, 900))
+            log("MTF CRR report 5: asking the back office (it can take a few minutes)…")
+            r = cancellable(lambda: s.post(f"{b}/api/Reports/MTFCRRReport/Post", headers=hdr, json=payload, timeout=(10, 3000)),
+                            "MTF CRR report 5")
             if r.status_code == 200:
                 data = r.json()
                 if data:
@@ -461,6 +488,8 @@ def step_korp(base: Path, force: bool = False) -> dict:
                 last = "the report came back empty"
             else:
                 last = f"HTTP {r.status_code} {r.text[:150]}"
+        except Cancelled:
+            raise
         except Exception as e:                                   # noqa: BLE001
             last = f"{type(e).__name__}: {e}"
         log(f"MTF CRR report 5: try {attempt}/3 failed: {last}")
@@ -605,8 +634,16 @@ DOWNLOADS = ("korp", "index")                 # the 08:40 job
 def _do_step(name: str, base: Path, force: bool = False, have_lock: bool = False) -> dict:
     lk = _STEP_LOCKS[name]
     if not have_lock:
-        lk.acquire()
+        t0, noted = time.time(), 0.0
+        while not lk.acquire(timeout=1):                         # the same download is already running (the timer's?) - wait, but Stop works
+            if _cancel():
+                _set_step(name, "stopped", "Stopped.")
+                return {"ok": False, "msg": "Stopped."}
+            if time.time() - noted >= 30:
+                noted = time.time()
+                log(f"{STEP_LABEL[name]}: the same download is already running (started by the timer or a button) - waiting for it… ({int(time.time() - t0)} s)")
     try:
+        log(f"{STEP_LABEL[name]}: starting…")
         _set_step(name, "running")
         try:
             r = STEPS[name](base, force) if name in ("korp", "index") else STEPS[name](base)
@@ -1242,6 +1279,10 @@ def status() -> dict:
     set_ = get_settings()
     inputs = input_status()
     steps = {k: dict(v) for k, v in (st.get("steps") or {}).items()}
+    busy = running or any_fetching()
+    for v in steps.values():                                     # a step still marked running while nothing runs = the server restarted
+        if v.get("status") == "running" and not busy:
+            v["status"], v["msg"] = "failed", "interrupted (the server restarted or the step was stopped)"
     by = {r["key"]: r for r in inputs}
     if not running:        # a step shown as failed but whose file is now there (uploaded by hand) is shown as present
         for step, keys in (("korp", ("SHORTAGE",)), ("index", ("NIFTY50", "BSE200", "BSE500")), ("mtfpos", ("MTFPOSITION",)),
@@ -1251,7 +1292,7 @@ def status() -> dict:
                 steps[step] = {"status": "done", "msg": "file(s) in place: " + ", ".join(by[k]["name"] for k in keys), "at": (steps.get(step) or {}).get("at", "")}
     sc = st.get("sched", {})
     return {"name": NAME, "date": st.get("date"), "status": "running" if running else s, "running": running,
-            "fetching": any_fetching(), "started": st.get("started", ""), "finished": st.get("finished", ""),
+            "fetching": any_fetching(), "stopping": bool(_ACTIVE.get("cancel")) and busy, "started": st.get("started", ""), "finished": st.get("finished", ""),
             "error": st.get("error", ""), "trigger": st.get("trigger", ""), "by": st.get("by", ""),
             "made": st.get("made", []), "sent": st.get("sent", []), "failed_mail": st.get("failed_mail", []),
             "copy_failed": bool(st.get("copy_failed")), "alert_sent": bool(st.get("alert_sent")), "alert_reason": st.get("alert_reason", ""),

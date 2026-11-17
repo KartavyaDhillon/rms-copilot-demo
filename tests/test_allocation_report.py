@@ -57,6 +57,22 @@ class AllocHelpers(unittest.TestCase):
         self.assertFalse(st["running"])
         self.assertEqual(st["last_manual"], {})
 
+class OpeningDate(unittest.TestCase):
+    def test_dates(self):
+        import datetime as dt
+        d = lambda s: dt.datetime.strptime(s, "%Y-%m-%d %H:%M")
+        f = ar._opening_date
+        # custom range that starts at the nightly cut -> next day's folder (the 9th)
+        self.assertEqual(f("custom", d("2026-11-08 23:59"), d("2026-11-09 23:59")), dt.date(2026, 11, 9))
+        # normal day windows keep the start day
+        self.assertEqual(f("custom", d("2026-11-08 08:00"), d("2026-11-08 23:59")), dt.date(2026, 11, 8))
+        self.assertEqual(f("sofar", d("2026-11-09 08:00"), d("2026-11-09 11:00")), dt.date(2026, 11, 9))
+        # a late start with no later end stays on its own day
+        self.assertEqual(f("custom", d("2026-11-08 23:59"), d("2026-11-08 23:59")), dt.date(2026, 11, 8))
+        # nightly close unchanged
+        self.assertEqual(f("close", d("2026-11-08 23:59"), d("2026-11-09 23:59")), dt.date(2026, 11, 9))
+
+
 class BackOfficeSnapshots(unittest.TestCase):
     """BOD / AFTERNOON / EVENING allocation: named by order of the day's backup folders, optional EVENING, Back Office rows,
     and log rows chained on the latest snapshot."""

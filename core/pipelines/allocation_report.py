@@ -399,6 +399,11 @@ def read_log_file(name: str, max_bytes: int = 400_000):
 def _opening_date(mode: str, start: dt.datetime, end: dt.datetime) -> dt.date:
     if mode == "close":
         return (end if end.hour >= 6 else end - dt.timedelta(days=1)).date()
+    # A window that starts at the very end of a day (the nightly cut, 23:30 or later) belongs to
+    # the NEXT day's session: 08-Nov 23:59 -> 09-Nov 23:59 is the 9th, so the 9th's morning backup
+    # is the BOD, not the 8th's folder.
+    if start.hour * 60 + start.minute >= 23 * 60 + 30 and end.date() > start.date():
+        return (start + dt.timedelta(days=1)).date()
     return start.date()
 
 

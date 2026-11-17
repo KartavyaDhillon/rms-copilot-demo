@@ -262,6 +262,65 @@ class Timer(Base):
         self.assertEqual(M.save_settings({"run_at": "9:45"})["run_at"], "09:45")
 
 
+class StuckAndStop(Base):
+    def setUp(self):
+        super().setUp()
+        M._ACTIVE["cancel"] = False
+
+    def tearDown(self):
+        M._ACTIVE["cancel"] = False
+        super().tearDown()
+
+    def test_step_waiting_behind_a_running_download_can_be_stopped(self):
+        import threading, time
+        lk = M._STEP_LOCKS["korp"]
+        lk.acquire()                                   # "the timer's download" holds the korp step
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("r", M._do_step("korp", self.root)), daemon=True)
+        t.start()
+        time.sleep(0.4)
+        self.assertTrue(t.is_alive())                  # it waits (this was the silent hang)
+        M._ACTIVE["cancel"] = True
+        t.join(5)
+        lk.release()
+        self.assertFalse(t.is_alive())
+        self.assertEqual(out["r"]["msg"], "Stopped.")
+        self.assertEqual(M.read_state()["steps"]["korp"]["status"], "stopped")
+
+    def test_cancellable_returns_result_and_reraises_errors(self):
+        self.assertEqual(M.cancellable(lambda: 7, "x", poll=0.05), 7)
+        with self.assertRaises(ValueError):
+            M.cancellable(lambda: (_ for _ in ()).throw(ValueError("boom")), "x", poll=0.05)
+
+    def test_cancellable_stops_a_hung_call_and_logs_heartbeat(self):
+        import threading
+        ev = threading.Event()
+        lines = []
+        with mock.patch.object(M, "log", lines.append):
+            threading.Timer(0.35, lambda: M._ACTIVE.__setitem__("cancel", True)).start()
+            with self.assertRaises(M.Cancelled):
+                M.cancellable(lambda: ev.wait(30), "report", every=0.1, poll=0.05)
+        ev.set()
+        self.assertTrue(any("still waiting" in l for l in lines))
+
+    def test_stale_running_step_is_not_shown_as_running(self):
+        M._set_step("korp", "running")
+        st = M.status()
+        k = next(x for x in st["steps"] if x["key"] == "korp")
+        self.assertEqual(k["status"], "failed")
+        self.assertFalse(st["stopping"])
+
+    def test_stopping_flag_while_busy(self):
+        lk = M._STEP_LOCKS["index"]
+        lk.acquire()
+        try:
+            M._ACTIVE["cancel"] = True
+            self.assertTrue(M.status()["stopping"])
+        finally:
+            lk.release()
+        self.assertFalse(M.status()["stopping"])
+
+
 class FtpPart(Base):
     def test_mtfposition_present_is_not_downloaded(self):
         _csv(self.common / f"MTFPOSITION_{D}.csv", ["a", "b"])
