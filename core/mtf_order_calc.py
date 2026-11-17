@@ -57,9 +57,9 @@ def read_str(path) -> pd.DataFrame:
     path = str(path)
     ext = path.rsplit(".", 1)[-1].lower()
     if ext in ("csv", "txt"):
-        return pd.read_csv(path, dtype=str, encoding_errors="replace", on_bad_lines="skip")
+        return pd.read_csv(path, dtype=object, encoding_errors="replace", on_bad_lines="skip")
     if ext in ("xls", "xlsx"):
-        return pd.read_excel(path, dtype=str)
+        return pd.read_excel(path, dtype=object)
     raise CalcError(f"unsupported file type: {path}")
 
 
@@ -201,7 +201,7 @@ def build_order_files(mtf_file, shortage_file, risk_report_file, out_dir, date_p
     # ---- part 1: edited position file ----
     log(f"reading {mtf_file.name}")
     make_edited(mtf_file, edited)
-    pdf = pd.read_csv(str(edited), dtype=str)
+    pdf = pd.read_csv(str(edited), dtype=object)
     original_columns = list(pdf.columns)
     pdf["_ClRate"] = pdf["ClRate"].apply(safe_num)
     pdf["_Qty"] = pdf["Qty"].apply(safe_int)

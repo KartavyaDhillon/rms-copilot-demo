@@ -776,7 +776,6 @@ def run(trigger="manual", by="", alert=None) -> dict:
             pre_run_check(base)
         except PreRunError as e:
             raise PreRunError(f"{e}" + (f"  [{'; '.join(bad)}]" if bad else ""))
-        stage_inputs(base)
         _check_cancel()
         res = step_calc(base)
         c = res["counts"]
