@@ -640,6 +640,31 @@ try:
     }
 except Exception as _e:                                          # noqa: BLE001
     print(f"⚠️  MTF CONCENTRATION not registered: {type(_e).__name__}: {_e}")
+# MTF ORDER FILE (core/mtf_order_file.py): shortage mail from 08:00, run at 10:00 (editable), zone + full mails, backup.
+# Logs: logs/mtfof/mtfof__<dd-mm-yyyy>__<time>.log
+try:
+    from core import mtf_order_file as _mc_of
+    _mc_of.apply_defaults()
+    PIPELINES["mtfof"] = {
+        "name": "MTF ORDER FILE", "module": "core.mtf_order_file", "func": "run", "logdir": "mtfof", "runs": 0,
+        "state_dir_env": "MTF_ORDER_DIR", "state_default": r"D:\CONSOLE\data\MTF ORDER FILE", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_of.MAIL_LABEL[k]: _mc_of.mail_keys(k) for k in _mc_of.MAIL_DEFAULTS},
+        "cred": {"E-mail sender (SMTP login) of this card": {
+                     "user_key": "MTFOF_SENDER_EMAIL", "pass_key": "MTFOF_SENDER_PASSWORD",
+                     "note": "The login the order-file mails go out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."},
+                 "Mailbox (POP3) that receives MTF_RISK_SHORTAGE_REPORT": {
+                     "user_key": "MTFOF_POP_USER", "pass_key": "MTFOF_POP_PASS",
+                     "note": "The mailbox the shortage report mail arrives in (pop9.netcore.co.in). Empty = the shared mailbox (Scheduler > Connections > pop3)."},
+                 "Mail look-up start time (HH:MM)": {
+                     "single_key": "MTFOF_MAIL_FROM", "default": "08:00",
+                     "note": "The mailbox is first looked at from this time (every 5 minutes, until 12:00). Only a mail that arrived at or after this time is taken. E.g. 09:00."},
+                 "COMMON FILES FTP (MTFPOSITION)": {
+                     "user_key": "COMMON_FTP_USER", "pass_key": "COMMON_FTP_PASS",
+                     "note": "the same FTP folder as HOLDING / RISK_REPORT - MTFPOSITION is fetched from it. Shared."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  MTF ORDER FILE not registered: {type(_e).__name__}: {_e}")
 # 2CAPTCHA low-balance alert (core/captcha_balance.py): only here so the shared e-mail / settings window works for it
 PIPELINES["captchabal"] = {
     "name": "2CAPTCHA BALANCE ALERT", "module": "core.captcha_balance", "func": "check", "logdir": "captchabal", "runs": 0,

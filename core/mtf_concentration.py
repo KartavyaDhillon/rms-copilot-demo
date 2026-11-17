@@ -1199,8 +1199,14 @@ def stop_ticker():
 
 
 # ───────────────────────────── files / backup listing ─────────────────────────────
+def _bk_day(name) -> Path:
+    """Day backup folder - in BACKUPFILES AUTOMATED or, after the month-end archive, inside its 'OCT 2026' folder."""
+    from core import backup_archive
+    return backup_archive.day_dir(backup_root(), str(name))
+
+
 def list_files(sub: str = "") -> list:
-    base = root() if not sub else backup_root() / sub
+    base = root() if not sub else _bk_day(sub)
     out = []
     if base.is_dir():
         for p in sorted(base.iterdir()):
@@ -1214,14 +1220,16 @@ def list_backup_dates() -> list:
     b = backup_root()
     if not b.is_dir():
         return []
+    from core import backup_archive
     ds = [(parse_bname(p.name), p.name) for p in b.iterdir() if p.is_dir() and parse_bname(p.name)]
+    ds += [(parse_bname(n), n) for n in backup_archive.archived_days(b) if parse_bname(n)]
     return [n for _d, n in sorted(ds, reverse=True)]
 
 
 def file_path(name: str, sub: str = "") -> Path:
     if "/" in name or "\\" in name or name.startswith("."):
         raise ValueError("bad file name")
-    p = (root() if not sub else backup_root() / _check_date(sub)) / name
+    p = (root() if not sub else _bk_day(_check_date(sub))) / name
     if not p.is_file():
         raise FileNotFoundError(name)
     return p
@@ -1249,7 +1257,7 @@ def zip_range(a: dt.date, b: dt.date) -> Path:
     with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
         for d in dates_between(a, b):
             for f in list_files(dstr(d)):
-                zf.write(backup_root() / dstr(d) / f["name"], f"{dstr(d)}/{f['name']}")
+                zf.write(_bk_day(dstr(d)) / f["name"], f"{dstr(d)}/{f['name']}")
     return z
 
 

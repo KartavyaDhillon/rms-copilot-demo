@@ -409,7 +409,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-backuparch.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1078,6 +1078,66 @@ def _comm_card_routes(prefix, modname):
 _comm_card_routes("mcx-comm", "core.mcx_comm_limit")
 _comm_card_routes("ncdex-comm", "core.ncdex_comm_limit")
 _comm_card_routes("mtf-conc", "core.mtf_concentration")      # MTF CONCENTRATION card: /mtf-conc/* (same routes)
+_comm_card_routes("mtf-order", "core.mtf_order_file")        # MTF ORDER FILE card: /mtf-order/* (same routes)
+
+
+@app.on_event("startup")
+def _mtf_order_startup():
+    """Timer of the MTF ORDER FILE card: mail pick from 08:00, run at 10:00 (editable in its Settings)."""
+    try:
+        from core import mtf_order_file as _mof
+        _mof.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  MTF ORDER FILE timer not started: {type(_e).__name__}: {_e}")
+
+
+# ── BACKUP ARCHIVE: finished months of every process backup folder are filed as "OCT 2026" / day folders ──────────
+@app.get("/backup-archive/status", name="backup_archive_status")
+def _ba_status():
+    from core import backup_archive as _ba
+    try:
+        return _ba.status()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/backup-archive/preview", name="backup_archive_preview")
+def _ba_preview():
+    from core import backup_archive as _ba
+    return _ba.preview()
+
+
+@app.post("/backup-archive/run", name="backup_archive_run")
+def _ba_run(request: Request):
+    """Archive now (same rules as the daily pass). Plain def: runs in a worker thread, never blocks the server."""
+    from core import backup_archive as _ba
+    try:
+        return {"ok": True, "result": _ba.run(manual=True)}
+    except _ba.Busy as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
+
+
+@app.post("/backup-archive/settings", name="backup_archive_settings")
+async def _ba_settings(request: Request):
+    from core import backup_archive as _ba
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        return {"ok": True, "status": _ba.save_settings(body.get("enabled"), body.get("grace_days"), body.get("run_time"))}
+    except (ValueError, TypeError) as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.on_event("startup")
+def _backup_archive_startup():
+    """Daily pass (weekdays, 06:30 by default): finished months move into month folders."""
+    try:
+        from core import backup_archive as _ba
+        _ba.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  Backup archive timer not started: {type(_e).__name__}: {_e}")
 
 
 @app.on_event("startup")

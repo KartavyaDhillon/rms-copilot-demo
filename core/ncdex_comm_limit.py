@@ -976,8 +976,14 @@ def _check_date(s: str) -> str:
     return s
 
 
+def _bk_day(name) -> Path:
+    """Day backup folder - in BACKUPFILES AUTOMATED or, after the month-end archive, inside its 'OCT 2026' folder."""
+    from core import backup_archive
+    return backup_archive.day_dir(backup_root(), str(name))
+
+
 def list_files(sub: str = "") -> list:
-    base = root() if not sub else backup_root() / sub
+    base = root() if not sub else _bk_day(sub)
     out = []
     if base.is_dir():
         for p in sorted(base.iterdir()):
@@ -991,14 +997,15 @@ def list_backup_dates() -> list:
     b = backup_root()
     if not b.is_dir():
         return []
-    ds = [p.name for p in b.iterdir() if p.is_dir() and re.match(r"^\d\d-\d\d-\d{4}$", p.name)]
+    from core import backup_archive
+    ds = [p.name for p in b.iterdir() if p.is_dir() and re.match(r"^\d\d-\d\d-\d{4}$", p.name)] + [n for n in backup_archive.archived_days(b) if re.match(r"^\d\d-\d\d-\d{4}$", n)]
     return sorted(ds, key=lambda s: dt.datetime.strptime(s, "%d-%m-%Y"), reverse=True)
 
 
 def file_path(name: str, sub: str = "") -> Path:
     if "/" in name or "\\" in name or name.startswith("."):
         raise ValueError("bad file name")
-    p = (root() if not sub else backup_root() / _check_date(sub)) / name
+    p = (root() if not sub else _bk_day(_check_date(sub))) / name
     if not p.is_file():
         raise FileNotFoundError(name)
     return p
@@ -1017,7 +1024,7 @@ def zip_range(a: dt.date, b: dt.date) -> Path:
     z = Path(tempfile.gettempdir()) / f"NCDEX_COMM_LIMIT_{a:%d%m%Y}_{b:%d%m%Y}_{int(time.time())}.zip"
     with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
         for f in range_listing(a, b):
-            zf.write(backup_root() / f["date"] / f["name"], f"{f['date']}/{f['name']}")
+            zf.write(_bk_day(f["date"]) / f["name"], f"{f['date']}/{f['name']}")
     return z
 
 

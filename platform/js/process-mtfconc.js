@@ -102,7 +102,9 @@
   }
   function keepLast() {      // this tile is the very last one of the row
     var el = $('task-mtfconc'); if (!el || !el.parentNode) return;
-    var p = el.parentNode; if (p.lastElementChild !== el) p.appendChild(el);
+    var p = el.parentNode, after = ['task-mtforder', 'task-backuparch'].map(function (i) { return document.getElementById(i); }).filter(function (e) { return e && e.parentNode === p; });
+    var kids = [].slice.call(p.children), want = kids.filter(function (e) { return e !== el && after.indexOf(e) < 0; }).concat([el]).concat(after);
+    if (kids.some(function (e, i) { return e !== want[i]; })) want.forEach(function (e) { p.appendChild(e); });
   }
 
   function modalOpen() {

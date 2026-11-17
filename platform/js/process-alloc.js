@@ -258,12 +258,31 @@
     window._saReturn = window.allocLogs;               // × goes back to the list of runs
     saShowModal(TITLE + ' — ' + name.replace(/\.log$/, ''), '<div style="color:var(--muted);font-size:12px">Loading…</div>');
     fetch(API + '/alloc/log?name=' + encodeURIComponent(name), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+      window._allocLogText = String(d.text || d.error || '');
       saShowModal(TITLE + ' — ' + name.replace(/\.log$/, ''),
+        '<div style="display:flex;justify-content:flex-end;margin-bottom:6px"><button id="allocLogCopyBtn" class="sa-tool" onclick="allocLogCopy()" title="Copy the whole log to the clipboard">&#128203; Copy</button></div>' +
         '<pre id="allocLogPre" style="max-height:60vh;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);font-size:11px;line-height:1.5;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin:0">' + esc(d.text || d.error || '') + '</pre>');
       var pre = $('allocLogPre'); if (pre) pre.scrollTop = pre.scrollHeight;
     }).catch(function () {
       saShowModal(TITLE, '<div style="color:var(--red);font-size:13px">Could not reach the server.</div>');
     });
+  };
+  window.allocLogCopy = function () {
+    var text = window._allocLogText || '';
+    var done = function (ok) {
+      var b = $('allocLogCopyBtn'); if (!b) return;
+      var o = '&#128203; Copy'; b.innerHTML = ok ? '&#9989; Copied' : '&#10060; Copy failed';
+      setTimeout(function () { b.innerHTML = o; }, 1800);
+    };
+    var fallback = function () {
+      var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta); done(ok);
+    };
+    // navigator.clipboard does not exist on plain-http pages opened by IP address
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(function () { done(true); }).catch(fallback);
+    else fallback();
   };
   window.allocMode = function (v) { S.mode = v; S.msg = ''; S.ask = ''; S.confirmed = false; paintMode(); };
   window.allocDeliver = function (v) { S.deliver = v; paintDeliver(); };

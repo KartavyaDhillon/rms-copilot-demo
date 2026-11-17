@@ -2541,6 +2541,10 @@ def find_date_folder(run_date):
         full = os.path.join(BACKUP_ROOT, name)
         if os.path.isdir(full) and name.strip() == wanted:
             return full
+    # already filed into its month folder by the month-end archive (e.g. "OCT 2026")?
+    month_dir = os.path.join(BACKUP_ROOT, f"{('JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC')[run_date.month - 1]} {run_date.year}")
+    if os.path.isdir(os.path.join(month_dir, wanted)):
+        return os.path.join(month_dir, wanted)
     # tolerate stray suffixes like "04-08-2026---"
     for name in sorted(os.listdir(BACKUP_ROOT)):
         full = os.path.join(BACKUP_ROOT, name)
