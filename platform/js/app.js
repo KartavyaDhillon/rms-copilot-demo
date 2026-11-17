@@ -2,7 +2,7 @@
 (function () {
   window.RMS = window.RMS || {};
   const $ = RMS.$;
-  const ROUTES = ["dashboard", "process", "history", "analytics", "reports",
+  const ROUTES = ["dashboard", "process", "history", "tracker", "analytics", "reports",
                   "assistant", "scheduler", "downloads", "files", "email", "settings"];
 
   RMS.go = function (route) { location.hash = "#/" + route; };

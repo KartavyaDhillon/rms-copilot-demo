@@ -373,6 +373,8 @@
       { sec: "Pages", icon: "dashboard", label: "Dashboard", hint: "G D", run: () => RMS.go("dashboard") },
       { sec: "Pages", icon: "play", label: "Process Center", hint: "G P", run: () => RMS.go("process") },
       { sec: "Pages", icon: "history", label: "Execution History", hint: "G H", run: () => RMS.go("history") },
+      { sec: "Pages", icon: "layers", label: "Work Tracker", hint: "tasks, diary", run: () => RMS.go("tracker") },
+      { sec: "Actions", icon: "check", label: "New task", run: () => { RMS.go("tracker"); setTimeout(() => RMS.trackerNew && RMS.trackerNew(), 400); } },
       { sec: "Pages", icon: "chart", label: "Analytics", run: () => RMS.go("analytics") },
       { sec: "Pages", icon: "file", label: "Reports", run: () => RMS.go("reports") },
       { sec: "Pages", icon: "bot", label: "AI Assistant", hint: "G A", run: () => RMS.go("assistant") },

@@ -1115,6 +1115,120 @@ def _mtf_order_startup():
         print(f"⚠️  MTF ORDER FILE timer not started: {type(_e).__name__}: {_e}")
 
 
+# ── WORK TRACKER: tasks, diary, follow-ups, comments, pictures (core/tracker.py; page: platform/js/pages/tracker.js) ──
+def _trk(request: Request, fn):
+    """Run one tracker call for the signed-in user; a TrackerError becomes {"ok": False, "error": ...}."""
+    from core import auth as _a, tracker as _t
+    try:
+        return fn(_t, _a.current_user(request))
+    except _t.TrackerError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:                                       # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/tracker/bootstrap", name="tracker_bootstrap")
+def _trk_bootstrap(request: Request):
+    return _trk(request, lambda t, u: {"ok": True, **t.bootstrap(u), "tasks": t.list_tasks(u), "summary": t.summary(u)})
+
+
+@app.get("/tracker/tasks", name="tracker_tasks")
+def _trk_tasks(request: Request):
+    return _trk(request, lambda t, u: {"ok": True, "tasks": t.list_tasks(u), "summary": t.summary(u)})
+
+
+@app.get("/tracker/summary", name="tracker_summary")
+def _trk_summary(request: Request):
+    return _trk(request, lambda t, u: {"ok": True, **t.summary(u)})
+
+
+@app.get("/tracker/task/{task_id}", name="tracker_task")
+def _trk_task(request: Request, task_id: int):
+    return _trk(request, lambda t, u: {"ok": True, "task": t.get_task(u, task_id)})
+
+
+@app.post("/tracker/task", name="tracker_create")
+async def _trk_create(request: Request):
+    b = await request.json()
+    keys = ("title", "description", "assignee", "due", "priority", "kind", "process", "private", "follow_up_days", "waiting_on")
+    return _trk(request, lambda t, u: {"ok": True, "task": t.create_task(u, **{k: b[k] for k in keys if k in b})})
+
+
+@app.post("/tracker/task/{task_id}", name="tracker_update")
+async def _trk_update(request: Request, task_id: int):
+    b = await request.json()
+    keys = ("title", "description", "assignee", "due", "priority", "kind", "process", "status", "waiting_on", "follow_up_days")
+    return _trk(request, lambda t, u: {"ok": True, "task": t.update_task(u, task_id, **{k: b[k] for k in keys if k in b})})
+
+
+@app.post("/tracker/task/{task_id}/comment", name="tracker_comment")
+async def _trk_comment(request: Request, task_id: int):
+    b = await request.json()
+    return _trk(request, lambda t, u: {"ok": True, "task": t.add_comment(u, task_id, b.get("text", ""))})
+
+
+@app.post("/tracker/task/{task_id}/delete", name="tracker_delete")
+def _trk_delete(request: Request, task_id: int):
+    return _trk(request, lambda t, u: t.delete_task(u, task_id))
+
+
+@app.post("/tracker/task/{task_id}/file", name="tracker_file_add")
+async def _trk_file_add(request: Request, task_id: int, files: _LA_List[_LA_UploadFile] = _LA_File(...)):
+    blobs = [(f.filename, await f.read()) for f in files]
+
+    def go(t, u):
+        saved, bad = [], []
+        for name, data in blobs:
+            try:
+                saved.append(t.add_file(u, task_id, name, data)["name"])
+            except t.TrackerError as e:
+                bad.append(f"{name}: {e}")
+        return {"ok": bool(saved) or not bad, "saved": saved, "rejected": bad, "error": "; ".join(bad) if bad and not saved else "",
+                "task": t.get_task(u, task_id)}
+    return _trk(request, go)
+
+
+@app.get("/tracker/file/{file_id}", name="tracker_file")
+def _trk_file(request: Request, file_id: int, download: int = 0):
+    from core import auth as _a, tracker as _t
+    try:
+        p, name, is_img = _t.file_path(_a.current_user(request), file_id)
+    except _t.TrackerError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if is_img and not download:
+        return FileResponse(str(p))
+    return FileResponse(str(p), filename=name)
+
+
+@app.post("/tracker/file/{file_id}/delete", name="tracker_file_delete")
+def _trk_file_delete(request: Request, file_id: int):
+    return _trk(request, lambda t, u: t.delete_file(u, file_id))
+
+
+@app.post("/tracker/people", name="tracker_people")
+async def _trk_people(request: Request):
+    b = await request.json()
+    return _trk(request, lambda t, u: {**t.save_person(u, b.get("id", ""), b.get("mobile", ""), b.get("email", ""), b.get("role", "member")),
+                                       "people": t.people()})
+
+
+@app.post("/tracker/settings", name="tracker_settings")
+async def _trk_settings(request: Request):
+    b = await request.json()
+    keys = ("enabled", "remind_at", "manager_summary", "notify_whatsapp", "notify_email")
+    return _trk(request, lambda t, u: {"ok": True, "settings": t.save_settings(u, **{k: b[k] for k in keys if k in b})})
+
+
+@app.on_event("startup")
+def _tracker_startup():
+    """Daily reminder digest of the Work Tracker (time in its Settings, default 09:30, Mon-Sat)."""
+    try:
+        from core import tracker as _t
+        _t.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  Work Tracker timer not started: {type(_e).__name__}: {_e}")
+
+
 # ── BACKUP ARCHIVE: finished months of every process backup folder are filed as "OCT 2026" / day folders ──────────
 @app.get("/backup-archive/status", name="backup_archive_status")
 def _ba_status():

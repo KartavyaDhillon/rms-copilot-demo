@@ -37,6 +37,7 @@ window.addEventListener("error", function (e) {
 <link rel="stylesheet" href="/platform/css/tokens.css?v=5">
 <link rel="stylesheet" href="/platform/css/app.css?v=5d">
 <link rel="stylesheet" href="/platform/css/scheduler.css?v=6">
+<link rel="stylesheet" href="/platform/css/tracker.css?v=1">
 </head>
 <body>
 <div class="shell">
@@ -56,6 +57,7 @@ window.addEventListener("error", function (e) {
       <a class="nav-item" data-route="dashboard" href="#/dashboard"><i data-icon="dashboard"></i><span>Dashboard</span></a>
       <a class="nav-item" data-route="process"   href="#/process"><i data-icon="play"></i><span>Process Center</span><em class="nav-live" id="navRunDot" hidden></em></a>
       <a class="nav-item" data-route="history"   href="#/history"><i data-icon="history"></i><span>Execution History</span></a>
+      <a class="nav-item" data-route="tracker"   href="#/tracker"><i data-icon="layers"></i><span>Work Tracker</span></a>
 
       <div class="nav-sec">Intelligence</div>
       <a class="nav-item" data-route="analytics" href="#/analytics"><i data-icon="chart"></i><span>Analytics</span></a>
@@ -88,7 +90,7 @@ window.addEventListener("error", function (e) {
       </div>
       <div class="tb-right">
         <button class="tb-search" id="searchBtn" title="Search (Ctrl+K)">
-          <i data-icon="search"></i><span>Search or run a command…</span><kbd>Ctrl K</kbd>
+          <i data-icon="search"></i><span>Search or run a command…</span>
         </button>
         <div class="mkt" id="marketChips"></div>
         <span class="tb-clock mono" id="tbClock">--:--:--</span>
@@ -102,6 +104,7 @@ window.addEventListener("error", function (e) {
       <section class="page" id="page-dashboard" hidden></section>
       <section class="page page-full" id="page-process" hidden></section>
       <section class="page" id="page-history" hidden></section>
+      <section class="page" id="page-tracker" hidden></section>
       <section class="page" id="page-analytics" hidden></section>
       <section class="page" id="page-reports" hidden></section>
       <section class="page" id="page-assistant" hidden></section>
@@ -129,11 +132,12 @@ window.addEventListener("error", function (e) {
 
 <script src="/platform/js/icons.js?v=5"></script>
 <script src="/platform/js/theme.js?v=5"></script>
-<script src="/platform/js/core.js?v=10"></script>
+<script src="/platform/js/core.js?v=11"></script>
 <script src="/platform/js/charts.js?v=5"></script>
 <script src="/platform/js/pages/dashboard.js?v=8"></script>
 <script src="/platform/js/pages/process.js?v=26"></script>
 <script src="/platform/js/pages/history.js?v=5"></script>
+<script src="/platform/js/pages/tracker.js?v=1"></script>
 <script src="/platform/js/pages/analytics.js?v=5"></script>
 <script src="/platform/js/pages/reports.js?v=5"></script>
 <script src="/platform/js/pages/ask.js?v=6"></script>
@@ -143,6 +147,6 @@ window.addEventListener("error", function (e) {
 <script src="/platform/js/pages/email.js?v=5"></script>
 <script src="/platform/js/pages/settings.js?v=5"></script>
 <script src="/platform/js/rms-busy.js?v=3"></script>
-<script src="/platform/js/app.js?v=9"></script>
+<script src="/platform/js/app.js?v=10"></script>
 </body>
 </html>
