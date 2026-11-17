@@ -390,7 +390,7 @@ def create_task(user, title: str, description: str = "", assignee: str = "", due
                   log_ref, waiting_email)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                (title, str(description or "").strip(), kind, priority, status, me, name, assignee,
-                name if assignee == me else _person_name(assignee), _clean_date(due), str(process or "").strip()[:80],
+                name if assignee == me else _person_name(assignee), _clean_date(due), str(process or "").strip()[:1000],
                 str(waiting_on or "").strip()[:200], now if status == "waiting" else "", fud, "", 1 if private else 0, now, now,
                 lref, wmail),
                insert=True)

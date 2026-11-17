@@ -74,7 +74,7 @@
   function card(t, opts) {
     opts = opts || {};
     const sub = t.status === "waiting" && t.waiting_on ? '<div class="wt-sub">' + RMS.icon("mail") + " waiting on " + esc(t.waiting_on) + "</div>" :
-      (t.process ? '<div class="wt-sub">' + RMS.icon("layers") + " " + esc(t.process) + "</div>" : "");
+      (t.process ? '<div class="wt-sub">' + RMS.icon("layers") + " " + esc(procLabel(t.process)) + "</div>" : "");
     return '<div class="wt-card pr-' + t.priority + (open_(t) ? "" : " closed") + '" data-id="' + t.id + '"' + (opts.drag ? ' draggable="true"' : "") + ">" +
       '<div class="t"><span class="k">' + esc(t.key) + "</span>" + (t.private ? RMS.icon("eye") + " " : "") + esc(t.title) + "</div>" + sub +
       '<div class="m">' + pills(t) + '<div class="r">' +
@@ -282,7 +282,53 @@
 
   // ───────────────────────── new task ─────────────────────────
   function peopleOpts(sel) { return ((S.boot && S.boot.people) || []).map((p) => '<option value="' + esc(p.id) + '"' + (p.id === sel ? " selected" : "") + ">" + esc(p.name) + "</option>").join(""); }
-  function procList() { return '<datalist id="wtProcs">' + ((S.boot && S.boot.processes) || []).map((p) => '<option value="' + esc(p) + '">').join("") + "</datalist>"; }
+  function procList() { return ""; }
+  // ── Linked process: proper multi-select dropdown (search, tick boxes, All processes, Clear). Value is stored as "A; B" or "*ALL*".
+  const ALL = "*ALL*";
+  const procArr = (s) => String(s || "").split(";").map((x) => x.trim()).filter(Boolean);
+  const procLabel = (s) => (String(s || "").trim() === ALL ? "All processes" : procArr(s).join(", "));
+  function procPicker(host, initial, disabled, onChange) {
+    document.querySelectorAll(".wt-pp-panel").forEach((x) => x.remove());
+    const all = (S.boot && S.boot.processes) || [];
+    let sel = new Set(procArr(initial)), isAll = sel.has(ALL); if (isAll) sel = new Set();
+    host.classList.add("wt-pp");
+    host.innerHTML = '<button type="button" class="wt-pp-btn" data-no-busy' + (disabled ? " disabled" : "") + '></button>';
+    const btn = host.firstChild; let panel = null;
+    const value = () => (isAll ? ALL : Array.from(sel).join("; "));
+    const paintBtn = () => {
+      const chips = isAll ? '<span class="wt-chip">All processes</span>' : Array.from(sel).slice(0, 3).map((x) => '<span class="wt-chip">' + esc(x) + "</span>").join("") + (sel.size > 3 ? '<span class="wt-chip">+' + (sel.size - 3) + " more</span>" : "");
+      btn.innerHTML = '<span class="wt-pp-v">' + (chips || '<span style="color:var(--text-3)">Select process(es)…</span>') + '</span><span class="wt-pp-c">▾</span>';
+    };
+    const closePanel = () => { if (panel) { panel.remove(); panel = null; document.removeEventListener("mousedown", outside, true); } };
+    const outside = (e) => { if (panel && !panel.contains(e.target) && !btn.contains(e.target)) closePanel(); };
+    const commit = () => { paintBtn(); if (onChange) onChange(value()); };
+    const paintList = () => {
+      const q = (panel.querySelector(".q").value || "").toLowerCase();
+      panel.querySelector(".lst").innerHTML = all.filter((p) => p.toLowerCase().includes(q)).map((p) =>
+        '<label class="wt-pp-r"><input type="checkbox" data-p="' + esc(p) + '"' + (isAll || sel.has(p) ? " checked" : "") + (isAll ? " disabled" : "") + "><span>" + esc(p) + "</span></label>").join("") || '<div class="wt-pp-r" style="color:var(--text-3)">No match</div>';
+      panel.querySelector(".all").checked = isAll;
+      panel.querySelector(".cnt").textContent = isAll ? "All" : sel.size + " selected";
+      panel.querySelectorAll("[data-p]").forEach((c) => { c.onchange = () => { c.checked ? sel.add(c.dataset.p) : sel.delete(c.dataset.p); panel.querySelector(".cnt").textContent = sel.size + " selected"; commit(); }; });
+    };
+    btn.onclick = () => {
+      if (panel) { closePanel(); return; }
+      panel = document.createElement("div"); panel.className = "wt-pp-panel";
+      panel.innerHTML = '<input class="wt-in q" placeholder="Search process…" style="width:100%;margin-bottom:6px"><label class="wt-pp-r" style="font-weight:700"><input type="checkbox" class="all"><span>All processes (Select all)</span></label>' +
+        '<div class="lst"></div><div class="wt-pp-f"><span class="cnt"></span><span><a href="#" class="clr">Clear</a> &nbsp; <a href="#" class="dn">Done</a></span></div>';
+      document.body.appendChild(panel);
+      const r = btn.getBoundingClientRect(), h = 330;
+      panel.style.left = r.left + "px"; panel.style.width = Math.max(r.width, 280) + "px";
+      panel.style.top = (r.bottom + h > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4) + "px";
+      paintList();
+      panel.querySelector(".q").oninput = paintList; panel.querySelector(".q").focus();
+      panel.querySelector(".all").onchange = (e) => { isAll = e.target.checked; sel.clear(); paintList(); commit(); };
+      panel.querySelector(".clr").onclick = (e) => { e.preventDefault(); isAll = false; sel.clear(); paintList(); commit(); };
+      panel.querySelector(".dn").onclick = (e) => { e.preventDefault(); closePanel(); };
+      document.addEventListener("mousedown", outside, true);
+    };
+    paintBtn();
+    return { get: value, set: (v) => { sel = new Set(procArr(v)); isAll = sel.has(ALL); if (isAll) sel = new Set(); paintBtn(); } };
+  }
 
   function newTask(pre) {
     pre = pre || {};
@@ -295,11 +341,28 @@
       '<div class="wt-grid2" style="margin-top:12px"><div id="ntWhoBox"><div class="wt-lbl">Assign to</div><select class="wt-sel" id="ntWho" style="width:100%">' + peopleOpts(pre.assignee || me().id) + "</select></div>" +
       '<div><div class="wt-lbl" id="ntDueL">Due date</div><input type="date" class="wt-in" id="ntDue" style="width:100%" value="' + esc(pre.due || "") + '"></div>' +
       '<div id="ntPriBox"><div class="wt-lbl">Priority</div><select class="wt-sel" id="ntPri" style="width:100%">' + ["normal", "low", "high", "urgent"].map((p) => '<option value="' + p + '">' + PRI[p] + "</option>").join("") + "</select></div>" +
-      '<div id="ntProcBox"><div class="wt-lbl" id="ntProcL">Linked process (optional)</div><input class="wt-in" id="ntProc" list="wtProcs" style="width:100%" placeholder="e.g. Margin Shortage">' + procList() + "</div></div>" +
+      '<div id="ntProcBox"><div class="wt-lbl" id="ntProcL">Linked process (optional)</div><div id="ntProc"></div></div></div>' +
       '<div id="ntFollow" style="display:none;margin-top:12px" class="wt-grid2"><div><div class="wt-lbl">Waiting for a reply from</div><input class="wt-in" id="ntWait" style="width:100%" placeholder="Exchange helpdesk, branch manager…"></div>' +
       '<div><div class="wt-lbl">Remind me every (days)</div><input type="number" min="1" max="60" class="wt-in" id="ntDays" style="width:100%" value="2"></div></div>' +
+      '<div class="wt-lbl" style="margin-top:14px">Pictures and files (optional)</div><div class="wt-files" id="ntFiles"></div>' +
+      '<div class="wt-drop" id="ntDrop">' + RMS.icon("download") + ' Drop pictures here, click to choose, or paste a screenshot (Ctrl+V)</div><input type="file" id="ntPick" multiple style="display:none">' +
+      '<div class="wt-lbl" style="margin-top:14px">First comment (optional)</div><textarea class="wt-ta" id="ntCmt" style="min-height:44px" placeholder="Add a comment for the assignee…"></textarea>' +
       '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px"><button class="btn ghost" id="ntCancel" data-no-busy>Cancel</button><button class="btn primary" id="ntSave" data-no-busy>Create task</button></div>',
-      { width: 600, icon: "check" });
+      { width: 640, icon: "check" });
+    const pp = procPicker($("#ntProc"), pre.process || "", false);
+    const pend = [];   // pictures chosen before the task exists - uploaded right after it is created
+    const paintPend = () => {
+      $("#ntFiles").innerHTML = pend.map((f, i) => '<div class="wt-file" title="' + esc(f.name) + '">' + (f.type.startsWith("image/") ? '<img src="' + URL.createObjectURL(f) + '">' : esc(f.name)) +
+        '<span class="x" data-i="' + i + '" style="display:flex">✕</span></div>').join("");
+      document.querySelectorAll("#ntFiles .x").forEach((x) => { x.onclick = () => { pend.splice(+x.dataset.i, 1); paintPend(); }; });
+    };
+    const addPend = (fs) => { fs.forEach((f) => pend.push(f)); paintPend(); };
+    $("#ntDrop").onclick = () => $("#ntPick").click();
+    $("#ntPick").onchange = () => { addPend(Array.from($("#ntPick").files)); $("#ntPick").value = ""; };
+    $("#ntDrop").ondragover = (e) => { e.preventDefault(); $("#ntDrop").classList.add("over"); };
+    $("#ntDrop").ondragleave = () => $("#ntDrop").classList.remove("over");
+    $("#ntDrop").ondrop = (e) => { e.preventDefault(); $("#ntDrop").classList.remove("over"); addPend(Array.from(e.dataTransfer.files || [])); };
+    document.onpaste = (e) => { if (!$("#ntDrop")) { document.onpaste = null; return; } const fs = Array.from((e.clipboardData && e.clipboardData.files) || []).filter((f) => f.type.startsWith("image/")); if (fs.length) { e.preventDefault(); addPend(fs); } };
     const T = {
       task: ["var(--accent)", "<b>Task</b> - work you give to someone (or to yourself) with a due date. They get a WhatsApp and an e-mail.", "What needs to be done", "Send the ledger query to the Ludhiana branch", "Anything the person should know", "Due date"],
       followup: ["#f59e0b", "<b>Follow-up</b> - something you sent and are <b>waiting for a reply on</b>. It stays on the list and you are reminded every few days until the reply comes.", "What are you following up", "Penalty query sent to the exchange - reply awaited", "What was sent, to whom, reference numbers", "Follow up by"],
@@ -319,19 +382,26 @@
       document.querySelectorAll("#ntKind button").forEach((b) => b.classList.toggle("on", b.dataset.k === kind));
     };
     document.querySelectorAll("#ntKind button").forEach((b) => { b.onclick = () => { kind = b.dataset.k; sync(); }; });
-    sync(); if (pre.process) $("#ntProc").value = pre.process; if (pre.desc) $("#ntDesc").value = pre.desc; $("#ntTitle").focus();
+    sync(); if (pre.desc) $("#ntDesc").value = pre.desc; $("#ntTitle").focus();
     $("#ntCancel").onclick = close;
     $("#ntSave").onclick = async () => {
       const btn = $("#ntSave"); btn.disabled = true; btn.textContent = "Creating…";
       const body = { title: $("#ntTitle").value, description: $("#ntDesc").value, assignee: $("#ntWho").value, due: $("#ntDue").value, priority: $("#ntPri").value,
-        kind, process: $("#ntProc").value, private: kind === "note" };
+        kind, process: pp.get(), private: kind === "note" };
       if (pre.log) body.log_ref = pre.log;
       if (kind === "followup") { body.waiting_on = $("#ntWait").value; body.follow_up_days = $("#ntDays").value; }
       const r = await api("/tracker/task", body);
-      btn.disabled = false; btn.textContent = "Create task";
-      if (!r.ok) { bad(r.error); return; }
-      close(); okBox(r.task.key + " created", r.task.assignee !== me().id ? "Assigned to " + r.task.assignee_name + " - they are notified on WhatsApp / e-mail if their contacts are filled in." : "Added to your list.");
-      await reload(); openTask(r.task.id);
+      if (!r.ok) { btn.disabled = false; btn.textContent = "Create task"; bad(r.error); return; }
+      const cm = $("#ntCmt").value.trim(); let extra = "";
+      if (cm) { const c = await api("/tracker/task/" + r.task.id + "/comment", { text: cm }); if (!c.ok) extra += " Comment not saved: " + c.error; }
+      if (pend.length) {
+        const fd = new FormData(); pend.forEach((f) => fd.append("files", f, f.name || "screenshot.png"));
+        let u; try { u = await (await fetch("/tracker/task/" + r.task.id + "/file", { method: "POST", body: fd, credentials: "same-origin" })).json(); } catch (e) { u = { ok: false, error: "Upload failed." }; }
+        if (!u.ok || (u.rejected && u.rejected.length)) extra += " Some pictures were not attached: " + ((u.rejected || []).join("; ") || u.error);
+      }
+      document.onpaste = null; close();
+      okBox(r.task.key + " created", (r.task.assignee !== me().id ? "Assigned to " + r.task.assignee_name + " - they are notified on WhatsApp / e-mail if their contacts are filled in." : "Added to your list.") + extra);
+      await reload();
     };
   }
 
@@ -348,14 +418,25 @@
   function paintTask() {
     const t = S.win, el = $("#wtWin"); if (!el || !t) return;
     const edit = t.can_edit, canSt = t.can_edit || t.mine;
-    const acts = t.activity.map((a) => a.kind === "comment" ?
-      '<div class="wt-act">' + av(a.by_name, true) + '<div class="b"><small>' + esc(a.by_name) + " · " + when(a.at) + "</small>" + esc(a.body) + "</div></div>" :
-      '<div class="wt-act ev">' + esc(a.body) + " · " + esc(a.by_name) + ", " + when(a.at) + "</div>").join("");
+    // History as a timeline (newest first): coloured dots on a vertical line - comments are cards, changes are one-liners
+    const evCls = (b) => /^Status/.test(b) ? "st" : /^Assigned/.test(b) ? "as" : /reply|mail/i.test(b) ? "ml" : "ch";
+    const acts = t.activity.slice().reverse().map((a) => a.kind === "comment" ?
+      '<div class="wt-tn cm"><i></i><div class="c">' + av(a.by_name) + '<div class="b"><small>' + esc(a.by_name) + " · " + when(a.at) + "</small>" + esc(a.body) + "</div></div></div>" :
+      '<div class="wt-tn ' + evCls(a.body) + '"><i></i><div class="e">' + esc(a.body) + ' <small>· ' + esc(a.by_name) + ", " + when(a.at) + "</small></div></div>").join("") +
+      '<div class="wt-tn st"><i></i><div class="e"><b>Created</b> <small>· ' + esc(t.created_by_name) + ", " + when(t.created_at) + "</small></div></div>";
+    // Status flow strip: where the task has been (ticked), where it is now (glowing), what is still ahead (grey)
+    const seen = new Set(["open", t.status]);
+    t.activity.forEach((a) => { const m = /^Status: (.+?) \(was (.+)\)$/.exec(a.body || ""); if (m) COLS.forEach((c) => { if (c[1] === m[1] || c[1] === m[2]) seen.add(c[0]); }); });
+    const flow = '<div class="wt-flow">' + COLS.map((c, i) => '<div class="wt-fs' + (c[0] === t.status ? " now" : seen.has(c[0]) ? " seen" : "") + '" style="--c:' + c[2] + '"><b>' + (seen.has(c[0]) && c[0] !== t.status ? "✓" : i + 1) + "</b><span>" + esc(c[1]) + "</span></div>").join('<em></em>') + "</div>";
     const files = t.file_list.map((f) => '<a class="wt-file" href="/tracker/file/' + f.id + '" target="_blank" title="' + esc(f.name + " · " + f.by_name) + '">' +
       (f.is_image ? '<img src="/tracker/file/' + f.id + '" alt="' + esc(f.name) + '">' : esc(f.name)) + '<span class="x" data-del="' + f.id + '" title="Remove">✕</span></a>').join("");
     const follow = t.status === "waiting" || t.kind === "followup";
     const links = (t.log || t.process) ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
-      (t.process ? '<button class="btn sm ghost" id="wtGoProc" data-no-busy>' + RMS.icon("layers") + " Open " + esc(t.process) + " in Process Center</button>" : "") +
+      (t.process ? (procArr(t.process).includes(ALL) || procArr(t.process).length > 1 ?
+        '<span class="card-sub" style="align-self:center">' + RMS.icon("layers") + " " + esc(procLabel(t.process)) + "</span>" +
+        (procArr(t.process).includes(ALL) ? '<button class="btn sm ghost" data-gp="" data-no-busy>' + RMS.icon("layers") + " Open Process Center</button>" :
+          procArr(t.process).map((p) => '<button class="btn sm ghost" data-gp="' + esc(p) + '" data-no-busy>' + esc(p) + "</button>").join("")) :
+        '<button class="btn sm ghost" data-gp="' + esc(t.process) + '" data-no-busy>' + RMS.icon("layers") + " Open " + esc(t.process) + " in Process Center</button>") : "") +
       (t.log ? '<button class="btn sm ghost" id="wtGoLog" data-no-busy>' + RMS.icon("terminal") + " Open run log</button>" : "") + "</div>" : "";
     const mb = (S.boot && S.boot.mailbox) || {};
     const mbLine = t.status !== "waiting" ? (t.replied ? "A reply was received " + when(t.replied_at) + "." : "")
@@ -376,17 +457,18 @@
         (t.waiting_days != null ? " · " + (t.waiting_days === 0 ? "since today" : t.waiting_days + " day(s) with no reply") : "") +
         (t.follow_up_days ? " · reminder every " + t.follow_up_days + " day(s)" : "") + "</div>" : "") +
       links + mailPanel +
+      '<div class="wt-cbox"><div class="wt-lbl" style="color:var(--text)">' + RMS.icon("file") + ' Add a comment</div><textarea class="wt-ta" id="wtCmt" style="min-height:54px" placeholder="Write a comment… (Ctrl+Enter to send)"></textarea>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="btn primary" id="wtSend" data-no-busy>Send comment</button></div></div>' +
       '<div class="wt-lbl">Details</div><textarea class="wt-ta" id="wtDesc"' + (edit ? "" : " readonly") + ' placeholder="No details">' + esc(t.description || "") + "</textarea>" +
       '<div class="wt-lbl" style="margin-top:14px">Pictures and files</div><div class="wt-files">' + files + "</div>" +
       '<div class="wt-drop" id="wtDrop">' + RMS.icon("download") + ' Drop pictures or files here, click to choose, or paste a screenshot (Ctrl+V)</div><input type="file" id="wtPick" multiple style="display:none">' +
-      '<div class="wt-lbl" style="margin-top:16px">Comments and history</div>' + acts +
-      '<div style="display:flex;gap:8px;margin-top:10px"><textarea class="wt-ta" id="wtCmt" style="min-height:44px" placeholder="Write a comment… (Ctrl+Enter to send)"></textarea><button class="btn primary" id="wtSend" data-no-busy style="align-self:flex-end">Send</button></div></div>' +
+      '<div class="wt-lbl" style="margin-top:16px">History</div>' + flow + '<div class="wt-tl">' + acts + "</div></div>" +
       '<div class="wt-side"><div class="f"><div class="wt-lbl">Status</div><select class="wt-sel" id="wtSt"' + (canSt ? "" : " disabled") + ">" + selOpts(S.boot.statuses.map((s) => [s.id, s.label]), t.status) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Assigned to</div><select class="wt-sel" id="wtWho"' + (edit && !t.private ? "" : " disabled") + ">" + peopleOpts(t.assignee) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Due date</div><input type="date" class="wt-in" id="wtDue" value="' + esc(t.due || "") + '"' + (edit ? "" : " disabled") + "></div>" +
       '<div class="f"><div class="wt-lbl">Priority</div><select class="wt-sel" id="wtPri"' + (edit ? "" : " disabled") + ">" + selOpts(S.boot.priorities.map((p) => [p, PRI[p]]), t.priority) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Type</div><select class="wt-sel" id="wtKind"' + (edit ? "" : " disabled") + ">" + selOpts(S.boot.kinds.map((k) => [k, KIND[k]]), t.kind) + "</select></div>" +
-      '<div class="f"><div class="wt-lbl">Linked process</div><input class="wt-in" id="wtProc" list="wtProcs" value="' + esc(t.process || "") + '"' + (edit ? "" : " disabled") + ">" + procList() + "</div>" +
+      '<div class="f"><div class="wt-lbl">Linked process</div><div id="wtProc"></div></div>' +
       (follow ? '<div class="f"><div class="wt-lbl">Waiting for reply from</div><input class="wt-in" id="wtWait" value="' + esc(t.waiting_on || "") + '"' + (canSt ? "" : " disabled") + "></div>" +
         '<div class="f"><div class="wt-lbl">Remind every (days)</div><input type="number" min="1" max="60" class="wt-in" id="wtDays" value="' + (t.follow_up_days || "") + '"' + (canSt ? "" : " disabled") + "></div>" : "") +
       '<div class="card-sub" style="margin:4px 0 12px">Assigned to ' + esc(t.assignee_name || t.assignee) + "</div>" +
@@ -453,13 +535,17 @@
       g("wtDue").onchange = () => patch({ due: g("wtDue").value }, "Due date saved");
       g("wtPri").onchange = () => patch({ priority: g("wtPri").value }, "Priority saved");
       g("wtKind").onchange = () => patch({ kind: g("wtKind").value }, "Type saved");
-      g("wtProc").onchange = () => patch({ process: g("wtProc").value }, "Process linked");
       if (g("wtDel")) g("wtDel").onclick = () => ask("Delete " + t.key + "?", "<b>" + esc(t.title) + "</b><br>The task, its comments and its files will be removed. This cannot be undone.", "Delete task",
         async () => {
           const r = await api("/tracker/task/" + t.id + "/delete", {});
           if (r.ok) { okBox(t.key + " deleted", "The task, comments and files are removed."); reload(); } else { bad(r.error); openTask(t.id); }
         }, () => openTask(t.id));
     }
+    let procTimer = null;
+    procPicker(g("wtProc"), t.process || "", !t.can_edit, (v) => { clearTimeout(procTimer); procTimer = setTimeout(async () => {
+      const r = await api("/tracker/task/" + t.id, { process: v });   // saved quietly - no repaint, so the dropdown stays open while ticking
+      if (r.ok) { S.win = r.task; ok("Process link saved"); reload(); } else bad(r.error);
+    }, 700); });
     g("wtSt").onchange = () => {
       const v = g("wtSt").value, b = { status: v };
       if (v === "waiting") b.follow_up_days = t.follow_up_days || 2;
@@ -469,7 +555,7 @@
       g("wtWait").onchange = () => patch({ waiting_on: g("wtWait").value }, "Saved");
       g("wtDays").onchange = () => patch({ follow_up_days: g("wtDays").value || 0 }, "Reminder saved");
     }
-    if (g("wtGoProc")) g("wtGoProc").onclick = () => { S.winClose && S.winClose(); RMS.go("process"); setTimeout(() => RMS.pcApply && RMS.pcApply(t.process, false), 700); };
+    document.querySelectorAll("#wtWin [data-gp]").forEach((b) => { b.onclick = () => { const p = b.dataset.gp; S.winClose && S.winClose(); RMS.go("process"); setTimeout(() => RMS.pcApply && RMS.pcApply(p, false), 700); }; });
     if (g("wtGoLog")) g("wtGoLog").onclick = () => RMS.openLogViewer(t.log);
     if (g("wtMailSend")) g("wtMailSend").onclick = () => followupWin(t);
     if (g("wtMailLink")) g("wtMailLink").onclick = () => linkMailWin(t);

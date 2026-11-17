@@ -112,6 +112,8 @@ _same_date_groups = [
     ("MCX files 01-08", r"MCX_PeakMargin56720_(\d{8})_0[1-8]\.csv", "YYYYMMDD"),
     ("NCDEX files 01-08", r"NCCL_MARGIN_REP_01292_(\d{8})_0[1-8]\.csv", "YYYYMMDD"),
     ("NCDEX END file", r"01292_MGN_(\d{8})\d{6}\.CSV", "DDMMYYYY"),
+    ("CO files i01-i08", r"O_SA01_P_06436_(\d{8})_i0[1-8]\.lis", "DDMMYYYY"),
+    ("CO END file", r"O_SA01_06436_(\d{8})\.lis", "DDMMYYYY"),
     ("Risk Report file", r"RISK_REPORT_(\d{8})\.csv", "DDMMYYYY"),
 ]
 
@@ -241,6 +243,36 @@ if not cm_end_files:
     raise FileNotFoundError("No CM last-day file found!")
 cm_end_df = pd.read_csv(os.path.join(folder, cm_end_files[0]), header=None, dtype=str)
 cm_end_df.columns = cm_headers[:len(cm_end_df.columns)]
+
+# ---------------- CO FILES (NSE COMM, O_SA01) - OPTIONAL ----------------
+# O_SA01_P_06436_<date>_i01..i08.lis = CO peaks 1-8, O_SA01_06436_<date>.lis = CO end of day. Same layout as the CM / FO files.
+# A missing file is NOT fatal: its CO columns stay 0 and a warning is printed (same rule as the MCX INTRASAR report).
+co_headers = ["Date", "Client Code", "Min Margin(A)", "Total Cash Collateral(B)",
+              "Total Non-Cash Collateral(C)", "Total Value of Collateral(D)",
+              "EOD Short Allocation(E=Max(E-D,0))"]
+
+def _read_co(path):
+    try:
+        _d = pd.read_csv(path, header=None, dtype=str)
+    except (pd.errors.EmptyDataError, ValueError):
+        return pd.DataFrame(columns=co_headers)
+    _d.columns = co_headers[:len(_d.columns)]
+    for _c in co_headers:
+        if _c not in _d.columns:
+            _d[_c] = "0"
+    _d["Client Code"] = _d["Client Code"].astype(str).str.strip()
+    return _d
+
+co_dfs = {}
+for _f in sorted(f for f in os.listdir(folder) if re.match(r"^O_SA01_P_06436_\d{8}_i0[1-8]\.lis$", f)):
+    co_dfs[int(re.search(r"i0([1-8])\.lis$", _f).group(1))] = _read_co(os.path.join(folder, _f))
+_co_end_files = [f for f in os.listdir(folder) if re.match(r"^O_SA01_06436_\d{8}\.lis$", f)]
+co_end_df = _read_co(os.path.join(folder, _co_end_files[0])) if _co_end_files else pd.DataFrame(columns=co_headers)
+_co_missing = [f"i0{i}" for i in range(1, 9) if i not in co_dfs] + ([] if _co_end_files else ["END"])
+if _co_missing:
+    print(f"⚠️ CO (O_SA01) file(s) not found: {', '.join(_co_missing)} - CO columns stay 0 for those peaks")
+else:
+    print("✅ All 8 CO (O_SA01) peak files + the CO end file found")
 
 # ---------------- MCX FILES ----------------
 pattern_mcx = r"^MCX_PeakMargin56720_\d{8}_0([1-8])\.csv$"
@@ -372,9 +404,10 @@ print(f"✅ MCX EOD peak file     : {mcx_eod_peak_file} ({len(mcx_eod_peak_looku
 print(f"✅ MCX EOD response file : {MCX_EOD_RESPONSE_NAME} ({len(mcx_eod_resp_lookup)} clients)")
 
 # ---------------- ADD NEW COLUMNS TO MAIN ----------------
-new_columns = ["Exchange", "CM_Peak", "FO_Peak", "MCX_Peak", "NCDEX_Peak",
+new_columns = ["Exchange", "CM_Peak", "FO_Peak", "CO_Peak", "MCX_Peak", "NCDEX_Peak",
                "Cash_Allocated_CM", "NCL_CM", "Deposit_CM (O+P)",
-               "Cash_Allocated_FO", "NCL_FO", "Deposit_CM (R+S)",
+               "Cash_Allocated_FO", "NCL_FO", "Deposit_FO",
+               "Cash_Allocated_CO", "NCL_CO", "Deposit_CO",
                "Cash_Allocated_MCX", "NCL_MCX", "Deposit_MCX (U + V)",
                "Cash_Allocated_NCDEX", "NCL_NCDEX", "Deposit_NCDEX (X+Y)"]
 for col in new_columns:
@@ -398,7 +431,7 @@ for idx, row in df_main.iterrows():
                 df_main.at[idx, "FO_Peak"] = match.iloc[0]["Min Margin(A)"]
                 df_main.at[idx, "Cash_Allocated_FO"] = match.iloc[0]["Total Cash Collateral(B)"]
                 df_main.at[idx, "NCL_FO"] = match.iloc[0]["Total Non-Cash Collateral(C)"]
-                df_main.at[idx, "Deposit_CM (R+S)"] = match.iloc[0]["Total Value of Collateral(D)"]
+                df_main.at[idx, "Deposit_FO"] = match.iloc[0]["Total Value of Collateral(D)"]
         # CM
         if sheet_index in cm_dfs:
             df = cm_dfs[sheet_index]
@@ -408,6 +441,15 @@ for idx, row in df_main.iterrows():
                 df_main.at[idx, "Cash_Allocated_CM"] = match.iloc[0]["Total Cash Collateral(B)"]
                 df_main.at[idx, "NCL_CM"] = match.iloc[0]["Total Non-Cash Collateral(C)"]
                 df_main.at[idx, "Deposit_CM (O+P)"] = match.iloc[0]["Total Value of Collateral(D)"]
+        # CO (NSE COMM) - peaks 1-8
+        if sheet_index in co_dfs:
+            df = co_dfs[sheet_index]
+            match = df[df["Client Code"] == client_code]
+            if not match.empty:
+                df_main.at[idx, "CO_Peak"] = match.iloc[0]["Min Margin(A)"]
+                df_main.at[idx, "Cash_Allocated_CO"] = match.iloc[0]["Total Cash Collateral(B)"]
+                df_main.at[idx, "NCL_CO"] = match.iloc[0]["Total Non-Cash Collateral(C)"]
+                df_main.at[idx, "Deposit_CO"] = match.iloc[0]["Total Value of Collateral(D)"]
         # MCX
         if sheet_index in mcx_dfs:
             df = mcx_dfs[sheet_index]
@@ -444,7 +486,7 @@ for idx, row in df_main.iterrows():
             df_main.at[idx, "FO_Peak"] = match.iloc[0]["Min Margin(A)"]
             df_main.at[idx, "Cash_Allocated_FO"] = match.iloc[0]["Total Cash Collateral(B)"]
             df_main.at[idx, "NCL_FO"] = match.iloc[0]["Total Non-Cash Collateral(C)"]
-            df_main.at[idx, "Deposit_CM (R+S)"] = match.iloc[0]["Total Value of Collateral(D)"]
+            df_main.at[idx, "Deposit_FO"] = match.iloc[0]["Total Value of Collateral(D)"]
 
         # CM END
         match = cm_end_df[cm_end_df["Client Code"] == client_code]
@@ -453,6 +495,14 @@ for idx, row in df_main.iterrows():
             df_main.at[idx, "Cash_Allocated_CM"] = match.iloc[0]["Total Cash Collateral(B)"]
             df_main.at[idx, "NCL_CM"] = match.iloc[0]["Total Non-Cash Collateral(C)"]
             df_main.at[idx, "Deposit_CM (O+P)"] = match.iloc[0]["Total Value of Collateral(D)"]
+
+        # CO END (O_SA01_06436_<date>.lis)
+        match = co_end_df[co_end_df["Client Code"] == client_code]
+        if not match.empty:
+            df_main.at[idx, "CO_Peak"] = match.iloc[0]["Min Margin(A)"]
+            df_main.at[idx, "Cash_Allocated_CO"] = match.iloc[0]["Total Cash Collateral(B)"]
+            df_main.at[idx, "NCL_CO"] = match.iloc[0]["Total Non-Cash Collateral(C)"]
+            df_main.at[idx, "Deposit_CO"] = match.iloc[0]["Total Value of Collateral(D)"]
 
         # ===== CHANGED (MCX EOD): MCX for Indicator = E now comes from the MCX EOD files =====
         # (was: SA_MCX_08 = MCX_PeakMargin56720_<date>_08.csv, then overwritten by MCX_Web_Allocation_08.xlsx)
@@ -1266,6 +1316,32 @@ print(f"ℹ️ MCX EOD: Indicator E rows = {int(_eod_is_e.sum())} | "
       f"not in MCX_MARGIN file (MCX_Peak = 0) = {int((_eod_is_e & ~_eod_cc_series.isin(set(mcx_eod_peak_lookup))).sum())} | "
       f"not in RESPONSE file (Cash/NCL/Deposit = 0) = {int((_eod_is_e & ~_eod_cc_series.isin(set(mcx_eod_resp_lookup))).sum())}")
 
+# ---------------- HEADER LETTERS (kept in step with the real column positions) ----------------
+# Several headers carry column letters, e.g. "Deposit_FO (S + T)". Adding the CO columns moved columns, so the letters are
+# worked out from the final layout here (not typed by hand) - they always point at the right columns.
+def _xl_col(i):
+    s, i = "", i + 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+_LET = {c: _xl_col(i) for i, c in enumerate(df_main.columns)}
+_HDR = {
+    "Deposit_CM (O+P)":    f"Deposit_CM ({_LET['Cash_Allocated_CM']}+{_LET['NCL_CM']})",
+    "Deposit_FO":          f"Deposit_FO ({_LET['Cash_Allocated_FO']} + {_LET['NCL_FO']})",
+    "Deposit_CO":          f"Deposit_CO ({_LET['Cash_Allocated_CO']} + {_LET['NCL_CO']})",
+    "Deposit_MCX (U + V)": f"Deposit_MCX ({_LET['Cash_Allocated_MCX']} + {_LET['NCL_MCX']})",
+    "Deposit_NCDEX (X+Y)": f"Deposit_NCDEX ({_LET['Cash_Allocated_NCDEX']}+{_LET['NCL_NCDEX']})",
+    "MCX SHORT/EXCESS (W-M)":   f"MCX SHORT/EXCESS ({_LET['Deposit_MCX (U + V)']}-{_LET['MCX_Peak']})",
+    "NCDEX SHORT/EXCESS (Z-N)": f"NCDEX SHORT/EXCESS ({_LET['Deposit_NCDEX (X+Y)']}-{_LET['NCDEX_Peak']})",
+    "COVERED SHORT WITH EPI 20% (AA-I)": f"COVERED SHORT WITH EPI 20% ({_LET['EPI 20%']}-{_LET['Short(H-D)']})",
+    "COVERED WITH MCX EXCESS (AD+AB)":   f"COVERED WITH MCX EXCESS ({_LET['COVERED SHORT WITH EPI 20% (AA-I)']}+{_LET['MCX SHORT/EXCESS (W-M)']})",
+    "COVERED WITH NCDEX EXCESS (AE + AC)": f"COVERED WITH NCDEX EXCESS ({_LET['COVERED WITH MCX EXCESS (AD+AB)']} + {_LET['NCDEX SHORT/EXCESS (Z-N)']})",
+}
+df_main = df_main.rename(columns=_HDR)
+print("✅ Header letters:", ", ".join(f"{v}" for v in _HDR.values()))
+
 excel_start=time.time()
 print("🚀 Excel save started")
 # ---------------- SAVE TO EXCEL ----------------
@@ -1319,6 +1395,18 @@ with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
     for j, col in enumerate(cm_end_df.columns):
         max_len = max(safe_col_width(cm_end_df[col]), len(str(col))) + 2
         ws.set_column(j, j, max_len)
+
+    # CO sheets (NSE COMM peaks 1-8 + end of day)
+    for sheet_num, df in co_dfs.items():
+        df.to_excel(writer, index=False, sheet_name=f"SA_CO_0{sheet_num}")
+        ws = writer.sheets[f"SA_CO_0{sheet_num}"]
+        for j, col in enumerate(df.columns):
+            ws.set_column(j, j, max(safe_col_width(df[col]), len(str(col))) + 2)
+    if not co_end_df.empty:
+        co_end_df.to_excel(writer, index=False, sheet_name="SA_CO_END")
+        ws = writer.sheets["SA_CO_END"]
+        for j, col in enumerate(co_end_df.columns):
+            ws.set_column(j, j, max(safe_col_width(co_end_df[col]), len(str(col))) + 2)
 
     # MCX sheets
     for sheet_num, df in mcx_dfs.items():
@@ -1459,8 +1547,8 @@ body = f"""
 
 <ul>
     <li>ZERO SHORTAGE IN I COLUMN: When I = 0</li>
-    <li>COVERED WITH EPI: When AD ≥ 0 and AA > 0 and I>0</li>
-    <li>COVERED WITH MCX EXCESS: When AD < 0 and AB ≥ 0 than check AD + AB ≥ 0</li>
+    <li>COVERED WITH EPI: When {_LET['COVERED SHORT WITH EPI 20% (AA-I)']} ≥ 0 and {_LET['EPI 20%']} > 0 and I>0</li>
+    <li>COVERED WITH MCX EXCESS: When {_LET['COVERED SHORT WITH EPI 20% (AA-I)']} < 0 and {_LET['MCX SHORT/EXCESS (W-M)']} ≥ 0 than check {_LET['COVERED SHORT WITH EPI 20% (AA-I)']} + {_LET['MCX SHORT/EXCESS (W-M)']} ≥ 0</li>
 </ul>
 
 <br>

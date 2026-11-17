@@ -210,6 +210,14 @@ def _sa01(d, fo=True, cm=True):
     return out
 
 
+def _sa01_co(d):
+    """Commodity (O_SA01) peak files - optional: reports run without them (CO columns = 0)."""
+    m, s = MEMBER, _dmy(d)
+    out = [_n("CO SA01 files", f"O_SA01 i0{i}", rf"O_SA01_P_{m}_{s}_i0{i}\.lis", True) for i in range(1, 9)]
+    out.append(_n("CO SA01 files", "O_SA01 end file", rf"O_SA01_{m}_{s}\.lis", True))
+    return out
+
+
 def needs_master(d):
     y, m = _ymd(d), MEMBER
     out = []
@@ -249,7 +257,7 @@ def needs_intra(d):
 
 def _sa_common(d):
     s = _dmy(d)
-    out = _sa01(d) + _peaks(d) + _ncdex_end(d)
+    out = _sa01(d) + _sa01_co(d) + _peaks(d) + _ncdex_end(d)
     out += [_n("MCX web allocation", f"MCX web allocation {i:02d} (live folder {i})", rf"MCX_Web_Allocation_{i:02d}\.xlsx") for i in (1, 2, 3, 4, 8)]
     out += [_n("MCX end of day", "MCX_MARGIN (EOD peak file)", rf"MCX_MARGIN_{MCX_USER}_{_ymd(d)}\.csv"),
             _n("MCX end of day", "RESPONSE_2_mcx.csv (manual)", r"RESPONSE_2_mcx\.csv"),

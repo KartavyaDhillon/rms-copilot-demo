@@ -118,3 +118,36 @@ html.rail .nav-count { display: none; }
 .wt-mail .h { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
 .wt-mail .l { color: var(--text-2); }
 .wt-mail svg { width: 14px; height: 14px; }
+
+/* ── Linked process multi-select dropdown ── */
+.wt-pp-btn { width: 100%; min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 6px; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-sm); color: var(--text); padding: 4px 8px; font-size: 12.5px; cursor: pointer; text-align: left; }
+.wt-pp-btn:disabled { opacity: .6; cursor: default; }
+.wt-pp-v { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.wt-pp-c { color: var(--text-3); flex: none; }
+.wt-pp-panel { position: fixed; z-index: 100001; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--sh-3); padding: 8px; max-height: 330px; display: flex; flex-direction: column; }
+.wt-pp-panel .lst { overflow-y: auto; flex: 1; min-height: 60px; }
+.wt-pp-r { display: flex; align-items: center; gap: 8px; padding: 5px 6px; font-size: 12.5px; border-radius: 6px; cursor: pointer; }
+.wt-pp-r:hover { background: var(--surface-2); }
+.wt-pp-f { display: flex; justify-content: space-between; align-items: center; padding-top: 6px; margin-top: 4px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--text-3); }
+.wt-pp-f a { color: var(--accent); text-decoration: none; }
+
+/* ── Comment box (top of the task window) ── */
+.wt-cbox { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; background: var(--surface-2); }
+.wt-cbox svg { width: 13px; height: 13px; vertical-align: -2px; }
+
+/* ── Status flow strip ── */
+.wt-flow { display: flex; align-items: center; gap: 0; margin: 6px 0 12px; }
+.wt-flow em { flex: 1; height: 2px; background: var(--line-2); min-width: 8px; }
+.wt-fs { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-3); text-align: center; }
+.wt-fs b { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid var(--line-2); font-size: 11px; }
+.wt-fs.seen { color: var(--text-2); } .wt-fs.seen b { background: var(--c); border-color: var(--c); color: #fff; }
+.wt-fs.now { color: var(--text); font-weight: 700; } .wt-fs.now b { background: var(--c); border-color: var(--c); color: #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 30%, transparent); }
+
+/* ── History timeline ── */
+.wt-tl { position: relative; margin-left: 8px; padding-left: 18px; border-left: 2px solid var(--line-2); }
+.wt-tn { position: relative; padding: 5px 0 9px; font-size: 12.5px; line-height: 1.5; }
+.wt-tn > i { position: absolute; left: -26px; top: 9px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-3); border: 2px solid var(--surface); }
+.wt-tn.cm > i { background: var(--accent); } .wt-tn.st > i { background: var(--ok); } .wt-tn.as > i { background: #c084fc; } .wt-tn.ml > i { background: var(--warn); }
+.wt-tn .c { display: flex; gap: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.wt-tn .b { min-width: 0; flex: 1; white-space: pre-wrap; word-break: break-word; }
+.wt-tn small { color: var(--text-3); display: block; } .wt-tn .e small { display: inline; }
