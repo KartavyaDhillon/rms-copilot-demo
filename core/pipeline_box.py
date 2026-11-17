@@ -618,6 +618,28 @@ PIPELINES["ncdexcomm"] = {
              "Kambala FTP (upload of the limit file)": {"user_key": "SCHED_KAMBALA_FTP_USER", "pass_key": "SCHED_KAMBALA_FTP_PASSWORD",
                                                         "note": "202.58.232.29 - shared with MCX COMM LIMIT"}},
 }
+# MTF CONCENTRATION (core/mtf_concentration.py): 08:40 KORP + index files, 09:15 MTFPOSITION, 09:30 run + e-mails.
+# Logs: logs/mtfconc/mtfconc__<dd-mm-yyyy>__<time>.log
+try:
+    from core import mtf_concentration as _mc_conc
+    _mc_conc.apply_defaults()
+    PIPELINES["mtfconc"] = {
+        "name": "MTF CONCENTRATION", "module": "core.mtf_concentration", "func": "run", "logdir": "mtfconc", "runs": 0,
+        "state_dir_env": "MTF_CONC_DIR", "state_default": r"D:\CONSOLE\data\CONCENTRATION", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_conc.MAIL_LABEL[k]: _mc_conc.mail_keys(k) for k in _mc_conc.MAIL_DEFAULTS},
+        "cred": {"E-mail sender (SMTP login) of this card": {
+                     "user_key": "MTFCONC_SENDER_EMAIL", "pass_key": "MTFCONC_SENDER_PASSWORD",
+                     "note": "The login the concentration mails go out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."},
+                 "Back-office API login (KORP report 5)": {
+                     "user_key": "SCHED_BACKOFFICE_USERNAME", "pass_key": "SCHED_BACKOFFICE_PASSWORD",
+                     "note": "boapi MTF CRR report - shared with the Scheduler's Back-office connection"},
+                 "COMMON FILES FTP (MTFPOSITION)": {
+                     "user_key": "COMMON_FTP_USER", "pass_key": "COMMON_FTP_PASS",
+                     "note": "the same FTP folder as HOLDING / RISK_REPORT - MTFPOSITION is fetched from it at 09:15. Shared."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  MTF CONCENTRATION not registered: {type(_e).__name__}: {_e}")
 # 2CAPTCHA low-balance alert (core/captcha_balance.py): only here so the shared e-mail / settings window works for it
 PIPELINES["captchabal"] = {
     "name": "2CAPTCHA BALANCE ALERT", "module": "core.captcha_balance", "func": "check", "logdir": "captchabal", "runs": 0,

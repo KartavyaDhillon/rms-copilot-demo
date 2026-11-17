@@ -447,7 +447,7 @@
       '<button class="btn sm ' + (on ? "primary" : "ghost") + '" data-pctab="' + id + '" style="font-weight:700">' + label + "</button>";
     const close = RMS.modal("Upload Common Files",
       '<div style="display:flex;gap:8px;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line,#2a3342)">' +
-      tabBtn("up", "⬆️ Upload", true) + tabBtn("get", "📦 Get files", false) + "</div>" +
+      tabBtn("up", "⬆️ Upload", true) + tabBtn("other", "🗂️ Other files", false) + tabBtn("get", "📦 Get files", false) + "</div>" +
       '<div id="pcTabUp">' +
       '<div class="card-sub" style="margin-bottom:10px">Only <b>today\'s</b> HOLDING and RISK_REPORT files are accepted, named exactly as below. Anything else is rejected. An existing file of the same name is replaced.</div>' +
       '<table class="htable"><tbody>' + rows + "</tbody></table>" +
@@ -456,19 +456,70 @@
       '<input type="file" id="pcCommonFile" accept=".csv" multiple style="display:none">' +
       '<button class="btn primary" id="pcCommonPick" style="width:100%;justify-content:center;height:44px;margin-top:12px">⬆️ Choose file(s) to upload</button>' +
       '<div id="pcCommonMsg" class="card-sub" style="min-height:18px;margin-top:8px"></div></div>' +
+      '<div id="pcTabOther" style="display:none"><div class="card-sub">Loading…</div></div>' +
       '<div id="pcTabGet" style="display:none">' + getFilesHtml() + "</div>",
       { width: 640, icon: "download" });
     document.querySelectorAll("[data-pctab]").forEach((b) => {
       b.onclick = () => {
-        const get = b.getAttribute("data-pctab") === "get";
-        $("#pcTabUp").style.display = get ? "none" : "";
-        $("#pcTabGet").style.display = get ? "" : "none";
+        const tab = b.getAttribute("data-pctab");
+        $("#pcTabUp").style.display = tab === "up" ? "" : "none";
+        $("#pcTabOther").style.display = tab === "other" ? "" : "none";
+        $("#pcTabGet").style.display = tab === "get" ? "" : "none";
         document.querySelectorAll("[data-pctab]").forEach((x) => {
           x.className = "btn sm " + (x === b ? "primary" : "ghost");
         });
-        if (get && !getBooted) { getBooted = true; wireGetFiles(); }
+        if (tab === "get" && !getBooted) { getBooted = true; wireGetFiles(); }
+        if (tab === "other") loadOther();
       };
     });
+    // ---- "Other files": any file kept in COMMON FILES\OTHER FILES for the processes that need it later ----
+    const kbs = (n) => (n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB");
+    async function loadOther(msg) {
+      const box = $("#pcTabOther"); if (!box) return;
+      let d = {};
+      try { d = await (await fetch("/common/other", { credentials: "same-origin" })).json(); }
+      catch (e) { box.innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; return; }
+      const m = d.mtfposition || {};
+      const mt = '<div class="card-sub" style="margin-bottom:10px"><b>' + esc(m.name || "MTFPOSITION") + "</b>: " +
+        (m.present ? '<span class="badge ok">Present · ' + esc(m.time || "") + "</span>" + (m.source === "FTP" ? " ⚡ auto-fetched" : m.source === "Manual" ? " ✋ by hand" : "")
+          : '<span class="badge warn">Missing</span> fetched automatically at 09:15 by MTF CONCENTRATION' + (m.detail ? " · last try: " + esc(m.detail) : "")) +
+        (!m.present && m.configured ? ' <button class="btn sm" id="pcMtfGo" style="margin-left:6px">📥 Fetch now</button>' : "") + "</div>";
+      const rows = (d.files || []).map((f) =>
+        "<tr><td style='word-break:break-all'><b>" + esc(f.name) + "</b><div class='card-sub'>" + kbs(f.size) + " · " + esc(f.time) + (f.by ? " · " + esc(f.by) : "") + "</div></td>" +
+        "<td style='text-align:right;white-space:nowrap'><a href='/common/other/download?name=" + encodeURIComponent(f.name) + "' download title='Download' style='color:inherit;text-decoration:none;margin-right:10px'>⬇</a>" +
+        "<a href='#' data-pcdel='" + esc(f.name) + "' title='Delete' style='color:var(--err);text-decoration:none'>🗑</a></td></tr>").join("");
+      box.innerHTML = mt +
+        '<div class="card-sub" style="margin-bottom:8px">Keep any file here (any name, any day). It stays in <b>COMMON FILES\\OTHER FILES</b> until you delete it, so later processes can pick it up - for example <b>EXCEPTION.xlsx</b> for MTF CONCENTRATION. A file with the same name is replaced.</div>' +
+        (rows ? '<table class="htable"><tbody>' + rows + "</tbody></table>" : '<div class="card-sub" style="padding:8px 0">No files here yet.</div>') +
+        '<input type="file" id="pcOtherFile" multiple style="display:none">' +
+        '<button class="btn primary" id="pcOtherPick" style="width:100%;justify-content:center;height:44px;margin-top:12px">⬆️ Choose file(s) to keep</button>' +
+        '<div id="pcOtherMsg" class="card-sub" style="min-height:18px;margin-top:8px">' + (msg || "") + "</div>";
+      if ($("#pcMtfGo")) $("#pcMtfGo").onclick = async () => {
+        $("#pcMtfGo").disabled = true;
+        const r = await (await fetch("/common/mtfposition/fetch", { method: "POST", credentials: "same-origin" })).json().catch(() => ({}));
+        $("#pcOtherMsg").innerHTML = r.ok ? "Fetching MTFPOSITION… reopen this tab in a minute." : '<span style="color:var(--err)">' + esc(r.error || "failed") + "</span>";
+      };
+      $("#pcOtherPick").onclick = () => $("#pcOtherFile").click();
+      $("#pcOtherFile").onchange = async () => {
+        const list = Array.from($("#pcOtherFile").files || []); if (!list.length) return;
+        $("#pcOtherMsg").innerHTML = "Uploading " + list.length + " file(s)…";
+        const fd = new FormData(); list.forEach((f) => fd.append("files", f));
+        try {
+          const r = await (await fetch("/common/other/upload", { method: "POST", body: fd, credentials: "same-origin" })).json();
+          const note = (r.saved && r.saved.length ? '<span style="color:var(--ok,#34d399)">✔ Saved: ' + r.saved.map(esc).join(", ") + "</span>" : "") +
+            (r.rejected && r.rejected.length ? '<br><span style="color:var(--err)">' + r.rejected.map(esc).join("<br>") + "</span>" : "");
+          loadOther(note);
+        } catch (e) { $("#pcOtherMsg").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; }
+      };
+      box.querySelectorAll("[data-pcdel]").forEach((a) => a.onclick = async (ev) => {
+        ev.preventDefault();
+        const n = a.getAttribute("data-pcdel");
+        const pw = window.prompt("Delete " + n + " from OTHER FILES?\nEnter the console password to confirm:");
+        if (!pw) return;
+        const r = await (await fetch("/common/other/delete", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n, password: pw }) })).json().catch(() => ({}));
+        loadOther(r.ok ? "Deleted " + esc(n) : '<span style="color:var(--err)">' + esc(r.error || "failed") + "</span>");
+      });
+    }
     let getBooted = false;
     if ($("#pcFtpGo")) $("#pcFtpGo").onclick = async () => {
       const goBtn = $("#pcFtpGo"), goTxt = goBtn.innerHTML;

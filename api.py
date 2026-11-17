@@ -409,7 +409,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1077,6 +1077,17 @@ def _comm_card_routes(prefix, modname):
 
 _comm_card_routes("mcx-comm", "core.mcx_comm_limit")
 _comm_card_routes("ncdex-comm", "core.ncdex_comm_limit")
+_comm_card_routes("mtf-conc", "core.mtf_concentration")      # MTF CONCENTRATION card: /mtf-conc/* (same routes)
+
+
+@app.on_event("startup")
+def _mtf_conc_startup():
+    """Timer of the MTF CONCENTRATION card: 08:40 downloads, 09:15 MTFPOSITION, 09:30 run (all editable in its Settings)."""
+    try:
+        from core import mtf_concentration as _mcn
+        _mcn.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  MTF CONCENTRATION timer not started: {type(_e).__name__}: {_e}")
 
 # ── 76 FILES DOWNLOADER (one day folder, no copies elsewhere; see core/files70.py) ───────────────────────────────
 def _f70_date(s: str = ""):
@@ -7065,6 +7076,75 @@ def common_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_File(.
             _by = ""
         print(f"📤 COMMON FILES upload by {_by or 'unknown'}: {', '.join(ok)}", flush=True)
     return {"ok": bool(ok) or not rejected, "saved": ok, "rejected": rejected}
+
+
+# ── "Other files" of the Upload Common Files window: any file kept in COMMON FILES\OTHER FILES for later processes ──
+@app.get("/common/other")
+def common_other_list():
+    from core import common_ftp as _cf
+    from core.common_ftp import read_sources as _rs
+    src = _rs(_cf.other_dir())
+    return {"folder": _cf.other_dir(), "files": [dict(f, by=(src.get(f["name"]) or {}).get("by", "")) for f in _cf.other_list()],
+            "mtfposition": _cf.mtfpos_status()}
+
+
+@app.post("/common/other/upload")
+async def common_other_upload(request: Request, files: _SA_List[_SA_UploadFile] = _SA_File(...)):
+    from core import common_ftp as _cf
+    try:
+        _who = _actor(request)[0] or ""
+    except Exception:
+        _who = ""
+    ok, rejected = [], []
+    for f in files:
+        try:
+            ok.append(_cf.other_save(f.filename or "", await f.read(), by=_who)["name"])
+        except ValueError as e:
+            rejected.append(str(e))
+    if ok:
+        print(f"📤 COMMON FILES > OTHER FILES upload by {_who or 'unknown'}: {', '.join(ok)}", flush=True)
+    return {"ok": bool(ok) or not rejected, "saved": ok, "rejected": rejected}
+
+
+@app.get("/common/other/download")
+def common_other_download(name: str):
+    from fastapi import HTTPException as _HE
+    from core import common_ftp as _cf
+    try:
+        p = _cf.other_path(name)
+    except (ValueError, FileNotFoundError):
+        raise _HE(status_code=404, detail="file not found")
+    return FileResponse(p, filename=_sa_os.path.basename(p), headers=_NO_CACHE)
+
+
+@app.post("/common/other/delete")
+async def common_other_delete(request: Request):
+    """Asks for the console password (a file other processes may rely on)."""
+    from core import common_ftp as _cf
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        _who = _actor(request)[0] or ""
+    except Exception:
+        _who = ""
+    try:
+        _cf.other_delete(str(body.get("name") or ""), by=_who)
+    except (ValueError, FileNotFoundError):
+        return {"ok": False, "error": "file not found"}
+    return {"ok": True}
+
+
+@app.post("/common/mtfposition/fetch")
+def common_mtfposition_fetch(request: Request):
+    """Fetch today's MTFPOSITION from the FTP now (normally done at 09:15 by the MTF CONCENTRATION timer)."""
+    import threading as _th
+    from core import common_ftp as _cf
+    if not _cf.configured():
+        return {"ok": False, "error": "FTP is not set up - add COMMON_FTP_HOST / COMMON_FTP_USER / COMMON_FTP_PASS to .env."}
+    _th.Thread(target=lambda: _cf.fetch_mtfposition(manual=True), daemon=True, name="mtfpos-manual").start()
+    return {"ok": True}
 
 
 @app.get("/reco/holidays")

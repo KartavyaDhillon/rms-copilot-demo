@@ -478,6 +478,165 @@ def is_fetching() -> bool:
     return _LOCK.locked()
 
 
+# ───────────────────────── MTFPOSITION (own time: 09:15, not the 07:30-08:15 window) ─────────────────────────
+# Same FTP folder as HOLDING / RISK_REPORT, but it is produced later, so it has its own fetch. It is deliberately NOT in KINDS:
+# the morning window, its "done" flag and its alert e-mail must not wait for (or complain about) this file.
+MTF_KIND = "MTFPOSITION"
+_MTF_LOCK = threading.Lock()
+_MTF_STATE: dict = {"date": "", "status": "", "detail": "", "at": ""}
+
+
+def mtfpos_name(today: Optional[dt.date] = None) -> str:
+    return f"{MTF_KIND}_{(today or dt.date.today()):%d%m%Y}.csv"
+
+
+def mtfpos_ok(path: str) -> bool:
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            return False
+        with open(path, "rb") as fh:
+            head = fh.readline(65536).decode("utf-8-sig", "replace")
+        return "," in head or ";" in head or "\t" in head
+    except OSError:
+        return False
+
+
+def mtfpos_status() -> dict:
+    s = dict(_MTF_STATE)
+    p = os.path.join(common_dir(), mtfpos_name())
+    s.update(name=mtfpos_name(), present=mtfpos_ok(p), fetching=_MTF_LOCK.locked(), configured=configured())
+    if s["present"]:
+        s["size"] = os.path.getsize(p)
+        s["time"] = dt.datetime.fromtimestamp(os.path.getmtime(p)).strftime("%H:%M:%S")
+        s["source"] = (read_sources(common_dir()).get(mtfpos_name()) or {}).get("how", "")
+    return s
+
+
+def fetch_mtfposition(manual: bool = False) -> dict:
+    """One try for today's MTFPOSITION_<DDMMYYYY>.csv. Skips it if a good copy is already in COMMON FILES (uploaded by hand
+    or fetched earlier). -> {'ok', 'status', 'detail'}; status is one of present / downloaded / not on ftp / being written / error."""
+    if not _MTF_LOCK.acquire(blocking=False):
+        return {"ok": False, "status": "busy", "detail": "a fetch is already running"}
+    name = mtfpos_name()
+    today = dt.date.today().isoformat()
+
+    def done(ok, status, detail):
+        _MTF_STATE.update(date=today, status=status, detail=detail, at=dt.datetime.now().strftime("%H:%M:%S"))
+        _log(f"{name}: {detail}")
+        return {"ok": ok, "status": status, "detail": detail}
+    try:
+        folder = common_dir()
+        os.makedirs(folder, exist_ok=True)
+        dest = os.path.join(folder, name)
+        if mtfpos_ok(dest):
+            return done(True, "present", "already in COMMON FILES - not downloaded")
+        if not configured():
+            return done(False, "error", "FTP is not set up (COMMON_FTP_HOST / USER / PASS in .env)")
+        try:
+            ftp = _connect()
+        except all_errors + (OSError,) as e:
+            return done(False, "error", f"could not connect to the FTP: {e}")
+        try:
+            try:
+                listing = set(ftp.nlst())
+            except error_perm:
+                listing = set()
+            if name not in listing:
+                return done(False, "not on ftp", "not on the FTP yet")
+            s1 = _size(ftp, name)
+            time.sleep(10)
+            s2 = _size(ftp, name)
+            if s1 is not None and s2 is not None and s1 != s2:
+                return done(False, "being written", f"the back office is still writing it ({s2:,} bytes)")
+            part = dest + ".ftp.part"
+            try:
+                ftp = _download(ftp, name, part, s2, lambda m: _log(f"{name}: {m}"))
+                if os.path.getsize(part) == 0:
+                    raise ValueError("the downloaded file is empty")
+                if not mtfpos_ok(part):
+                    raise ValueError("this does not look like a CSV file")
+                os.replace(part, dest)
+                mark_source(folder, name, "FTP")
+                return done(True, "downloaded", f"downloaded from the FTP ({os.path.getsize(dest) / 1048576:.1f} MB)")
+            except Exception as e:
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+                return done(False, "error", f"download failed: {e}")
+        finally:
+            try:
+                ftp.quit()
+            except Exception:
+                try:
+                    ftp.close()
+                except Exception:
+                    pass
+    except Exception as e:                                  # never let a caller die
+        return done(False, "error", f"{type(e).__name__}: {e}")
+    finally:
+        _MTF_LOCK.release()
+
+
+# ───────────────────────── "Other files" (anything the later processes will need) ─────────────────────────
+OTHER_SUB = "OTHER FILES"
+_BAD_EXT = (".py", ".bat", ".cmd", ".exe", ".ps1", ".vbs", ".dll", ".msi", ".part", ".js")
+
+
+def other_dir() -> str:
+    p = os.path.join(common_dir(), OTHER_SUB)
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
+def other_list() -> List[dict]:
+    d = other_dir()
+    out = []
+    for n in sorted(os.listdir(d), key=str.lower):
+        p = os.path.join(d, n)
+        if os.path.isfile(p) and not n.startswith("."):
+            st = os.stat(p)
+            out.append({"name": n, "size": st.st_size, "time": dt.datetime.fromtimestamp(st.st_mtime).strftime("%d-%m-%Y %H:%M:%S")})
+    return out
+
+
+def _other_safe(name: str) -> str:
+    n = os.path.basename((name or "").replace("\\", "/"))
+    if not n or n.startswith(".") or n.lower().endswith(_BAD_EXT):
+        raise ValueError(f"{n or '(no name)'}: this file name / type is not allowed")
+    return n
+
+
+def other_save(name: str, data: bytes, by: str = "") -> dict:
+    """Keep any file under its own name (a file of the same name is replaced). Returns {'name','size'}."""
+    n = _other_safe(name)
+    if not data:
+        raise ValueError(f"{n}: the file is empty")
+    d = other_dir()
+    part = os.path.join(d, n + ".part")
+    with open(part, "wb") as f:
+        f.write(data)
+    os.replace(part, os.path.join(d, n))
+    mark_source(d, n, "Manual", by)
+    _log(f"OTHER FILES: {n} ({len(data):,} bytes) uploaded by {by or 'user'}")
+    return {"name": n, "size": len(data)}
+
+
+def other_path(name: str) -> str:
+    n = _other_safe(name)
+    p = os.path.join(other_dir(), n)
+    if not os.path.isfile(p):
+        raise FileNotFoundError(n)
+    return p
+
+
+def other_delete(name: str, by: str = "") -> bool:
+    p = other_path(name)
+    os.remove(p)
+    _log(f"OTHER FILES: {os.path.basename(p)} deleted by {by or 'user'}")
+    return True
+
+
 def alert_once_if_missing(detail: str = "") -> bool:
     """Used by the scheduler process after the window: ONE alert e-mail per day if something is still missing."""
     today = dt.date.today().isoformat()
