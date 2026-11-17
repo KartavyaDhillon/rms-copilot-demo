@@ -1339,6 +1339,12 @@ def parse_manohar(text: str) -> tuple[list, str]:
     pans = [c for c in codes if re.fullmatch(r"[A-Z]{5}\d{4}[A-Z]", c)]
     if pans and len(pans) < len(codes):
         codes = [c for c in codes if c not in pans]
+    # Same pasted row also has the Branch ID (e.g. B7MAA) - the a/c starts with the branch part (7MAA10071). Only when the text
+    # mentions "branch" and the short code is contained at the start of a longer code (after its first letter) in the same reply.
+    if re.search(r"branch", t, re.I) and len(codes) > 1:
+        br = [c for c in codes if len(c) <= 6 and any(o != c and len(o) > len(c) and (o.startswith(c) or o.startswith(c[1:])) for o in codes)]
+        if br and len(br) < len(codes):
+            codes = [c for c in codes if c not in br]
     return (codes, "") if codes else ([], f"cannot read any trading a/c code in Manohar's reply: {t!r}")
 
 
