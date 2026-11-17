@@ -178,7 +178,12 @@ def check_folders(root):
         # Tesseract into a green tick, and the failure only surfaced later as a
         # captcha that never solved. Check the file, and say so plainly.
         if kinds and all(k == "program" for k in kinds):
-            if os.path.isfile(resolved):
+            # Programs this console no longer uses are not checked (OCR was retired). Add more names to DOCTOR_SKIP
+            # in .env.local (comma separated) to silence another one.
+            _skip = {x.strip().upper() for x in (os.getenv("DOCTOR_SKIP", "") + ",SA_TESSERACT").split(",") if x.strip()}
+            if key.upper() in _skip:
+                check(_PASS, key, "not checked - no longer used")
+            elif os.path.isfile(resolved):
                 check(_PASS, key, f"{resolved}  [installed program]")
             else:
                 check(_FAIL, key, f"{resolved}  ← NOT INSTALLED HERE. "
@@ -192,7 +197,7 @@ def check_folders(root):
         # must not fire on them.
         if "repo" in kinds:
             missing = [p for p, k in zip(parts, kinds)
-                       if k == "repo" and not os.path.isdir(p)]
+                       if k == "repo" and not (os.path.isdir(p) or os.path.isfile(p))]      # SA_PYTHON is a file
             if missing:
                 check(_WARN, key, f"{resolved}  ← code folder(s) not found: "
                                   f"{', '.join(missing)}. Re-run tools\\make_env_local.py.")
