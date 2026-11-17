@@ -37,6 +37,19 @@
     document.body.appendChild(el);
     setTimeout(function () { if (el.parentNode) el.remove(); }, kind === 'err' ? 7000 : 3800);
   }
+  function okBox(title, text, kind) {      // a popup with an OK button (stays until OK is pressed)
+    var old = $('mofOk'); if (old) old.remove();
+    var col = kind === 'err' ? 'var(--red,#f87171)' : 'var(--green,#34d399)';
+    var bg = document.createElement('div'); bg.id = 'mofOk';
+    bg.style.cssText = 'position:fixed;inset:0;z-index:100002;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
+    bg.innerHTML = '<div style="background:var(--panel,#141821);color:var(--ink,#e8ecf3);border:1px solid ' + col + ';border-radius:14px;padding:20px 22px;width:min(420px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.6)">' +
+      '<div style="font-size:15px;font-weight:700;margin-bottom:8px;color:' + col + '">' + (kind === 'err' ? '✕ ' : '✓ ') + esc(title) + '</div><div style="font-size:13px;color:var(--muted,#9aa4b5);line-height:1.5;margin-bottom:16px">' + esc(text) + '</div>' +
+      '<div style="display:flex;justify-content:flex-end"><button class="sa-tool" data-no-busy="1" id="mofOkBtn" style="min-width:90px;background:' + col + ';color:#06251a;border-color:transparent">OK</button></div></div>';
+    document.body.appendChild(bg);
+    $('mofOkBtn').onclick = function () { bg.remove(); };
+    bg.onclick = function (e) { if (e.target === bg) bg.remove(); };
+    $('mofOkBtn').focus();
+  }
   function confirmBox(title, text, okLabel, cb) {
     var old = $('mofConfirm'); if (old) old.remove();
     var bg = document.createElement('div'); bg.id = 'mofConfirm';
@@ -93,7 +106,7 @@
     tile.innerHTML =
       '<div class="tile-icon">🧾</div>' +
       '<div class="tile-name">MTF ORDER FILE <span class="st" id="mofChip">idle</span></div>' +
-      '<div class="tile-desc">Picks the MTF risk shortage mail (from the start time set in Credentials, 08:00 by default), reads MTFPOSITION + RISK_REPORT from COMMON FILES, makes the Kambala / 0319 order files at 10:00 and e-mails each zone.</div>' +
+      '<div class="tile-desc">Picks the MTF risk shortage mail (from the start time set in Settings, 08:00 by default), reads MTFPOSITION + RISK_REPORT from COMMON FILES, makes the Kambala / 0319 order files at 10:00 and e-mails each zone.</div>' +
       '<div class="tile-desc" id="mofMini" style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">Checking…</div>' +
       '<div class="tile-actions"><button class="tbtn" style="background:#f59e0b;color:#2b1a02" onclick="event.stopPropagation();mofOpen()" data-tip="Open MTF ORDER FILE: downloads, run, auto switch, credentials, e-mail To / CC, upload and backup files, logs.">Open</button></div>';
     g.appendChild(tile);
@@ -101,7 +114,7 @@
   }
   function keepLast() {      // this tile is the very last one of the row
     var el = $('task-mtforder'); if (!el || !el.parentNode) return;
-    var p = el.parentNode, bk = document.getElementById('task-backuparch'); bk = bk && bk.parentNode === p ? bk : null;
+    var p = el.parentNode, bk = document.getElementById('task-entrisk'); bk = bk && bk.parentNode === p ? bk : null;
     var kids = [].slice.call(p.children), want = kids.filter(function (e) { return e !== el && e !== bk; }).concat([el]).concat(bk ? [bk] : []);
     if (kids.some(function (e, i) { return e !== want[i]; })) want.forEach(function (e) { p.appendChild(e); });
   }
@@ -123,7 +136,7 @@
 
   // ───────────────────────── window ─────────────────────────
   function tb(label, fn, tip, extra) {
-    return '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap' + (extra || '') + '" onclick="' + fn + '"' + (tip ? ' data-tip="' + esc(tip) + '"' : '') + '>' + label + '</button>';
+    return '<button class="sa-tool" style="width:100%;justify-content:center;text-align:center;padding-left:6px;padding-right:6px;white-space:nowrap' + (extra || '') + '" onclick="' + fn + '"' + (fn.indexOf('mofRun') === 0 ? ' data-no-busy="1"' : '') + (tip ? ' data-tip="' + esc(tip) + '"' : '') + '>' + label + '</button>';
   }
   var RED = ';border-color:rgba(248,113,113,.45);color:var(--red)';
   window.mofSub = function (fn) { window._saReturn = mofOpen; fn(); };
@@ -136,7 +149,7 @@
     var auto = S.data ? S.data.auto : true;
     modal(TITLE,
       '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin:0 0 8px">' +
-        tb('⬇ Shortage mail', "mofFetch('mail')", 'Looks in the mailbox for today\'s MTF_RISK_SHORTAGE_REPORT mail (start time in Credentials - 12:00) and saves its attachment. A button always checks again.') +
+        tb('⬇ Shortage mail', "mofFetch('mail')", 'Looks in the mailbox for today\'s MTF_RISK_SHORTAGE_REPORT mail (start time in Settings - 12:00) and saves its attachment. A button always checks again.') +
         tb('⬇ MTFPOSITION', "mofFetch('mtfpos')", 'Fetches today\'s MTFPOSITION csv from the FTP into COMMON FILES (skipped if it is already there).') +
       '</div>' +
       '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0 0 8px">' +
@@ -273,8 +286,10 @@
       get(BASE + '/settings').then(function (s) {
         S.pw = pw;
         modal('⚙ ' + TITLE + ' - settings',
-          '<div style="margin-bottom:12px"><div class="mof-lbl">Run time (the order files are made and e-mailed at this time)</div><input type="time" id="mofT3" class="mof-in" style="width:100%" value="' + esc(s.run_at) + '"></div>' +
-          '<div style="font-size:11.5px;color:var(--dim);line-height:1.55;margin-bottom:12px">The shortage mail is looked for every 5 minutes from the start time set in <b>Credentials</b> (\'Mail look-up start time\', 08:00 by default); if it is not there at the run time the run waits for it until 12:00.</div>' +
+          '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px">' +
+          '<div><div class="mof-lbl">Mail look-up start time</div><input type="time" id="mofT1" class="mof-in" style="width:100%" value="' + esc(s.mail_from || '08:00') + '"></div>' +
+          '<div><div class="mof-lbl">Run time (order files made and e-mailed)</div><input type="time" id="mofT3" class="mof-in" style="width:100%" value="' + esc(s.run_at) + '"></div></div>' +
+          '<div style="font-size:11.5px;color:var(--dim);line-height:1.55;margin-bottom:12px">The shortage mail is looked for every 5 minutes from the start time until 12:00; only a mail that arrived at or after the start time is taken. If it is not there at the run time, the run waits for it until 12:00.</div>' +
           '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:12px"><input type="checkbox" id="mofMail" ' + (s.send_mail ? 'checked' : '') + '> Send the e-mails automatically at the run</label>' +
           '<div class="mof-lbl">WhatsApp failure-alert numbers (blank = the Margin Shortage / common alert numbers)</div><input type="text" id="mofAlert" class="mof-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
           '<button class="sa-save" id="mofSetBtn" data-no-busy="1" style="width:100%" onclick="mofSetSave()">Save settings</button><div class="sa-msg" id="mofSetMsg"></div>');
@@ -283,9 +298,9 @@
   };
   window.mofSetSave = function () {
     var btn = $('mofSetBtn'), m = $('mofSetMsg'); if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-    post(BASE + '/settings', { password: S.pw, run_at: $('mofT3').value, send_mail: $('mofMail').checked, alert_numbers: $('mofAlert').value }).then(function (j) {
+    post(BASE + '/settings', { password: S.pw, mail_from: $('mofT1').value, run_at: $('mofT3').value, send_mail: $('mofMail').checked, alert_numbers: $('mofAlert').value }).then(function (j) {
       if (btn) { btn.disabled = false; btn.textContent = j && j.ok ? '✓ Saved' : 'Save settings'; }
-      if (j && j.ok) toast('Settings saved.'); else toast((j && j.error) || 'Could not save the settings.', 'err');
+      if (j && j.ok) okBox('Settings saved', 'Mail look-up starts at ' + $('mofT1').value + ', the run is at ' + $('mofT3').value + '.'); else okBox('Not saved', (j && j.error) || 'Could not save the settings.', 'err');
       if (m) m.innerHTML = j && j.ok ? '<span style="color:var(--green)">Saved.</span>' : '<span style="color:var(--red)">' + esc((j && j.error) || 'Failed') + '</span>';
       reload();
     });

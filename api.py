@@ -409,7 +409,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-backuparch.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1079,6 +1079,30 @@ _comm_card_routes("mcx-comm", "core.mcx_comm_limit")
 _comm_card_routes("ncdex-comm", "core.ncdex_comm_limit")
 _comm_card_routes("mtf-conc", "core.mtf_concentration")      # MTF CONCENTRATION card: /mtf-conc/* (same routes)
 _comm_card_routes("mtf-order", "core.mtf_order_file")        # MTF ORDER FILE card: /mtf-order/* (same routes)
+_comm_card_routes("entrisk", "core.enterprise_risk")         # ENTERPRISE RISK REPORT card: /entrisk/* (same routes)
+
+
+@app.post("/entrisk/screener", name="entrisk_screener")
+async def _entrisk_screener(request: Request):
+    """On demand: {symbol} -> the screener file of that company is made and e-mailed (rms_del by default)."""
+    from core import enterprise_risk as _er
+    body = await request.json()
+    try:
+        return _er.request_screener(str(body.get("symbol") or ""), by=(_actor(request)[0] or ""))
+    except _er.Busy as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+
+@app.on_event("startup")
+def _entrisk_startup():
+    """Timer of the ENTERPRISE RISK REPORT card: mailbox from 10:03, run at 10:30 on weekdays (editable in its Settings)."""
+    try:
+        from core import enterprise_risk as _er
+        _er.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  ENTERPRISE RISK REPORT timer not started: {type(_e).__name__}: {_e}")
 
 
 @app.on_event("startup")
@@ -4295,7 +4319,7 @@ def sa_las_email_download_stream():
         )
         python = _sa_os.getenv("SA_PYTHON", "python")
         env2 = _sa_os.environ.copy()
-        env2["SA_ENV_FILE"] = r"D:\CLAUDE\rms-copilot\.env"
+        env2["SA_ENV_FILE"] = _sa_os.path.join(_sa_os.path.dirname(_sa_os.path.abspath(__file__)), ".env")   # this checkout's .env, not the dev copy
         env2["PYTHONIOENCODING"] = "utf-8"   # prevent cp1252 UnicodeEncodeError
         env2["PYTHONUTF8"] = "1"             # Python 3.7+ UTF-8 mode
         env2["PYTHONUNBUFFERED"] = "1"       # otherwise child stdout is block-buffered on

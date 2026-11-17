@@ -31,7 +31,7 @@ IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 MAIL_SUBJECT = "MTF_RISK_SHORTAGE_REPORT"
 MAIL_ATTACHMENT = "MTF_RISK_SHORTAGE_REPORT.xlsx"
 SHORTAGE_STEM = "MTF_RISK_SHORTAGE_REPORT"
-WINDOW_START = dt.time(8, 0)      # default; the real start is mail_from() (Credentials > MTFOF_MAIL_FROM)
+WINDOW_START = dt.time(8, 0)      # default; the real start is mail_from() (Settings)
 WINDOW_END = dt.time(12, 0)
 ZONES = ("CHND", "MUMB", "LUDH", "DELH")
 _VR, _SK = "vipin.rai@mastertrust.co.in", "sandeep.kumar2@mastertrust.co.in"
@@ -72,18 +72,18 @@ def mail_keys(k: str) -> tuple:
 
 
 def mail_from() -> dt.time:
-    """When the mailbox is first looked at: Credentials 'Mail look-up start time' (MTFOF_MAIL_FROM), default 08:00.
-    Must be earlier than the 12:00 end of the window, otherwise the default is used."""
-    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", os.environ.get("MTFOF_MAIL_FROM", ""))
-    if m and int(m.group(1)) < 24 and int(m.group(2)) < 60:
-        t = dt.time(int(m.group(1)), int(m.group(2)))
+    """When the mailbox is first looked at: Settings > 'Mail look-up start time' (default 08:00); always earlier than the 12:00 end."""
+    try:
+        v = get_settings()["mail_from"]
+        t = dt.time(int(v[:2]), int(v[3:]))
         if t < WINDOW_END:
             return t
+    except Exception:                                            # noqa: BLE001
+        pass
     return WINDOW_START
 
 
 def apply_defaults() -> None:
-    os.environ.setdefault("MTFOF_MAIL_FROM", "08:00")
     for k, (to, cc) in MAIL_DEFAULTS.items():
         tk, ck = mail_keys(k)
         os.environ.setdefault(tk, to)
@@ -167,12 +167,13 @@ def _settings_path() -> Path:
 
 
 def get_settings() -> dict:
-    d = {"auto": True, "run_at": "10:00", "send_mail": True, "alert_numbers": ""}
+    d = {"auto": True, "run_at": "10:00", "mail_from": "08:00", "send_mail": True, "alert_numbers": ""}
     try:
         d.update(json.loads(_settings_path().read_text(encoding="utf-8")))
     except Exception:                                            # noqa: BLE001
         pass
     d["run_at"] = _hhmm(d.get("run_at"), "10:00")
+    d["mail_from"] = _hhmm(d.get("mail_from"), "08:00")
     return d
 
 
@@ -186,6 +187,13 @@ def save_settings(update: dict, by: str = "") -> dict:
         if not v:
             raise ValueError(f"{update['run_at']!r} is not a time like 10:00")
         cur["run_at"] = v
+    if "mail_from" in update:
+        v = _hhmm(update["mail_from"], "")
+        if not v:
+            raise ValueError(f"{update['mail_from']!r} is not a time like 09:00")
+        if dt.time(int(v[:2]), int(v[3:])) >= WINDOW_END:
+            raise ValueError(f"the mail start time must be earlier than {WINDOW_END:%H:%M} (the end of the mail window)")
+        cur["mail_from"] = v
     if "alert_numbers" in update:
         raw = str(update["alert_numbers"] or "").strip()
         if raw:
@@ -1089,7 +1097,7 @@ def status() -> dict:
             "counts": st.get("counts", {}), "sent": st.get("sent", []), "failed_mail": st.get("failed_mail", []),
             "empty_zones": st.get("empty_zones", []), "alert_sent": bool(st.get("alert_sent")), "alert_reason": st.get("alert_reason", ""),
             "auto": bool(set_["auto"]), "needs_password": s == "done" and not running,
-            "settings": dict({k: set_[k] for k in ("auto", "run_at", "send_mail", "alert_numbers")}, mail_from=mail_from().strftime("%H:%M")),
+            "settings": {k: set_[k] for k in ("auto", "run_at", "mail_from", "send_mail", "alert_numbers")},
             "sched": {k: {"done": bool(v.get("done")), "gave_up": bool(v.get("gave_up")), "tries": v.get("tries", 0)} for k, v in sc.items()},
             "steps": [dict(key=k, label=STEP_LABEL[k], **steps.get(k, {"status": "", "msg": ""})) for k in STEP_ORDER],
             "inputs": inputs, "folder": str(root()), "log": recent_log(60)}

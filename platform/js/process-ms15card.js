@@ -61,7 +61,7 @@
     var els = ['task-ms15card', 'task-mcxcomm', 'task-ncdexcomm'].map(function (i) { return document.getElementById(i); }).filter(Boolean);
     if (!els.length || !els[0].parentNode) return;
     var p = els[0].parentNode; els = els.filter(function (e) { return e.parentNode === p; });
-    var kids = [].slice.call(p.children).filter(function (e) { return ['task-mtfconc', 'task-mtforder', 'task-backuparch'].indexOf(e.id) < 0; }), tail = kids.slice(kids.length - els.length);
+    var kids = [].slice.call(p.children).filter(function (e) { return ['task-mtfconc', 'task-mtforder', 'task-entrisk'].indexOf(e.id) < 0; }), tail = kids.slice(kids.length - els.length);
     if (!els.every(function (e, i) { return tail[i] === e; })) els.forEach(function (e) { p.appendChild(e); });
   }
 

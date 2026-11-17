@@ -107,21 +107,20 @@ class FakePop:
 
 
 class MailPick(Env):
-    def test_start_time_from_credentials(self):
+    def test_start_time_from_settings(self):
         d = dt.date(2026, 11, 16)
         mails = [make_mail("MTF_RISK_SHORTAGE_REPORT", d, 8, 20), make_mail("MTF_RISK_SHORTAGE_REPORT", d, 9, 30)]
-        os.environ["MTFOF_MAIL_FROM"] = "09:00"
-        try:
-            self.assertEqual(self.m.mail_from(), dt.time(9, 0))
-            _data, when = self.m.find_mail(FakePop(mails[:1] + mails[1:]), 2, d)
-            self.assertEqual((when.hour, when.minute), (9, 30))
-            self.assertIsNone(self.m.find_mail(FakePop(mails[:1]), 1, d))          # the 08:20 mail is before the start time
-            os.environ["MTFOF_MAIL_FROM"] = "13:00"                                # after the window end -> default
-            self.assertEqual(self.m.mail_from(), dt.time(8, 0))
-            os.environ["MTFOF_MAIL_FROM"] = "junk"
-            self.assertEqual(self.m.mail_from(), dt.time(8, 0))
-        finally:
-            os.environ.pop("MTFOF_MAIL_FROM", None)
+        self.assertEqual(self.m.mail_from(), dt.time(8, 0))                        # default
+        self.m.save_settings({"mail_from": "9:00"})
+        self.assertEqual(self.m.mail_from(), dt.time(9, 0))
+        _data, when = self.m.find_mail(FakePop(mails), 2, d)
+        self.assertEqual((when.hour, when.minute), (9, 30))
+        self.assertIsNone(self.m.find_mail(FakePop(mails[:1]), 1, d))              # the 08:20 mail is before the start time
+        self.assertEqual(self.m.status()["settings"]["mail_from"], "09:00")
+        for bad in ("12:00", "13:00", "junk"):
+            with self.assertRaises(ValueError):
+                self.m.save_settings({"mail_from": bad})
+        self.assertEqual(self.m.mail_from(), dt.time(9, 0))
 
     def test_window_subject_and_newest(self):
         d = dt.date(2026, 11, 16)

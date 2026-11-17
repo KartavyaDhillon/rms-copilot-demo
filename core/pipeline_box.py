@@ -656,15 +656,40 @@ try:
                  "Mailbox (POP3) that receives MTF_RISK_SHORTAGE_REPORT": {
                      "user_key": "MTFOF_POP_USER", "pass_key": "MTFOF_POP_PASS",
                      "note": "The mailbox the shortage report mail arrives in (pop9.netcore.co.in). Empty = the shared mailbox (Scheduler > Connections > pop3)."},
-                 "Mail look-up start time (HH:MM)": {
-                     "single_key": "MTFOF_MAIL_FROM", "default": "08:00",
-                     "note": "The mailbox is first looked at from this time (every 5 minutes, until 12:00). Only a mail that arrived at or after this time is taken. E.g. 09:00."},
                  "COMMON FILES FTP (MTFPOSITION)": {
                      "user_key": "COMMON_FTP_USER", "pass_key": "COMMON_FTP_PASS",
                      "note": "the same FTP folder as HOLDING / RISK_REPORT - MTFPOSITION is fetched from it. Shared."}},
     }
 except Exception as _e:                                          # noqa: BLE001
     print(f"⚠️  MTF ORDER FILE not registered: {type(_e).__name__}: {_e}")
+# ENTERPRISE RISK REPORT (core/enterprise_risk.py): Enterprise mails from 10:03, run 10:30 Mon-Fri, screener.in data, one mail.
+# Logs: logs/entrisk/entrisk__<dd-mm-yyyy>__<time>.log
+try:
+    from core import enterprise_risk as _mc_er
+    _mc_er.apply_defaults()
+    PIPELINES["entrisk"] = {
+        "name": "ENTERPRISE RISK REPORT", "module": "core.enterprise_risk", "func": "run", "logdir": "entrisk", "runs": 0,
+        "state_dir_env": "ENTRISK_DIR", "state_default": r"D:\CONSOLE\data\ENTERPRISE RISK", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_er.MAIL_LABEL[k]: _mc_er.mail_keys(k) for k in _mc_er.MAIL_DEFAULTS},
+        "cred": {"E-mail sender (SMTP login) of this card": {
+                     "user_key": "ENTRISK_SENDER_EMAIL", "pass_key": "ENTRISK_SENDER_PASSWORD",
+                     "note": "The login the report and screener mails go out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."},
+                 "Mailbox (POP3) that receives the Enterprise Risk mails": {
+                     "user_key": "ENTRISK_POP_USER", "pass_key": "ENTRISK_POP_PASS",
+                     "note": "pop9.netcore.co.in - the mailbox of the Enterprise Risk (With / Without Margin) and Concentration mails. Empty = the shared mailbox (Scheduler > Connections > pop3)."},
+                 "screener.in login": {
+                     "user_key": "ENTRISK_SCREENER_USER", "pass_key": "ENTRISK_SCREENER_PASS",
+                     "note": "Used by the daily run and by the Screener button. Not stored anywhere else."},
+                 "Enterprise file password": {
+                     "single_key": "ENTRISK_FILE_PASSWORD", "secret": True,
+                     "note": "Opens the Enterprise Risk mail files when they are password protected, and protects the two report files before they are mailed. Blank = keep the saved one."},
+                 "Concentration csv password": {
+                     "single_key": "ENTRISK_ABV20_PASSWORD", "secret": True,
+                     "note": "Opens Concentration_abv20percentage.csv (an encrypted workbook). Blank = keep the saved one (the Enterprise file password is tried too)."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  ENTERPRISE RISK REPORT not registered: {type(_e).__name__}: {_e}")
 # 2CAPTCHA low-balance alert (core/captcha_balance.py): only here so the shared e-mail / settings window works for it
 PIPELINES["captchabal"] = {
     "name": "2CAPTCHA BALANCE ALERT", "module": "core.captcha_balance", "func": "check", "logdir": "captchabal", "runs": 0,

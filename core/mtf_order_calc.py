@@ -74,8 +74,25 @@ def find_columns(df: pd.DataFrame):
     return acct, net
 
 
+_PROBLEM_CACHE: dict = {}
+
+
 def shortage_problem(path) -> str:
-    """'' when the file is a usable shortage report, else why not."""
+    """'' when the file is a usable shortage report, else why not. Cached per file version: reading a 30,000-row
+    workbook takes seconds and the card's status is polled every few seconds."""
+    try:
+        st = Path(path).stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return "file not found"
+    if key not in _PROBLEM_CACHE:
+        if len(_PROBLEM_CACHE) > 20:
+            _PROBLEM_CACHE.clear()
+        _PROBLEM_CACHE[key] = _shortage_problem(path)
+    return _PROBLEM_CACHE[key]
+
+
+def _shortage_problem(path) -> str:
     try:
         df = read_str(path)
     except Exception as e:                                       # noqa: BLE001

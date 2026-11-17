@@ -112,13 +112,23 @@ def reload():
     boot(), just refreshed.
     """
     try:
-        from dotenv import load_dotenv
+        from dotenv import dotenv_values
     except Exception:
         return
-    if os.path.exists(_ENV_SHARED):
-        load_dotenv(_ENV_SHARED, override=True)     # fresh shared values
-    if os.path.exists(_ENV_LOCAL):
-        load_dotenv(_ENV_LOCAL, override=True)      # machine layout wins, always
+    # Merge first, write once: the old two-step load_dotenv wrote the SHARED
+    # path (D:\15 minutes) into os.environ for a moment before .env.local put the
+    # machine path back - a timer thread reading the variable in that gap (the
+    # 11:29 Margin Shortage NMASS download) saved its files into the wrong folder.
+    merged = {}
+    for f in (_ENV_SHARED, _ENV_LOCAL):                 # later file wins
+        if os.path.exists(f):
+            try:
+                merged.update({k: v for k, v in dotenv_values(f).items() if v is not None})
+            except Exception:
+                pass
+    for k, v in merged.items():
+        if os.environ.get(k) != v:
+            os.environ[k] = v
 
 
 def data_root():

@@ -1,17 +1,15 @@
-"""core/backup_archive.py - monthly order for every process BACKUP folder.
+"""core/backup_archive.py - month order for every process BACKUP folder (runs by itself, no card on the console).
 
-Every process keeps one folder per day inside  <data root>\\<process>\\BACKUPFILES AUTOMATED\\<dd-mm-yyyy>.
-When a month is over, its day folders are moved (nothing is deleted, nothing is renamed) into a month folder:
+Every process keeps one folder per day inside  <data root>\\<process>\\BACKUPFILES AUTOMATED\\<day>.
+Day folders are filed (moved, nothing deleted or renamed) into a month folder:
 
-    BACKUPFILES AUTOMATED\\OCT 2026\\01-10-2026 ... 30-10-2026
+    BACKUPFILES AUTOMATED\\NOV 2026\\2026-11-02 ... 2026-11-13        (also the running month)
 
 Rules
-  * only COMPLETED months move; the running month is never touched;
-  * a day folder newer than "keep last N days" (default 3) stays where it is, so a job that looks at "yesterday" across the
-    month change still finds it; the leftovers move on the next daily pass, so the month folder fills up by itself;
-  * the daily pass runs on weekdays at the set time (default 06:30) - the first weekday of a month (1st / 2nd / 3rd after a
-    weekend) is the first one that finds a completed month; a manual "Archive now" does the same any time;
-  * a day folder whose files are open (Windows lock) is skipped and reported, the rest still moves;
+  * a day folder newer than "keep last N days" (default 3) stays where it is, so a job that writes today's files or looks at
+    "yesterday" finds it; the rest move on the next daily pass;
+  * the daily pass runs on weekdays at the set time (default 06:30); finished months and the running month are filed the same way;
+  * a day folder whose files are open (Windows lock) is skipped and tried again next pass;
   * an unknown folder name (e.g. "02-04-2026---") is never touched.
 """
 from __future__ import annotations
@@ -169,8 +167,8 @@ def plan(today: dt.date | None = None, grace_days: int | None = None, base: Path
             d = parse_day(e.name)
             if d is None:
                 continue
-            if (d.year, d.month) >= (today.year, today.month):
-                continue                                          # running month (or a future date): never moved
+            if d > today:
+                continue                                          # a future date: never moved
             if (today - d).days <= grace:
                 continue                                          # still inside the keep-in-place window
             mname = month_name(d)

@@ -341,7 +341,8 @@ def _uncleared_sweep_old(base_dir, today_ddmmyyyy):
         try:
             d = datetime.strptime(m.group(1), "%d%m%Y")
             src = os.path.join(base_dir, f)
-            date_root = os.path.join(base_dir, "BACKUPFILES AUTOMATED", d.strftime("%Y-%m-%d"))
+            from core import backup_archive as _ba      # an older day may already be filed in its month folder
+            date_root = str(_ba.day_dir(os.path.join(base_dir, "BACKUPFILES AUTOMATED"), d.strftime("%Y-%m-%d")))
             runs = []
             if os.path.isdir(date_root):
                 runs = [x for x in os.listdir(date_root)
@@ -727,7 +728,8 @@ def backfill_run_to_db(date_str, run_number):
     `run_number` — the two-digit run folder, e.g. 1 for ".../01".
     Safe to call more than once — re-archiving just adds another row."""
     base_dir = os.getenv("MARGIN_SHORTAGE_FOLDER", r"D:\15 minutes")
-    run_folder = os.path.join(base_dir, "BACKUPFILES AUTOMATED", date_str, f"{int(run_number):02d}")
+    from core import backup_archive as _ba
+    run_folder = os.path.join(str(_ba.day_dir(os.path.join(base_dir, "BACKUPFILES AUTOMATED"), date_str)), f"{int(run_number):02d}")
     if not os.path.isdir(run_folder):
         return {"ok": False, "error": f"Folder not found: {run_folder}"}
     db_tag = f"{date_str}/{int(run_number):02d}"
