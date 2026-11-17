@@ -132,7 +132,12 @@ _WA_OK_RE    = re.compile(r"whatsapp submitted for|all whatsapp messages process
 _EMAIL_BAD_RE = re.compile(r"email (failed|error)", re.I)
 _WA_BAD_RE    = re.compile(r"whatsapp (api error|error) for", re.I)
 _FAILISH_RE  = re.compile(r"traceback \(most recent|aborting execution|pre-run file check failed|"
-                          r"\[(NMASS|MCX90|NCFE|MCX_DEPOSIT)_(AUTH_FAIL|LOCKED)\]|\[FRIENDLY_MSG\]", re.I)
+                          r"\[(NMASS|MCX90|NCFE|MCX_DEPOSIT)_(AUTH_FAIL|LOCKED)\]|"
+                          r"\[FRIENDLY_MSG\][^\n]*(fail|error|could not|cannot|not produced|missing|aborted)", re.I)
+# A [FRIENDLY_MSG] line only counts as a failure when it SAYS so. Before, every one did, so a fully successful run whose last
+# friendly line was "... finished" (PHYSICAL DELIVERY) was listed under "Needs your attention" as Failed.
+_HARD_FAIL_RE = re.compile(r"traceback \(most recent|aborting execution|pre-run file check failed", re.I)
+_OUTCOME_RE   = re.compile(r"outcome=(\w+)")
 
 
 def _parse_win(w):
@@ -208,6 +213,9 @@ def _classify_tail(tail):
     """Best-effort verdict from the last few KB of a finished log."""
     if "⛔" in tail or "Stopped by user" in tail:
         return "stopped"
+    oc = _OUTCOME_RE.findall(tail)               # the footer every run log ends with
+    if oc and oc[-1] == "completed" and not _HARD_FAIL_RE.search(tail):
+        return "ok"
     last_ok  = max(tail.rfind("✅"), tail.rfind("Completed successfully"), tail.rfind("Backup & cleanup completed"))
     m_fail   = None
     for m in _FAILISH_RE.finditer(tail):

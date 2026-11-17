@@ -77,6 +77,7 @@
     return true;
   }
   function keepLast() {      // the last tiles of the row, in this order: MARGIN SHORTAGE, MCX COMM LIMIT, NCDEX COMM LIMIT
+    if (window.__tilesManaged) return;      // process-organizer.js owns the card order (A-Z or your own)
     var els = ['task-ms15card', 'task-mcxcomm', 'task-ncdexcomm'].map(function (i) { return document.getElementById(i); }).filter(Boolean);
     if (!els.length || !els[0].parentNode) return;
     var p = els[0].parentNode; els = els.filter(function (e) { return e.parentNode === p; });

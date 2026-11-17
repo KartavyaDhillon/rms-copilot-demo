@@ -407,10 +407,31 @@
     return i === q.length ? score : 0;
   }
 
+  /* ── Process Center search: on that page the search box also filters the page itself (process-organizer.js inside the console) ── */
+  function pcWin() {
+    const f = document.getElementById("pcFrame");
+    try { return f && f.contentWindow && typeof f.contentWindow.pcFilter === "function" ? f.contentWindow : null; } catch (e) { return null; }
+  }
+  const onProc = () => /^#\/process/.test(location.hash) && !!pcWin();
+  RMS.pcFilterState = "";
+  RMS.pcApply = function (q, exact) {                 // filter the console page, show the chip in the bar
+    const w = pcWin(); if (!w) return;
+    try { w.pcFilter(q, { exact: !!exact }); } catch (e) { return; }
+    RMS.pcFilterState = q || "";
+    const chip = document.getElementById("pcFilt");
+    if (chip) {
+      chip.style.display = q ? "inline-flex" : "none";
+      chip.innerHTML = q ? 'Showing only: <b>' + RMS.esc(q) + '</b> <button class="btn sm ghost" id="pcFiltX" title="Show every process again">✕ Clear</button>' : "";
+      const x = document.getElementById("pcFiltX"); if (x) x.onclick = () => RMS.pcApply("");
+    }
+  };
+
   RMS.openPalette = function () {
     const wrap = $("#paletteWrap"), input = $("#palInput"), list = $("#palList");
     wrap.hidden = false; RMS.palette.open = true;
-    input.value = ""; input.focus();
+    const procMode = onProc();
+    input.placeholder = procMode ? "Search a process or KPI card (only it stays on the page)…" : "Search pages, actions, themes, logs…";
+    input.value = procMode ? RMS.pcFilterState : ""; input.focus(); if (procMode) input.select();
     let sel = 0, shown = [], kbItems = [], kbTimer = null;
     const KB_ICO = { output: "file", client: "bot", process: "layers", code: "terminal" };
     function kbFetch(q) {
@@ -436,6 +457,16 @@
         .filter((it) => it.score > 0)
         .sort((a, b) => b.score - a.score);
       shown = q ? all.concat(kbItems) : RMS.paletteItems();
+      if (q && onProc()) {                              // the page's own processes / KPI cards come first
+        let hits = [];
+        try { hits = pcWin().pcList(q) || []; } catch (e) { hits = []; }
+        const procItems = hits.slice(0, 12).map((h) => ({
+          sec: "Process Center", icon: h.kind === "card" ? "layers" : "play",
+          label: h.title + (h.kind === "card" ? "  ·  KPI card" : ""), hint: "show only this",
+          run: () => RMS.pcApply(h.title, true),
+        }));
+        shown = procItems.concat(shown);
+      }
       sel = Math.min(sel, Math.max(0, shown.length - 1));
       let html = "", lastSec = null;
       if (!shown.length) html = '<div class="pal-empty">No matches for “' + RMS.esc(q) + '”.</div>';
@@ -457,6 +488,7 @@
     input.oninput = () => {
       sel = 0;
       const q = input.value.trim();
+      if (onProc()) RMS.pcApply(q, false);              // the page filters live while you type; empty box = everything again
       clearTimeout(kbTimer);
       if (q.length >= 3) kbTimer = setTimeout(() => kbFetch(q), 250);
       else kbItems = [];

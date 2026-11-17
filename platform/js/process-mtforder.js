@@ -113,6 +113,7 @@
     return true;
   }
   function keepLast() {      // this tile is the very last one of the row
+    if (window.__tilesManaged) return;      // process-organizer.js owns the card order (A-Z or your own)
     var el = $('task-mtforder'); if (!el || !el.parentNode) return;
     var p = el.parentNode, bk = document.getElementById('task-entrisk'); bk = bk && bk.parentNode === p ? bk : null;
     var kids = [].slice.call(p.children), want = kids.filter(function (e) { return e !== el && e !== bk; }).concat([el]).concat(bk ? [bk] : []);

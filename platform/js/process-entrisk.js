@@ -114,6 +114,7 @@
     return true;
   }
   function keepLast() {      // the very last tile of the row
+    if (window.__tilesManaged) return;      // process-organizer.js owns the card order (A-Z or your own)
     var el = $('task-entrisk'); if (!el || !el.parentNode) return;
     var p = el.parentNode; if (p.lastElementChild !== el) p.appendChild(el);
   }

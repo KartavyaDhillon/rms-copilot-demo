@@ -36,7 +36,7 @@
       // NOTE: no page title inside the content area — the platform topbar above
       // already says "Process Center"; this slim bar only carries utilities.
       el.innerHTML =
-        '<div class="pc-bar"><div class="l"></div>' +
+        '<div class="pc-bar"><div class="l"><span id="pcFilt" style="display:none;gap:8px;align-items:center;font-size:12.5px"></span></div>' +
         '<div style="display:flex;gap:8px">' +
         '<button class="btn sm ghost pc-tcs" id="pcTcs" data-state="unknown" title="Who is using the TCS BANCS (MCX eclear) login right now, and who is next. Click for details."><span class="dot"></span><span class="lbl">TCS BANCS</span><b id="pcTcsState">\u2026</b></button>' +
         '<button class="btn sm ghost" id="pcMail" title="Who the console\'s e-mails are sent from: Kartavya (with the moving-to-noreply note) or noreply_rms. Click to change.">\u2709 MAIL <b id="pcMailState">\u2026</b></button>' +
@@ -52,6 +52,7 @@
         }
       };
       $("#pcCommon").onclick = openCommon;
+      $("#pcFrame").addEventListener("load", () => { if (RMS.pcApply) RMS.pcApply(""); });   // a reloaded console shows everything again
       captchaAutoInit();
       tcsInit();
       mailIdInit();
