@@ -42,7 +42,9 @@
 .wt-card .k { font-family: var(--mono); font-size: 10.5px; color: var(--text-3); margin-right: 6px; }
 .wt-card .m { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .wt-card .m .r { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--text-3); }
-.wt-card.closed .t { color: var(--text-3); text-decoration: line-through; }
+.wt-card.closed .t { color: var(--text-3); text-decoration: none; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.wt-card.closed .t::before { content: "\2713  "; color: var(--ok); font-weight: 800; }
+.wt-card.closed { opacity: .8; }
 .wt-card.pr-urgent { --pc: var(--err); } .wt-card.pr-high { --pc: var(--warn); } .wt-card.pr-normal { --pc: var(--accent); } .wt-card.pr-low { --pc: var(--line-2); }
 .wt-sub { font-size: 11px; color: var(--text-3); margin-top: 4px; }
 
@@ -136,9 +138,9 @@ html.rail .nav-count { display: none; }
 .wt-cbox svg { width: 13px; height: 13px; vertical-align: -2px; }
 
 /* ── Status flow strip ── */
-.wt-flow { display: flex; align-items: center; gap: 0; margin: 6px 0 12px; }
-.wt-flow em { flex: 1; height: 2px; background: var(--line-2); min-width: 8px; }
-.wt-fs { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-3); text-align: center; }
+.wt-flow { display: flex; align-items: flex-start; gap: 0; margin: 6px 0 12px; }
+.wt-flow em { flex: 1; margin-top: 11px; height: 2px; background: var(--line-2); min-width: 8px; }
+.wt-fs { min-width: 64px; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; color: var(--text-3); text-align: center; }
 .wt-fs b { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid var(--line-2); font-size: 11px; }
 .wt-fs.seen { color: var(--text-2); } .wt-fs.seen b { background: var(--c); border-color: var(--c); color: #fff; }
 .wt-fs.now { color: var(--text); font-weight: 700; } .wt-fs.now b { background: var(--c); border-color: var(--c); color: #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 30%, transparent); }
@@ -151,3 +153,23 @@ html.rail .nav-count { display: none; }
 .wt-tn .c { display: flex; gap: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 .wt-tn .b { min-width: 0; flex: 1; white-space: pre-wrap; word-break: break-word; }
 .wt-tn small { color: var(--text-3); display: block; } .wt-tn .e small { display: inline; }
+
+/* ── slimmer count cards: label and number on one line, the explanation is a tooltip ── */
+.wt-kpis { gap: 10px; margin-bottom: 12px; }
+.wt-kpi { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 14px; }
+.wt-kpi .l { margin: 0; }
+.wt-kpi .n { font-size: 20px; letter-spacing: -.4px; }
+.wt-kpi .s { display: none; }
+
+/* ── cards: owner line, hover tick, compact diary cards ── */
+.wt-card { position: relative; }
+.wt-own { font-size: 11px; color: var(--text-3); }
+.wt-tick { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 50%; display: none; align-items: center; justify-content: center; border: 1px solid var(--ok); background: color-mix(in srgb, var(--ok) 16%, var(--surface-2)); color: var(--ok); cursor: pointer; padding: 0; }
+.wt-tick svg { width: 13px; height: 13px; }
+.wt-card:hover .wt-tick { display: flex; }
+.wt-tick:hover { background: var(--ok); color: #fff; }
+.wt-card:hover .t { padding-right: 28px; }
+.wt-card.compact .t { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.wt-day.today { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
+.wt-day.today .dh b { color: var(--accent); }
+.wt-day.today .dh span::after { content: " \00B7 TODAY"; color: var(--accent); }

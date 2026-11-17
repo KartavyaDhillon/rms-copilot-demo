@@ -400,8 +400,16 @@ def calculate(base, log=log) -> dict:
     _cm = client_level_sum(CM_PATTERNS)
     client_total = pd.concat([_co, _fo, _cm]).groupby(level=0).sum()
     client_total = client_total[client_total >= ELIGIBILITY_MIN]
-    df_reco = pd.DataFrame({"ACCOUNTID": client_total.index.astype(str)})
-    log(f"Clients with CO+FO+CM (c+d) >= {ELIGIBILITY_MIN:,}: {len(df_reco)}")
+    # ALSO eligible: CASH_MARGIN file, every segment EXCEPT COM, summed per client >= 25,00,000
+    _cmf = clean_cols(pd.read_csv(pl(CASH_PATTERNS)))
+    _cmf["SEG_ID"] = _cmf["SEG_ID"].astype(str).str.strip().str.upper()
+    _cmf["ACCOUNTID"] = _cmf["ACCOUNTID"].astype(str).str.strip()
+    _cm_ok = (to_number(_cmf["CASH_MARGIN_AMOUNT"]).where(_cmf["SEG_ID"] != "COM", 0).groupby(_cmf["ACCOUNTID"]).sum())
+    _cm_ok = _cm_ok[_cm_ok >= ELIGIBILITY_MIN]
+    _elig = sorted(set(client_total.index.astype(str)) | set(_cm_ok.index.astype(str)))
+    df_reco = pd.DataFrame({"ACCOUNTID": _elig})
+    log(f"Clients with CO+FO+CM (c+d) >= {ELIGIBILITY_MIN:,}: {len(client_total)}; "
+        f"CASH_MARGIN (all segments except COM) >= {ELIGIBILITY_MIN:,}: {len(_cm_ok)}; together: {len(df_reco)}")
     eligible = len(df_reco)
 
     # MCX ACTIVE DETAILS
@@ -558,6 +566,7 @@ def mail_body() -> str:
     <p><b>Note:</b><br>This file has been generated based on the following criteria:
     <ul>
         <li>Clients with <b>(Cash-others (c) + Non-cash Securities (d)) &ge; &#8377;25,00,000</b>, summed across the <b>CO, FO and CM ClientLevelCollaterals</b> files, only.</li>
+        <li>Also included: clients whose <b>CASH_MARGIN</b> file total, with the <b>COM</b> segment removed and all other segments kept, is <b>&ge; &#8377;25,00,000</b>.</li>
         <li>Clients with <b>MCX Permit to Trade = 'Y'(MCX_ACTIVE_DETAILS_CURRENTDATE.csv)</b> only.</li>
         <li>Final limit is calculated as the sum of:
             <ul>

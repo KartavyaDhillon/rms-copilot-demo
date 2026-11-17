@@ -75,14 +75,26 @@
     opts = opts || {};
     const sub = t.status === "waiting" && t.waiting_on ? '<div class="wt-sub">' + RMS.icon("mail") + " waiting on " + esc(t.waiting_on) + "</div>" :
       (t.process ? '<div class="wt-sub">' + RMS.icon("layers") + " " + esc(procLabel(t.process)) + "</div>" : "");
-    return '<div class="wt-card pr-' + t.priority + (open_(t) ? "" : " closed") + '" data-id="' + t.id + '"' + (opts.drag ? ' draggable="true"' : "") + ">" +
-      '<div class="t"><span class="k">' + esc(t.key) + "</span>" + (t.private ? RMS.icon("eye") + " " : "") + esc(t.title) + "</div>" + sub +
-      '<div class="m">' + pills(t) + '<div class="r">' +
+    // who it is between: "from Abhishek" (given to me) / "to Abhishek" (I gave it) - nothing for my own notes
+    const mineId = me().id, own = t.private || (t.assignee === mineId && t.created_by === mineId) ? "" :
+      t.assignee === mineId ? "from " + esc(t.created_by_name || t.created_by) : "to " + esc(t.assignee_name || t.assignee);
+    const tick = open_(t) && (t.can_edit || t.mine) && !opts.noTick ? '<button class="wt-tick" data-done="' + t.id + '" data-no-busy title="Mark done">' + RMS.icon("check") + "</button>" : "";
+    return '<div class="wt-card pr-' + t.priority + (open_(t) ? "" : " closed") + (opts.compact ? " compact" : "") + '" data-id="' + t.id + '"' + (opts.drag ? ' draggable="true"' : "") + ">" + tick +
+      '<div class="t" title="' + esc(t.title) + '"><span class="k">' + esc(t.key) + "</span>" + (t.private ? RMS.icon("eye") + " " : "") + esc(t.title) + "</div>" + sub +
+      '<div class="m">' + pills(t) + (own && !opts.noOwn ? '<span class="wt-own">' + own + "</span>" : "") + '<div class="r">' +
       (t.comments ? RMS.icon("file") + t.comments + " " : "") + (t.files ? "📎" + t.files + " " : "") +
       (opts.noAv ? "" : av(t.assignee_name || t.assignee)) + "</div></div></div>";
   }
   function wire(root) {
     root.querySelectorAll(".wt-card").forEach((c) => { c.onclick = () => openTask(+c.dataset.id); });
+    root.querySelectorAll("[data-done]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const t = S.tasks.find((x) => x.id === +b.dataset.done); b.disabled = true;
+        const r = await api("/tracker/task/" + b.dataset.done, { status: "done" });
+        if (r.ok) { okBox((t ? t.key : "Task") + " marked done", "The creator is told."); reload(); } else { b.disabled = false; bad(r.error); }
+      };
+    });
   }
 
   // ───────────────────────── data ─────────────────────────
@@ -131,7 +143,7 @@
     const k = [["mine", "My open tasks", s.mine, "var(--accent)", "assigned to me"], ["overdue", "Overdue", s.overdue, "var(--err)", "mine, past the due date"],
       ["today", "Due today", s.today, "var(--warn)", "mine"], ["waiting", "Waiting for reply", s.waiting, "#f59e0b", mgr ? "across the team" : "visible to me"],
       ["review", "To review", s.review, "#c084fc", "done by others, waiting for me"]];
-    $("#trkKpis").innerHTML = '<div class="wt-kpis">' + k.map((x) => '<div class="card wt-kpi' + (S.kpi === x[0] ? " on" : "") + '" data-k="' + x[0] + '"><div class="l"><i style="--c:' + x[3] + '"></i>' +
+    $("#trkKpis").innerHTML = '<div class="wt-kpis">' + k.map((x) => '<div class="card wt-kpi' + (S.kpi === x[0] ? " on" : "") + '" title="' + x[4] + '" data-k="' + x[0] + '"><div class="l"><i style="--c:' + x[3] + '"></i>' +
       x[1] + '</div><div class="n" style="' + (x[0] === "overdue" && x[2] ? "color:var(--err)" : "") + '">' + (x[2] || 0) + '</div><div class="s">' + x[4] + "</div></div>").join("") + "</div>";
     $("#trkKpis").querySelectorAll(".wt-kpi").forEach((c) => {
       c.onclick = () => { S.kpi = S.kpi === c.dataset.k ? "" : c.dataset.k; if (S.kpi) S.view = "all"; render(); };
@@ -221,7 +233,7 @@
       '<div class="wt-week">' + days.map((d) => {
         const k = iso(d), l = v.filter((t) => t.due === k);
         return '<div class="wt-day' + (k === t0 ? " today" : "") + (k < t0 ? " past" : "") + '"><div class="dh"><b>' + d.getDate() + "</b><span>" + DOW[d.getDay()] + "</span><em>" + (l.length || "") + "</em></div>" +
-          l.map((t) => card(t, { noAv: !me().manager && t.mine })).join("") +
+          l.map((t) => card(t, { noAv: true, compact: true })).join("") +
           '<div class="add"><input data-d="' + k + '" placeholder="+ add task" maxlength="200"></div></div>';
       }).join("") + "</div>" +
       (nodate.length ? '<div class="wt-group" style="margin-top:16px"><h4>No date <b>' + nodate.length + '</b></h4><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px">' + nodate.map((t) => card(t)).join("") + "</div></div>" : "");
