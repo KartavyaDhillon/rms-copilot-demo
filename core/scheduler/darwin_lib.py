@@ -1335,6 +1335,10 @@ def parse_manohar(text: str) -> tuple[list, str]:
     if is_nothing(t) or says_nothing(t):
         return [], ""
     codes = list(dict.fromkeys(m.group(0).upper() for m in CODE_RE.finditer(t)))
+    # A reply that pastes the whole table row also carries the client's PAN (AAAAA9999A) - that is never a trading a/c
+    pans = [c for c in codes if re.fullmatch(r"[A-Z]{5}\d{4}[A-Z]", c)]
+    if pans and len(pans) < len(codes):
+        codes = [c for c in codes if c not in pans]
     return (codes, "") if codes else ([], f"cannot read any trading a/c code in Manohar's reply: {t!r}")
 
 
