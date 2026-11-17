@@ -40,12 +40,26 @@
   // In-console confirmation (never the browser's confirm box). Replaces the open window; "No" brings the task back.
   function ask(title, text, yesLabel, onYes, onNo) {
     const close = RMS.modal(title, '<div style="font-size:13px;line-height:1.6;margin-bottom:18px">' + text + "</div>" +
-      '<div style="display:flex;justify-content:flex-end;gap:10px"><button class="btn ghost" id="wtNo">Cancel</button><button class="btn primary" id="wtYes" style="background:var(--err);border-color:var(--err)">' + esc(yesLabel) + "</button></div>",
+      '<div style="display:flex;justify-content:flex-end;gap:10px"><button class="btn ghost" id="wtNo" data-no-busy>Cancel</button><button class="btn primary" id="wtYes" data-no-busy style="background:var(--err);border-color:var(--err)">' + esc(yesLabel) + "</button></div>",
       { width: 460, icon: "alert" });
     $("#wtNo").onclick = () => { close(); if (onNo) onNo(); };
     $("#wtYes").onclick = () => { close(); onYes(); };
   }
   function ok(msg) { RMS.toast("ok", msg); }
+  // Visible "done" popup for button actions (centre of the screen, closes by itself after 3 s or on OK)
+  function okBox(title, sub) {
+    const old = document.getElementById("wtOkBox"); if (old) old.remove();
+    const w = document.createElement("div"); w.id = "wtOkBox";
+    w.style.cssText = "position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)";
+    w.innerHTML = '<div style="background:var(--surface);border:1px solid var(--line-2);border-radius:14px;box-shadow:var(--sh-3);padding:24px 30px;min-width:300px;max-width:440px;text-align:center">' +
+      '<div style="width:46px;height:46px;border-radius:50%;background:rgba(52,211,153,.15);color:var(--ok);display:flex;align-items:center;justify-content:center;margin:0 auto 12px"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>' +
+      '<div style="font-size:15px;font-weight:700;margin-bottom:4px">' + esc(title) + "</div>" + (sub ? '<div style="font-size:12.5px;color:var(--text-2);margin-bottom:4px">' + esc(sub) + "</div>" : "") +
+      '<button class="btn primary" id="wtOkBtn" data-no-busy style="margin-top:14px;min-width:90px;justify-content:center">OK</button></div>';
+    document.body.appendChild(w);
+    const done = () => { if (w.parentNode) w.remove(); };
+    $("#wtOkBtn").onclick = done; w.onclick = (e) => { if (e.target === w) done(); };
+    $("#wtOkBtn").focus(); setTimeout(done, 3000);
+  }
   function bad(msg) { RMS.toast("err", "Not saved", msg); }
 
   function pills(t) {
@@ -107,8 +121,8 @@
       [["mine", "My work"], ["board", "Board"], ["diary", "Diary"], ["all", "All tasks"]].map((v) => '<button data-v="' + v[0] + '">' + v[1] + "</button>").join("") + "</div>" +
       '<input class="wt-in" id="trkQ" placeholder="Search tasks…" style="width:220px">' +
       '<select class="wt-sel" id="trkWho"></select><span id="trkKchip"></span><div class="spacer"></div>' +
-      '<button class="btn ghost" id="trkPeople" title="Mobile, e-mail and reminder settings">' + RMS.icon("bell") + " People and alerts</button>" +
-      '<button class="btn primary" id="trkNew"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> New task</button></div>' +
+      '<button class="btn ghost" id="trkPeople" data-no-busy title="Mobile, e-mail and reminder settings">' + RMS.icon("bell") + " People and alerts</button>" +
+      '<button class="btn primary" id="trkNew" data-no-busy><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> New task</button></div>' +
       '<div id="trkBody"><div class="card-sub" style="padding:40px;text-align:center">Loading…</div></div>';
   }
 
@@ -247,21 +261,33 @@
     let kind = pre.kind || "task";
     const close = RMS.modal("New task",
       '<div class="wt-seg" id="ntKind" style="margin-bottom:14px">' + ["task", "followup", "change", "note"].map((k) => '<button data-k="' + k + '"' + (k === kind ? ' class="on"' : "") + ">" + KIND[k] + "</button>").join("") + "</div>" +
-      '<div class="wt-lbl">What needs to be done</div><input class="wt-in" id="ntTitle" style="width:100%;margin-bottom:12px" maxlength="200" placeholder="Send the ledger query to the Ludhiana branch" value="' + esc(pre.title || "") + '">' +
-      '<div class="wt-lbl">Details (optional)</div><textarea class="wt-ta" id="ntDesc" placeholder="Anything the person should know"></textarea>' +
-      '<div class="wt-grid2" style="margin-top:12px"><div><div class="wt-lbl">Assign to</div><select class="wt-sel" id="ntWho" style="width:100%">' + peopleOpts(pre.assignee || me().id) + "</select></div>" +
-      '<div><div class="wt-lbl">Due date</div><input type="date" class="wt-in" id="ntDue" style="width:100%" value="' + esc(pre.due || "") + '"></div>' +
-      '<div><div class="wt-lbl">Priority</div><select class="wt-sel" id="ntPri" style="width:100%">' + ["normal", "low", "high", "urgent"].map((p) => '<option value="' + p + '">' + PRI[p] + "</option>").join("") + "</select></div>" +
-      '<div><div class="wt-lbl">Linked process (optional)</div><input class="wt-in" id="ntProc" list="wtProcs" style="width:100%" placeholder="e.g. Margin Shortage">' + procList() + "</div></div>" +
+      '<div id="ntHint" style="border-left:3px solid var(--accent);background:var(--surface-2);border-radius:6px;padding:9px 12px;font-size:12.5px;line-height:1.5;margin-bottom:14px"></div>' +
+      '<div class="wt-lbl" id="ntTitleL">What needs to be done</div><input class="wt-in" id="ntTitle" style="width:100%;margin-bottom:12px" maxlength="200" value="' + esc(pre.title || "") + '">' +
+      '<div class="wt-lbl">Details (optional)</div><textarea class="wt-ta" id="ntDesc"></textarea>' +
+      '<div class="wt-grid2" style="margin-top:12px"><div id="ntWhoBox"><div class="wt-lbl">Assign to</div><select class="wt-sel" id="ntWho" style="width:100%">' + peopleOpts(pre.assignee || me().id) + "</select></div>" +
+      '<div><div class="wt-lbl" id="ntDueL">Due date</div><input type="date" class="wt-in" id="ntDue" style="width:100%" value="' + esc(pre.due || "") + '"></div>' +
+      '<div id="ntPriBox"><div class="wt-lbl">Priority</div><select class="wt-sel" id="ntPri" style="width:100%">' + ["normal", "low", "high", "urgent"].map((p) => '<option value="' + p + '">' + PRI[p] + "</option>").join("") + "</select></div>" +
+      '<div id="ntProcBox"><div class="wt-lbl" id="ntProcL">Linked process (optional)</div><input class="wt-in" id="ntProc" list="wtProcs" style="width:100%" placeholder="e.g. Margin Shortage">' + procList() + "</div></div>" +
       '<div id="ntFollow" style="display:none;margin-top:12px" class="wt-grid2"><div><div class="wt-lbl">Waiting for a reply from</div><input class="wt-in" id="ntWait" style="width:100%" placeholder="Exchange helpdesk, branch manager…"></div>' +
       '<div><div class="wt-lbl">Remind me every (days)</div><input type="number" min="1" max="60" class="wt-in" id="ntDays" style="width:100%" value="2"></div></div>' +
-      '<div id="ntNote" class="card-sub" style="display:none;margin-top:10px">A private note is visible to you only, even managers cannot see it.</div>' +
-      '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px"><button class="btn ghost" id="ntCancel">Cancel</button><button class="btn primary" id="ntSave">Create task</button></div>',
+      '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px"><button class="btn ghost" id="ntCancel" data-no-busy>Cancel</button><button class="btn primary" id="ntSave" data-no-busy>Create task</button></div>',
       { width: 600, icon: "check" });
+    const T = {
+      task: ["var(--accent)", "<b>Task</b> - work you give to someone (or to yourself) with a due date. They get a WhatsApp and an e-mail.", "What needs to be done", "Send the ledger query to the Ludhiana branch", "Anything the person should know", "Due date"],
+      followup: ["#f59e0b", "<b>Follow-up</b> - something you sent and are <b>waiting for a reply on</b>. It stays on the list and you are reminded every few days until the reply comes.", "What are you following up", "Penalty query sent to the exchange - reply awaited", "What was sent, to whom, reference numbers", "Follow up by"],
+      change: ["#c084fc", "<b>Change</b> - a change or fix to be made in the console or a process. Link the process so it is easy to find later.", "Change required", "Update Margin Shortage run time to 14:45", "What exactly should change, and why", "Needed by"],
+      note: ["var(--text-3)", "<b>Private note</b> - your own reminder. Only you can see it, not even managers, and nobody is notified.", "Note to myself", "Call the bank about the payout", "Anything to remember", "Remind me on"],
+    };
     const sync = () => {
+      const t = T[kind];
+      $("#ntHint").style.borderLeftColor = t[0]; $("#ntHint").innerHTML = t[1];
+      $("#ntTitleL").textContent = t[2]; $("#ntTitle").placeholder = t[3]; $("#ntDesc").placeholder = t[4]; $("#ntDueL").textContent = t[5];
+      $("#ntProcL").textContent = kind === "change" ? "Process / area changed" : "Linked process (optional)";
       $("#ntFollow").style.display = kind === "followup" ? "grid" : "none";
-      $("#ntNote").style.display = kind === "note" ? "" : "none";
-      $("#ntWho").disabled = kind === "note"; if (kind === "note") $("#ntWho").value = me().id;
+      $("#ntWhoBox").style.display = kind === "note" ? "none" : "";
+      $("#ntPriBox").style.display = kind === "note" ? "none" : "";
+      $("#ntProcBox").style.display = kind === "note" ? "none" : "";
+      if (kind === "note") $("#ntWho").value = me().id;
       document.querySelectorAll("#ntKind button").forEach((b) => b.classList.toggle("on", b.dataset.k === kind));
     };
     document.querySelectorAll("#ntKind button").forEach((b) => { b.onclick = () => { kind = b.dataset.k; sync(); }; });
@@ -275,7 +301,8 @@
       const r = await api("/tracker/task", body);
       btn.disabled = false; btn.textContent = "Create task";
       if (!r.ok) { bad(r.error); return; }
-      close(); ok(r.task.key + " created" + (r.task.assignee !== me().id ? " and assigned to " + r.task.assignee_name : "")); await reload(); openTask(r.task.id);
+      close(); okBox(r.task.key + " created", r.task.assignee !== me().id ? "Assigned to " + r.task.assignee_name + " - they are notified on WhatsApp / e-mail if their contacts are filled in." : "Added to your list.");
+      await reload(); openTask(r.task.id);
     };
   }
 
@@ -309,7 +336,7 @@
       '<div class="wt-lbl" style="margin-top:14px">Pictures and files</div><div class="wt-files">' + files + "</div>" +
       '<div class="wt-drop" id="wtDrop">' + RMS.icon("download") + ' Drop pictures or files here, click to choose, or paste a screenshot (Ctrl+V)</div><input type="file" id="wtPick" multiple style="display:none">' +
       '<div class="wt-lbl" style="margin-top:16px">Comments and history</div>' + acts +
-      '<div style="display:flex;gap:8px;margin-top:10px"><textarea class="wt-ta" id="wtCmt" style="min-height:44px" placeholder="Write a comment… (Ctrl+Enter to send)"></textarea><button class="btn primary" id="wtSend" style="align-self:flex-end">Send</button></div></div>' +
+      '<div style="display:flex;gap:8px;margin-top:10px"><textarea class="wt-ta" id="wtCmt" style="min-height:44px" placeholder="Write a comment… (Ctrl+Enter to send)"></textarea><button class="btn primary" id="wtSend" data-no-busy style="align-self:flex-end">Send</button></div></div>' +
       '<div class="wt-side"><div class="f"><div class="wt-lbl">Status</div><select class="wt-sel" id="wtSt"' + (canSt ? "" : " disabled") + ">" + selOpts(S.boot.statuses.map((s) => [s.id, s.label]), t.status) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Assigned to</div><select class="wt-sel" id="wtWho"' + (edit && !t.private ? "" : " disabled") + ">" + peopleOpts(t.assignee) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Due date</div><input type="date" class="wt-in" id="wtDue" value="' + esc(t.due || "") + '"' + (edit ? "" : " disabled") + "></div>" +
@@ -319,8 +346,8 @@
       (follow ? '<div class="f"><div class="wt-lbl">Waiting for reply from</div><input class="wt-in" id="wtWait" value="' + esc(t.waiting_on || "") + '"' + (canSt ? "" : " disabled") + "></div>" +
         '<div class="f"><div class="wt-lbl">Remind every (days)</div><input type="number" min="1" max="60" class="wt-in" id="wtDays" value="' + (t.follow_up_days || "") + '"' + (canSt ? "" : " disabled") + "></div>" : "") +
       '<div class="card-sub" style="margin:4px 0 12px">Assigned to ' + esc(t.assignee_name || t.assignee) + "</div>" +
-      (t.status !== "done" && canSt ? '<button class="btn primary" id="wtDone" style="width:100%;justify-content:center;margin-bottom:8px">' + RMS.icon("check") + " Mark done</button>" : "") +
-      (edit ? '<button class="btn ghost" id="wtDel" style="width:100%;justify-content:center;color:var(--err)">Delete task</button>' : "") + "</div>";
+      (t.status !== "done" && canSt ? '<button class="btn primary" id="wtDone" data-no-busy style="width:100%;justify-content:center;margin-bottom:8px">' + RMS.icon("check") + " Mark done</button>" : "") +
+      (edit ? '<button class="btn ghost" id="wtDel" data-no-busy style="width:100%;justify-content:center;color:var(--err)">Delete task</button>' : "") + "</div>";
     wireTask();
   }
   async function patch(body, okMsg) {
@@ -335,7 +362,7 @@
     let r;
     try { r = await (await fetch("/tracker/task/" + S.win.id + "/file", { method: "POST", body: fd, credentials: "same-origin" })).json(); } catch (e) { r = { ok: false, error: "Upload failed." }; }
     if (r.task) { S.win = r.task; paintTask(); }
-    if (!r.ok || (r.rejected && r.rejected.length)) bad((r.rejected || []).join("; ") || r.error); else ok("Attached " + (r.saved || []).join(", "));
+    if (!r.ok || (r.rejected && r.rejected.length)) bad((r.rejected || []).join("; ") || r.error); else okBox("Attached", (r.saved || []).join(", "));
     reload();
   }
   function wireTask() {
@@ -351,7 +378,7 @@
       if (g("wtDel")) g("wtDel").onclick = () => ask("Delete " + t.key + "?", "<b>" + esc(t.title) + "</b><br>The task, its comments and its files will be removed. This cannot be undone.", "Delete task",
         async () => {
           const r = await api("/tracker/task/" + t.id + "/delete", {});
-          if (r.ok) { ok(t.key + " deleted"); reload(); } else { bad(r.error); openTask(t.id); }
+          if (r.ok) { okBox(t.key + " deleted", "The task, comments and files are removed."); reload(); } else { bad(r.error); openTask(t.id); }
         }, () => openTask(t.id));
     }
     g("wtSt").onchange = () => {
@@ -363,11 +390,11 @@
       g("wtWait").onchange = () => patch({ waiting_on: g("wtWait").value }, "Saved");
       g("wtDays").onchange = () => patch({ follow_up_days: g("wtDays").value || 0 }, "Reminder saved");
     }
-    if (g("wtDone")) g("wtDone").onclick = () => patch({ status: "done" }, t.key + " marked done");
+    if (g("wtDone")) g("wtDone").onclick = async () => { await patch({ status: "done" }); okBox(t.key + " marked done", "The creator is told."); };
     const send = async () => {
       const txt = g("wtCmt").value.trim(); if (!txt) { g("wtCmt").focus(); return; }
       const r = await api("/tracker/task/" + t.id + "/comment", { text: txt });
-      if (r.ok) { S.win = r.task; paintTask(); reload(); } else bad(r.error);
+      if (r.ok) { S.win = r.task; paintTask(); reload(); okBox("Comment sent", "The other person is notified."); } else bad(r.error);
     };
     g("wtSend").onclick = send;
     g("wtCmt").onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(); };
@@ -405,7 +432,7 @@
       '<td><input class="wt-in" data-f="mobile" style="width:130px" placeholder="9876543210" value="' + esc(p.mobile) + '"></td>' +
       '<td><input class="wt-in" data-f="email" style="width:210px" placeholder="name@company.com" value="' + esc(p.email) + '"></td>' +
       "<td>" + (mgr && !p.admin ? '<select class="wt-sel" data-f="role"><option value="member"' + (p.role === "member" ? " selected" : "") + '>Member</option><option value="manager"' + (p.role === "manager" ? " selected" : "") + ">Manager</option></select>" :
-        '<span class="wt-pill">' + (p.admin ? "Admin" : p.role === "manager" ? "Manager" : "Member") + "</span>") + '</td><td><button class="btn sm" data-save="' + esc(p.id) + '">Save</button></td></tr>').join("");
+        '<span class="wt-pill">' + (p.admin ? "Admin" : p.role === "manager" ? "Manager" : "Member") + "</span>") + '</td><td><button class="btn sm" data-no-busy data-save="' + esc(p.id) + '">Save</button></td></tr>').join("");
     const close = RMS.modal("People and alerts",
       '<div class="card-sub" style="margin-bottom:12px;line-height:1.6">The mobile number and e-mail are where a person gets the WhatsApp picture and the mail when a task is assigned to them, when somebody comments, and in the daily list. ' +
       (mgr ? "Managers see every task that is not a private note." : "You can change your own details here.") + "</div>" +
@@ -416,18 +443,18 @@
         '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="stMgr"' + (s.manager_summary ? " checked" : "") + "> Summary to managers</label>" +
         '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="stWa"' + (s.notify_whatsapp ? " checked" : "") + "> WhatsApp</label>" +
         '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="stMail"' + (s.notify_email ? " checked" : "") + "> E-mail</label>" +
-        '<button class="btn primary sm" id="stSave">Save settings</button></div></div>' : ""),
+        '<button class="btn primary sm" id="stSave" data-no-busy>Save settings</button></div></div>' : ""),
       { width: 820, icon: "bell" });
     document.querySelectorAll("[data-save]").forEach((b) => {
       b.onclick = async () => {
         const tr = b.closest("tr"), f = (n) => { const e = tr.querySelector('[data-f="' + n + '"]'); return e ? e.value : undefined; };
         const r = await api("/tracker/people", { id: b.dataset.save, mobile: f("mobile") || "", email: f("email") || "", role: f("role") || "member" });
-        if (r.ok) { S.boot.people = r.people; ok("Saved"); } else bad(r.error);
+        if (r.ok) { S.boot.people = r.people; okBox("Saved", tr.querySelector("b").textContent + " - contact details updated."); } else bad(r.error);
       };
     });
     if (mgr) $("#stSave").onclick = async () => {
       const r = await api("/tracker/settings", { enabled: $("#stOn").checked, remind_at: $("#stAt").value, manager_summary: $("#stMgr").checked, notify_whatsapp: $("#stWa").checked, notify_email: $("#stMail").checked });
-      if (r.ok) { S.boot.settings = r.settings; ok("Settings saved"); close(); } else bad(r.error);
+      if (r.ok) { S.boot.settings = r.settings; close(); okBox("Settings saved", "Daily reminder at " + r.settings.remind_at + "."); } else bad(r.error);
     };
   }
 
