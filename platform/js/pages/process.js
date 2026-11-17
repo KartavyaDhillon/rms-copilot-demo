@@ -42,6 +42,7 @@
         '<button class="btn sm ghost" id="pcMail" title="Who the console\'s e-mails are sent from: Kartavya (with the moving-to-noreply note) or noreply_rms. Click to change.">\u2709 MAIL <b id="pcMailState">\u2026</b></button>' +
         '<button class="btn sm ghost" id="pcAuto" title="Automatic captcha and RSA-token filling, and the low-balance e-mail">\u26a1 AUTOFILL</button>' +
         '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
+        '<button class="btn sm ghost" id="pcTask" title="Hand something to a colleague in the Work Tracker (the process you filtered is linked)">+ Task</button>' +
         '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
         '<a class="btn sm ghost" href="/legacy" target="_blank" title="Original console with sidebar and internal views, in a new tab">' + RMS.icon("external") + " Standalone</a></div></div>" +
         '<iframe class="pc-frame" id="pcFrame" src="/legacy?embed=1"></iframe>';
@@ -52,6 +53,7 @@
         }
       };
       $("#pcCommon").onclick = openCommon;
+      $("#pcTask").onclick = () => { const f = RMS.pcFilterState || ""; RMS.go("tracker"); setTimeout(() => RMS.trackerNew && RMS.trackerNew({ process: f }), 450); };
       $("#pcFrame").addEventListener("load", () => { if (RMS.pcApply) RMS.pcApply(""); });   // a reloaded console shows everything again
       captchaAutoInit();
       tcsInit();

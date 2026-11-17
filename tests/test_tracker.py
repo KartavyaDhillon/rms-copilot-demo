@@ -41,6 +41,8 @@ class Tracker(unittest.TestCase):
     def tearDown(self):
         self.p1.stop(); self.p2.stop()
         tr._SENDER["fn"] = None
+        tr._MAIL["fn"] = None
+        tr._MAIL["pop"] = None
         _db.DB_PATH = self._old_db
         if self._old_root is None:
             os.environ.pop("RMS_DATA_ROOT", None)
@@ -148,6 +150,49 @@ class Tracker(unittest.TestCase):
             tr.list_tasks(None)
         s = tr.summary(ABHI)
         self.assertEqual(s["mine"], 0)
+
+    def test_followup_mail_and_reply(self):
+        mails = []
+        tr._MAIL["fn"] = lambda subj, html, to, cc, rt: mails.append((subj, to, cc, rt))
+        t = tr.create_task(BOSS, "Ask exchange about penalty", assignee="M002")
+        t = tr.send_followup(ABHI, t["id"], "help@exchange.com", "", "")
+        self.assertEqual(t["status"], "waiting")
+        self.assertTrue(mails[0][0].startswith("[T-%d]" % t["id"]))
+        self.assertEqual(t["waiting_email"], "help@exchange.com")
+        with self.assertRaises(tr.TrackerError):
+            tr.send_followup(ABHI, t["id"], "not-an-email", "", "")
+        with self.assertRaises(tr.TrackerError):
+            tr.send_followup(PRIY, t["id"], "a@b.co", "", "")
+        t2 = tr.mark_reply(ABHI, t["id"], "they answered")
+        self.assertEqual(t2["status"], "in_progress")
+        self.assertTrue(t2["replied"])
+        self.assertTrue(any("Reply received" in a["body"] for a in t2["activity"]))
+
+    def test_mailbox_finds_reply_by_key_and_linked_subject(self):
+        a = tr.create_task(BOSS, "Ask exchange", assignee="M002", kind="followup", waiting_on="Exchange")
+        b = tr.create_task(BOSS, "Ask bank", assignee="M002", kind="followup", waiting_on="Bank")
+        tr.update_task(BOSS, b["id"], mail_subject="Pending fund transfer query")
+        box = [("u1", "x@y.com", "old mail", "")]
+        tr._MAIL["pop"] = lambda: list(box)
+        with mock.patch.object(tr, "mailbox_cfg", return_value={"username": "tracker@mt.in", "server": "s", "password": "p"}):
+            self.assertTrue(tr.poll_mailbox()["first"])                      # first look: nothing is matched
+            box += [("u2", "help@exchange.com", "Re: [T-%d] Ask exchange" % a["id"], ""),
+                    ("u3", "bank@b.com", "RE: Pending fund transfer query", ""),
+                    ("u4", "tracker@mt.in", "[T-%d] copy of our own mail" % a["id"], ""),
+                    ("u5", "spam@x.com", "hello", "")]
+            self.assertEqual(tr.poll_mailbox()["matched"], 2)
+            self.assertEqual(tr.get_task(BOSS, a["id"])["status"], "in_progress")
+            self.assertEqual(tr.get_task(BOSS, b["id"])["status"], "in_progress")
+            self.assertEqual(tr.poll_mailbox()["matched"], 0)                # nothing twice
+            self.assertTrue(tr.mailbox_status()["last_checked"])
+
+    def test_log_ref_and_settings(self):
+        t = tr.create_task(BOSS, "Margin shortage run 03 failed", kind="bug", process="Margin Shortage",
+                           log_ref={"file": "ms15__1.log", "logdir": "ms15", "label": "Run 03", "pipe_name": "Margin Shortage", "pipe": "ms15"})
+        self.assertEqual(t["log"]["file"], "ms15__1.log")
+        s = tr.save_settings(BOSS, mailbox_poll_min=5, mailbox_enabled=False)
+        self.assertEqual(s["mailbox_poll_min"], 5)
+        self.assertFalse(s["mailbox_enabled"])
 
 
 if __name__ == "__main__":

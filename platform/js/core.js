@@ -175,7 +175,8 @@
       '<input class="f-input" id="logvSearch" placeholder="Search in log…" style="flex:1">' +
       '<button class="btn sm ghost" id="logvWrap" title="Toggle wrap">' + RMS.icon("wrap") + " Wrap</button>" +
       '<button class="btn sm ghost" id="logvCopy">' + RMS.icon("copy") + " Copy</button>" +
-      '<button class="btn sm ghost" id="logvDl">' + RMS.icon("download") + " Save</button></div>" +
+      '<button class="btn sm ghost" id="logvDl">' + RMS.icon("download") + " Save</button>" +
+      '<button class="btn sm ghost" id="logvTask" title="Hand this to somebody in the Work Tracker">+ Task</button></div>' +
       '<div class="logv" id="logvBody">Loading…</div>', { raw: true, icon: "terminal" });
     let raw = "";
     RMS.api(url).then((d) => {
@@ -194,6 +195,11 @@
     };
     $("#logvCopy").onclick = () => {
       navigator.clipboard.writeText(raw).then(() => RMS.toast("ok", "Log copied to clipboard"));
+    };
+    $("#logvTask").onclick = () => {
+      close(); RMS.go("tracker");
+      setTimeout(() => RMS.trackerNew && RMS.trackerNew({ title: entry.pipe_name + " - " + (entry.label || entry.file) + " needs a look", process: entry.pipe_name,
+        log: { file: entry.file, logdir: entry.logdir || "", label: entry.label || "", pipe_name: entry.pipe_name || "", pipe: entry.pipe || "" } }), 450);
     };
     $("#logvDl").onclick = () => {
       const a = document.createElement("a");

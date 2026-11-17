@@ -1150,14 +1150,14 @@ def _trk_task(request: Request, task_id: int):
 @app.post("/tracker/task", name="tracker_create")
 async def _trk_create(request: Request):
     b = await request.json()
-    keys = ("title", "description", "assignee", "due", "priority", "kind", "process", "private", "follow_up_days", "waiting_on")
+    keys = ("title", "description", "assignee", "due", "priority", "kind", "process", "private", "follow_up_days", "waiting_on", "log_ref", "waiting_email")
     return _trk(request, lambda t, u: {"ok": True, "task": t.create_task(u, **{k: b[k] for k in keys if k in b})})
 
 
 @app.post("/tracker/task/{task_id}", name="tracker_update")
 async def _trk_update(request: Request, task_id: int):
     b = await request.json()
-    keys = ("title", "description", "assignee", "due", "priority", "kind", "process", "status", "waiting_on", "follow_up_days")
+    keys = ("title", "description", "assignee", "due", "priority", "kind", "process", "status", "waiting_on", "follow_up_days", "waiting_email", "mail_subject")
     return _trk(request, lambda t, u: {"ok": True, "task": t.update_task(u, task_id, **{k: b[k] for k in keys if k in b})})
 
 
@@ -1165,6 +1165,30 @@ async def _trk_update(request: Request, task_id: int):
 async def _trk_comment(request: Request, task_id: int):
     b = await request.json()
     return _trk(request, lambda t, u: {"ok": True, "task": t.add_comment(u, task_id, b.get("text", ""))})
+
+
+@app.post("/tracker/task/{task_id}/reply", name="tracker_reply")
+async def _trk_reply(request: Request, task_id: int):
+    b = await request.json()
+    return _trk(request, lambda t, u: {"ok": True, "task": t.mark_reply(u, task_id, b.get("note", ""))})
+
+
+@app.post("/tracker/task/{task_id}/followup", name="tracker_followup")
+async def _trk_followup(request: Request, task_id: int):
+    b = await request.json()
+    return _trk(request, lambda t, u: {"ok": True, "task": t.send_followup(u, task_id, b.get("to", ""), b.get("subject", ""), b.get("body", ""))})
+
+
+@app.post("/tracker/mailbox/check", name="tracker_mailbox_check")
+def _trk_mailbox_check(request: Request):
+    """Look in the tracker mailbox now (anybody who may see tasks can ask; it only reads)."""
+    def go(t, u):
+        t._uid(u)
+        if not t.mailbox_cfg():
+            return {"ok": False, "error": "The tracker mailbox is not set up yet - add it in Scheduler > Connections > Work Tracker mailbox."}
+        r = t.poll_mailbox(force=True)
+        return {"ok": bool(r.get("ok")), "error": r.get("error", ""), "matched": r.get("matched", 0), "mailbox": t.mailbox_status()}
+    return _trk(request, go)
 
 
 @app.post("/tracker/task/{task_id}/delete", name="tracker_delete")
@@ -1215,7 +1239,7 @@ async def _trk_people(request: Request):
 @app.post("/tracker/settings", name="tracker_settings")
 async def _trk_settings(request: Request):
     b = await request.json()
-    keys = ("enabled", "remind_at", "manager_summary", "notify_whatsapp", "notify_email")
+    keys = ("enabled", "remind_at", "manager_summary", "notify_whatsapp", "notify_email", "mailbox_enabled", "mailbox_poll_min")
     return _trk(request, lambda t, u: {"ok": True, "settings": t.save_settings(u, **{k: b[k] for k in keys if k in b})})
 
 

@@ -3,7 +3,7 @@
 (function () {
   window.RMS = window.RMS || {};
   const $ = RMS.$, esc = RMS.esc;
-  const S = { boot: null, tasks: [], summary: {}, view: "mine", q: "", who: "", kpi: "", weekStart: null, win: null, winClose: null, ready: false };
+  const S = { tchip: "", boot: null, tasks: [], summary: {}, view: "mine", q: "", who: "", kpi: "", weekStart: null, win: null, winClose: null, ready: false };
   const COLS = [["open", "Open", "var(--text-3)"], ["in_progress", "In progress", "var(--info)"], ["waiting", "Waiting for reply", "var(--warn)"],
                 ["review", "Review", "#c084fc"], ["done", "Done", "var(--ok)"]];
   const PRI = { urgent: "Urgent", high: "High", normal: "Normal", low: "Low" };
@@ -118,7 +118,7 @@
   function shell() {
     return '<div id="trkKpis"></div>' +
       '<div class="wt-bar"><div class="seg" id="trkViews">' +
-      [["mine", "My work"], ["board", "Board"], ["diary", "Diary"], ["all", "All tasks"]].map((v) => '<button data-v="' + v[0] + '">' + v[1] + "</button>").join("") + "</div>" +
+      [["mine", "My work"], ["board", "Board"], ["diary", "Diary"], ["team", "Team diary"], ["all", "All tasks"]].map((v) => '<button data-v="' + v[0] + '">' + v[1] + "</button>").join("") + "</div>" +
       '<input class="wt-in" id="trkQ" placeholder="Search tasks…" style="width:220px">' +
       '<select class="wt-sel" id="trkWho"></select><span id="trkKchip"></span><div class="spacer"></div>' +
       '<button class="btn ghost" id="trkPeople" data-no-busy title="Mobile, e-mail and reminder settings">' + RMS.icon("bell") + " People and alerts</button>" +
@@ -153,7 +153,7 @@
       kc.innerHTML = S.kpi ? '<span class="wt-pill today">' + lab + ' <span style="cursor:pointer" id="trkKx">✕</span></span>' : "";
       if (S.kpi) $("#trkKx").onclick = () => { S.kpi = ""; render(); };
     }
-    ({ mine: viewMine, board: viewBoard, diary: viewDiary, all: viewAll }[S.view] || viewMine)();
+    ({ mine: viewMine, board: viewBoard, diary: viewDiary, team: viewTeam, all: viewAll }[S.view] || viewMine)();
   }
 
   // ───────────────────────── views ─────────────────────────
@@ -238,6 +238,34 @@
     });
   }
 
+  // Team diary: what the manager handed out and what is stuck, with the reply state of every waiting task
+  function stText(t) {
+    if (t.status === "waiting") return ['<span class="wt-pill s-waiting">' + (t.waiting_days ? "No reply · " + t.waiting_days + (t.waiting_days === 1 ? " day" : " days") : "Waiting · today") + "</span>"];
+    if (t.replied && t.replied_at && (Date.now() - new Date(t.replied_at)) < 7 * 864e5) return ['<span class="wt-pill s-reply">Reply received</span>'];
+    return ['<span class="wt-pill s-' + t.status + '">' + (t.status === "open" ? "Not started" : esc(t.status_label)) + "</span>"];
+  }
+  function viewTeam() {
+    const v = visible(), id = me().id;
+    const F = { given: (t) => t.created_by === id && t.assignee !== id && open_(t), waiting: (t) => t.status === "waiting", overdue: (t) => t.overdue };
+    const n = (k) => v.filter(F[k]).length;
+    let list = v.filter((t) => open_(t) || (t.replied && t.replied_at && (Date.now() - new Date(t.replied_at)) < 7 * 864e5));
+    if (S.tchip) list = list.filter(F[S.tchip]);
+    const ord = { urgent: 0, high: 1, normal: 2, low: 3 };
+    list.sort((a, b) => ((b.status === "waiting") - (a.status === "waiting")) || (b.overdue - a.overdue) || ((a.due || "9999") < (b.due || "9999") ? -1 : 1) || (ord[a.priority] - ord[b.priority]));
+    const chip = (k, lab, c) => '<button class="wt-chip' + (S.tchip === k ? " on" : "") + '" data-c="' + k + '" style="--c:' + c + '">' + lab + " <b>" + n(k) + "</b></button>";
+    $("#trkBody").innerHTML = '<div class="card" style="padding:0;overflow:hidden"><div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid var(--line)">' +
+      '<div class="card-title" style="margin-right:6px">Task diary</div>' + chip("given", "Assigned by me", "var(--accent)") + chip("waiting", "Waiting for reply", "#f59e0b") + chip("overdue", "Overdue", "var(--err)") +
+      '<span class="card-sub" style="margin-left:auto">Everything handed out, and what is stuck. Click a row to open it.</span></div>' +
+      '<div style="max-height:calc(100vh - 400px);overflow:auto"><table class="htable"><thead><tr><th>Task</th><th>Owner</th><th>Status</th><th>Due</th></tr></thead><tbody>' +
+      (list.length ? list.map((t) => '<tr data-id="' + t.id + '"><td><span class="mono" style="color:var(--text-3);margin-right:6px">' + esc(t.key) + "</span><b>" + esc(t.title) + "</b>" +
+        (t.status === "waiting" && t.waiting_on ? '<div class="wt-sub">waiting on ' + esc(t.waiting_on) + "</div>" : "") + "</td>" +
+        '<td><div style="display:flex;gap:7px;align-items:center">' + av(t.assignee_name || t.assignee) + esc(t.assignee_name || t.assignee) + "</div></td><td>" + stText(t)[0] + "</td>" +
+        '<td style="white-space:nowrap;' + (t.overdue ? "color:var(--err)" : "") + '">' + (esc(dueText(t)) || "-") + "</td></tr>").join("")
+        : '<tr><td colspan="4" style="padding:30px;text-align:center;color:var(--text-3)">Nothing here.</td></tr>') + "</tbody></table></div></div>";
+    $("#trkBody").querySelectorAll("[data-c]").forEach((b) => { b.onclick = () => { S.tchip = S.tchip === b.dataset.c ? "" : b.dataset.c; viewTeam(); }; });
+    $("#trkBody").querySelectorAll("tbody tr[data-id]").forEach((r) => { r.onclick = () => openTask(+r.dataset.id); });
+  }
+
   function viewAll() {
     const v = visible().filter((t) => !S.kpi || KP[S.kpi](t));
     const ord = { urgent: 0, high: 1, normal: 2, low: 3 };
@@ -291,12 +319,13 @@
       document.querySelectorAll("#ntKind button").forEach((b) => b.classList.toggle("on", b.dataset.k === kind));
     };
     document.querySelectorAll("#ntKind button").forEach((b) => { b.onclick = () => { kind = b.dataset.k; sync(); }; });
-    sync(); $("#ntTitle").focus();
+    sync(); if (pre.process) $("#ntProc").value = pre.process; if (pre.desc) $("#ntDesc").value = pre.desc; $("#ntTitle").focus();
     $("#ntCancel").onclick = close;
     $("#ntSave").onclick = async () => {
       const btn = $("#ntSave"); btn.disabled = true; btn.textContent = "Creating…";
       const body = { title: $("#ntTitle").value, description: $("#ntDesc").value, assignee: $("#ntWho").value, due: $("#ntDue").value, priority: $("#ntPri").value,
         kind, process: $("#ntProc").value, private: kind === "note" };
+      if (pre.log) body.log_ref = pre.log;
       if (kind === "followup") { body.waiting_on = $("#ntWait").value; body.follow_up_days = $("#ntDays").value; }
       const r = await api("/tracker/task", body);
       btn.disabled = false; btn.textContent = "Create task";
@@ -325,6 +354,20 @@
     const files = t.file_list.map((f) => '<a class="wt-file" href="/tracker/file/' + f.id + '" target="_blank" title="' + esc(f.name + " · " + f.by_name) + '">' +
       (f.is_image ? '<img src="/tracker/file/' + f.id + '" alt="' + esc(f.name) + '">' : esc(f.name)) + '<span class="x" data-del="' + f.id + '" title="Remove">✕</span></a>').join("");
     const follow = t.status === "waiting" || t.kind === "followup";
+    const links = (t.log || t.process) ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+      (t.process ? '<button class="btn sm ghost" id="wtGoProc" data-no-busy>' + RMS.icon("layers") + " Open " + esc(t.process) + " in Process Center</button>" : "") +
+      (t.log ? '<button class="btn sm ghost" id="wtGoLog" data-no-busy>' + RMS.icon("terminal") + " Open run log</button>" : "") + "</div>" : "";
+    const mb = (S.boot && S.boot.mailbox) || {};
+    const mbLine = t.status !== "waiting" ? (t.replied ? "A reply was received " + when(t.replied_at) + "." : "")
+      : mb.configured ? (mb.last_checked ? "Tracker mailbox checked " + when(mb.last_checked) + " - no reply found" + (t.mail_subject ? "" : " (link or send a mail so replies can be matched)") : "Tracker mailbox connected - first check is pending.")
+        : "Tracker mailbox is not connected - press <b>Reply received</b> yourself when the reply comes.";
+    const mailPanel = follow && canSt ? '<div class="wt-mail"><div class="h">' + RMS.icon("mail") + ' <b>E-mail tracking</b></div>' +
+      (t.mail_subject ? '<div class="l">Tracked mail: <b>' + esc(t.mail_subject) + "</b>" + (t.waiting_email ? " to " + esc(t.waiting_email) : "") + "</div>" : "") +
+      (mbLine ? '<div class="l">' + mbLine + "</div>" : "") +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm" id="wtMailSend" data-no-busy>' + RMS.icon("send") + " Send follow-up mail</button>" +
+      '<button class="btn sm" id="wtMailLink" data-no-busy>' + RMS.icon("copy") + " Link a sent mail</button>" +
+      (t.status === "waiting" ? '<button class="btn sm primary" id="wtReply" data-no-busy>' + RMS.icon("check") + " Reply received</button>" : "") +
+      (mb.configured && t.status === "waiting" ? '<button class="btn sm ghost" id="wtMailCheck" data-no-busy>' + RMS.icon("refresh") + " Check mailbox now</button>" : "") + "</div></div>" : "";
     el.innerHTML = '<div class="wt-main">' +
       '<input class="wt-title" id="wtTitle" value="' + esc(t.title) + '"' + (edit ? "" : " readonly") + ' maxlength="200">' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><span class="wt-pill s-' + t.status + '">' + esc(t.status_label) + '</span><span class="wt-pill">' + esc(KIND[t.kind] || t.kind) + "</span>" + pills(t) +
@@ -332,6 +375,7 @@
       (t.status === "waiting" ? '<div class="wt-warn">' + RMS.icon("mail") + " Waiting for a reply" + (t.waiting_on ? " from <b>" + esc(t.waiting_on) + "</b>" : "") +
         (t.waiting_days != null ? " · " + (t.waiting_days === 0 ? "since today" : t.waiting_days + " day(s) with no reply") : "") +
         (t.follow_up_days ? " · reminder every " + t.follow_up_days + " day(s)" : "") + "</div>" : "") +
+      links + mailPanel +
       '<div class="wt-lbl">Details</div><textarea class="wt-ta" id="wtDesc"' + (edit ? "" : " readonly") + ' placeholder="No details">' + esc(t.description || "") + "</textarea>" +
       '<div class="wt-lbl" style="margin-top:14px">Pictures and files</div><div class="wt-files">' + files + "</div>" +
       '<div class="wt-drop" id="wtDrop">' + RMS.icon("download") + ' Drop pictures or files here, click to choose, or paste a screenshot (Ctrl+V)</div><input type="file" id="wtPick" multiple style="display:none">' +
@@ -349,6 +393,41 @@
       (t.status !== "done" && canSt ? '<button class="btn primary" id="wtDone" data-no-busy style="width:100%;justify-content:center;margin-bottom:8px">' + RMS.icon("check") + " Mark done</button>" : "") +
       (edit ? '<button class="btn ghost" id="wtDel" data-no-busy style="width:100%;justify-content:center;color:var(--err)">Delete task</button>' : "") + "</div>";
     wireTask();
+  }
+  function followupWin(t) {
+    const back = () => openTask(t.id);
+    const close = RMS.modal("Send follow-up mail - " + t.key,
+      '<div class="card-sub" style="margin-bottom:12px;line-height:1.55">Sent from the console\'s mail account. The subject keeps <b>[' + esc(t.key) + ']</b> so the reply can be found in the tracker mailbox.</div>' +
+      '<div class="wt-lbl">To (e-mail, several with a comma)</div><input class="wt-in" id="fuTo" style="width:100%;margin-bottom:10px" value="' + esc(t.waiting_email || "") + '" placeholder="helpdesk@exchange.com">' +
+      '<div class="wt-lbl">Subject</div><input class="wt-in" id="fuSub" style="width:100%;margin-bottom:10px" value="' + esc(t.mail_subject || ("[" + t.key + "] " + t.title)) + '">' +
+      '<div class="wt-lbl">Message</div><textarea class="wt-ta" id="fuBody" style="min-height:130px">Dear Sir/Madam,\n\nThis is a gentle reminder regarding: ' + esc(t.title) + '.\nKindly reply at the earliest.\n\nRegards,\n' + esc(me().name) + '</textarea>' +
+      '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px"><button class="btn ghost" id="fuNo" data-no-busy>Cancel</button><button class="btn primary" id="fuGo" data-no-busy>Send mail</button></div>',
+      { width: 620, icon: "mail" });
+    $("#fuNo").onclick = () => { close(); back(); };
+    $("#fuGo").onclick = async () => {
+      const b = $("#fuGo"); b.disabled = true; b.textContent = "Sending…";
+      const r = await api("/tracker/task/" + t.id + "/followup", { to: $("#fuTo").value, subject: $("#fuSub").value, body: $("#fuBody").value });
+      b.disabled = false; b.textContent = "Send mail";
+      if (!r.ok) { bad(r.error); return; }
+      close(); okBox("Mail sent", "To " + r.task.waiting_email + ". The task now waits for the reply."); await reload(); back();
+    };
+  }
+  function linkMailWin(t) {
+    const back = () => openTask(t.id);
+    const close = RMS.modal("Link a sent mail - " + t.key,
+      '<div class="card-sub" style="margin-bottom:12px;line-height:1.55">Already sent the mail from Outlook? Enter its subject exactly as sent. When a reply with that subject arrives in the tracker mailbox, the task is moved on automatically. Replies that carry <b>[' + esc(t.key) + ']</b> are found too.</div>' +
+      '<div class="wt-lbl">Subject of the mail you sent</div><input class="wt-in" id="lkSub" style="width:100%;margin-bottom:10px" value="' + esc(t.mail_subject || "") + '">' +
+      '<div class="wt-lbl">Sent to (optional)</div><input class="wt-in" id="lkTo" style="width:100%" value="' + esc(t.waiting_email || "") + '" placeholder="person@company.com">' +
+      '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px"><button class="btn ghost" id="lkNo" data-no-busy>Cancel</button><button class="btn primary" id="lkGo" data-no-busy>Link mail</button></div>',
+      { width: 560, icon: "copy" });
+    $("#lkNo").onclick = () => { close(); back(); };
+    $("#lkGo").onclick = async () => {
+      if (!$("#lkSub").value.trim()) { bad("Enter the subject of the mail."); return; }
+      const body = { mail_subject: $("#lkSub").value, waiting_email: $("#lkTo").value }; if (t.status !== "waiting") body.status = "waiting";
+      const r = await api("/tracker/task/" + t.id, body);
+      if (!r.ok) { bad(r.error); return; }
+      close(); okBox("Mail linked", "Replies to it will be tracked."); await reload(); back();
+    };
   }
   async function patch(body, okMsg) {
     const r = await api("/tracker/task/" + S.win.id, body);
@@ -390,6 +469,17 @@
       g("wtWait").onchange = () => patch({ waiting_on: g("wtWait").value }, "Saved");
       g("wtDays").onchange = () => patch({ follow_up_days: g("wtDays").value || 0 }, "Reminder saved");
     }
+    if (g("wtGoProc")) g("wtGoProc").onclick = () => { S.winClose && S.winClose(); RMS.go("process"); setTimeout(() => RMS.pcApply && RMS.pcApply(t.process, false), 700); };
+    if (g("wtGoLog")) g("wtGoLog").onclick = () => RMS.openLogViewer(t.log);
+    if (g("wtMailSend")) g("wtMailSend").onclick = () => followupWin(t);
+    if (g("wtMailLink")) g("wtMailLink").onclick = () => linkMailWin(t);
+    if (g("wtReply")) g("wtReply").onclick = async () => { const r = await api("/tracker/task/" + t.id + "/reply", {}); if (r.ok) { S.win = r.task; paintTask(); reload(); okBox("Reply received", t.key + " moved to In progress."); } else bad(r.error); };
+    if (g("wtMailCheck")) g("wtMailCheck").onclick = async () => {
+      const r = await api("/tracker/mailbox/check", {}); if (r.mailbox) S.boot.mailbox = r.mailbox;
+      if (!r.ok) { bad(r.error); return; }
+      const d = await api("/tracker/task/" + t.id); if (d.ok) { S.win = d.task; paintTask(); }
+      okBox(r.matched ? r.matched + " reply found" : "Mailbox checked", r.matched ? "Tasks with a reply moved to In progress." : "No reply found yet."); reload();
+    };
     if (g("wtDone")) g("wtDone").onclick = async () => { await patch({ status: "done" }); okBox(t.key + " marked done", "The creator is told."); };
     const send = async () => {
       const txt = g("wtCmt").value.trim(); if (!txt) { g("wtCmt").focus(); return; }
@@ -443,7 +533,12 @@
         '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="stMgr"' + (s.manager_summary ? " checked" : "") + "> Summary to managers</label>" +
         '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="stWa"' + (s.notify_whatsapp ? " checked" : "") + "> WhatsApp</label>" +
         '<label style="font-size:12.5px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="stMail"' + (s.notify_email ? " checked" : "") + "> E-mail</label>" +
-        '<button class="btn primary sm" id="stSave" data-no-busy>Save settings</button></div></div>' : ""),
+        '</div><div class="wt-lbl" style="margin-top:14px">Reply tracking - shared tracker mailbox</div><div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-size:12.5px">' +
+        '<span id="stMbLine"></span><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="stMbOn"' + (s.mailbox_enabled ? " checked" : "") + "> Look for replies</label>" +
+        '<label style="display:flex;gap:6px;align-items:center">every <input type="number" min="2" max="120" class="wt-in" id="stMbMin" style="width:70px" value="' + (s.mailbox_poll_min || 10) + '"> min</label>' +
+        '<button class="btn sm" id="stMbCheck" data-no-busy>Check now</button></div>' +
+        '<div class="card-sub" style="margin-top:6px">The mailbox login is added once in Scheduler &gt; Connections &gt; "Work Tracker - shared mailbox". Follow-up mails ask for replies to go there.</div>' +
+        '<div style="margin-top:14px"><button class="btn primary sm" id="stSave" data-no-busy>Save settings</button></div></div>' : ""),
       { width: 820, icon: "bell" });
     document.querySelectorAll("[data-save]").forEach((b) => {
       b.onclick = async () => {
@@ -452,8 +547,13 @@
         if (r.ok) { S.boot.people = r.people; okBox("Saved", tr.querySelector("b").textContent + " - contact details updated."); } else bad(r.error);
       };
     });
+    if (mgr) {
+      const mb = S.boot.mailbox || {};
+      $("#stMbLine").innerHTML = mb.configured ? 'Mailbox <b>' + esc(mb.address) + "</b> " + (mb.last_error ? '<span style="color:var(--err)">- ' + esc(mb.last_error) + "</span>" : mb.last_checked ? "- last checked " + when(mb.last_checked) : "- not checked yet") : '<span style="color:var(--warn)">Mailbox not connected yet</span>';
+      $("#stMbCheck").onclick = async () => { const r = await api("/tracker/mailbox/check", {}); if (r.mailbox) S.boot.mailbox = r.mailbox; if (r.ok) { okBox(r.matched ? r.matched + " reply found" : "Mailbox checked", r.matched ? "Tasks moved to In progress." : "No new reply."); reload(); } else bad(r.error); };
+    }
     if (mgr) $("#stSave").onclick = async () => {
-      const r = await api("/tracker/settings", { enabled: $("#stOn").checked, remind_at: $("#stAt").value, manager_summary: $("#stMgr").checked, notify_whatsapp: $("#stWa").checked, notify_email: $("#stMail").checked });
+      const r = await api("/tracker/settings", { enabled: $("#stOn").checked, remind_at: $("#stAt").value, manager_summary: $("#stMgr").checked, notify_whatsapp: $("#stWa").checked, notify_email: $("#stMail").checked, mailbox_enabled: $("#stMbOn").checked, mailbox_poll_min: $("#stMbMin").value });
       if (r.ok) { S.boot.settings = r.settings; close(); okBox("Settings saved", "Daily reminder at " + r.settings.remind_at + "."); } else bad(r.error);
     };
   }

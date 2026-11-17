@@ -108,3 +108,13 @@
 html.rail .nav-count { display: none; }
 @media (max-width: 1250px) { .wt-board { grid-template-columns: repeat(3, minmax(0, 1fr)); } .wt-week { grid-template-columns: repeat(4, minmax(0, 1fr)); } .wt-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .wt-two, .wt-win { grid-template-columns: 1fr; } .wt-side { border-left: none; border-top: 1px solid var(--line); } }
+
+/* team diary + e-mail tracking */
+.wt-chip { display: inline-flex; gap: 6px; align-items: center; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
+.wt-chip b { color: var(--c, var(--accent)); }
+.wt-chip:hover, .wt-chip.on { border-color: var(--c, var(--accent)); color: var(--text); }
+.wt-pill.s-reply { background: rgba(52, 211, 153, .15); color: var(--ok); }
+.wt-mail { border: 1px solid var(--line-2); border-left: 3px solid #f59e0b; background: var(--surface-2); border-radius: var(--r-sm); padding: 10px 12px; margin-bottom: 14px; font-size: 12.5px; line-height: 1.55; }
+.wt-mail .h { display: flex; gap: 6px; align-items: center; margin-bottom: 4px; }
+.wt-mail .l { color: var(--text-2); }
+.wt-mail svg { width: 14px; height: 14px; }

@@ -192,8 +192,17 @@
     box.innerHTML = rows.map((r, k) =>
       '<div class="feed-item" data-k="' + k + '" style="' + (r.entry ? "" : "cursor:default") + '"><span class="feed-ic failed">' + RMS.icon("alert") + "</span>" +
       '<div class="feed-main"><b>' + esc(r.title) + "</b><small>" + esc(r.sub) + "</small></div>" +
-      '<span class="badge err">' + (ST[r.st] || ST.failed)[1] + "</span><span></span></div>").join("");
+      '<span class="badge err">' + (ST[r.st] || ST.failed)[1] + '</span><button class="btn sm ghost" data-task="' + k + '" title="Hand this to somebody in the Work Tracker">+ Task</button></div>').join("");
     box.querySelectorAll("[data-k]").forEach((el) => { const r = rows[+el.dataset.k]; if (r && r.entry) el.onclick = () => RMS.openLogViewer(r.entry); });
+    box.querySelectorAll("[data-task]").forEach((bt) => {
+      bt.onclick = (ev) => {
+        ev.stopPropagation();
+        const r = rows[+bt.dataset.task], e = r.entry;
+        RMS.go("tracker");
+        setTimeout(() => RMS.trackerNew && RMS.trackerNew({ title: String(r.title).slice(0, 120) + " - check and fix", process: e ? e.pipe_name : String(r.title).replace(/ \u2014.*$/, ""),
+          desc: r.sub, log: e ? { file: e.file, logdir: e.logdir || "", label: e.label || "", pipe_name: e.pipe_name || "", pipe: e.pipe || "" } : null }), 450);
+      };
+    });
   }
 
   function renderTimeline(t) {

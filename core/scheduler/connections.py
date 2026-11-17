@@ -67,6 +67,15 @@ GROUPS: Dict[str, dict] = {
             ("password", "Password", True, ""),
         ],
     },
+    "tracker_pop3": {
+        "label": "Work Tracker — shared mailbox where replies arrive (POP3)",
+        "fields": [
+            ("server", "POP3 server", False, "pop9.netcore.co.in"),
+            ("port", "Port", False, "995"),
+            ("username", "Mailbox user name (e-mail address)", False, ""),
+            ("password", "Password", True, ""),
+        ],
+    },
     "smtpb": {
         "label": "E-mail sending — second mailbox (SMTP)",
         "fields": [
@@ -288,7 +297,7 @@ def view() -> List[dict]:
 # Which field identifies the ACCOUNT of a group. A new password for an account is handed to every other place that holds
 # the SAME account (same e-mail / same user id); other accounts are never touched. None = one account for the whole group.
 IDENT = {"smtp": "email", "smtpb": "email", "alloc_smtp": "email", "pop3": "username", "pop3b": "username",
-         "alloc_pop3": "username", "nse": "login_id", "mcx_sftp": "user", "mcx_eclear": "user_id", "backoffice": "username",
+         "alloc_pop3": "username", "tracker_pop3": "username", "nse": "login_id", "mcx_sftp": "user", "mcx_eclear": "user_id", "backoffice": "username",
          "atom": "username", "darwinbox": "username", "kambala_ftp": "user", "common_ftp": "user",
          "upload_api": "user_id"}
 

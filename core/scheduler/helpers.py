@@ -526,7 +526,7 @@ def whatsapp_send_image(image: Path, to: str, label: str, date_text: str, ctx,
 # ───────────────────────── e-mail (SMTP) ─────────────────────────
 def send_email(subject: str, body: str, to: List[str], cc: List[str], attachments: List[Path], ctx,
                html: bool = False, attempts: int = 3, delay: float = 10.0,
-               group: str = "smtp", inline_images: Optional[dict] = None):
+               group: str = "smtp", inline_images: Optional[dict] = None, reply_to: str = ""):
     """group: 'smtp' (default) or 'smtpb' (second mailbox).  inline_images: {cid: Path} shown inside an HTML body
     as <img src="cid:…">."""
     c = connections.require(group, "server", "port", "email", "password")
@@ -538,6 +538,8 @@ def send_email(subject: str, body: str, to: List[str], cc: List[str], attachment
     msg["To"] = ", ".join(to)
     if cc:
         msg["Cc"] = ", ".join(cc)
+    if reply_to:
+        msg["Reply-To"] = reply_to
     if html:
         msg.set_content("Please view this e-mail in an HTML-capable client.")
         msg.add_alternative(body, subtype="html")

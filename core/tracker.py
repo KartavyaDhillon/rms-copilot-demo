@@ -33,12 +33,17 @@ KINDS = ("task", "followup", "change", "bug", "note")
 MAX_FILE_MB = 15
 IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 BAD_EXT = (".exe", ".bat", ".cmd", ".com", ".msi", ".ps1", ".vbs", ".js", ".scr", ".dll", ".jar", ".sh")
-DEFAULT_SETTINGS = {"enabled": True, "remind_at": "09:30", "manager_summary": True, "notify_whatsapp": True, "notify_email": True}
+DEFAULT_SETTINGS = {"enabled": True, "remind_at": "09:30", "manager_summary": True, "notify_whatsapp": True, "notify_email": True,
+                    "mailbox_enabled": True, "mailbox_poll_min": 10}
+_NEW_COLS = (("replied_at", "TEXT"), ("log_ref", "TEXT"), ("waiting_email", "TEXT"), ("mail_subject", "TEXT"))
 
 _INIT_LOCK = threading.Lock()
 _READY = {"ok": False}
 _TICK = {"thread": None, "stop": threading.Event()}
 _SENDER = {"fn": None}          # tests: fn(channel, to, subject, lines) instead of the real WhatsApp / e-mail
+_MAIL = {"fn": None, "pop": None}   # tests: fn(subject, html, to, cc, reply_to) instead of SMTP; pop() -> [(uid, from, subject, date)] instead of POP3
+_POLL = {"last": 0.0}
+SYSTEM = {"sub": "MAILBOX", "name": "Mailbox"}
 
 
 class TrackerError(Exception):
@@ -119,6 +124,18 @@ def ensure() -> None:
             conn.commit()
         finally:
             conn.close()
+        for _n, _t in _NEW_COLS:                                 # columns added later - old databases get them here
+            c2 = _conn()
+            try:
+                c2.cursor().execute(f"ALTER TABLE tracker_tasks ADD COLUMN {'IF NOT EXISTS ' if _pg() else ''}{_n} {_t}")
+                c2.commit()
+            except Exception:                                    # noqa: BLE001  (already there)
+                try:
+                    c2.rollback()
+                except Exception:                                # noqa: BLE001
+                    pass
+            finally:
+                c2.close()
         _READY["ok"] = True
 
 
@@ -239,9 +256,14 @@ def save_settings(user, **kw) -> dict:
         if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(kw["remind_at"])):
             raise TrackerError("Reminder time must be HH:MM (24 hour).")
         s["remind_at"] = str(kw["remind_at"])
-    for k in ("enabled", "manager_summary", "notify_whatsapp", "notify_email"):
+    for k in ("enabled", "manager_summary", "notify_whatsapp", "notify_email", "mailbox_enabled"):
         if kw.get(k) is not None:
             s[k] = bool(kw[k])
+    if kw.get("mailbox_poll_min") is not None:
+        try:
+            s["mailbox_poll_min"] = max(2, min(120, int(kw["mailbox_poll_min"])))
+        except (TypeError, ValueError):
+            raise TrackerError("Mailbox check interval must be a number of minutes.")
     _meta_set("settings", s)
     return s
 
@@ -283,6 +305,11 @@ def _decorate(t: dict, me: str, mgr: bool) -> dict:
             pass
     t["can_edit"] = _can_edit(t, me, mgr)
     t["mine"] = t.get("assignee") == me
+    try:
+        t["log"] = json.loads(t.get("log_ref") or "") or None
+    except Exception:                                            # noqa: BLE001
+        t["log"] = None
+    t["replied"] = bool(t.get("replied_at") and t["status"] != "waiting")
     return t
 
 
@@ -334,7 +361,8 @@ def get_task(user, task_id: int) -> dict:
 
 
 def create_task(user, title: str, description: str = "", assignee: str = "", due: str = "", priority: str = "normal",
-                kind: str = "task", process: str = "", private: bool = False, follow_up_days=None, waiting_on: str = "") -> dict:
+                kind: str = "task", process: str = "", private: bool = False, follow_up_days=None, waiting_on: str = "",
+                log_ref=None, waiting_email: str = "") -> dict:
     me, name = _uid(user), _uname(user)
     title = str(title or "").strip()
     if len(title) < 3:
@@ -352,19 +380,35 @@ def create_task(user, title: str, description: str = "", assignee: str = "", due
         raise TrackerError("That person is not a console user.")
     fud = _days(follow_up_days)
     now = _now()
+    lref = ""
+    if isinstance(log_ref, dict) and log_ref.get("file"):
+        lref = json.dumps({k: str(log_ref.get(k) or "")[:200] for k in ("file", "logdir", "label", "pipe_name", "pipe")})
+    wmail = _clean_emails(waiting_email)
     status = "waiting" if (kind == "followup" and str(waiting_on or "").strip()) else "open"
     tid = _run("""INSERT INTO tracker_tasks (title, description, kind, priority, status, created_by, created_by_name, assignee,
-                  assignee_name, due, process, waiting_on, waiting_since, follow_up_days, last_followup, private, created_at, updated_at)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                  assignee_name, due, process, waiting_on, waiting_since, follow_up_days, last_followup, private, created_at, updated_at,
+                  log_ref, waiting_email)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                (title, str(description or "").strip(), kind, priority, status, me, name, assignee,
                 name if assignee == me else _person_name(assignee), _clean_date(due), str(process or "").strip()[:80],
-                str(waiting_on or "").strip()[:200], now if status == "waiting" else "", fud, "", 1 if private else 0, now, now),
+                str(waiting_on or "").strip()[:200], now if status == "waiting" else "", fud, "", 1 if private else 0, now, now,
+                lref, wmail),
                insert=True)
     _event(tid, user, "Created" + ("" if assignee == me else f" and assigned to {_person_name(assignee)}"))
     t = _get(tid)
     if assignee != me:
         notify("assigned", t, user)
     return get_task(user, tid)
+
+
+def _clean_emails(v) -> str:
+    parts = [x.strip() for x in re.split(r"[,;\s]+", str(v or "")) if x.strip()]
+    if len(parts) > 5:
+        raise TrackerError("At most 5 e-mail addresses.")
+    for x in parts:
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", x):
+            raise TrackerError(f"'{x}' is not a valid e-mail address.")
+    return ", ".join(parts)
 
 
 def _days(v):
@@ -434,6 +478,15 @@ def update_task(user, task_id: int, **ch) -> dict:
         if v != (t.get("waiting_on") or ""):
             sets["waiting_on"] = v
             notes.append(f"Waiting on: {v or 'nobody'}")
+    if ch.get("waiting_email") is not None:
+        v = _clean_emails(ch["waiting_email"])
+        if v != (t.get("waiting_email") or ""):
+            sets["waiting_email"] = v
+    if ch.get("mail_subject") is not None:
+        v = str(ch["mail_subject"]).strip()[:200]
+        if v != (t.get("mail_subject") or ""):
+            sets["mail_subject"] = v
+            notes.append(f"Sent mail linked: {v}" if v else "Sent mail link removed")
     if "follow_up_days" in ch and ch["follow_up_days"] is not None:
         v = _days(ch["follow_up_days"])
         if v != t.get("follow_up_days"):
@@ -649,6 +702,10 @@ def notify(kind: str, t: dict, actor, extra: str = "") -> None:
             to = [t["created_by"]]
             subject = f"{STATUS_LABEL.get(t['status'], t['status'])} - {key}"
             lines = [t["title"], f"By: {who}", due]
+        elif kind == "reply":
+            to = [x for x in {t["created_by"], t["assignee"]} if x != me]
+            subject = f"Reply received - {key}"
+            lines = [t["title"], extra or "A reply has come."]
         elif kind == "comment":
             to = [x for x in {t["created_by"], t["assignee"]} if x != me]
             subject = f"New comment - {key}"
@@ -746,12 +803,192 @@ def tick(now: dt.datetime | None = None) -> bool:
     return True
 
 
+# ───────────────────────────── replies, follow-up mail, mailbox ─────────────────────────────
+def mark_reply(user, task_id: int, note: str = "", by_mailbox: bool = False) -> dict:
+    """The reply has come: the task leaves "Waiting for reply" and the time is kept."""
+    me, mgr = _uid(user), is_manager(user)
+    t = _get(task_id)
+    if not by_mailbox:
+        if not _visible(t, me, mgr):
+            raise TrackerError("You cannot see this task.")
+        if not (_can_edit(t, me, mgr) or t["assignee"] == me):
+            raise TrackerError("Only the person it is assigned to, the creator or a manager can do this.")
+    if t["status"] in CLOSED:
+        raise TrackerError("This task is already closed.")
+    note = str(note or "").strip()[:300]
+    sets = {"replied_at": _now(), "updated_at": _now(), "waiting_since": "", "last_followup": ""}
+    if t["status"] == "waiting":
+        sets["status"] = "in_progress"
+    cols = ", ".join(f"{k} = ?" for k in sets)
+    _run(f"UPDATE tracker_tasks SET {cols} WHERE id = ?", tuple(sets.values()) + (int(task_id),))
+    _event(task_id, user, "Reply received" + (f" - {note}" if note else "") + (" (found in the tracker mailbox)" if by_mailbox else ""))
+    notify("reply", _get(task_id), user, extra=note)
+    return get_task(user, task_id) if not by_mailbox else {"ok": True}
+
+
+def mailbox_cfg() -> dict:
+    """The shared tracker mailbox (Scheduler > Connections > Work Tracker mailbox). {} when it is not filled in."""
+    try:
+        from core.scheduler import connections
+        c = connections.get("tracker_pop3")
+        return c if c.get("server") and c.get("username") and c.get("password") else {}
+    except Exception:                                            # noqa: BLE001
+        return {}
+
+
+def mailbox_status() -> dict:
+    cfg = mailbox_cfg()
+    st = _meta_get("mailbox", {}) or {}
+    return {"configured": bool(cfg), "address": cfg.get("username", ""), "last_checked": st.get("last_checked", ""),
+            "last_error": st.get("error", ""), "enabled": get_settings()["mailbox_enabled"]}
+
+
+def _norm_subject(v: str) -> str:
+    v = re.sub(r"^\s*((re|fw|fwd)\s*:\s*)+", "", str(v or ""), flags=re.I)
+    return re.sub(r"\s+", " ", v).strip().lower()
+
+
+def _decode_hdr(v) -> str:
+    from email.header import decode_header, make_header
+    try:
+        return str(make_header(decode_header(str(v or ""))))
+    except Exception:                                            # noqa: BLE001
+        return str(v or "")
+
+
+def _read_pop() -> list:
+    """[(uidl, from address, subject, date)] of every message in the tracker mailbox - read only, nothing is deleted."""
+    if _MAIL["pop"] is not None:
+        return _MAIL["pop"]()
+    import poplib
+    import ssl
+    from email import message_from_bytes
+    from email.utils import parseaddr
+    c = mailbox_cfg()
+    pop = poplib.POP3_SSL(c["server"], int(c.get("port") or 995), timeout=40, context=ssl.create_default_context())
+    out = []
+    try:
+        pop.user(c["username"])
+        pop.pass_(c["password"])
+        uidl = {}
+        for ln in pop.uidl()[1]:
+            a = ln.decode("ascii", "replace").split()
+            if len(a) >= 2:
+                uidl[int(a[0])] = a[1]
+        for num in sorted(uidl)[-300:]:
+            top = pop.top(num, 0)[1]
+            m = message_from_bytes(b"\r\n".join(top))
+            out.append((uidl[num], parseaddr(_decode_hdr(m.get("From")))[1].lower(), _decode_hdr(m.get("Subject")), str(m.get("Date") or "")))
+    finally:
+        try:
+            pop.quit()
+        except Exception:                                        # noqa: BLE001
+            pass
+    return out
+
+
+def poll_mailbox(force: bool = False) -> dict:
+    """Look in the tracker mailbox for replies to waiting tasks. A mail counts as the reply when its subject carries the
+    task key ([T-12]) or the subject of the linked sent mail, and it was not sent by the console itself."""
+    s = get_settings()
+    if not force and (not s["mailbox_enabled"] or not mailbox_cfg()):
+        return {"ok": True, "skipped": True}
+    try:
+        msgs = _read_pop()
+    except Exception as e:                                       # noqa: BLE001
+        _meta_set("mailbox", {"last_checked": _now(), "error": f"{type(e).__name__}: {str(e)[:160]}"})
+        _log(f"mailbox check failed: {type(e).__name__}: {str(e)[:160]}")
+        return {"ok": False, "error": str(e)[:160]}
+    seen = _meta_get("pop_seen", None)
+    ids = [m[0] for m in msgs]
+    if seen is None:                                             # first look: older mail is not a reply to anything
+        _meta_set("pop_seen", ids[-2000:])
+        _meta_set("mailbox", {"last_checked": _now(), "error": ""})
+        return {"ok": True, "first": True, "matched": 0}
+    seen_set, matched = set(seen), 0
+    own = {mailbox_cfg().get("username", "").lower()}
+    try:
+        from core.scheduler import connections
+        own.add((connections.get("smtp").get("email") or "").lower())
+    except Exception:                                            # noqa: BLE001
+        pass
+    waiting = [t for t in _run("SELECT * FROM tracker_tasks WHERE status NOT IN ('done','cancelled')", fetch=True)]
+    for uid, frm, subj, _d in msgs:
+        if uid in seen_set:
+            continue
+        seen_set.add(uid)
+        if frm in own or not frm:
+            continue
+        ns, hit = _norm_subject(subj), None
+        m = re.search(r"\[?T-(\d+)\]?", subj or "")
+        if m:
+            hit = next((t for t in waiting if t["id"] == int(m.group(1))), None)
+        if hit is None and ns:
+            hit = next((t for t in waiting if t.get("mail_subject") and _norm_subject(t["mail_subject"]) == ns), None)
+        if hit and hit["status"] == "waiting":
+            mark_reply(SYSTEM, hit["id"], f"from {frm}: {subj[:100]}", by_mailbox=True)
+            matched += 1
+    _meta_set("pop_seen", list(seen_set)[-2000:] if len(seen_set) > 2000 else list(seen_set))
+    _meta_set("mailbox", {"last_checked": _now(), "error": ""})
+    return {"ok": True, "matched": matched}
+
+
+def send_followup(user, task_id: int, to: str, subject: str = "", body: str = "") -> dict:
+    """E-mail the person the task is waiting on. The subject always carries [T-<id>] so the reply can be found."""
+    me, mgr = _uid(user), is_manager(user)
+    t = _get(task_id)
+    if not _visible(t, me, mgr) or not (_can_edit(t, me, mgr) or t["assignee"] == me):
+        raise TrackerError("Only the person it is assigned to, the creator or a manager can send this.")
+    rcpt = [x.strip() for x in _clean_emails(to).split(",") if x.strip()]
+    if not rcpt:
+        raise TrackerError("Enter the e-mail address to send to.")
+    key = f"T-{t['id']}"
+    subject = str(subject or "").strip() or t["title"]
+    if f"[{key}]" not in subject:
+        subject = f"[{key}] {subject}"
+    body = str(body or "").strip() or f"Dear Sir/Madam,\n\nThis is a gentle reminder regarding: {t['title']}.\nKindly reply at the earliest.\n\nRegards,\n{_uname(user)}"
+    cfg = mailbox_cfg()
+    reply_to = cfg.get("username", "")
+    html = ("<div style='font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.6'>" + _html.escape(body).replace("\n", "<br>")
+            + "<br><br><span style='color:#889;font-size:12px'>Please keep " + key + " in the subject when you reply.</span></div>")
+    cc = [reply_to] if reply_to else []
+    if _MAIL["fn"] is not None:
+        _MAIL["fn"](subject, html, rcpt, cc, reply_to)
+    else:
+        class _C:
+            def log(self, m):
+                _log(str(m))
+        try:
+            from core.scheduler import helpers as H
+            H.send_email(subject, html, rcpt, cc, [], _C(), html=True, attempts=1, reply_to=reply_to)
+        except Exception as e:                                   # noqa: BLE001
+            raise TrackerError(f"The mail could not be sent: {str(e)[:200]}")
+    sets = {"waiting_email": ", ".join(rcpt), "mail_subject": subject, "last_followup": _today(), "updated_at": _now()}
+    if not t.get("waiting_on"):
+        sets["waiting_on"] = ", ".join(rcpt)[:200]
+    if t["status"] != "waiting":
+        sets["status"] = "waiting"
+        sets["waiting_since"] = _now()
+        sets["last_followup"] = _today()
+    cols = ", ".join(f"{k} = ?" for k in sets)
+    _run(f"UPDATE tracker_tasks SET {cols} WHERE id = ?", tuple(sets.values()) + (int(task_id),))
+    _event(task_id, user, f"Follow-up mail sent to {', '.join(rcpt)}: {subject}")
+    return get_task(user, task_id)
+
+
 def _loop():
     while not _TICK["stop"].wait(60):
         try:
             tick()
         except Exception as e:                                   # noqa: BLE001
             _log(f"timer error: {type(e).__name__}: {e}")
+        try:
+            import time as _t
+            if get_settings()["mailbox_enabled"] and mailbox_cfg() and _t.time() - _POLL["last"] >= get_settings()["mailbox_poll_min"] * 60:
+                _POLL["last"] = _t.time()
+                poll_mailbox()
+        except Exception as e:                                   # noqa: BLE001
+            _log(f"mailbox timer error: {type(e).__name__}: {e}")
 
 
 def start_ticker() -> None:
@@ -775,4 +1012,4 @@ def bootstrap(user) -> dict:
         procs = []
     return {"me": {"id": me, "name": _uname(user), "manager": is_manager(user)}, "people": people(), "processes": procs,
             "settings": get_settings(), "statuses": [{"id": s, "label": STATUS_LABEL[s]} for s in STATUSES],
-            "priorities": list(PRIORITIES), "kinds": list(KINDS), "max_file_mb": MAX_FILE_MB}
+            "priorities": list(PRIORITIES), "kinds": list(KINDS), "max_file_mb": MAX_FILE_MB, "mailbox": mailbox_status()}
