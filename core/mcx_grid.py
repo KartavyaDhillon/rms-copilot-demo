@@ -4,6 +4,8 @@ out of the search grid instead of queueing an Excel export (which can sit in the
   MCX Deposit  (RSK383)            -> MCX_DEPOSIT_HH.MM.xlsx       (12-hour clock, as the console always saved it)
   MCX 90% / Margin Utilization View
                (RSK335)            -> <10 random letters/digits>-<YYYYMMDDHHMMSS>.xlsx   (the portal's own export name)
+  Search Results (RSK136, "Query Security Collateral Valuation" - the file of MCX COMM LIMIT)
+                                   -> SearchResults_<ddmmyyyy>.xlsx
 
 The names are exactly what the rest of the console already looks for (Short Allocation, CTCL vs NMASS, Margin Shortage ...),
 so nothing downstream changes.
@@ -46,8 +48,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 MODE_FILE = Path(os.getenv("MCX_DOWNLOAD_MODE_FILE") or (_ROOT / ".mcx_download_mode.json"))
 
 # What the consumers look for in the header row (core/ctcl_mcx_source.REQUIRED_COLUMNS)
-REQUIRED_COLUMNS = {"margin": ["Client Code", "Client Margin Limit"], "deposit": ["UCC Code", "Margin Limit"]}
-KEYS = ("deposit", "margin")
+REQUIRED_COLUMNS = {"margin": ["Client Code", "Client Margin Limit"], "deposit": ["UCC Code", "Margin Limit"],
+                    "search": ["UCC Code", "Value After Haircut"]}
+KEYS = ("deposit", "margin", "search")
 
 
 class GridAuthError(Exception):
@@ -405,6 +408,22 @@ def fetch_one(sess, rnd, key: str, out_dir: str, log=print, cm: str = "56720", d
             if _expired(r.text, table):
                 raise _SessionLost()
             return r.text
+    elif key == "search":
+        from core.pipelines import tcs_rsk136 as R136
+        day = datetime.strptime(date_api, "%Y%m%d").date()
+        sess.post(R136.RSK136_URL, timeout=60, data=R136._init_payload(rnd),
+                  headers={"User-Agent": _UA, "Content-Type": "application/x-www-form-urlencoded", "Origin": BASE_URL,
+                           "Referer": BASE_URL + "/Bancs/common/PageLoader.html"})
+        table = "RSK136_Table"
+
+        def post(size):
+            d = R136._search_payload(rnd, day)
+            if size:
+                d["confViewSize"], d["butvalue"] = str(size), str(size)
+            r = sess.post(R136.RSK136_URL, headers=dict(_FETCH_H, Referer=R136.RSK136_URL), timeout=300, data=d)
+            if _expired(r.text, table):
+                raise _SessionLost()
+            return r.text
     else:
         _open_335(sess, rnd, cm)
         table = "RSK335_Table"
@@ -423,9 +442,17 @@ def fetch_one(sess, rnd, key: str, out_dir: str, log=print, cm: str = "56720", d
     os.makedirs(out_dir, exist_ok=True)
     nm = (names or {}).get(key)
     nm = nm() if callable(nm) else nm
-    path = os.path.join(out_dir, nm or (deposit_name() if key == "deposit" else portal_name()))
+    if key == "search":
+        from core.pipelines import tcs_rsk136 as _R
+        default_name = _R.save_name(datetime.strptime(date_api, "%Y%m%d").date())
+    else:
+        default_name = deposit_name() if key == "deposit" else portal_name()
+    path = os.path.join(out_dir, nm or default_name)
     write_excel(heads, rows, amounts, path)
     return path, len(rows)
+
+
+LONG = {"deposit": "MCX Deposit (RSK383)", "margin": "MCX 90% (RSK335)", "search": "Search Results (RSK136)"}
 
 
 class _SessionLost(Exception):
@@ -434,12 +461,16 @@ class _SessionLost(Exception):
 
 def run_grid(want, out_dir: str, user: str, password: str, token_fn, log=print, tries: int = 5, cm: str = "56720",
              date_api: str | None = None, token_attempts: int = 3, auth_tag: str = "MCX_DEPOSIT", before_relogin=None,
-             sleep=time.sleep, session_factory=None, outdirs: dict | None = None, names: dict | None = None) -> dict:
+             sleep=time.sleep, session_factory=None, outdirs: dict | None = None, names: dict | None = None,
+             optional=()) -> dict:
     """Download the wanted files ("deposit", "margin") with the grid method, up to `tries` attempts.
 
     Every attempt = one fresh login (the next RSA code) + only the files still missing. Returns {key: path} for what was
     saved - when it is shorter than `want`, the rest failed (the caller decides: fail, or fall back to the previous method).
-    Raises GridAuthError / GridTokenError at once (retrying those is useless or dangerous)."""
+    Raises GridAuthError / GridTokenError at once (retrying those is useless or dangerous).
+
+    `optional` = keys that ride along in the same login but never cost a retry: when one of them fails it is logged and given
+    up (the caller has its own way to get it) - it can never delay or fail the other files. They are fetched last."""
     import requests
     need = [k for k in KEYS if k in set(want)]
     done: dict = {}
@@ -455,10 +486,17 @@ def run_grid(want, out_dir: str, user: str, password: str, token_fn, log=print, 
         sess = session_factory() if session_factory else requests.Session()
         try:
             rnd = login(sess, user, password, token_fn, log, token_attempts, auth_tag)
-            for key in list(need):
+            for key in sorted(need, key=lambda k: k in optional):         # the required files first
                 t0 = time.time()
-                log(f"[{attempt}/{tries}] {'MCX Deposit (RSK383)' if key == 'deposit' else 'MCX 90% (RSK335)'} ...")
-                path, n = fetch_one(sess, rnd, key, (outdirs or {}).get(key) or out_dir, log, cm, date_api, names)
+                log(f"[{attempt}/{tries}] {LONG.get(key, key)} ...")
+                try:
+                    path, n = fetch_one(sess, rnd, key, (outdirs or {}).get(key) or out_dir, log, cm, date_api, names)
+                except Exception as e:                                   # noqa: BLE001  (a lost session too: an optional file never costs a new login)
+                    if key not in optional:
+                        raise
+                    log(f"[MCX_GRID_OPTIONAL_FAILED] {key}: {type(e).__name__}: {e} - given up (the other files are not affected)")
+                    need.remove(key)
+                    continue
                 done[key] = path
                 need.remove(key)
                 log(f"OK {key}: {n} rows -> {os.path.basename(path)} ({time.time() - t0:.0f}s)")

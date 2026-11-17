@@ -154,6 +154,25 @@ def download(out_dir: str, max_wait: int = 900, interval: int = 15) -> str | Non
     _ajax, _login, _nav, _ajax2, init_h, dl_h = hdrs
     mdd._acquire_mcx_lock("mcxcomm")
     try:
+        try:                                           # GRID VIEW first (same switch as PROBABLE): no export queue, no waiting
+            from core import mcx_grid as _gm
+        except Exception:                              # noqa: BLE001
+            _gm = None
+        if _gm is not None and _gm.enabled():
+            print("⚡ Grid view (fast) — logging in once and reading the Search Results…", flush=True)
+            try:
+                got = _gm.run_grid(["search"], out_dir, user, pwd, mdd._token_popup, print, tries=3,
+                                   token_attempts=(2 if mdd._auto_mode() else 3), auth_tag="MCX_DEPOSIT",
+                                   names={"search": save_name})
+            except _gm.GridAuthError:
+                return None                            # [MCX_DEPOSIT_AUTH_FAIL] was printed
+            except _gm.GridTokenError as e:
+                print(f"❌ RSK136: RSA code problem: {e}", flush=True)
+                return None
+            if got.get("search"):
+                print(f"✅ RSK136 DOWNLOADED (grid view): {got['search']}", flush=True)
+                return got["search"]
+            print("ℹ️ Grid view could not read RSK136 — using the previous method (export queue).", flush=True)
         print("🔐 Logging in to TCS BANCS (RSK136 only)...", flush=True)
         sess = requests.Session()
         rndaak = P._login(sess, user, pwd, mdd, hdrs)

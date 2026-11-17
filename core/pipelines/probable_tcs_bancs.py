@@ -520,8 +520,8 @@ def download_both(output_dir, force=False, search_dir=None):
     try:
         # ── GRID VIEW (new, fast): both files straight from the search grid - no export queue, no waiting. Everything
         #    below this block is the PREVIOUS method (queue the exports, wait, download) and is untouched: it runs when the
-        #    switch (TCS BANCS button in the Process Center) is on "queue". RSK136 (MCX COMM LIMIT's Search Results) is an
-        #    export-only file: in grid mode it is not queued here, MCX COMM LIMIT fetches it itself at its time. ──
+        #    switch (TCS BANCS button in the Process Center) is on "queue". RSK136 (MCX COMM LIMIT's Search Results) is read
+        #    in the SAME login as an optional third file; if that one fails MCX COMM LIMIT fetches it itself at its time. ──
         try:
             from core import mcx_grid as _gm
         except Exception as _ge:                                   # noqa: BLE001
@@ -529,10 +529,13 @@ def download_both(output_dir, force=False, search_dir=None):
             print(f"[grid] grid view not available ({type(_ge).__name__}: {_ge}) - using the previous method.")
         if _gm is not None and _gm.enabled():
             _stage("⚡ Grid view (fast) — logging in once and reading both reports…")
+            _want = ["deposit", "margin"] + (["search"] if search_dir else [])      # RSK136 rides along in the same login
+            _outd = {"search": search_dir} if search_dir else None
             try:
-                _got = _gm.run_grid(["deposit", "margin"], output_dir, USER_ID, PASSWORD, mdd._token_popup, print, tries=5,
+                _got = _gm.run_grid(_want, output_dir, USER_ID, PASSWORD, mdd._token_popup, print, tries=5,
                                     token_attempts=(2 if mdd._auto_mode() else 3), auth_tag="MCX_DEPOSIT",
-                                    names={"deposit": _gm.portal_name, "margin": "Clientwise_mcx_margin.xlsx"})
+                                    names={"deposit": _gm.portal_name, "margin": "Clientwise_mcx_margin.xlsx"},
+                                    outdirs=_outd, optional=("search",))
             except _gm.GridAuthError:
                 return {"rsk383": None, "rsk335": None}            # [MCX_DEPOSIT_AUTH_FAIL] was printed -> the password popup
             except _gm.GridTokenError as _te:
@@ -541,8 +544,12 @@ def download_both(output_dir, force=False, search_dir=None):
             if "deposit" in _got and "margin" in _got:
                 print(f"  ✅ RSK383 DOWNLOADED (grid view): {_got['deposit']}")
                 print(f"  ✅ RSK335 DOWNLOADED (grid view): {_got['margin']}")
+                if _got.get("search"):
+                    print(f"  ✅ RSK136 (Search Results) DOWNLOADED (grid view): {_got['search']}")
+                elif search_dir:
+                    print("  ℹ️ RSK136 (Search Results) was not read in this login — MCX COMM LIMIT will fetch it itself at its time.")
                 print("\n🎉 ALL FILES DOWNLOADED SUCCESSFULLY")
-                return {"rsk383": _got["deposit"], "rsk335": _got["margin"], "rsk136": None}
+                return {"rsk383": _got["deposit"], "rsk335": _got["margin"], "rsk136": _got.get("search")}
             print("❌ TCS BANCS download failed: grid view could not get both files after 5 tries")
             return {"rsk383": _got.get("deposit"), "rsk335": _got.get("margin")}
 

@@ -296,6 +296,57 @@ def test_hook_queue_mode_runs_only_the_old_method():
     assert m.download_mcx_deposit(output_dir=tempfile.mkdtemp()) is None and hit
 
 
+# ------------------------------------------------------------------ RSK136 "Search Results" (MCX COMM LIMIT) in the grid
+def test_search_results_fetch_saves_the_name_mcx_comm_limit_looks_for():
+    sent = []
+
+    class Sess:
+        def post(self, url, headers=None, data=None, **k):
+            if isinstance(data, dict) and data.get("GRID_RESPONSE") == "RSK136_Table":
+                sent.append(dict(data))
+                html = _grid_html([("A1", "N", "10.5"), ("A2", "M", "4")], "RSK136_Table", total=2).replace("Margin Limit", "Value After Haircut")
+                return types.SimpleNamespace(text=html)
+            return types.SimpleNamespace(text="ok")
+
+    out = tempfile.mkdtemp()
+    path, n = G.fetch_one(Sess(), "R", "search", out, lambda s: None, date_api="20261117")
+    assert n == 2 and os.path.basename(path) == "SearchResults_17112026.xlsx"
+    assert sent and sent[0]["confViewSize"] == "6000" and sent[0]["GRID_RESPONSE"] == "RSK136_Table"
+    import pandas as pd
+    df = pd.read_excel(path)                      # the way MCX COMM LIMIT reads it
+    assert list(df["UCC Code"]) == ["A1", "A2"] and df["Value After Haircut"].sum() == 14.5
+
+
+def test_search_results_without_the_needed_columns_is_refused():
+    class Sess:
+        def post(self, url, headers=None, data=None, **k):
+            return types.SimpleNamespace(text=_grid_html([("1", "A", "2")], "RSK136_Table"))      # has no Value After Haircut
+    try:
+        G.fetch_one(Sess(), "R", "search", tempfile.mkdtemp(), lambda s: None, date_api="20261117")
+        assert False, "must refuse"
+    except RuntimeError as e:
+        assert "missing" in str(e)
+
+
+def test_optional_search_failure_never_costs_a_retry_or_the_other_files():
+    plan = {(1, "search"): RuntimeError("columns missing")}
+    got, env, lines = _run(plan, want=("deposit", "margin", "search"), optional=("search",))
+    assert set(got) == {"deposit", "margin"} and env.logins == 1                 # ONE login, nothing retried for the bonus file
+    assert any("MCX_GRID_OPTIONAL_FAILED" in l for l in lines)
+
+
+def test_optional_search_rides_along_when_it_works_and_goes_last():
+    got, env, lines = _run({}, want=("deposit", "margin", "search"), optional=("search",))
+    assert set(got) == {"deposit", "margin", "search"} and env.logins == 1
+    assert [k for _l, k in env.fetched] == ["deposit", "margin", "search"]
+
+
+def test_required_failure_still_retries_while_optional_is_given_up():
+    plan = {(1, "margin"): G._SessionLost(), (1, "search"): RuntimeError("x")}
+    got, env, lines = _run(plan, want=("deposit", "margin", "search"), optional=("search",))
+    assert set(got) >= {"deposit", "margin"} and env.logins == 2
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
