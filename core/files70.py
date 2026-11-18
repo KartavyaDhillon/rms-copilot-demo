@@ -144,8 +144,9 @@ def plan(d: dt.date, member: Optional[str] = None, mcx_user: Optional[str] = Non
     ymd, dmy = d.strftime("%Y%m%d"), d.strftime("%d%m%Y")
     out: List[dict] = []
 
-    def nse(group, sub, seg, folder, gz):
-        out.append({"group": group, "sub": sub, "name": gz[:-3], "src": "nse", "seg": seg, "folder": folder, "remote": gz})
+    def nse(group, sub, seg, folder, gz, optional=False):
+        out.append({"group": group, "sub": sub, "name": gz[:-3], "src": "nse", "seg": seg, "folder": folder, "remote": gz,
+                    "optional": optional})
 
     std, rep = "Reports/Standard report", "Reports"
     # CM (16)
@@ -156,6 +157,8 @@ def plan(d: dt.date, member: Optional[str] = None, mcx_user: Optional[str] = Non
     nse("nse_cm", "CM", "CM", rep, f"C_SA01_{m}_{dmy}.lis.gz")
     for i in range(1, 5):
         nse("nse_cm", "CM", "CM", rep, f"C_SA01_P_{m}_{dmy}_i0{i}.lis.gz")
+    for i in range(5, 9):      # i05-i08 come only on some days: fetched when NSE has them, never counted as missing
+        nse("nse_cm", "CM", "CM", rep, f"C_SA01_P_{m}_{dmy}_i0{i}.lis.gz", optional=True)
     nse("nse_cm", "CM", "CM", rep, f"C_SA04_{m}_{dmy}.lis.gz")
     nse("nse_cm", "CM", "CM", rep, f"C_CC02_{m}_{dmy}.csv.gz")
     nse("nse_cm", "CM", "CM", rep, f"C_{m}_SEC_PLEDGE_{dmy}_01.csv.gz")
@@ -168,6 +171,8 @@ def plan(d: dt.date, member: Optional[str] = None, mcx_user: Optional[str] = Non
     nse("nse_fo", "FO", "FO", rep, f"F_SA01_{m}_{dmy}.lis.gz")
     for i in range(1, 5):
         nse("nse_fo", "FO", "FO", rep, f"F_SA01_P_{m}_{dmy}_i0{i}.lis.gz")
+    for i in range(5, 9):      # optional, see CM above
+        nse("nse_fo", "FO", "FO", rep, f"F_SA01_P_{m}_{dmy}_i0{i}.lis.gz", optional=True)
     nse("nse_fo", "FO", "FO", rep, f"F_SA04_{m}_{dmy}.lis.gz")
     nse("nse_fo", "FO", "FO", rep, f"F_CC02_{m}_{dmy}.CSV.gz")
     nse("nse_fo", "FO", "FO", rep, f"F_{m}_SEC_PLEDGE_{dmy}_01.csv.gz")
@@ -248,6 +253,8 @@ def status(d: Optional[dt.date] = None) -> dict:
             if it["group"] != key:
                 continue
             p = find(it, base, cache)
+            if it.get("optional") and not p:
+                continue                       # an optional file that has not come is neither missing nor counted
             files.append({"name": p.name if p else (it.get("name") or it.get("label")), "present": bool(p),
                           "size": p.stat().st_size if p else 0})
         n = sum(1 for f in files if f["present"])
@@ -341,7 +348,7 @@ def fetch_nse(items: List[dict], base: Path, ctx: _Ctx) -> List[str]:
                 ctx.log(f"NSE: server problem (HTTP {r.status_code}) - asking again in {min(30, 3 * n)} s.")
                 time.sleep(min(30, 3 * n))
                 continue
-            if nse._not_found_400(r) and nf < 2:          # NSE sometimes says 'not found' for a file that is there
+            if nse._not_found_400(r) and nf < (0 if it.get("optional") else 2):          # NSE sometimes says 'not found' for a file that is there
                 nf += 1
                 time.sleep(10)
                 continue
@@ -977,7 +984,7 @@ def run(d: dt.date, groups: Optional[List[str]] = None, log: Callable[[str], Non
     except Exception as e:
         log(f"{EODSAR}: {type(e).__name__}: {e}")
     for it in items:
-        if it["group"] in groups and not find(it, base):
+        if it["group"] in groups and not it.get("optional") and not find(it, base):
             res["missing"].append(it.get("name") or it.get("label"))
             res["groups"][it["group"]] = "missing"
     for g in groups:
