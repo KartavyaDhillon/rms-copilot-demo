@@ -195,7 +195,14 @@ def find_backup_catg(d: datetime.date, max_days: int = MAX_BACKUP_DAYS):
     root = backup_root()
     if not root.is_dir():
         return None, 0, "there is no Backup folder yet"
-    for day_dir in root.iterdir():
+    from core import backup_archive as _ba          # day folders filed in a month folder (NOV 2026) are looked at too
+    kids = []
+    for k in root.iterdir():
+        if k.is_dir() and _ba.MONTH_RE.match(k.name):
+            kids += [c for c in k.iterdir() if c.is_dir()]
+        else:
+            kids.append(k)
+    for day_dir in kids:
         day = parse_date(day_dir.name) if day_dir.is_dir() else None
         if day is None:
             continue

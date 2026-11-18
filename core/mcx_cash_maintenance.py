@@ -90,7 +90,8 @@ def parse_dstr(s: str) -> dt.date:
 
 
 def day_dir(d: dt.date, create=False) -> Path:
-    p = root() / SUB / dstr(d)
+    from core import backup_archive as _ba          # an older day may already be filed in its month folder (NOV 2026)
+    p = _ba.day_dir(root() / SUB, dstr(d))
     if create:
         p.mkdir(parents=True, exist_ok=True)
     return p
@@ -240,7 +241,8 @@ def ms15_run_for(m: int, settings=None):
 
 
 def ms15_folder(d: dt.date, n: int) -> Path:
-    return ms15_base() / SUB / d.strftime("%Y-%m-%d") / f"{int(n):02d}"
+    from core import backup_archive as _ba          # the day may be filed in its month folder
+    return _ba.day_dir(ms15_base() / SUB, d.strftime("%Y-%m-%d")) / f"{int(n):02d}"
 
 
 def ms15_counter(d: dt.date) -> int:
@@ -262,7 +264,7 @@ def ms15_state(d: dt.date, n: int) -> str:
         return "gone"
     # a later run's folder exists although this one never did -> it was skipped
     try:
-        later = [x for x in (ms15_base() / SUB / d.strftime("%Y-%m-%d")).iterdir() if x.name.isdigit() and int(x.name) > n]
+        later = [x for x in __import__('core.backup_archive', fromlist=['x']).day_dir(ms15_base() / SUB, d.strftime("%Y-%m-%d")).iterdir() if x.name.isdigit() and int(x.name) > n]
         if later:
             return "gone"
     except OSError:
@@ -386,13 +388,16 @@ def file_path(d: dt.date, key: str, name: str) -> Path:
 
 
 def list_dates() -> list:
+    from core import backup_archive as _ba          # days filed in month folders (NOV 2026) count too
     out = []
     try:
-        for n in os.listdir(root() / SUB):
+        for n in list(os.listdir(root() / SUB)) + _ba.archived_days(root() / SUB):
             try:
-                out.append(parse_dstr(n))
+                d = parse_dstr(n)
             except ValueError:
                 continue
+            if d not in out:
+                out.append(d)
     except OSError:
         pass
     return sorted(out, reverse=True)

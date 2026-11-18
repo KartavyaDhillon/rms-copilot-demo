@@ -1164,7 +1164,8 @@ def backfill_run_to_db(date_str, run_number):
     `run_number` — the two-digit run folder, e.g. 1 for ".../01".
     Safe to call more than once — re-archiving just adds another row."""
     out_dir = cfg().get("output") or os.getenv("SA_OUTPUT_DIR", r"C:\KARTAVYA\SHORT ALLOCATION")
-    run_folder = os.path.join(out_dir, "BACKUP FILES AUTOMATED", date_str, f"{int(run_number):02d}")
+    from core import backup_archive as _ba          # an older day is filed in its month folder (NOV 2026)
+    run_folder = os.path.join(str(_ba.day_dir(os.path.join(out_dir, "BACKUP FILES AUTOMATED"), date_str)), f"{int(run_number):02d}")
     if not os.path.isdir(run_folder):
         return {"ok": False, "error": f"Folder not found: {run_folder}"}
     tag = f"SA-{int(run_number):02d}"

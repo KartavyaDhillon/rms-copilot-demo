@@ -312,7 +312,8 @@ def ctcl_files(d: dt.date, root: Optional[Path] = None) -> List[dict]:
     """Update Limits files of day d: every run folder of the CTCL backup, + the one still in the CTCL folder."""
     found = []
     root = Path(root) if root else ctcl_backup_root()
-    day = root / dstr(d)
+    from core import backup_archive as _ba          # an older day is filed in its month folder (NOV 2026)
+    day = _ba.day_dir(root, dstr(d))
     try:
         for run in sorted(p for p in day.iterdir() if p.is_dir()):
             for f in run.glob("Update Limits*"):

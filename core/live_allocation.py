@@ -92,7 +92,8 @@ def parse_dstr(s: str) -> dt.date:
 
 
 def day_dir(d: dt.date, create=False) -> Path:
-    p = root() / SUB / dstr(d)
+    from core import backup_archive as _ba          # an older day may already be filed in its month folder (NOV 2026)
+    p = _ba.day_dir(root() / SUB, dstr(d))
     if create:
         p.mkdir(parents=True, exist_ok=True)
     return p
@@ -288,14 +289,17 @@ def file_path(d: dt.date, slot: int, name: str) -> Path:
 
 
 def list_dates() -> list:
+    from core import backup_archive as _ba          # days filed in month folders (NOV 2026) count too
     base = root() / SUB
     out = []
     try:
-        for n in os.listdir(base):
+        for n in list(os.listdir(base)) + _ba.archived_days(base):
             try:
-                out.append(parse_dstr(n))
+                d = parse_dstr(n)
             except ValueError:
                 continue
+            if d not in out:
+                out.append(d)
     except OSError:
         pass
     return sorted(out, reverse=True)

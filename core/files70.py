@@ -93,7 +93,8 @@ def dstr(d: dt.date) -> str:
 
 
 def day_dir(d: dt.date) -> Path:
-    return root() / SUB / dstr(d)
+    from core import backup_archive as _ba          # an older day may already be filed in its month folder (NOV 2026)
+    return _ba.day_dir(root() / SUB, dstr(d))
 
 
 def parse_date(s: Optional[str]) -> dt.date:
