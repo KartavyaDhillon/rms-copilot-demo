@@ -6308,8 +6308,15 @@ async function pxSave(pipe,pw){
   // "blank = leave as it is" behaviour.
   const updates={}; document.querySelectorAll('#saModalBody input[data-key]').forEach(i=>{ const v=i.value.trim(); if(v!==''||(['probable','mcxcomm','ncdexcomm','mtfconc','mtfof','entrisk','cncf11','payoutchk','obligation'].indexOf(pipe)>=0&&i.dataset.email==='1')) updates[i.dataset.key]=v; });
   const msg=document.getElementById('pxCfgMsg');
-  if(!Object.keys(updates).length){ if(msg)msg.innerHTML='<span style="color:var(--muted)">No changes entered.</span>'; return; }
-  let d; try{ d=await (await fetch(API+'/px/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pipe,password:pw,updates})})).json(); }catch(e){ if(msg)msg.innerHTML='<span style="color:var(--red)">'+e+'</span>'; return; }
+  // OBLIGATION REPORT: the times / auto / numbers block of this window is saved by the same button
+  let _oblSaved=false;
+  if(pipe==='obligation'&&typeof window.oblSettingsPost==='function'&&document.getElementById('oblTimes')){
+    const r=await window.oblSettingsPost(pw);
+    if(!r||!r.ok){ if(msg) msg.innerHTML='<span style="color:var(--red)">✕ '+((r&&r.error)||'Could not save the times and alerts')+'</span>'; return; }
+    _oblSaved=true;
+  }
+  if(!Object.keys(updates).length&&!_oblSaved){ if(msg)msg.innerHTML='<span style="color:var(--muted)">No changes entered.</span>'; return; }
+  let d; if(!Object.keys(updates).length){ d={ok:true}; } else try{ d=await (await fetch(API+'/px/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pipe,password:pw,updates})})).json(); }catch(e){ if(msg)msg.innerHTML='<span style="color:var(--red)">'+e+'</span>'; return; }
   if(!d.ok){ if(msg) msg.innerHTML='<span style="color:var(--red)">✕ '+(d.error||'Failed')+'</span>'; return; }
   // Same clear "✓ Saved" confirmation modal SA's credentials/email save already
   // uses — inline text at the bottom of the form was too easy to miss.

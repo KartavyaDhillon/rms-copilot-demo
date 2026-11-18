@@ -303,7 +303,7 @@
     S.pw = pw;
     return get(BASE + '/settings').then(function (s) {
       return '<div style="border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px"><div style="font-weight:650;margin-bottom:3px">Run times &amp; alerts</div>' +
-        '<div style="font-size:10.5px;color:var(--dim);margin-bottom:10px">Relaxed times: the report runs at its time once the MAIN file is uploaded. Nothing is sent for a missing or late run - it only shows ATTENTION in the console.</div>' +
+        '<div style="font-size:10.5px;color:var(--dim);margin-bottom:10px">Everything here is saved by the Save credentials button below. Relaxed times: the report runs at its time once the MAIN file is uploaded. Nothing is sent for a missing or late run - it only shows ATTENTION in the console.</div>' +
         '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:10px"><input type="checkbox" id="oblAuto" ' + (s.auto !== false ? 'checked' : '') + '> Auto run (timer) is ON</label>' +
         '<div class="obl-lbl">Times (24-hour, comma separated - one report each)</div><input type="text" id="oblTimes" class="obl-in" style="width:100%;margin-bottom:10px" value="' + esc(s.times || '') + '">' +
         '<div class="obl-lbl">Show ATTENTION when a slot is more than ... minutes late</div><input type="number" id="oblAttn" class="obl-in" style="width:120px;margin-bottom:10px" min="10" max="600" value="' + esc(s.attention_min || 60) + '">' +
@@ -314,19 +314,14 @@
         '<div class="obl-lbl">WhatsApp numbers - REPORT after the split time until 00:30 (blank = same as the first group). The e-mail To / CC of this group is in Email To / CC.</div><input type="text" id="oblRepLate" class="obl-in" style="width:100%;margin-bottom:10px" placeholder="9876543210, 9123456789" value="' + esc(s.report_numbers_late || '') + '">' +
         '<div class="obl-lbl">WhatsApp numbers that get the FAILURE ALERT (blank = the common numbers)</div><input type="text" id="oblAlert" class="obl-in" style="width:100%;margin-bottom:10px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
         '<div class="obl-lbl">WhatsApp template of the report</div><input type="text" id="oblTpl" class="obl-in" style="width:220px;margin-bottom:12px" value="' + esc(s.report_template || 'daily_report') + '">' +
-        '<button class="sa-tool" id="oblSetBtn" data-no-busy="1" style="width:100%" onclick="oblSetSave()">Save times &amp; alerts</button><div class="sa-msg" id="oblSetMsg"></div></div>';
+        '</div>';
     }).catch(function () { return ''; });
   };
-  window.oblSetSave = function () {
-    var btn = $('oblSetBtn'); if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-    post(BASE + '/settings', { password: S.pw, auto: $('oblAuto').checked, times: $('oblTimes').value, attention_min: $('oblAttn').value, send_mail: $('oblMail').checked,
-      send_whatsapp: $('oblWa').checked, report_numbers: $('oblRep').value, report_numbers_late: $('oblRepLate').value, split_time: $('oblSplit').value, alert_numbers: $('oblAlert').value, report_template: $('oblTpl').value }).then(function (j) {
-      if (btn) { btn.disabled = false; btn.textContent = 'Save times & alerts'; }
-      var m = $('oblSetMsg');
-      if (j && j.ok) { okBox('Saved', 'Times: ' + j.settings.times + ' · auto ' + (j.settings.auto ? 'ON' : 'OFF') + '. They apply from the next timer check (a few seconds).'); if (m) m.innerHTML = '<span style="color:var(--green)">Saved.</span>'; }
-      else { okBox('Not saved', (j && j.error) || 'Could not save.', 'err'); if (m) m.innerHTML = '<span style="color:var(--red)">' + esc((j && j.error) || 'Failed') + '</span>'; }
-      reload();
-    });
+  // saved together with the logins by the one 'Save credentials' button of the window (dashboard.html pxSave)
+  window.oblSettingsPost = function (pw) {
+    return post(BASE + '/settings', { password: pw || S.pw, auto: $('oblAuto').checked, times: $('oblTimes').value, attention_min: $('oblAttn').value, send_mail: $('oblMail').checked,
+      send_whatsapp: $('oblWa').checked, report_numbers: $('oblRep').value, report_numbers_late: $('oblRepLate').value, split_time: $('oblSplit').value,
+      alert_numbers: $('oblAlert').value, report_template: $('oblTpl').value }).then(function (j) { reload(); return j; });
   };
 
   // ───────────────────────── Backup files ─────────────────────────
