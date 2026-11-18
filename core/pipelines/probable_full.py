@@ -84,7 +84,8 @@ def backfill_run_to_db(date_str, subfolder=None):
     archived, skipped, folders_used = [], [], []
     any_found = False
     for sf in subfolders:
-        folder = os.path.join(base_folder, "BACKUPFILES AUTOMATED", date_str, sf)
+        from core import backup_archive as _bka        # the day may be filed in its month folder (NOV 2026)
+        folder = os.path.join(str(_bka.day_dir(os.path.join(base_folder, "BACKUPFILES AUTOMATED"), date_str)), sf)
         if not os.path.isdir(folder):
             continue
         any_found = True

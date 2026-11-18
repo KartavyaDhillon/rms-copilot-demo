@@ -1414,6 +1414,31 @@ async def _ba_settings(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+@app.get("/backup-db/status", name="backup_db_status")
+def _bdb_status():
+    from core import backup_to_db as _b
+    return _b.status()
+
+
+@app.post("/backup-db/run", name="backup_db_run")
+def _bdb_run(all_days: bool = True):
+    """Copy every process backup (cards, scheduler, BACKUP FILES folders) into PostgreSQL now."""
+    from core import backup_to_db as _b
+    try:
+        return _b.scan(None if all_days else _b.RECENT_DAYS)
+    except _b.Busy as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
+
+
+@app.on_event("startup")
+def _backup_to_db_startup():
+    try:
+        from core import backup_to_db as _b
+        _b.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  Backup-to-database timer not started: {type(_e).__name__}: {_e}")
+
+
 @app.on_event("startup")
 def _backup_archive_startup():
     """Daily pass (weekdays, 06:30 by default): finished months move into month folders."""
@@ -6252,7 +6277,8 @@ def ms15_output_file(date: str, run: int):
         _ddmmyyyy = _odt.datetime.strptime(date, "%Y-%m-%d").strftime("%d-%m-%Y")
     except Exception:
         return {"ok": False, "error": "date must be YYYY-MM-DD"}
-    run_folder = _oos.path.join(_dir, "BACKUPFILES AUTOMATED", _ddmmyyyy, f"{int(run):02d}")
+    from core import backup_db as _bdb          # month folder (NOV 2026) first, then the database
+    run_folder = _oos.path.join(str(_bdb.day_dir("ms15", _oos.path.join(_dir, "BACKUPFILES AUTOMATED"), _ddmmyyyy)), f"{int(run):02d}")
     cands = _og.glob(_oos.path.join(run_folder, "Shortage_vs_CC_Deposit*.xlsx"))
     # Prefer the main output over the per-zone files
     cands.sort(key=lambda p: (("_" in _oos.path.basename(p)[len("Shortage_vs_CC_Deposit"):]), p))
@@ -7226,8 +7252,9 @@ def _common_disk_path(name):
     if not m:
         return ""
     base = _sa_os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES")
-    for p in (_sa_os.path.join(base, name),
-              _sa_os.path.join(base, "BACKUP FILES AUTOMATED", f"{m.group(2)}-{m.group(3)}-{m.group(4)}", name)):
+    from core import backup_archive as _bka         # the day may be filed in its month folder (NOV 2026)
+    _bk = _bka.day_dir(_sa_os.path.join(base, "BACKUP FILES AUTOMATED"), f"{m.group(2)}-{m.group(3)}-{m.group(4)}")
+    for p in (_sa_os.path.join(base, name), _sa_os.path.join(str(_bk), name)):
         if _sa_os.path.isfile(p):
             return p
     return ""

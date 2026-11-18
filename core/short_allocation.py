@@ -2026,11 +2026,8 @@ def client_peak_lookup(client_code: str, from_date: str = "", to_date: str = "")
     for root in backup_roots():
         if not os.path.isdir(root):
             continue
-        try:
-            date_entries = os.listdir(root)
-        except Exception:
-            continue
-        for date_folder in date_entries:
+        from core import backup_archive as _bka        # days filed in month folders (NOV 2026) are searched too
+        for date_folder, date_path in _bka.iter_day_dirs(root):
             fd = _folder_date(date_folder)
             if not fd:
                 continue
@@ -2038,7 +2035,6 @@ def client_peak_lookup(client_code: str, from_date: str = "", to_date: str = "")
                 continue
             if d_to and fd > d_to:
                 continue
-            date_path = os.path.join(root, date_folder)
             try:
                 run_entries = sorted(os.listdir(date_path))
             except Exception:

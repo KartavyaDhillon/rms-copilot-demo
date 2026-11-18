@@ -2660,8 +2660,8 @@ def check_too_many_snapshots(run_date, send=False):
     if not os.path.isdir(BACKUP_ROOT):
         return None
     wanted = f"{run_date:%d-%m-%Y}"
-    date_folder = next((os.path.join(BACKUP_ROOT, n) for n in os.listdir(BACKUP_ROOT)
-                        if os.path.isdir(os.path.join(BACKUP_ROOT, n)) and n.strip().startswith(wanted)), None)
+    from core import backup_archive as _bka            # the day may be filed in its month folder (NOV 2026)
+    date_folder = next((p for n, p in _bka.iter_day_dirs(BACKUP_ROOT) if n.strip().startswith(wanted)), None)
     if not date_folder:
         return None
     names = sorted(n for n in os.listdir(date_folder)

@@ -579,7 +579,7 @@ def step_fo(work: Path) -> Path:
         env = os.environ.copy()
         env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1",
                     "NMASS_SAVE_DIR": str(work), "NCFE_LOGOUT_AFTER": "1"})
-        env.pop("NMASS_RUN_MODE", None)
+        env["NMASS_RUN_MODE"] = "fo_only"                       # only the FO file: no CM / CO, no NCDEX (NCFE) login
         log("NMASS download (FO client-level collaterals) ...")
         alive = threading.Event()
 

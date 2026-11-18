@@ -117,6 +117,26 @@ def archived_days(root) -> list:
     return out
 
 
+def iter_day_dirs(root) -> list:
+    """[(folder name, path)] of EVERY day folder of a backup folder: the ones directly in it and the ones filed in month
+    folders (NOV 2026). Use this instead of listing the backup folder when you look through all days / a date range."""
+    out = []
+    try:
+        for e in os.scandir(root):
+            if not e.is_dir():
+                continue
+            if MONTH_RE.match(e.name):
+                try:
+                    out += [(c.name, c.path) for c in os.scandir(e.path) if c.is_dir()]
+                except OSError:
+                    pass
+            else:
+                out.append((e.name, e.path))
+    except OSError:
+        pass
+    return out
+
+
 def find_roots(base: Path | None = None) -> list:
     """Every folder named like a backup folder under the data root (and BACKUP_ARCHIVE_EXTRA, ';' separated)."""
     starts = [Path(base) if base else data_root()]
@@ -216,6 +236,12 @@ def run(manual: bool = False, today: dt.date | None = None, grace_days: int | No
         raise Busy("an archive pass is already running")
     t0 = time.time()
     try:
+        try:                                                      # make sure everything is in the database before it is filed away
+            from core import backup_to_db
+            if backup_to_db.enabled() and base is None:
+                backup_to_db.scan()
+        except Exception as e:                                    # noqa: BLE001
+            log(f"[backup-archive] database copy skipped: {type(e).__name__}: {e}")
         items = plan(today, grace_days, base)
         moved = failed = merged = 0
         errors, touched = [], set()

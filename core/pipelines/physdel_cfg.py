@@ -218,11 +218,11 @@ def _pick_ctcl_once(root: Optional[str] = None) -> Optional[dict]:
         return None
     try:
         dated = []
-        for e in os.scandir(rootp):
-            if e.is_dir():
-                d0 = _date_from(e.name)
-                if d0:
-                    dated.append((d0, e.path))
+        from core import backup_archive as _bka        # days filed in month folders (NOV 2026) count too
+        for name0, path0 in _bka.iter_day_dirs(rootp):
+            d0 = _date_from(name0)
+            if d0:
+                dated.append((d0, path0))
     except OSError:
         return None
     dated.sort(reverse=True)

@@ -1057,20 +1057,22 @@ def run_downloads():
     print("\n" + "-"*60)
     log_header("DOWNLOAD STARTED")
 
-    download_file(
-        "/nmass/collateral-management/cm-coll-client-dtls",
-        cm_payload
-    )
+    if not _FO_ONLY:
+        download_file(
+            "/nmass/collateral-management/cm-coll-client-dtls",
+            cm_payload
+        )
 
     download_file(
         "/nmass/collateral-management/fo-coll-client-dtls",
         fo_payload
     )
 
-    download_file(
-        "/nmass/collateral-management/co-coll-client-dtls",
-        co_payload
-    )
+    if not _FO_ONLY:
+        download_file(
+            "/nmass/collateral-management/co-coll-client-dtls",
+            co_payload
+        )
 
     log_success("ALL DOWNLOADS COMPLETED ✅")
 
@@ -1081,6 +1083,8 @@ def run_downloads():
 
 # NMASS_RUN_MODE=ncfe_only (NCDEX DEPOSIT card): only the NCDEX ClientNetEffectiveDeposits download - no NMASS login at all.
 _NCFE_ONLY = os.getenv("NMASS_RUN_MODE", "").strip().lower() == "ncfe_only"
+# NMASS_RUN_MODE=fo_only (OBLIGATION REPORT card): only the FO client-level collaterals - no CM / CO file, no NCDEX (NCFE) login.
+_FO_ONLY = os.getenv("NMASS_RUN_MODE", "").strip().lower() == "fo_only"
 
 if _NCFE_ONLY:
     log_header("NCDEX ONLY - NMASS login skipped")
@@ -2170,6 +2174,8 @@ _ncdex_failed = False
 # locked account is NOT retried (it raises a different error straight away).
 _NCDEX_RESTARTS = int(os.getenv("NCDEX_LOGIN_RESTARTS", "5"))
 for _restart in range(1, _NCDEX_RESTARTS + 1):
+    if _FO_ONLY:
+        break
     try:
         run_ncdex()
         _ncdex_failed = False
