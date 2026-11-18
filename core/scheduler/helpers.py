@@ -204,16 +204,25 @@ def wait_for_file(finder: Callable[[], Optional[Path]], wait_minutes: int, ctx, 
         time.sleep(every)
 
 
+def _bk_day(root, name: str) -> Path:
+    """A day folder of a BACKUP folder - directly in it, or inside its month folder (NOV 2026) once it was filed."""
+    try:
+        from core import backup_archive
+        return backup_archive.day_dir(root, name)
+    except Exception:                                  # noqa: BLE001
+        return Path(root) / name
+
+
 def ctcl_run1_file(ctx=None) -> Optional[Path]:
     """FULL_FILE_CTCL_VS_NMASS_01.xlsx produced today by the CTCL vs NMASS pipeline (run 1) — read only."""
     name = "FULL_FILE_CTCL_VS_NMASS_01.xlsx"
     base = Path(os.getenv("CTCL_NMASS_FOLDER", r"D:\CTCL VS NMASS"))
-    bk = base / "BACKUPFILES AUTOMATED" / today_dash()
+    bk = _bk_day(base / "BACKUPFILES AUTOMATED", today_dash())
     cands = [base / name, bk / "01" / name, bk / name]
     start = dt.datetime.combine(dt.date.today(), dt.time(0, 0)).timestamp()
     fb = todays_file_fallback_day()                    # special trading day (Sunday): also accept Friday's run-1 file
     if fb:
-        bk_fb = base / "BACKUPFILES AUTOMATED" / f"{fb:%d-%m-%Y}"
+        bk_fb = _bk_day(base / "BACKUPFILES AUTOMATED", f"{fb:%d-%m-%Y}")
         cands += [bk_fb / "01" / name, bk_fb / name]
         start = dt.datetime.combine(fb, dt.time(0, 0)).timestamp()
     for c in cands:
@@ -267,7 +276,7 @@ def find_risk_report(ctx=None) -> Path:
     backup folder (COMMON FILES\\BACKUP FILES AUTOMATED\\<dd-mm-yyyy>) that copy is used.  Only today's exact
     name is ever accepted.  The file is never moved or deleted."""
     name = f"RISK_REPORT_{today_ddmmyyyy()}.csv"
-    cands = [common_dir() / name, common_dir() / "BACKUP FILES AUTOMATED" / today_dash() / name]
+    cands = [common_dir() / name, _bk_day(common_dir() / "BACKUP FILES AUTOMATED", today_dash()) / name]
     for c in cands:
         if c.is_file():
             if ctx:
@@ -276,7 +285,7 @@ def find_risk_report(ctx=None) -> Path:
     fb = todays_file_fallback_day()                    # special trading day (Sunday): today's file first, else Friday's
     if fb:
         fname, fdash = f"RISK_REPORT_{fb:%d%m%Y}.csv", f"{fb:%d-%m-%Y}"
-        for c in (common_dir() / fname, common_dir() / "BACKUP FILES AUTOMATED" / fdash / fname):
+        for c in (common_dir() / fname, _bk_day(common_dir() / "BACKUP FILES AUTOMATED", fdash) / fname):
             if c.is_file():
                 if ctx:
                     ctx.log(f"Special trading day: {name} is not there - using the previous trading day's risk report: {c}")

@@ -66,12 +66,12 @@ def _locate(ctx) -> Path:
     for base in bases:
         # the CLI run moves its files into BACKUPFILES AUTOMATED\<dd-mm-yyyy>\<hh-mm-ss>\ when it finishes, so look there too
         spots = [base]
-        day = base / "BACKUPFILES AUTOMATED" / H.today_dash()
+        day = H._bk_day(base / "BACKUPFILES AUTOMATED", H.today_dash())
         if day.is_dir():
             spots += [day] + sorted([d for d in day.rglob("*") if d.is_dir()])
         fbd = H.todays_file_fallback_day()                # special trading day: the previous trading day's backup too
         if fbd:
-            day = base / "BACKUPFILES AUTOMATED" / f"{fbd:%d-%m-%Y}"
+            day = H._bk_day(base / "BACKUPFILES AUTOMATED", f"{fbd:%d-%m-%Y}")
             if day.is_dir():
                 spots += [day] + sorted([d for d in day.rglob("*") if d.is_dir()])
         searched.append(str(base))

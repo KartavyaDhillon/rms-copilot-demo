@@ -93,7 +93,8 @@ def parse_dstr(s: str) -> dt.date:
 
 def day_dir(d: dt.date, create=False) -> Path:
     from core import backup_archive as _ba          # an older day may already be filed in its month folder (NOV 2026)
-    p = _ba.day_dir(root() / SUB, dstr(d))
+    from core import backup_db as _bdb              # not on disk: bring it back from the database
+    p = _bdb.day_dir("liveallocation", root() / SUB, dstr(d)) if not create else _ba.day_dir(root() / SUB, dstr(d))
     if create:
         p.mkdir(parents=True, exist_ok=True)
     return p
@@ -301,6 +302,13 @@ def list_dates() -> list:
             if d not in out:
                 out.append(d)
     except OSError:
+        pass
+    try:                                            # days that are only in the database count too
+        from core import backup_db as _bdb
+        for x in _bdb.dates("liveallocation"):
+            if x not in out:
+                out.append(x)
+    except Exception:                               # noqa: BLE001
         pass
     return sorted(out, reverse=True)
 

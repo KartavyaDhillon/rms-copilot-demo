@@ -136,7 +136,8 @@ def backfill_date_to_db(date_str):
     `date_str` — folder name exactly as on disk, DD-MM-YYYY (e.g. "21-07-2026").
     Safe to call more than once — re-archiving just adds another row."""
     base_folder = os.getenv("CLI_FOLDER", r"D:\CLI_PRUDENTIAL_LIMIT")
-    date_folder = os.path.join(base_folder, "BACKUPFILES AUTOMATED", date_str)
+    from core import backup_archive as _ba          # the day may be filed in its month folder (NOV 2026)
+    date_folder = str(_ba.day_dir(os.path.join(base_folder, "BACKUPFILES AUTOMATED"), date_str))
     if not os.path.isdir(date_folder):
         return {"ok": False, "error": f"Folder not found: {date_folder}"}
     archived, skipped, tags = [], [], []
@@ -235,9 +236,10 @@ def backfill_all_to_db():
     def _key(d):
         try: return datetime.datetime.strptime(d, "%d-%m-%Y")
         except Exception: return datetime.datetime.min
+    from core import backup_archive as _ba
     date_folders = sorted(
-        (d for d in os.listdir(root)
-         if date_re.match(d) and os.path.isdir(os.path.join(root, d))),
+        set([d for d in os.listdir(root) if date_re.match(d) and os.path.isdir(os.path.join(root, d))]
+            + [d for d in _ba.archived_days(root) if date_re.match(d)]),        # days already filed in month folders
         key=_key,
     )
     if not date_folders:

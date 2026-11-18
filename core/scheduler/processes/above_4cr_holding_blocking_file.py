@@ -49,7 +49,7 @@ def master_path() -> Path:
 def find_holding(ctx=None) -> Path:
     """Today's HOLDING_<DDMMYYYY>.csv from COMMON FILES (or the console's dated backup copy). Read-only."""
     name = f"HOLDING_{H.today_ddmmyyyy()}.csv"
-    for c in (H.common_dir() / name, H.common_dir() / "BACKUP FILES AUTOMATED" / H.today_dash() / name):
+    for c in (H.common_dir() / name, H._bk_day(H.common_dir() / "BACKUP FILES AUTOMATED", H.today_dash()) / name):
         if c.is_file():
             if ctx:
                 ctx.log(f"Holding file: {c}")
@@ -57,7 +57,7 @@ def find_holding(ctx=None) -> Path:
     fb = H.todays_file_fallback_day()                  # special trading day (Sunday): today's file first, else Friday's
     if fb:
         fname = f"HOLDING_{fb:%d%m%Y}.csv"
-        for c in (H.common_dir() / fname, H.common_dir() / "BACKUP FILES AUTOMATED" / f"{fb:%d-%m-%Y}" / fname):
+        for c in (H.common_dir() / fname, H._bk_day(H.common_dir() / "BACKUP FILES AUTOMATED", f"{fb:%d-%m-%Y}") / fname):
             if c.is_file():
                 if ctx:
                     ctx.log(f"Special trading day: {name} is not there - using the previous trading day's holding file: {c}")

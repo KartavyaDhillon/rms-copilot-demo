@@ -342,7 +342,8 @@ def _uncleared_sweep_old(base_dir, today_ddmmyyyy):
             d = datetime.strptime(m.group(1), "%d%m%Y")
             src = os.path.join(base_dir, f)
             from core import backup_archive as _ba      # an older day may already be filed in its month folder
-            date_root = str(_ba.day_dir(os.path.join(base_dir, "BACKUPFILES AUTOMATED"), d.strftime("%Y-%m-%d")))
+            from core import backup_db as _bdb          # not on disk: brought back from the database
+            date_root = str(_bdb.day_dir("ms15", os.path.join(base_dir, "BACKUPFILES AUTOMATED"), d.strftime("%Y-%m-%d")))
             runs = []
             if os.path.isdir(date_root):
                 runs = [x for x in os.listdir(date_root)

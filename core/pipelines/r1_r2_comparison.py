@@ -374,11 +374,21 @@ def _slot_for_hour(hh):
     return "Evening"
 
 
+def _bk_date_dir(date_str):
+    """<CLI_FOLDER>\\BACKUPFILES AUTOMATED\\<date> - or inside its month folder (NOV 2026) once it was filed."""
+    root = os.path.join(CLI_FOLDER, "BACKUPFILES AUTOMATED")
+    try:
+        from core import backup_db as _bdb          # not on disk: brought back from the database
+        return str(_bdb.day_dir("cli", root, date_str))
+    except Exception:                                    # noqa: BLE001
+        return os.path.join(root, date_str)
+
+
 def _find_slot_folder(slot, date_str):
     """CLI's backup layout: <CLI_FOLDER>\\BACKUPFILES AUTOMATED\\<date>\\<HH-MM-SS>\\
     Classify each run folder by its own HH via _slot_for_hour() and use the
     LATEST one that falls in the requested slot for that date."""
-    date_dir = os.path.join(CLI_FOLDER, "BACKUPFILES AUTOMATED", date_str)
+    date_dir = _bk_date_dir(date_str)
     if not os.path.isdir(date_dir):
         return None, []
 
@@ -405,7 +415,7 @@ def _find_slot_folder(slot, date_str):
 def collect_from_cli_slot(slot, date_str):
     slot_dir, seen = _find_slot_folder(slot, date_str)
     if slot_dir is None:
-        date_dir = os.path.join(CLI_FOLDER, "BACKUPFILES AUTOMATED", date_str)
+        date_dir = _bk_date_dir(date_str)
         seen_desc = ", ".join(f"{n} ({s})" for n, s in seen) or "(none)"
         raise AbortRun(
             f"No CLI {slot} backup found for {date_str}.\n"

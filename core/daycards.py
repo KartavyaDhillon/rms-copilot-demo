@@ -486,7 +486,8 @@ def risk_sources(d: dt.date) -> List[Src]:
         folder = Path(os.getenv("SA_COMMON_DIR", r"C:\COMMON FILES"))
     rx = re.compile(rf"^RISK_REPORT_{_dmy(d)}\.csv$", re.I)
     out: List[Src] = []
-    places = [folder, folder / "BACKUP FILES AUTOMATED" / dstr(d)]
+    from core import backup_archive as _ba          # the day may be filed in its month folder (NOV 2026)
+    places = [folder, _ba.day_dir(folder / "BACKUP FILES AUTOMATED", dstr(d))]
     if is_diwali():
         places = [diwali_dir(d), diwali_dir(d) / "RISK REPORT"] + places
     for f in places:
