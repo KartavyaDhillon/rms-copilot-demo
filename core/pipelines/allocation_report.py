@@ -267,7 +267,14 @@ def _backup_matches(m, backup_root: Path, start: dt.datetime, end: dt.datetime) 
     if not backup_root.is_dir():
         return []
     lo, hi = start.date(), end.date()
-    for day in sorted(backup_root.iterdir()):
+    from core import backup_archive as _ba          # older days are filed in month folders (NOV 2026 / 2026-11-08)
+    days = []
+    for p in backup_root.iterdir():
+        if p.is_dir() and _ba.MONTH_RE.match(p.name):
+            days += [q for q in p.iterdir() if q.is_dir()]
+        else:
+            days.append(p)
+    for day in sorted(days, key=lambda q: q.name):
         try:
             d = dt.datetime.strptime(day.name, "%Y-%m-%d").date()
         except ValueError:
