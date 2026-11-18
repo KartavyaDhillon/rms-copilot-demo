@@ -699,6 +699,28 @@ try:
     }
 except Exception as _e:                                          # noqa: BLE001
     print(f"⚠️  PAYOUT CHECK not registered: {type(_e).__name__}: {_e}")
+# OBLIGATION REPORT (core/obligation_card.py): MAIN csv uploaded in the card + FO collaterals (NMASS) + MCX Margin Utilization (RSK335)
+# -> detailed picture -> mail + WhatsApp -> backup. 8 relaxed timings (editable in Credentials). Logs: logs/obligation/obligation__<dd-mm-yyyy>__<time>.log
+try:
+    from core import obligation_card as _mc_ob
+    _mc_ob.apply_defaults()
+    PIPELINES["obligation"] = {
+        "name": "OBLIGATION REPORT", "module": "core.obligation_card", "func": "run", "logdir": "obligation", "runs": 0,
+        "state_dir_env": "OBLIGATION_DIR", "state_default": r"D:\CONSOLE\data\OBLIGATION REPORT", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_ob.MAIL_LABEL[k]: _mc_ob.mail_keys(k) for k in _mc_ob.MAIL_DEFAULTS},
+        "cred": {"NSCCL / NMASS login (FO collaterals)": {
+                     "user_key": "CTCL_NMASS_USER", "pass_key": "CTCL_NMASS_PASSWORD",
+                     "note": "Shared with CTCL vs NMASS and the other NMASS downloads - change it here and they follow."},
+                 "MCX eclear login (Margin Utilization View)": {
+                     "user_key": "SA_MCX_DEPOSIT_USER", "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
+                     "note": "The eclear.mcxccl.com login. Shared with the other MCX downloads. The RSA code is filled automatically."},
+                 "E-mail sender (SMTP login) of this card": {
+                     "user_key": "OBLIGATION_SENDER_EMAIL", "pass_key": "OBLIGATION_SENDER_PASSWORD",
+                     "note": "The login the Daily Obligation mail goes out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  OBLIGATION REPORT not registered: {type(_e).__name__}: {_e}")
 # ENTERPRISE RISK REPORT (core/enterprise_risk.py): Enterprise mails from 10:03, run 10:30 Mon-Fri, screener.in data, one mail.
 # Logs: logs/entrisk/entrisk__<dd-mm-yyyy>__<time>.log
 try:

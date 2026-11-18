@@ -409,7 +409,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=1"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=1"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1124,6 +1124,52 @@ async def _payout_check_upload(request: Request):
 
 
 _comm_card_routes("payout-check", "core.payout_check_card")  # PAYOUT CHECK card: /payout-check/* (same routes; upload = Update Limits)
+
+
+@app.post("/obligation/upload", name="obligation_upload_own")
+async def _obligation_upload(request: Request):
+    """OBLIGATION upload (declared BEFORE the shared card routes so it wins): MAIN_<hh.mm>.csv + the browser's 'modified' time."""
+    from core import obligation_card as m
+    if m.is_running():
+        return JSONResponse({"ok": False, "error": "A run is going - Stop it first."}, status_code=409)
+    form = await request.form()
+    files, mods = form.getlist("files"), form.getlist("modified")
+    by = (_actor(request)[0] or "")
+    ok, rejected = [], []
+    for i, f in enumerate(files):
+        try:
+            ok.append(m.accept_upload(getattr(f, "filename", "") or "", await f.read(), by=by,
+                                      modified_ms=(mods[i] if i < len(mods) else None))["name"])
+        except ValueError as e:
+            rejected.append(str(e))
+    return {"ok": ok, "rejected": rejected, "inputs": m.input_status()}
+
+
+@app.post("/obligation/override", name="obligation_override")
+async def _obligation_override(request: Request):
+    """Manual override: {slots:[1,2], password} = the slots already done by hand today (counter continues from the next one)."""
+    from core import obligation_card as m
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        return m.override_slots(body.get("slots") or [], by=(_actor(request)[0] or ""))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
+_comm_card_routes("obligation", "core.obligation_card")      # OBLIGATION REPORT card: /obligation/* (same routes; upload = MAIN csv)
+
+
+@app.on_event("startup")
+def _obligation_startup():
+    """Timer of the OBLIGATION REPORT card: runs at its timings once today's MAIN file is uploaded (relaxed - no alert for a late run)."""
+    try:
+        from core import obligation_card as _ob
+        _ob.start_ticker()
+    except Exception as _e:
+        print(f"⚠️  OBLIGATION REPORT timer not started: {type(_e).__name__}: {_e}")
 
 
 # ── WhatsApp failure-alert numbers of every card (core/card_alerts.py; button: platform/js/process-wanumbers.js) ──
