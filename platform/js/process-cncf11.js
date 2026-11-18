@@ -149,7 +149,7 @@
     window._saReturn = null;
     modal(TITLE,
       '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0 0 8px">' +
-        tb('⬆️ Upload PositionBook', 'cncUpload()', 'Choose the PositionBook csv (a name like PositionBook.csv). It is kept as PositionBook.csv and read by the next run.') +
+        tb('⬆️ Upload PositionBook', 'cncUpload()', 'Only TODAY\'s PositionBook is taken: today\'s date in the file name (e.g. PositionBook_18112026.csv), or - if the name has no date - a file saved in the last 30 minutes. Kept as PositionBook.csv; every upload is written to Logs.') +
         tb('🔑 Credentials', 'cncCreds()', 'The e-mail login this card sends from.') +
         tb('✉️ Email To / CC', 'cncEmail()', 'Who gets the CNC_F11 file.') +
         tb('📦 Backup files', 'cncSub(cncBackup)', 'Pick a date or a range and download the backed-up files as one zip.') +
@@ -323,7 +323,7 @@
   };
   function cncUpSend(file) {
     toast('Uploading ' + file.name + '…', 'warn');
-    var fd = new FormData(); fd.append('files', file);
+    var fd = new FormData(); fd.append('files', file); fd.append('modified', String(file.lastModified || ''));      // the file's own saved time: the server checks it when the name has no date
     fetch(API + BASE + '/upload', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
       if (j.error || j.detail) { okBox('Upload failed', String(j.error || j.detail), 'err'); return; }
       if ((j.ok || []).length) okBox('PositionBook uploaded', 'Saved as ' + j.ok[0] + ' - press Run to make the CNC F11 file.');

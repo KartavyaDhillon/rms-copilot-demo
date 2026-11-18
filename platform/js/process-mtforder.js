@@ -292,7 +292,7 @@
           '<div><div class="mof-lbl">Run time (order files made and e-mailed)</div><input type="time" id="mofT3" class="mof-in" style="width:100%" value="' + esc(s.run_at) + '"></div></div>' +
           '<div style="font-size:11.5px;color:var(--dim);line-height:1.55;margin-bottom:12px">The shortage mail is looked for every 5 minutes from the start time until 12:00; only a mail that arrived at or after the start time is taken. If it is not there at the run time, the run waits for it until 12:00.</div>' +
           '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:12px"><input type="checkbox" id="mofMail" ' + (s.send_mail ? 'checked' : '') + '> Send the e-mails automatically at the run</label>' +
-          '<div class="mof-lbl">WhatsApp failure-alert numbers (blank = the Margin Shortage / common alert numbers)</div><input type="text" id="mofAlert" class="mof-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
+          '<div class="mof-lbl">WhatsApp failure-alert numbers (blank = the common alert numbers of Scheduler &gt; Credentials &gt; WhatsApp)</div><input type="text" id="mofAlert" class="mof-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
           '<button class="sa-save" id="mofSetBtn" data-no-busy="1" style="width:100%" onclick="mofSetSave()">Save settings</button><div class="sa-msg" id="mofSetMsg"></div>');
       });
     });

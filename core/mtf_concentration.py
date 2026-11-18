@@ -906,13 +906,7 @@ def send_alert(headline, detail, sender=None) -> dict:
     rec = {"sent": False, "reason": ""}
     try:
         from core.scheduler import connections, failure_alert, helpers as H, paths
-        raw = get_settings().get("alert_numbers") or ""
-        if not raw.strip():
-            try:
-                from core import ms15_auto
-                raw = ms15_auto.get_settings().get("alert_numbers", "")
-            except Exception:
-                raw = ""
+        raw = get_settings().get("alert_numbers") or ""          # this card's own list; blank -> the COMMON list below (Credentials > WhatsApp)
         c = connections.get("whatsapp")
         numbers = failure_alert.parse_numbers(raw) or failure_alert.parse_numbers(c.get("alert_numbers", ""))
         if not numbers:

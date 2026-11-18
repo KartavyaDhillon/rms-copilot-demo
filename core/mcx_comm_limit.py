@@ -1137,13 +1137,7 @@ def _do_step(name: str, base: Path, have_lock: bool = False) -> dict:
 # ───────────────────────────── failure alert ─────────────────────────────
 def alert_numbers():
     from core.scheduler import failure_alert
-    raw = get_settings().get("alert_numbers") or ""
-    if not raw.strip():
-        try:
-            from core import ms15_auto
-            raw = ms15_auto.get_settings().get("alert_numbers", "")
-        except Exception:
-            raw = ""
+    raw = get_settings().get("alert_numbers") or ""      # this card's own list only; blank -> the caller uses the COMMON list (Credentials > WhatsApp)
     return failure_alert.parse_numbers(raw)
 
 

@@ -1080,6 +1080,26 @@ _comm_card_routes("ncdex-comm", "core.ncdex_comm_limit")
 _comm_card_routes("mtf-conc", "core.mtf_concentration")      # MTF CONCENTRATION card: /mtf-conc/* (same routes)
 _comm_card_routes("mtf-order", "core.mtf_order_file")        # MTF ORDER FILE card: /mtf-order/* (same routes)
 _comm_card_routes("entrisk", "core.enterprise_risk")         # ENTERPRISE RISK REPORT card: /entrisk/* (same routes)
+@app.post("/cnc-f11/upload", name="cnc_f11_upload_own")
+async def _cnc_f11_upload(request: Request):
+    """CNC F11 upload (declared BEFORE the shared card routes so it wins): files + the browser's 'modified' time of each file.
+    Only today's PositionBook is taken; every upload (taken or refused) goes to the card's log."""
+    from core import cnc_f11_card as m
+    if m.is_running():
+        return JSONResponse({"ok": False, "error": "A run is going - Stop it first."}, status_code=409)
+    form = await request.form()
+    files, mods = form.getlist("files"), form.getlist("modified")
+    by = (_actor(request)[0] or "")
+    ok, rejected = [], []
+    for i, f in enumerate(files):
+        try:
+            ok.append(m.accept_upload(getattr(f, "filename", "") or "", await f.read(), by=by,
+                                      modified_ms=(mods[i] if i < len(mods) else None))["name"])
+        except ValueError as e:
+            rejected.append(str(e))
+    return {"ok": ok, "rejected": rejected, "inputs": m.input_status()}
+
+
 _comm_card_routes("cnc-f11", "core.cnc_f11_card")            # CNC F11 card: /cnc-f11/* (same routes; upload = PositionBook.csv)
 
 

@@ -81,7 +81,9 @@
     var wa = l.wa || {};
     var waTxt = wa.skipped ? ('WhatsApp: not sent (' + esc(wa.skipped) + ')') : ('WhatsApp: ' + n(wa.sent) + ' sent' + (wa.failed ? ', ' + n(wa.failed) + ' failed' : ''));
     var tf = l.trade_file || {}, tm = tf.mail || {};
-    var tradeTxt = tf.name ? ('<br>MTF trade files: ' + n(tf.rows) + ' trade(s) (TXT + CSV) · ' + (tm.sent ? 'e-mailed to ' + esc((tm.to || []).join(', ')) : '<span style="color:var(--amber)">NOT e-mailed (' + esc(tm.error || 'unknown') + ')</span>')) : '';
+    var tu = tf.upload || {};
+    var upTxt = tf.name ? (' · ' + (tu.ok ? '<span style="color:var(--green)">TXT uploaded to the service API</span>' : tu.skipped ? 'not uploaded (' + esc(tu.skipped) + ')' : '<span style="color:var(--red)">TXT NOT uploaded (' + esc(tu.error || 'unknown') + ')</span>')) : '';
+    var tradeTxt = tf.name ? ('<br>MTF trade files: ' + n(tf.rows) + ' trade(s) (TXT + CSV) · ' + (tm.sent ? 'e-mailed to ' + esc((tm.to || []).join(', ')) : '<span style="color:var(--amber)">NOT e-mailed (' + esc(tm.error || 'unknown') + ')</span>') + upTxt) : '';
     return '<div style="font-size:11px;color:var(--dim);margin-bottom:6px">Run for <b style="color:var(--ink)">' + esc(l.date) + '</b> · finished ' + esc(l.finished) + '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap">' + tile('MTF trades', l.mtf, 'var(--ink)') + tile('OK', l.ok, 'var(--green)') + tile('Check required', l.check, l.check ? 'var(--red)' : 'var(--ink)') + '</div>' +
       (l.check ? '<div style="font-size:11px;color:var(--muted);margin:6px 0">' + n(l.no_holding) + ' no Holding record · ' + n(l.isin_missing) + ' ISIN not in NSE file · ' + n(l.wrong_category) + ' wrong category</div>' : '') +

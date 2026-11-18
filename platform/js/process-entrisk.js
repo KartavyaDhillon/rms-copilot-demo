@@ -1,7 +1,7 @@
 /* ENTERPRISE RISK REPORT - the LAST small tile of the Process Center. "Open" shows the window: report type switch (REDFLAG / SIMPLE),
    single buttons (mailbox files, MTF CONCENTRATION file), Screener (any company, on demand, e-mailed to rms_del), Credentials,
    Email To / CC, Upload files, Backup files, Logs, Run, Auto on/off, Stop, Settings (times), KPI cards, step tiles, input files, live log.
-   Timeline (Mon-Fri, editable in Settings): mailbox from 10:03 (until 11:00), run at 10:30.
+   Timeline (Mon-Fri, editable in Settings): mailbox from 09:00 (until 12:00, then all of today's mails), run at 10:30.
    Backend: /entrisk/* (api.py, core/enterprise_risk.py) and the shared /px/* windows with pipe=entrisk.
    Injected at serve time (see api.py /legacy); dashboard.html is only touched in its two e-mail-window lists. */
 (function () {
@@ -306,7 +306,7 @@
           '<div style="margin-bottom:12px"><div class="ent-lbl">Symbols per report (top N by NET_EXPOSURE + top N by days to liquidate)</div><input type="number" min="1" max="200" id="entTop" class="ent-in" style="width:100%" value="' + esc(s.top_n) + '"></div>' +
           '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:8px"><input type="checkbox" id="entProt" ' + (s.protect ? 'checked' : '') + '> Password-protect the two report files (password in Credentials)</label>' +
           '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:12px"><input type="checkbox" id="entMail" ' + (s.send_mail ? 'checked' : '') + '> Send the e-mail automatically at the run</label>' +
-          '<div class="ent-lbl">WhatsApp failure-alert numbers (blank = the Margin Shortage / common alert numbers)</div><input type="text" id="entAlert" class="ent-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
+          '<div class="ent-lbl">WhatsApp failure-alert numbers (blank = the common alert numbers of Scheduler &gt; Credentials &gt; WhatsApp)</div><input type="text" id="entAlert" class="ent-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
           '<button class="sa-save" id="entSetBtn" data-no-busy="1" style="width:100%" onclick="entSetSave()">Save settings</button><div class="sa-msg" id="entSetMsg"></div>');
       });
     });

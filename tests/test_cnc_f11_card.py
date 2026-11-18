@@ -135,14 +135,58 @@ class CncCardTests(unittest.TestCase):
         self.assertTrue(r["ok"])
         self.assertEqual(FakeSMTP.sent, [])
 
+    def _now_ms(self, minutes_ago=0):
+        return (dt.datetime.now() - dt.timedelta(minutes=minutes_ago)).timestamp() * 1000
+
     def test_upload_rules(self):
-        ok = self.m.accept_upload("PositionBook (2).csv", POSITION.encode(), by="t")
+        today = dt.date.today().strftime("%d%m%Y")
+        ok = self.m.accept_upload(f"Positionbook_{today}.csv", POSITION.encode(), by="t")
         self.assertEqual(ok["name"], "PositionBook.csv")
         self.assertTrue(self.m.input_status()[0]["ok"])
-        for bad_name, data in (("holding.csv", POSITION.encode()), ("PositionBook.csv", b""), ("PositionBook.exe", b"x"),
-                               ("PositionBook.csv", b"a,b\n1,2\n")):
+        for bad_name, data in (("holding.csv", POSITION.encode()), (f"PositionBook_{today}.csv", b""), ("PositionBook.exe", b"x"),
+                               (f"PositionBook_{today}.csv", b"a,b\n1,2\n")):
             with self.assertRaises(ValueError):
-                self.m.accept_upload(bad_name, data)
+                self.m.accept_upload(bad_name, data, modified_ms=self._now_ms())
+
+    def test_only_todays_date_in_the_name(self):
+        y = (dt.date.today() - dt.timedelta(days=1))
+        for nm in (f"Positionbook_{y:%d%m%Y}.csv", f"PositionBook_{y:%d-%m-%Y}.csv", f"PositionBook_{y:%Y%m%d}.csv"):
+            with self.assertRaises(ValueError) as cm:
+                self.m.accept_upload(nm, POSITION.encode(), modified_ms=self._now_ms())       # a fresh file time does not rescue a dated name
+            self.assertIn("only today's", str(cm.exception))
+        t = dt.date.today()
+        for nm in (f"PositionBook_{t:%d%m%Y}.csv", f"PositionBook_{t:%d-%m-%Y}.csv", f"PositionBook_{t:%Y%m%d}.csv"):
+            self.assertEqual(self.m.accept_upload(nm, POSITION.encode())["name"], "PositionBook.csv")
+
+    def test_no_date_in_name_needs_a_file_saved_in_the_last_30_minutes(self):
+        self.assertEqual(self.m.accept_upload("PositionBook.csv", POSITION.encode(), modified_ms=self._now_ms(10))["name"], "PositionBook.csv")
+        with self.assertRaises(ValueError) as cm:
+            self.m.accept_upload("PositionBook.csv", POSITION.encode(), modified_ms=self._now_ms(45))
+        self.assertIn("30 min", str(cm.exception))
+        with self.assertRaises(ValueError):
+            self.m.accept_upload("PositionBook.csv", POSITION.encode(), modified_ms=None)       # saved time unknown -> refused
+        with self.assertRaises(ValueError):
+            self.m.accept_upload("PositionBook.csv", POSITION.encode(), modified_ms=self._now_ms(-60))   # in the future
+
+    def test_every_upload_is_written_to_the_log_file(self):
+        y = dt.date.today() - dt.timedelta(days=1)
+        with self.assertRaises(ValueError):
+            self.m.accept_upload(f"Positionbook_{y:%d%m%Y}.csv", POSITION.encode(), by="Kartavya")
+        self.m.accept_upload("PositionBook.csv", POSITION.encode(), by="Kartavya", modified_ms=self._now_ms(1))
+        f = self.m.log_dir() / f"cncf11__{dt.date.today():%d-%m-%Y}__uploads.log"
+        self.assertTrue(f.is_file())
+        txt = f.read_text(encoding="utf-8")
+        self.assertIn("Upload REFUSED", txt)
+        self.assertIn("Upload ACCEPTED", txt)
+        self.assertIn("by Kartavya", txt)
+
+    def test_name_date_reader(self):
+        n = self.m.name_date
+        self.assertEqual(n("Positionbook_17112026.csv"), dt.date(2026, 11, 17))
+        self.assertEqual(n("PositionBook 2026-11-17.csv"), dt.date(2026, 11, 17))
+        self.assertEqual(n("PositionBook_20261117.csv"), dt.date(2026, 11, 17))
+        self.assertIsNone(n("PositionBook.csv"))
+        self.assertIsNone(n("PositionBook (2).csv"))
 
     def test_status_shapes_for_the_card_routes(self):
         st = self.m.status()

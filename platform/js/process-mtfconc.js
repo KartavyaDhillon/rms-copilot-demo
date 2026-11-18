@@ -283,7 +283,7 @@
           '<div><div class="cq-lbl">Run + e-mails</div><input type="time" id="cqT3" class="cq-in" style="width:100%" value="' + esc(s.run_at) + '"></div></div>' +
           '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:12px"><input type="checkbox" id="cqMail" ' + (s.send_mail ? 'checked' : '') + '> Send the e-mails automatically at the run</label>' +
           '<div class="cq-lbl">Also copy the full file to this folder (blank = no copy)</div><input type="text" id="cqCopy" class="cq-in" style="width:100%;margin-bottom:12px" value="' + esc(s.copy_dir || '') + '">' +
-          '<div class="cq-lbl">WhatsApp failure-alert numbers (blank = the Margin Shortage / common alert numbers)</div><input type="text" id="cqAlert" class="cq-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
+          '<div class="cq-lbl">WhatsApp failure-alert numbers (blank = the common alert numbers of Scheduler &gt; Credentials &gt; WhatsApp)</div><input type="text" id="cqAlert" class="cq-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
           '<button class="sa-save" id="cqSetBtn" data-no-busy="1" style="width:100%" onclick="cqSetSave()">Save settings</button><div class="sa-msg" id="cqSetMsg"></div>');
       });
     });

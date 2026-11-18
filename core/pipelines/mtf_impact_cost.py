@@ -929,6 +929,121 @@ def send_trade_file_email(files, d: datetime.date, n_rows: int) -> dict:
             time.sleep(wait)
 
 
+# ───────────────────────────── upload of the MTF trade TXT to the Mastertrust service API ─────────────────────────────
+MTF_API_LOGIN = "/api/auth/login"
+MTF_API_UPLOAD = "/api/dataservice/uploadMTFTrades"
+MTF_API_DEFAULT_BASE = "https://service.mastertrust.co.in"
+_TRADE_TXT_RE = re.compile(r"MTF_TRADE-\d{8}\.txt", re.I)
+
+
+def _upload_cfg():
+    """(base url, user id, password): this card's own entry (Credentials > Service API login) if both are filled, else the shared
+    Mastertrust upload API connection (Scheduler > Connections). Nothing is written in the code."""
+    user, pw = os.getenv("MTFIC_API_USER", "").strip(), os.getenv("MTFIC_API_PASS", "")
+    base = os.getenv("MTFIC_API_BASE", "").strip()
+    if not (user and pw):
+        try:
+            from core.scheduler import connections
+            c = connections.get("upload_api") or {}
+            user, pw, base = str(c.get("user_id", "")).strip(), str(c.get("password", "")), base or str(c.get("base_url", "")).strip()
+        except Exception:                                        # noqa: BLE001
+            user, pw = "", ""
+    return (base or MTF_API_DEFAULT_BASE).rstrip("/"), user, pw
+
+
+def _http():
+    try:
+        from core.scheduler.peak_upload import _requests_with_windows_certs     # the Windows certificate store, like the other uploads
+        return _requests_with_windows_certs()
+    except Exception:                                            # noqa: BLE001
+        import requests
+        return requests
+
+
+def _answer_ok(r) -> tuple:
+    """(ok, message) of an API answer: HTTP ok and no success=false (the API writes "Success" / "success")."""
+    try:
+        j = r.json()
+    except ValueError:
+        return bool(r.ok), (r.text or "")[:300]
+    flag = next((j[k] for k in ("Success", "success") if isinstance(j, dict) and k in j), None)
+    msg = next((str(j[k]) for k in ("Message", "message") if isinstance(j, dict) and k in j), "") or str(j)[:300]
+    return bool(r.ok and flag is not False), msg
+
+
+def upload_trade_file(path, d: datetime.date, n_rows: int, http=None, sleep=None, tries: int = 5) -> dict:
+    """POST the MTF_TRADE-<DDMMYYYY>.txt (only that TXT) to /api/dataservice/uploadMTFTrades after logging in
+    (POST /api/auth/login -> accessToken; multipart field "file"). A network / server (5xx) error is retried (5 s apart), an
+    expired token (401) is renewed once; a refused login / refused permission (400 / 403) is not retried - retrying cannot fix
+    it. Never raises. -> {"ok", "message", "status", "attempts", "error", "skipped"}"""
+    import time as _t
+    sleep = sleep or _t.sleep
+    res = {"ok": False, "message": "", "status": 0, "attempts": 0, "error": "", "skipped": ""}
+    p = Path(path)
+    if not _TRADE_TXT_RE.fullmatch(p.name) or not p.is_file():
+        res["error"] = f"only a file named MTF_TRADE-DDMMYYYY.txt is uploaded ({p.name})"
+        log(f"❌ MTF trade file NOT uploaded: {res['error']}")
+        return res
+    if not n_rows:
+        res["skipped"] = "no MTF / MTFS trades today"
+        log("MTF trade file has no rows - not uploaded.")
+        return res
+    base, user, pw = _upload_cfg()
+    if not (user and pw):
+        res["error"] = "the service API user id / password are not set (Credentials > Service API login, or Scheduler > Connections > Mastertrust upload API)"
+        log(f"❌ MTF trade file NOT uploaded: {res['error']}")
+        return res
+    requests = http or _http()
+    token = None
+    for attempt in range(1, tries + 1):
+        res["attempts"] = attempt
+        try:
+            if not token:
+                r = requests.post(base + MTF_API_LOGIN, json={"userId": user, "password": pw}, timeout=30)
+                try:
+                    body = r.json()
+                except ValueError:
+                    body = {}
+                token = ((body.get("data") or {}).get("accessToken")) if isinstance(body, dict) else None
+                if not (r.ok and token):
+                    res["status"] = r.status_code
+                    if r.status_code in (400, 401, 403) or (r.ok and not token):
+                        res["error"] = f"the service API refused the login (HTTP {r.status_code}): {(r.text or '')[:200]}"
+                        log(f"❌ MTF trade file NOT uploaded: {res['error']}")
+                        return res
+                    raise OSError(f"login HTTP {r.status_code}")
+            with open(p, "rb") as fh:
+                r = requests.post(base + MTF_API_UPLOAD, headers={"Authorization": f"Bearer {token}"},
+                                  files={"file": (p.name, fh, "text/plain")}, timeout=180)
+            res["status"] = r.status_code
+            ok, msg = _answer_ok(r)
+            res["message"] = msg
+            if ok:
+                res["ok"] = True
+                log(f"✅ MTF trade file uploaded to the service API: {p.name} ({n_rows:,} trade(s)) - {msg}")
+                return res
+            if r.status_code == 401:
+                token = None                                     # token expired: log in again, once more
+                log("MTF trade file upload: token refused (401) - logging in again.")
+                continue
+            if r.status_code < 500:
+                res["error"] = f"the service API answered HTTP {r.status_code}: {msg}"
+                log(f"❌ MTF trade file NOT uploaded: {res['error']}")
+                return res
+            raise OSError(f"HTTP {r.status_code}: {msg}")
+        except Exception as e:                                   # noqa: BLE001
+            res["error"] = f"{type(e).__name__}: {e}"
+            if "CERTIFICATE_VERIFY_FAILED" in str(e):
+                res["error"] += " - pip install truststore on the console PC, then restart the console"
+                log(f"❌ MTF trade file NOT uploaded: {res['error']}")
+                return res
+            log(f"MTF trade file upload try {attempt}/{tries} failed: {res['error']}" + (" - again in 5 s" if attempt < tries else ""))
+            if attempt < tries:
+                sleep(5)
+    log(f"❌ MTF trade file NOT uploaded after {tries} tries: {res['error']}")
+    return res
+
+
 # ───────────────────────────── the run ──────────────────────────────────────
 def _fail(msg):
     log(f"❌ {msg}")
@@ -1099,7 +1214,8 @@ def _run_all(date_str, send_wa, force=False, by=""):
 
     # 3b ─ MTF trade files (Product MTF + MTFS): the TXT and the TradeBook CSV; create, then e-mail both
     trade_info = {"name": "", "rows": 0, "skipped": 0, "csv": "", "csv_rows": 0,
-                  "mail": {"sent": False, "error": "not created"}}
+                  "mail": {"sent": False, "error": "not created"},
+                  "upload": {"ok": False, "error": "not attempted", "skipped": ""}}
     tpath = cpath = None
     try:
         tpath, trows, tskip = build_trade_file(tb, d, base_dir())
@@ -1115,6 +1231,17 @@ def _run_all(date_str, send_wa, force=False, by=""):
         else:
             trade_info["mail"] = {"sent": False, "error": "no MTF / MTFS trades today"}
             log("MTF trade file has no rows - not e-mailed.")
+        # the TXT goes to the Mastertrust service API in the SAME run (whatever happened to the e-mail)
+        _prog(4, "Uploading the MTF trade file to the service API")
+        trade_info["upload"] = upload_trade_file(tpath, d, trows)
+        up = trade_info["upload"]
+        if not up.get("ok") and not up.get("skipped"):
+            try:                                                 # the card's WhatsApp failure alert (numbers: 📲 WhatsApp alerts button)
+                from core import card_alerts
+                card_alerts.notify_failure("mtfic", "MTF Impact Cost", "The MTF trade file was NOT uploaded.",
+                                           (up.get("error") or "unknown error")[:300], trigger="Run")
+            except Exception:                                    # noqa: BLE001
+                pass
     except Exception as e:
         log(f"⚠ MTF trade files could not be created: {type(e).__name__}: {e}")
         trade_info["mail"] = {"sent": False, "error": f"{type(e).__name__}: {e}"}

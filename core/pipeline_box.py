@@ -290,6 +290,8 @@ PIPELINES = {
                         "note": "mail server of that account, e.g. smtp3.netcore.co.in. Blank = the shared SMTP_SERVER is used."},
                        "SMTP port": {"single_key": "MTFIC_SMTP_PORT",
                         "note": "usually 587 (the run uses STARTTLS). Blank = the shared SMTP_PORT is used."},
+                       "Service API login (MTF trade file upload)": {"user_key": "MTFIC_API_USER", "pass_key": "MTFIC_API_PASS",
+                        "note": "service.mastertrust.co.in login that uploads MTF_TRADE-<date>.txt in every run (the user must be allowed to call uploadMTFTrades). Leave BLANK to use the shared Mastertrust upload API login (Scheduler > Connections)."},
                        "WhatsApp (Tata) bearer token": {"single_key": "MTFIC_WA_TOKEN",
                         "note": "sends the dashboard image. Leave blank to use the shared WA_AUTH_TOKEN."},
                        "WhatsApp numbers": {"single_key": "MTFIC_WA_NUMBERS",

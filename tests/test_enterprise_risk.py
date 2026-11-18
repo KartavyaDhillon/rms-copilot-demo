@@ -291,6 +291,25 @@ class MailPick(Env):
         self.assertTrue(got["without"][1].endswith(b"109"))
         self.assertEqual(got["concentration"][0], "Concentration_abv20percentage.csv")
 
+    def test_full_day_fallback_finds_a_mail_outside_the_window(self):
+        """A mail that came at 08:20 (before the 09:00 start) is missed by the window but found by the full-day look-up."""
+        d = dt.date(2026, 11, 16)
+        att = "EnterpriseRiskReport_Without_Margin_REDFLAG_2026-11-16.xlsx"
+        mails = [make_mail("EnterpriseRiskReport Without Margin REDFLAG", self.NR, d, 8, 20, att),
+                 make_mail("EnterpriseRiskReport Without Margin REDFLAG", self.NR, d, 13, 40, att)]
+        self.assertEqual(self.m.find_mails(FakePop(mails), 2, d, "redflag", {"without": dt.time(9, 0)}, dt.time(12, 0)), {})
+        got = self.m.find_mails(FakePop(mails), 2, d, "redflag", {"without": dt.time(0, 0)}, dt.time(23, 59, 59))
+        self.assertTrue(got["without"][1].endswith(b"1340"))                     # newest of the whole day
+
+    def test_old_saved_window_is_moved_to_the_new_one_once(self):
+        import json
+        p = self.m._settings_path()
+        p.write_text(json.dumps({"mail_from": "10:15", "mail_until": "11:00", "run_at": "10:45", "top_n": 7}), encoding="utf-8")
+        s = self.m.get_settings()
+        self.assertEqual((s["mail_from"], s["mail_until"], s["run_at"], s["top_n"]), ("09:00", "12:00", "10:45", 7))
+        self.m.save_settings({"mail_from": "09:30"})                            # a choice made AFTER the move is kept
+        self.assertEqual(self.m.get_settings()["mail_from"], "09:30")
+
     def test_later_start_time_ignores_earlier_mail(self):
         d = dt.date(2026, 11, 16)
         mails = [make_mail("EnterpriseRiskReport Without Margin REDFLAG", self.NR, d, 10, 5, "EnterpriseRiskReport_Without_Margin_REDFLAG_2026-11-16.xlsx")]
@@ -458,10 +477,10 @@ class Timer(Env):
         calls, runs = [], []
         m.STEPS = dict(m.STEPS, mail=lambda base, force=False: calls.append("mail") or {"ok": True, "msg": "ok"})
         m.run = lambda trigger="manual", by="", alert=None: runs.append(trigger) or {"ok": True}
-        mon = dt.datetime(2026, 11, 16, 9, 0)                                   # a Monday
+        mon = dt.datetime(2026, 11, 16, 8, 30)                                  # a Monday
         m.tick(mon)
-        self.assertEqual(calls, [])                                            # before 10:03
-        m.tick(mon.replace(hour=10, minute=3))
+        self.assertEqual(calls, [])                                            # before 09:00
+        m.tick(mon.replace(hour=9, minute=0))
         self.assertEqual(calls, ["mail"])
         m.tick(mon.replace(hour=10, minute=5))
         self.assertEqual(calls, ["mail"])                                      # done: not asked again
@@ -480,7 +499,7 @@ class Timer(Env):
         m = self.m
         alerts = []
         m.STEPS = dict(m.STEPS, mail=lambda base, force=False: {"ok": False, "msg": "not there yet"})
-        mon = dt.datetime(2026, 11, 16, 11, 5)
+        mon = dt.datetime(2026, 11, 16, 12, 5)                                  # after the 12:00 end of the window
         m.tick(mon, alert=lambda h, d: alerts.append(h) or {"sent": True})
         m.tick(mon.replace(minute=20), alert=lambda h, d: alerts.append(h) or {"sent": True})
         self.assertEqual(len(alerts), 1)
@@ -488,8 +507,8 @@ class Timer(Env):
     def test_settings_validation_and_defaults(self):
         m = self.m
         s = m.get_settings()
-        self.assertEqual((s["variant"], s["run_at"], s["mail_from"], s["mail_until"]), ("redflag", "10:30", "10:03", "11:00"))
-        for bad in ({"run_at": "25:61"}, {"mail_from": "11:30"}, {"top_n": 0}, {"variant": "x"}):
+        self.assertEqual((s["variant"], s["run_at"], s["mail_from"], s["mail_until"]), ("redflag", "10:30", "09:00", "12:00"))
+        for bad in ({"run_at": "25:61"}, {"mail_from": "12:30"}, {"top_n": 0}, {"variant": "x"}):
             with self.assertRaises(ValueError):
                 m.save_settings(bad)
         s = m.save_settings({"mail_from": "9:00", "run_at": "10:45", "top_n": 12, "variant": "simple"})

@@ -492,13 +492,7 @@ def send_alert(headline, detail, sender=None) -> dict:
     rec = {"sent": False, "reason": ""}
     try:
         from core.scheduler import connections, failure_alert, helpers as H, paths
-        raw = get_settings().get("alert_numbers") or ""
-        if not raw.strip():
-            try:
-                from core import ms15_auto
-                raw = ms15_auto.get_settings().get("alert_numbers", "")
-            except Exception:                                    # noqa: BLE001
-                raw = ""
+        raw = get_settings().get("alert_numbers") or ""          # this card's own list; blank -> the COMMON list below (Credentials > WhatsApp)
         c = connections.get("whatsapp")
         numbers = failure_alert.parse_numbers(raw) or failure_alert.parse_numbers(c.get("alert_numbers", ""))
         if not numbers:
@@ -700,23 +694,85 @@ def zip_range(a: dt.date, b: dt.date) -> Path:
     return z
 
 
-def accept_upload(name: str, data: bytes, by="") -> dict:
-    """The upload button: only the PositionBook is accepted; it is kept as PositionBook.csv (what the run reads)."""
+FRESH_MIN = int(os.getenv("CNC_F11_FRESH_MIN", "30") or 30)      # a PositionBook with no date in its name must have been saved this recently
+_D8 = re.compile(r"(?<!\d)(\d{2})[-_.]?(\d{2})[-_.]?(\d{4})(?!\d)")        # ddmmyyyy, dd-mm-yyyy ...
+_Y8 = re.compile(r"(?<!\d)(\d{4})[-_.]?(\d{2})[-_.]?(\d{2})(?!\d)")        # yyyymmdd, yyyy-mm-dd ...
+
+
+def name_date(name: str):
+    """The date written in a file name (17112026, 17-11-2026, 20261117 ...) or None when there is none."""
+    stem = os.path.splitext(os.path.basename(name or ""))[0]
+    for mt in _D8.finditer(stem):
+        try:
+            return dt.date(int(mt.group(3)), int(mt.group(2)), int(mt.group(1)))
+        except ValueError:
+            continue
+    for mt in _Y8.finditer(stem):
+        try:
+            if 2000 <= int(mt.group(1)) <= 2100:
+                return dt.date(int(mt.group(1)), int(mt.group(2)), int(mt.group(3)))
+        except ValueError:
+            continue
+    return None
+
+
+def freshness_problem(name: str, modified_ms=None, now: dt.datetime = None) -> str:
+    """'' when the file may be taken: today's date in its name, or - with no date in the name - saved within FRESH_MIN minutes."""
+    now = now or dt.datetime.now()
+    d = name_date(name)
+    if d is not None:
+        if d != now.date():
+            return f"it is dated {dstr(d)} - only today's ({dstr(now.date())}) PositionBook is accepted"
+        return ""
+    try:
+        t = dt.datetime.fromtimestamp(float(modified_ms) / 1000.0)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "there is no date in the name and its saved time could not be read - put today's date in the name (e.g. PositionBook_" + now.strftime("%d%m%Y") + ".csv)"
+    age = (now - t).total_seconds() / 60.0
+    if age > FRESH_MIN:
+        return f"there is no date in the name and the file was saved {int(age)} min ago (older than {FRESH_MIN} min) - export it again or put today's date in the name"
+    if age < -5:
+        return "its saved time is in the future - check the computer's clock"
+    return ""
+
+
+def _event(msg: str):
+    """An upload event: shown in the live log AND kept in logs/cncf11/cncf11__<dd-mm-yyyy>__uploads.log (the Logs button)."""
+    log(msg)
+    try:
+        with open(log_dir() / f"cncf11__{dstr(_today())}__uploads.log", "a", encoding="utf-8") as f:
+            f.write(f"[{dt.datetime.now():%d-%m-%Y %H:%M:%S}] {msg}\n")
+    except Exception:                                            # noqa: BLE001
+        pass
+
+
+def _refuse(name, why, by=""):
+    _event(f"Upload REFUSED: {name} - {why} (by {by or 'user'})")
+    raise ValueError(f"{name}: {why}")
+
+
+def accept_upload(name: str, data: bytes, by="", modified_ms=None, now: dt.datetime = None) -> dict:
+    """The upload button: only today's PositionBook is accepted (see freshness_problem); it is kept as PositionBook.csv.
+    `modified_ms` = the file's own saved time as the browser reports it (File.lastModified). Every upload - taken or refused -
+    is written to the card's log."""
     name = os.path.basename(name or "")
     if not name or name.startswith(".") or name.lower().endswith((".py", ".bat", ".exe", ".part")):
-        raise ValueError("this file name is not allowed")
+        _refuse(name or "(no name)", "this file name is not allowed", by)
     if not data:
-        raise ValueError("the file is empty")
+        _refuse(name, "the file is empty", by)
     if not re.match(r"^positionbook.*\.csv$", name, re.I):
-        raise ValueError(f"{name}: only the PositionBook csv is used here (a name like PositionBook.csv)")
+        _refuse(name, "only the PositionBook csv is used here (a name like PositionBook_<ddmmyyyy>.csv)", by)
+    why = freshness_problem(name, modified_ms, now)
+    if why:
+        _refuse(name, why, by)
     try:
         head = pd.read_csv(pd.io.common.BytesIO(data), nrows=5)
     except Exception as e:                                       # noqa: BLE001
-        raise ValueError(f"{name}: cannot be read as a csv ({type(e).__name__})")
+        _refuse(name, f"cannot be read as a csv ({type(e).__name__})", by)
     cols = {COLUMN_MAP[str(c).strip().lower()] for c in head.columns if str(c).strip().lower() in COLUMN_MAP}
     need = {"ClientID", "Product", "NetQty"}
     if not need <= cols:
-        raise ValueError(f"{name}: columns missing - {', '.join(sorted(need - cols))} (is this the PositionBook?)")
+        _refuse(name, f"columns missing - {', '.join(sorted(need - cols))} (is this the PositionBook?)", by)
     target = root() / INPUT_NAME
     old = position_path()
     part = root() / (INPUT_NAME + ".part")
@@ -724,7 +780,9 @@ def accept_upload(name: str, data: bytes, by="") -> dict:
     if old.exists() and old != target:
         old.unlink()
     part.replace(target)
-    log(f"Uploaded {name} as {INPUT_NAME} ({len(data):,} bytes) by {by or 'user'}")
+    d = name_date(name)
+    _event(f"Upload ACCEPTED: {name} as {INPUT_NAME} ({len(data):,} bytes) by {by or 'user'} - "
+           + (f"dated {dstr(d)} (today)" if d else f"no date in the name, saved within {FRESH_MIN} min"))
     return {"ok": True, "name": INPUT_NAME, "size": len(data)}
 
 

@@ -1,8 +1,9 @@
 """core/enterprise_risk.py - ENTERPRISE RISK REPORT card (EMAIL.bat + FINAL.bat + any_screener.py as ONE card).
 
 Daily timeline (Mon-Fri trading days; every time is editable in the card's Settings):
-    10:03 -> 11:00  the Enterprise Risk mails (With / Without Margin) and the Concentration_abv20percentage.csv mail are picked from the
-                    mailbox (looked for every 5 minutes; today's mails only)
+    09:00 -> 12:00  the Enterprise Risk mails (With / Without Margin) and the Concentration_abv20percentage.csv mail are picked from the
+                    mailbox (looked for every 5 minutes; today's mails only). A mail that is not found inside the window is then
+                    looked for among ALL of today's mails (00:00 - 23:59), so one that came before 09:00 or after 12:00 is still taken.
     10:30           the run: FULLFILE_CONCENTRATION is taken from MTF CONCENTRATION (its output or its backup, copied - the original stays)
                     -> the two report workbooks (top symbols by NET_EXPOSURE and DAYSTOLIQUIDATE_5PER_VOL, MTF CONCENTRATION and
                     CONCENTRATION_ABV20 sheets) -> screener.in data (SCREENER sheet + combined file) -> password protection
@@ -170,16 +171,27 @@ def _settings_path() -> Path:
     return _state_dir() / "settings.json"
 
 
-DEFAULT_SETTINGS = {"auto": True, "variant": "redflag", "run_at": "10:30", "mail_from": "10:03", "mail_until": "11:00",
+DEFAULT_SETTINGS = {"auto": True, "variant": "redflag", "run_at": "10:30", "mail_from": "09:00", "mail_until": "12:00",
                     "send_mail": True, "protect": True, "top_n": 10, "alert_numbers": ""}
+WINDOW_VERSION = 2          # 2 = the mail window is 09:00 - 12:00 (the mails arrive about 10:00) and a full-day look-up follows
 
 
 def get_settings() -> dict:
     d = dict(DEFAULT_SETTINGS)
+    saved = {}
     try:
-        d.update(json.loads(_settings_path().read_text(encoding="utf-8")))
+        saved = json.loads(_settings_path().read_text(encoding="utf-8"))
+        d.update(saved)
     except Exception:                                            # noqa: BLE001
         pass
+    if saved and saved.get("win_v") != WINDOW_VERSION:           # one-time: an older saved window (10:03 / 10:15 - 11:00) missed the 10:00 mails
+        d["mail_from"], d["mail_until"], d["win_v"] = DEFAULT_SETTINGS["mail_from"], DEFAULT_SETTINGS["mail_until"], WINDOW_VERSION
+        try:
+            tmp = _settings_path().with_suffix(".tmp")
+            tmp.write_text(json.dumps({**saved, "mail_from": d["mail_from"], "mail_until": d["mail_until"], "win_v": WINDOW_VERSION}, indent=1), encoding="utf-8")
+            tmp.replace(_settings_path())
+        except Exception:                                        # noqa: BLE001
+            pass
     for k in ("run_at", "mail_from", "mail_until"):
         d[k] = _hhmm(d.get(k), DEFAULT_SETTINGS[k])
     if d.get("variant") not in ("redflag", "simple"):
@@ -225,7 +237,7 @@ def save_settings(update: dict, by: str = "") -> dict:
             if not failure_alert.parse_numbers(raw):
                 raise ValueError("those WhatsApp numbers are not valid")
         cur["alert_numbers"] = raw
-    cur["by"], cur["at"] = by, _iso()
+    cur["by"], cur["at"], cur["win_v"] = by, _iso(), WINDOW_VERSION
     with _STATE_LOCK:
         _settings_path().write_text(json.dumps(cur, indent=1), encoding="utf-8")
     return cur
@@ -591,7 +603,16 @@ def step_mail(base: Path, force: bool = False) -> dict:
             pop.pass_(cfg["password"])
             count, _size = pop.stat()
             log(f"Mailbox has {count} message(s); looking for today's {var.upper()} Enterprise mails from {s['mail_from']} to {s['mail_until']}.")
-            return find_mails(pop, count, now.date(), var, starts, _t(s["mail_until"]), check=_check_cancel)
+            got = find_mails(pop, count, now.date(), var, starts, _t(s["mail_until"]), check=_check_cancel)
+            miss = [k for k in starts if k not in got]
+            if miss:                                             # not in the window: look at ALL of today's mails (00:00 - 23:59)
+                names = {"without": "Without Margin", "with": "With Margin", "concentration": "Concentration csv"}
+                log(f"Not found between {s['mail_from']} and {s['mail_until']}: {', '.join(names[k] for k in miss)} - now checking ALL of today's mails (full day).")
+                got.update(find_mails(pop, count, now.date(), var, {k: dt.time(0, 0) for k in miss}, dt.time(23, 59, 59), check=_check_cancel))
+                for k in miss:
+                    if k in got:
+                        log(f"{names[k]}: found in the full-day look-up (mail of {got[k][2]:%H:%M}).")
+            return got
         finally:
             try:
                 pop.quit()
@@ -823,13 +844,7 @@ def send_alert(headline, detail, sender=None) -> dict:
     rec = {"sent": False, "reason": ""}
     try:
         from core.scheduler import connections, failure_alert, helpers as H, paths
-        raw = get_settings().get("alert_numbers") or ""
-        if not raw.strip():
-            try:
-                from core import ms15_auto
-                raw = ms15_auto.get_settings().get("alert_numbers", "")
-            except Exception:                                    # noqa: BLE001
-                raw = ""
+        raw = get_settings().get("alert_numbers") or ""          # this card's own list; blank -> the COMMON list below (Credentials > WhatsApp)
         c = connections.get("whatsapp")
         numbers = failure_alert.parse_numbers(raw) or failure_alert.parse_numbers(c.get("alert_numbers", ""))
         if not numbers:

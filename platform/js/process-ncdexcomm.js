@@ -253,7 +253,7 @@
           '<div class="nq-lbl">Client codes always left out (comma separated)</div><input type="text" id="nqExcl" class="nq-in" style="width:100%;margin-bottom:12px" value="' + esc(s.excluded || '') + '">' +
           '<div class="nq-lbl">Start delay after PROBABLE Run (seconds)</div><input type="number" id="nqDelay" min="0" max="600" class="nq-in" style="width:100%;margin-bottom:12px" value="' + esc(s.delay_s) + '">' +
           '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;margin-bottom:12px"><input type="checkbox" id="nqFtp" ' + (s.ftp_enabled ? 'checked' : '') + '> Upload the finished file to Kambala FTP</label>' +
-          '<div class="nq-lbl">WhatsApp failure-alert numbers (blank = the Margin Shortage / common alert numbers)</div><input type="text" id="nqAlert" class="nq-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
+          '<div class="nq-lbl">WhatsApp failure-alert numbers (blank = the common alert numbers of Scheduler &gt; Credentials &gt; WhatsApp)</div><input type="text" id="nqAlert" class="nq-in" style="width:100%;margin-bottom:14px" placeholder="9876543210, 9123456789" value="' + esc(s.alert_numbers || '') + '">' +
           '<button class="sa-save" id="nqSetBtn" data-no-busy="1" style="width:100%" onclick="nqSetSave()">Save settings</button><div class="sa-msg" id="nqSetMsg"></div>');
       });
     });
