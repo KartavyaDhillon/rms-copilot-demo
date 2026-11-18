@@ -680,6 +680,25 @@ try:
     }
 except Exception as _e:                                          # noqa: BLE001
     print(f"⚠️  CNC F11 not registered: {type(_e).__name__}: {_e}")
+# PAYOUT CHECK (core/payout_check_card.py): Update Limits uploaded in the card (also stored in UPDATE LIMITS DATA) -> Payment Request Log
+# -> negative Available Margin check -> one mail -> backup. Run by the button only (3:40 / 4:50 ...). Logs: logs/payoutchk/payoutchk__<dd-mm-yyyy>__<time>.log
+try:
+    from core import payout_check_card as _mc_pc
+    _mc_pc.apply_defaults()
+    PIPELINES["payoutchk"] = {
+        "name": "PAYOUT CHECK", "module": "core.payout_check_card", "func": "run", "logdir": "payoutchk", "runs": 0,
+        "state_dir_env": "PAYOUT_CHECK_DIR", "state_default": r"D:\CONSOLE\data\PAYOUT CHECK", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_pc.MAIL_LABEL[k]: _mc_pc.mail_keys(k) for k in _mc_pc.MAIL_DEFAULTS},
+        "cred": {"Back-office API login (Payment Request Log)": {
+                     "user_key": "KORP_USERNAME", "pass_key": "KORP_PASSWORD",
+                     "note": "The back-office (boapi) login that downloads today's Payment Request Log. Shared with every back-office job - change it here and they follow."},
+                 "E-mail sender (SMTP login) of this card": {
+                     "user_key": "PAYOUTCHK_SENDER_EMAIL", "pass_key": "PAYOUTCHK_SENDER_PASSWORD",
+                     "note": "The login the Payout Check mail goes out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  PAYOUT CHECK not registered: {type(_e).__name__}: {_e}")
 # ENTERPRISE RISK REPORT (core/enterprise_risk.py): Enterprise mails from 10:03, run 10:30 Mon-Fri, screener.in data, one mail.
 # Logs: logs/entrisk/entrisk__<dd-mm-yyyy>__<time>.log
 try:

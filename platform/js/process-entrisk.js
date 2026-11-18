@@ -194,9 +194,29 @@
     if (!d.auto) return '<div class="ent-ban" style="background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.45);color:var(--amber)"><b>Auto is OFF</b> - the timer does nothing. Use the buttons.</div>';
     return '<div class="ent-ban" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.35);color:var(--blue)">● Auto is ON (' + tag + ') - Monday to Friday: mailbox from <b>' + esc(s.mail_from) + '</b> to <b>' + esc(s.mail_until) + '</b>, run at <b>' + esc(s.run_at) + '</b>.' + (s.send_mail ? '' : ' <b style="color:var(--amber)">E-mail is switched OFF.</b>') + (s.protect ? '' : ' <b style="color:var(--amber)">File protection is OFF.</b>') + '</div>';
   }
+  // The Screener line is shown while a screener job is running, and for ONE minute after it finishes - never an older result
+  var SCR_SHOW_MS = 60000;
+  function scrAge(x) {
+    var t = Date.parse(String((x && x.at) || '').replace(' ', 'T'));
+    return isNaN(t) ? Infinity : Date.now() - t;
+  }
+  function scrFresh(x) {
+    if (!x || !x.status) return false;
+    if (x.status === 'running') return scrAge(x) < 15 * 60000;       // a job that never finished is not shown for ever
+    return scrAge(x) >= -60000 && scrAge(x) < SCR_SHOW_MS;
+  }
+  function scrAnnounce(d) {                // a popup when a screener job finishes, even if the Screener window was closed
+    var x = d && d.screener;
+    if (!x || !scrFresh(x) || x.status === 'running') return;
+    var key = (x.symbol || '') + '|' + x.status + '|' + x.at;
+    if (S.scrAnn === key) return;
+    S.scrAnn = key;
+    if (x.status === 'done') okBox('Screener done - ' + (x.symbol || ''), x.msg || 'The file was e-mailed.');
+    else okBox(x.status === 'stopped' ? 'Screener stopped' : 'Screener failed - ' + (x.symbol || ''), x.msg || '', 'err');
+  }
   function scrLine(d) {
     var x = d.screener || {};
-    if (!x.status) return '';
+    if (!scrFresh(x)) return '';
     var col = x.status === 'done' ? 'var(--green)' : x.status === 'failed' ? 'var(--red)' : 'var(--amber)';
     return '<div class="ent-msg" style="color:' + col + '">Screener <b>' + esc(x.symbol) + '</b>: ' + esc(x.status) + ' - ' + esc(x.msg || '') + ' <span style="color:var(--dim)">' + esc(String(x.at || '').slice(11, 16)) + '</span></div>';
   }
@@ -230,7 +250,7 @@
   function paintDyn(force) {
     var d = S.data, el = $('entDyn');
     if (!el || !d || !d.steps) return;
-    var sig = JSON.stringify(d);
+    var sig = JSON.stringify(d) + (scrFresh(d.screener) ? '|scr' : '');       // repaint when the 1-minute line expires
     if (sig === S.sig && !force) return;
     S.sig = sig;
     var old = $('entLogBox'), stick = !old || (old.scrollHeight - old.scrollTop - old.clientHeight < 30), keep = old ? old.scrollTop : 0;
@@ -251,7 +271,10 @@
     var next = 8000;
     return get(BASE + '/status').then(function (d) {
       S.data = d;
-      if (d && d.steps) { paintTile(d); if (modalOpen()) paintDyn(); if (d.running || d.fetching || d.stopping) next = 2000; }
+      if (d && d.steps) {
+        paintTile(d); scrAnnounce(d); if (modalOpen()) paintDyn();
+        if (d.running || d.fetching || d.stopping || scrFresh(d.screener)) next = 2000;
+      }
     }).catch(function () { next = 15000; }).then(function () { schedule(next); });
   }
   function schedule(ms) {
@@ -352,6 +375,7 @@
       S.data = d; paintTile(d);
       var x = d.screener || {};
       if (x.symbol === sym && (x.status === 'done' || x.status === 'failed' || x.status === 'stopped') && x.at !== S.scrSeen) {
+        S.scrAnn = (x.symbol || '') + '|' + x.status + '|' + x.at;      // announced here - the general watcher must not repeat it
         if (x.status === 'done') okBox('Screener done - ' + sym, x.msg || 'The file was e-mailed.');
         else okBox(x.status === 'stopped' ? 'Stopped' : 'Screener failed - ' + sym, x.msg || '', 'err');
         return;

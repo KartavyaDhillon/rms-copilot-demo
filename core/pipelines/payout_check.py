@@ -40,17 +40,25 @@ def _emails(key):
     return [e.strip() for e in os.getenv(key, "").split(",") if e.strip()]
 
 
-def run_payout_check(_preloaded_update=None):
+def run_payout_check(_preloaded_update=None, _update_file=None, _base_file=None, _cancel=None, _max_mail_tries=None):
     """Thin wrapper: adds the AI (Groq) plain-English fallback translation on an
     unrecognized failure, same as nmass_download.py etc. — see _run_payout_check_impl.
 
     _preloaded_update: optional (file_path, polars_df) tuple — see _run_payout_check_impl
-    for exactly how/when it's used. Defaults to None, meaning "read from disk as before"."""
+    for exactly how/when it's used. Defaults to None, meaning "read from disk as before".
+
+    Used only by the PAYOUT CHECK card (all default to None = the unchanged CTCL behaviour):
+      _update_file / _base_file  use exactly these files instead of searching the folders
+      _cancel                    callable; True = stop (checked between mail tries)
+      _max_mail_tries            stop after this many failed mail tries (None = keep trying as before)"""
     try:
-        return _run_payout_check_impl(_preloaded_update=_preloaded_update)
+        return _run_payout_check_impl(_preloaded_update=_preloaded_update, _update_file=_update_file, _base_file=_base_file,
+                                      _cancel=_cancel, _max_mail_tries=_max_mail_tries)
     except SystemExit:
         raise
     except Exception:
+        if _cancel and _cancel():                       # the card's Stop button: not a failure, no translation
+            raise
         import traceback
         from core.error_translator import translate_error
         tb_lines = traceback.format_exc().splitlines()
@@ -63,7 +71,7 @@ def run_payout_check(_preloaded_update=None):
         raise
 
 
-def _run_payout_check_impl(_preloaded_update=None):
+def _run_payout_check_impl(_preloaded_update=None, _update_file=None, _base_file=None, _cancel=None, _max_mail_tries=None):
     """Payout checking: base + Update Limits (CTCL→PAYOUT) → negative margin → email → backup."""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     TODAY_STR = datetime.now().strftime("%d%m%Y")
@@ -84,7 +92,7 @@ def _run_payout_check_impl(_preloaded_update=None):
                     return os.path.join(BASE_DIR, file)
         return None
 
-    base_file = find_file([rf"{TODAY_STR}.*\.xlsx", rf"{TODAY_STR}.*\.csv"])
+    base_file = _base_file if (_base_file and os.path.isfile(_base_file)) else find_file([rf"{TODAY_STR}.*\.xlsx", rf"{TODAY_STR}.*\.csv"])
     if not base_file:
         print(f"❌ Base file ({TODAY_STR}*.xlsx/.csv) not found in {BASE_DIR}")
         return {"status": "missing_files", "missing": [f"{TODAY_STR}*.xlsx/.csv (base file)"]}
@@ -115,7 +123,11 @@ def _run_payout_check_impl(_preloaded_update=None):
             return latest, "PAYOUT"
         return None, None
 
-    update_file, update_source = find_update_limits()
+    if _update_file and os.path.isfile(_update_file):
+        update_file, update_source = str(_update_file), "PAYOUT"       # the card's own file (backed up and removed after the run)
+        print(f"✅ Using the uploaded Update Limits: {os.path.basename(update_file)}")
+    else:
+        update_file, update_source = find_update_limits()
     if not update_file:
         print("❌ Update Limits file not found in CTCL or PAYOUT folder")
         return {"status": "missing_files", "missing": ["Update Limits*.xlsx/.csv (CTCL or PAYOUT folder)"]}
@@ -192,7 +204,10 @@ def _run_payout_check_impl(_preloaded_update=None):
         <br>Best regards,<br><b>Kartavya Dhillon</b><br>Master Capital Services Ltd<br>📞 011-66331000 | Ext. 84
     </body></html>
     """
+        tries = 0
         while True:
+            if _cancel and _cancel():
+                raise RuntimeError("stopped")
             try:
                 msg = MIMEMultipart()
                 msg["From"] = SMTP_EMAIL
@@ -212,7 +227,11 @@ def _run_payout_check_impl(_preloaded_update=None):
                 print("✅ Email sent successfully")
                 break
             except Exception as e:
-                print(f"❌ Email failed: {e}"); print("🔁 Retrying in 5 seconds...")
+                tries += 1
+                print(f"❌ Email failed: {e}")
+                if _max_mail_tries and tries >= _max_mail_tries:
+                    raise RuntimeError(f"e-mail did not go after {tries} tries: {e}")
+                print("🔁 Retrying in 5 seconds...")
                 time.sleep(5)
 
     send_email_with_retry()
