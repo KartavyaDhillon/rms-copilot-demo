@@ -409,7 +409,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=1"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1080,6 +1080,39 @@ _comm_card_routes("ncdex-comm", "core.ncdex_comm_limit")
 _comm_card_routes("mtf-conc", "core.mtf_concentration")      # MTF CONCENTRATION card: /mtf-conc/* (same routes)
 _comm_card_routes("mtf-order", "core.mtf_order_file")        # MTF ORDER FILE card: /mtf-order/* (same routes)
 _comm_card_routes("entrisk", "core.enterprise_risk")         # ENTERPRISE RISK REPORT card: /entrisk/* (same routes)
+_comm_card_routes("cnc-f11", "core.cnc_f11_card")            # CNC F11 card: /cnc-f11/* (same routes; upload = PositionBook.csv)
+
+
+# ── WhatsApp failure-alert numbers of every card (core/card_alerts.py; button: platform/js/process-wanumbers.js) ──
+@app.get("/alert-numbers/{pipe}", name="alert_numbers_get")
+def _alert_numbers_get(pipe: str):
+    from core import card_alerts as _ca
+    return _ca.get_numbers(pipe)
+
+
+@app.post("/alert-numbers/{pipe}", name="alert_numbers_set")
+async def _alert_numbers_set(pipe: str, request: Request):
+    """Password-gated: {password, numbers} -> the numbers that get the WhatsApp picture when this card's run fails."""
+    from core import card_alerts as _ca
+    from core.short_allocation import check_password as _cp
+    body = await request.json()
+    if not _cp(str(body.get("password") or "")):
+        return {"ok": False, "error": "Wrong password"}
+    try:
+        r = _ca.set_numbers(pipe, str(body.get("numbers") or ""), by=(_actor(request)[0] or ""))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, **r}
+
+
+@app.on_event("startup")
+def _card_alerts_startup():
+    """Watcher: a failed run of any card (timer or button) sends the WhatsApp picture to that card's numbers."""
+    try:
+        from core import card_alerts as _ca
+        _ca.start_watcher()
+    except Exception as _e:
+        print(f"⚠️  card failure-alert watcher not started: {type(_e).__name__}: {_e}")
 
 
 @app.post("/entrisk/screener", name="entrisk_screener")

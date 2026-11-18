@@ -662,6 +662,22 @@ try:
     }
 except Exception as _e:                                          # noqa: BLE001
     print(f"⚠️  MTF ORDER FILE not registered: {type(_e).__name__}: {_e}")
+# CNC F11 (core/cnc_f11_card.py): PositionBook.csv uploaded in the card -> Sheet4 -> one mail -> backup. Run by the button only.
+# Logs: logs/cncf11/cncf11__<dd-mm-yyyy>__<time>.log
+try:
+    from core import cnc_f11_card as _mc_cnc
+    _mc_cnc.apply_defaults()
+    PIPELINES["cncf11"] = {
+        "name": "CNC F11", "module": "core.cnc_f11_card", "func": "run", "logdir": "cncf11", "runs": 0,
+        "state_dir_env": "CNC_F11_DIR", "state_default": r"D:\CONSOLE\data\CNC F11", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_cnc.MAIL_LABEL[k]: _mc_cnc.mail_keys(k) for k in _mc_cnc.MAIL_DEFAULTS},
+        "cred": {"E-mail sender (SMTP login) of this card": {
+                     "user_key": "CNCF11_SENDER_EMAIL", "pass_key": "CNCF11_SENDER_PASSWORD",
+                     "note": "The login the CNC F11 mail goes out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  CNC F11 not registered: {type(_e).__name__}: {_e}")
 # ENTERPRISE RISK REPORT (core/enterprise_risk.py): Enterprise mails from 10:03, run 10:30 Mon-Fri, screener.in data, one mail.
 # Logs: logs/entrisk/entrisk__<dd-mm-yyyy>__<time>.log
 try:

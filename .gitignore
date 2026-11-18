@@ -75,3 +75,12 @@ captcha_auto_log.csv
 .bkcache/
 logs/.merge_jobs/
 logs/.lookup_jobs/
+
+# Darwinbox login session, device id and employee records - never shared (also keeps them out of the Bitbucket copy)
+.darwinbox_session.json
+darwinbox_device.json
+darwinbox_sent_records.json
+Darwin_Act_Preview.json
+Darwin_Act_BLOCKED.txt
+data/darwinbox_exit/reference/captures/login_page_raw.html
+data/scheduler/failure_alerts.jsonl
