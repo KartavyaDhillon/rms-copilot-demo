@@ -721,6 +721,22 @@ try:
     }
 except Exception as _e:                                          # noqa: BLE001
     print(f"⚠️  OBLIGATION REPORT not registered: {type(_e).__name__}: {_e}")
+# TENTATIVE PAYIN PAYOUT (core/tpp_card.py): Positionbook uploaded in the card + risk report from COMMON FILES + settlement prices (popup / any file)
+# -> normal + custodian report (Excel protected + picture) -> one mail -> backup. Run by the button only, once a day. Logs: logs/tpp/tpp__<dd-mm-yyyy>__<time>.log
+try:
+    from core import tpp_card as _mc_tpp
+    _mc_tpp.apply_defaults()
+    PIPELINES["tpp"] = {
+        "name": "TENTATIVE PAYIN PAYOUT", "module": "core.tpp_card", "func": "run", "logdir": "tpp", "runs": 0,
+        "state_dir_env": "TPP_DIR", "state_default": r"D:\CONSOLE\data\TENTATIVE PAYIN PAYOUT", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_tpp.MAIL_LABEL[k]: _mc_tpp.mail_keys(k) for k in _mc_tpp.MAIL_DEFAULTS},
+        "cred": {"E-mail sender (SMTP login) of this card": {
+                     "user_key": "TPP_SENDER_EMAIL", "pass_key": "TPP_SENDER_PASSWORD",
+                     "note": "The login the Tentative Obligation mail goes out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  TENTATIVE PAYIN PAYOUT not registered: {type(_e).__name__}: {_e}")
 # ENTERPRISE RISK REPORT (core/enterprise_risk.py): Enterprise mails from 10:03, run 10:30 Mon-Fri, screener.in data, one mail.
 # Logs: logs/entrisk/entrisk__<dd-mm-yyyy>__<time>.log
 try:

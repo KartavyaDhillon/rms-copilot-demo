@@ -409,7 +409,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=1"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=1"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=1"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1160,6 +1160,79 @@ async def _obligation_override(request: Request):
 
 
 _comm_card_routes("obligation", "core.obligation_card")      # OBLIGATION REPORT card: /obligation/* (same routes; upload = MAIN csv)
+
+
+@app.post("/tpp/upload", name="tpp_upload_own")
+async def _tpp_upload(request: Request):
+    """TENTATIVE PAYIN PAYOUT upload (declared BEFORE the shared card routes so it wins): PositionBook + the browser's 'modified' time.
+    Today's date in the name, or no date and saved within an hour; every upload (taken or refused) goes to the card's log."""
+    from core import tpp_card as m
+    if m.is_running():
+        return JSONResponse({"ok": False, "error": "A run is going - Stop it first."}, status_code=409)
+    form = await request.form()
+    files, mods = form.getlist("files"), form.getlist("modified")
+    by = (_actor(request)[0] or "")
+    ok, rejected = [], []
+    for i, f in enumerate(files):
+        try:
+            ok.append(m.accept_upload(getattr(f, "filename", "") or "", await f.read(), by=by,
+                                      modified_ms=(mods[i] if i < len(mods) else None))["name"])
+        except ValueError as e:
+            rejected.append(str(e))
+    return {"ok": ok, "rejected": rejected, "inputs": m.input_status()}
+
+
+@app.get("/tpp/settle/need", name="tpp_settle_need")
+def _tpp_settle_need():
+    """Symbols that need a settlement price today (ITM contracts expiring today) + the prices already saved."""
+    from core import tpp_card as m
+    try:
+        return {"ok": True, "symbols": m.need_symbols(), "stored": m.stored_settlement()}
+    except m.PreRunError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:                                       # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/tpp/settle/save", name="tpp_settle_save")
+async def _tpp_settle_save(request: Request):
+    from core import tpp_card as m
+    body = await request.json()
+    try:
+        return m.save_settlement(body.get("prices") or {}, source=str(body.get("source") or "typed in the popup")[:120],
+                                 token=str(body.get("token") or ""), by=(_actor(request)[0] or ""))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/tpp/settle/inspect", name="tpp_settle_inspect")
+async def _tpp_settle_inspect(request: Request):
+    """Any csv / xlsx file (multipart 'file') or an earlier pick (form 'token') -> its sheets, column names, sample rows and a SYMBOL / PRICE guess."""
+    from core import tpp_card as m
+    form = await request.form()
+    f = form.get("file")
+    try:
+        if f is not None and hasattr(f, "read"):
+            return m.inspect_settle_file(name=getattr(f, "filename", "") or "", data=await f.read(), by=(_actor(request)[0] or ""))
+        return m.inspect_settle_file(token=str(form.get("token") or ""), sheet=form.get("sheet") or None,
+                                     header_row=form.get("header_row") or 1)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/tpp/settle/apply", name="tpp_settle_apply")
+async def _tpp_settle_apply(request: Request):
+    """The chosen SYMBOL / PRICE columns -> the prices found in the file (not saved until the popup is submitted)."""
+    from core import tpp_card as m
+    body = await request.json()
+    try:
+        return m.apply_settle_file(str(body.get("token") or ""), str(body.get("symbol_col") or ""), str(body.get("price_col") or ""),
+                                   sheet=body.get("sheet") or None, header_row=body.get("header_row") or 1, by=(_actor(request)[0] or ""))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
+_comm_card_routes("tpp", "core.tpp_card")                        # TENTATIVE PAYIN PAYOUT card: /tpp/* (same routes; upload = PositionBook)
 
 
 @app.on_event("startup")

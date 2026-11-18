@@ -6276,7 +6276,7 @@ function pxRenderRuns(pipe,s){
 function pxConfig(pipe){ saAskPassword('Email recipients', function(pw){ pxOpenConfig(pipe,pw); }); }
 async function pxOpenConfig(pipe,pw){
   let c; try{ c=await (await fetch(API+'/px/config?pipe='+pipe)).json(); }catch(e){ alert('Could not load config'); return; }
-  let rows='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Edit email recipients (comma-separated). '+(['probable','mcxcomm','ncdexcomm','mtfconc','mtfof','entrisk','cncf11','payoutchk','obligation'].indexOf(pipe)>=0?'What you see here is what is used — a blank box is saved as empty (no recipient).':'Blank = keep current.')+'</div>';
+  let rows='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Edit email recipients (comma-separated). '+(['probable','mcxcomm','ncdexcomm','mtfconc','mtfof','entrisk','cncf11','payoutchk','obligation','tpp'].indexOf(pipe)>=0?'What you see here is what is used — a blank box is saved as empty (no recipient).':'Blank = keep current.')+'</div>';
   // CTCL: inject section headers to group zone emails / Top20 / Payout
   const ctclHeaders=(pipe==='ctcl')?{'Main':'CTCL Zone Emails','Top20 CDR+MT':'Margin Top 20','Payout Check':'Payout Check'}:{};
   for(const z in (c.emails||{})){
@@ -6306,7 +6306,7 @@ async function pxOpenCreds(pipe,pw){
 async function pxSave(pipe,pw){
   // PROBABLE, MCX COMM LIMIT and NCDEX COMM LIMIT e-mail boxes are saved exactly as shown (a blank clears that recipient); every other box / field keeps the old
   // "blank = leave as it is" behaviour.
-  const updates={}; document.querySelectorAll('#saModalBody input[data-key]').forEach(i=>{ const v=i.value.trim(); if(v!==''||(['probable','mcxcomm','ncdexcomm','mtfconc','mtfof','entrisk','cncf11','payoutchk','obligation'].indexOf(pipe)>=0&&i.dataset.email==='1')) updates[i.dataset.key]=v; });
+  const updates={}; document.querySelectorAll('#saModalBody input[data-key]').forEach(i=>{ const v=i.value.trim(); if(v!==''||(['probable','mcxcomm','ncdexcomm','mtfconc','mtfof','entrisk','cncf11','payoutchk','obligation','tpp'].indexOf(pipe)>=0&&i.dataset.email==='1')) updates[i.dataset.key]=v; });
   const msg=document.getElementById('pxCfgMsg');
   // OBLIGATION REPORT: the times / auto / numbers block of this window is saved by the same button
   let _oblSaved=false;

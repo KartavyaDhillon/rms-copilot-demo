@@ -31,8 +31,9 @@ OWN_ALERT = {
     "mtfof": "core.mtf_order_file", "mtfconc": "core.mtf_concentration", "entrisk": "core.enterprise_risk",
     "ncdexcomm": "core.ncdex_comm_limit", "mcxcomm": "core.mcx_comm_limit", "cncf11": "core.cnc_f11_card",
     "ms15": "core.ms15_auto", "payoutchk": "core.payout_check_card", "obligation": "core.obligation_card",
+    "tpp": "core.tpp_card",
 }
-OWN_LOGDIRS = {"mtfof", "mtfconc", "entrisk", "ncdexcomm", "mcxcomm", "cncf11", "ms15", "short_allocation", "payoutchk", "obligation"}
+OWN_LOGDIRS = {"mtfof", "mtfconc", "entrisk", "ncdexcomm", "mcxcomm", "cncf11", "ms15", "short_allocation", "payoutchk", "obligation", "tpp"}
 
 _LOCK = threading.Lock()
 _LAST: dict = {}
