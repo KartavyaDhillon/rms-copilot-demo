@@ -332,6 +332,30 @@ def ctcl_files(d: dt.date, root: Optional[Path] = None) -> List[dict]:
     return found
 
 
+def payout_files(d: dt.date) -> List[dict]:
+    """Update Limits files of day d filed by the PAYOUT CHECK card (3:40, 4:50 ... uploads): BACKUP AUTOMATION\\<dd-mm-yyyy>\\<hhmmss>\\.
+    The card never stores them itself (that would slow its run) - they are stored here, with the snapshot time the card noted."""
+    found = []
+    try:
+        from core import backup_archive as _ba
+        from core import payout_check_card as _pc
+        day = _ba.day_dir(_pc.backup_root(), dstr(d))
+        for run in sorted(p for p in day.iterdir() if p.is_dir()):
+            meta = {}
+            try:
+                meta = json.loads((run / "_update_limits.json").read_text(encoding="utf-8"))
+            except Exception:                                    # noqa: BLE001
+                pass
+            for f in run.iterdir():
+                if f.is_file() and re.match(r"^update[ _]limits.*\.(xlsx|csv)$", f.name, re.I):
+                    found.append({"path": f, "run_dir": None, "source": f"PAYOUT CHECK {run.name}",
+                                  "time": meta.get("time") if meta.get("file") in (None, f.name) else None,
+                                  "time_src": meta.get("time_src", "") if meta.get("file") in (None, f.name) else ""})
+    except (OSError, ImportError):
+        pass
+    return found
+
+
 # ───────────────────────────── the background worker ─────────────────────────────
 def job() -> dict:
     j = dict(_JOB)
@@ -397,7 +421,7 @@ def enqueue_days(days: List[dt.date], kind: str, root: Optional[Path] = None, by
     known = {e.get("sig") for e in index()}
     tasks, nfiles = [], 0
     for d in days:
-        for f in ctcl_files(d, root):
+        for f in ctcl_files(d, root) + (payout_files(d) if root is None else []):
             nfiles += 1
             try:
                 if _sig(f["path"]) in known:
@@ -405,7 +429,7 @@ def enqueue_days(days: List[dt.date], kind: str, root: Optional[Path] = None, by
             except OSError:
                 continue
             tasks.append({"path": f["path"], "date": d, "source": f["source"], "run_dir": f["run_dir"], "by": by,
-                          "label": f"{dstr(d)} {f['source']}"})
+                          "time": f.get("time"), "time_src": f.get("time_src", ""), "label": f"{dstr(d)} {f['source']}"})
     n = _enqueue(tasks, kind)
     if n:
         log(f"{kind}: {n} file(s) to store ({nfiles - n} already stored) from {Path(root) if root else ctcl_backup_root()}")
@@ -421,7 +445,7 @@ def load_history(d1: dt.date, d2: dt.date, root: str = "", by: str = "") -> dict
     if not r.is_dir():
         raise ValueError(f"folder not found on the server: {r}")
     days = [d1 + dt.timedelta(days=i) for i in range((d2 - d1).days + 1)]
-    res = enqueue_days(days, "history", r, by)
+    res = enqueue_days(days, "history", (r if root.strip() else None), by)
     if not res["found"]:
         res["note"] = f"no Update Limits files in {r}\\<dd-mm-yyyy>\\<NN>\\ for these dates"
     return res

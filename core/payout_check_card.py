@@ -5,7 +5,6 @@ This card runs just those two on a fresh Update Limits file, so the 3:40 and the
 CTCL vs NMASS run:
 
     Update Limits file (uploaded in the card)
-      -> stored in UPDATE LIMITS DATA (one Parquet snapshot of the day, background job)
       -> today's Payment Request Log from the back-office API (payout_download)
       -> clients with NEGATIVE Available Margin joined to the requests, TOTAL DEPOSIT added (payout_check)
       -> one mail (PAYOUT CHECKING FILE | <ddmmyyyy>) -> backup.
@@ -37,9 +36,9 @@ NAME = "PAYOUT CHECK"
 FOLDER_NAME = "PAYOUT CHECK"
 PIPE = "payoutchk"
 BACKUP_SUB = "BACKUP AUTOMATION"
-STEP_LABEL = {"input": "Update Limits", "store": "Store in UPDATE LIMITS DATA", "download": "Payment Request Log",
+STEP_LABEL = {"input": "Update Limits", "download": "Payment Request Log",
               "check": "Payout check + e-mail", "backup": "Backup"}
-STEP_ORDER = ("input", "store", "download", "check", "backup")
+STEP_ORDER = ("input", "download", "check", "backup")
 MAIL_DEFAULTS = {"REPORT": ("rms_del@mastertrust.co.in", "")}
 MAIL_LABEL = {"REPORT": "Payout Check file"}
 MAIL_TRIES = 5
@@ -323,23 +322,6 @@ def pre_run_check(base: Path = None) -> dict:
 
 
 # ───────────────────────────── steps ─────────────────────────────
-def step_store(path: Path, by: str = "") -> str:
-    """Hand today's Update Limits to UPDATE LIMITS DATA (background job - a 100 MB file takes minutes; the payout does not wait)."""
-    from core import update_limits as ul
-    meta = _read_meta()
-    d = _today()
-    t = meta.get("time") or dt.datetime.now().strftime("%H:%M:%S")
-    how = meta.get("time_src") or "upload time"
-    dest = ul.upload_target(path.name, d)
-    if dest.exists():
-        dest = dest.with_name(f"{dest.stem}_{t.replace(':', '')}{dest.suffix}")
-    shutil.copy2(path, dest)
-    ul._enqueue([{"path": dest, "date": d, "source": "payout check upload", "time": t, "time_src": how, "by": by,
-                  "keep_path": str(dest), "label": f"{dstr(d)} payout check {dest.name}"}], "upload")
-    log(f"Update Limits {path.name}: {dstr(d)} {t} ({how}) - being stored in UPDATE LIMITS DATA (background).")
-    return f"{dstr(d)} {t} ({how})"
-
-
 def step_download() -> dict:
     from core.pipelines.payout_download import run_payout_download
     with _captured():
@@ -366,20 +348,43 @@ def _latest_run_folder(day: dt.date):
     return max(runs, key=lambda p: int(p.name)) if runs else None
 
 
-def backup_and_cleanup(day: dt.date = None, update_file: Path = None, stamp: str = "") -> Path:
-    """The files of THIS run (from payout_check's run folder) + the uploaded Update Limits go to BACKUP AUTOMATION\\<dd-mm-yyyy>\\<hhmmss>."""
+def _stash_dir() -> Path:
+    p = _state_dir() / "ul_stash"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _stash_update_file(up: Path) -> Path:
+    """A copy of the uploaded Update Limits (original time kept), so it reaches the backup whatever the check does with the original."""
+    dest = _stash_dir() / Path(up).name
+    shutil.copy2(up, dest)
+    return dest
+
+
+def backup_and_cleanup(day: dt.date = None, update_file: Path = None, stamp: str = "", with_run: bool = True) -> Path:
+    """The files of THIS run (from payout_check's run folder) + the uploaded Update Limits go to BACKUP AUTOMATION\\<dd-mm-yyyy>\\<hhmmss>.
+    The Update Limits file is what UPDATE LIMITS DATA stores from here at its daily time (18:00): nothing is stored during the run.
+    A small `_update_limits.json` next to it keeps the snapshot time (from the file name / its saved time / the upload time)."""
     day = day or _today()
     dest = backup_root() / dstr(day) / (stamp or dt.datetime.now().strftime("%H%M%S"))
     dest.mkdir(parents=True, exist_ok=True)
-    run = _latest_run_folder(day)
+    run = _latest_run_folder(day) if with_run else None
     if run:
         for p in run.iterdir():
             if p.is_file():
                 shutil.copy2(p, dest / p.name)
                 log(f"saved in backup: {p.name}")
     if update_file and Path(update_file).is_file():
-        shutil.move(str(update_file), str(dest / Path(update_file).name))
-        log(f"moved to backup: {Path(update_file).name}")
+        target = dest / Path(update_file).name
+        if target.exists() and target.stat().st_size == Path(update_file).stat().st_size:
+            Path(update_file).unlink()                           # payout_check already filed the same file there
+        else:
+            shutil.move(str(update_file), str(target))
+        meta = _read_meta()
+        t, how = meta.get("time") or dt.datetime.now().strftime("%H:%M:%S"), meta.get("time_src") or "upload time"
+        (dest / "_update_limits.json").write_text(json.dumps({"file": target.name, "time": t, "time_src": how, "date": day.isoformat()}),
+                                                  encoding="utf-8")
+        log(f"Update Limits filed in backup ({target.name}, snapshot time {t}) - UPDATE LIMITS DATA stores it at its daily time.")
     return dest
 
 
@@ -439,11 +444,11 @@ def needs_password() -> bool:
 
 
 def run(trigger="manual", by="", alert=None, step_fns=None) -> dict:
-    """`step_fns` (tests): {'store','download','check'} replacements."""
+    """`step_fns` (tests): {'download','check'} replacements."""
     if not _RUN_LOCK.acquire(blocking=False):
         raise Busy(f"{NAME} is already running.")
     alert = alert or send_alert
-    fns = {"store": step_store, "download": step_download, "check": step_check}
+    fns = {"download": step_download, "check": step_check}
     fns.update(step_fns or {})
     base = root()
     _ACTIVE["cancel"] = False
@@ -462,12 +467,8 @@ def run(trigger="manual", by="", alert=None, step_fns=None) -> dict:
         row = input_status(base)[0]
         _set_step("input", "ok", f"{up.name} · {row['size']:,} bytes" + (f" · {row['why']}" if row.get("stale") else ""))
         _check_cancel()
-        _set_step("store", "running")
-        try:
-            _set_step("store", "ok", "queued: " + fns["store"](up, by))
-        except Exception as e:                                   # noqa: BLE001  (storing must never stop the payout)
-            _set_step("store", "failed", f"{type(e).__name__}: {e}")
-            log(f"WARNING: not stored in UPDATE LIMITS DATA - {type(e).__name__}: {e}")
+        stash = _stash_update_file(up)                           # a copy for the backup - the check may move the original
+        stamp = dt.datetime.now().strftime("%H%M%S")
         _check_cancel()
         _set_step("download", "running")
         dl = fns["download"]()
@@ -477,19 +478,20 @@ def run(trigger="manual", by="", alert=None, step_fns=None) -> dict:
         _check_cancel()
         if recs == 0 or not dl.get("file"):
             _set_step("check", "skipped", "no payment request today - nothing to check")
-            _set_step("backup", "skipped", "nothing to file")
+            dest = backup_and_cleanup(_today(), stash, stamp, with_run=False)
+            _set_step("backup", "ok", f"Update Limits filed (no payment request): {dest}")
         elif not get_settings().get("send_mail", True):
             _set_step("check", "skipped", "e-mail is switched off in Settings (the check needs it) - not run")
-            _set_step("backup", "skipped", "")
+            dest = backup_and_cleanup(_today(), stash, stamp, with_run=False)
+            _set_step("backup", "ok", f"Update Limits filed (check not run): {dest}")
         else:
             _set_step("check", "running")
-            stamp = dt.datetime.now().strftime("%H%M%S")
             fns["check"](up, dl["file"])
             _set_step("check", "ok", "mailed: " + ", ".join(_to_list()))
             _update(sent=["REPORT"])
             _check_cancel()
             _set_step("backup", "running")
-            dest = backup_and_cleanup(_today(), None, stamp)
+            dest = backup_and_cleanup(_today(), stash, stamp)
             _set_step("backup", "ok", str(dest))
         _update(status="done", finished=_iso(), error="")
         log(f"=== {NAME} finished ===")

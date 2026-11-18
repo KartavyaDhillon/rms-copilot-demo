@@ -1,6 +1,6 @@
 /* PAYOUT CHECK - small tile of the Process Center. "Open" shows the window: Upload Update Limits, Run, Stop, Credentials, Email To / CC,
    Backup files, Logs, Settings (mail on/off, WhatsApp failure-alert numbers), KPI cards, step tiles, the input file and the live log.
-   Job (PAYMENT_REQUEST_LOG_FILE.py + PAYOUT_FINAL.py): Update Limits uploaded (also stored in UPDATE LIMITS DATA) -> today's Payment Request Log
+   Job (PAYMENT_REQUEST_LOG_FILE.py + PAYOUT_FINAL.py): Update Limits uploaded -> today's Payment Request Log
    -> clients with NEGATIVE Available Margin -> PAYOUT_CHECKING file mailed -> backup. Run it as often as needed (3:40, 4:50 ...).
    Backend: /payout-check/* (api.py, core/payout_check_card.py) and the shared /px/* windows with pipe=payoutchk.
    Injected at serve time (see api.py /legacy). Every button answers with an in-console popup (never the browser's own). */
@@ -107,7 +107,7 @@
     tile.innerHTML =
       '<div class="tile-icon">💰</div>' +
       '<div class="tile-name">PAYOUT CHECK <span class="st" id="pckChip">idle</span></div>' +
-      '<div class="tile-desc">Upload the Update Limits file, Run: gets today\'s Payment Request Log, keeps the clients with negative Available Margin, mails the PAYOUT_CHECKING file. The Update Limits file is also stored in UPDATE LIMITS DATA. Run it at 3:40, 4:50 ... as often as needed.</div>' +
+      '<div class="tile-desc">Upload the Update Limits file, Run: gets today\'s Payment Request Log, keeps the clients with negative Available Margin, mails the PAYOUT_CHECKING file. The Update Limits file is filed in the backup; UPDATE LIMITS DATA stores it from there at its daily time (18:00), not during the run. Run it at 3:40, 4:50 ... as often as needed.</div>' +
       '<div class="tile-desc" id="pckMini" style="font-family:var(--mono);font-size:10.5px;color:var(--dim)">Checking…</div>' +
       '<div class="tile-actions"><button class="tbtn" style="background:#a78bfa;color:#1d1240" onclick="event.stopPropagation();pckOpen()" data-tip="Open PAYOUT CHECK: upload, run, credentials, e-mail To / CC, backup files, logs, settings.">Open</button></div>';
     g.appendChild(tile);
@@ -150,7 +150,7 @@
     window._saReturn = null;
     modal(TITLE,
       '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0 0 8px">' +
-        tb('⬆️ Upload Update Limits', 'pckUpload()', 'Only TODAY\'s Update Limits is taken: today\'s date in the file name (e.g. Update Limits 18112026 1540.xlsx), or - if the name has no date - a file saved in the last 30 minutes. It is also stored in UPDATE LIMITS DATA. Every upload is written to Logs.') +
+        tb('⬆️ Upload Update Limits', 'pckUpload()', 'Only TODAY\'s Update Limits is taken: today\'s date in the file name (e.g. Update Limits 18112026 1540.xlsx), or - if the name has no date - a file saved in the last 30 minutes. It is filed in the backup and stored in UPDATE LIMITS DATA at its daily time (18:00). Every upload is written to Logs.') +
         tb('🔑 Credentials', 'pckCreds()', 'The back-office login that downloads the Payment Request Log, and the e-mail login this card sends from.') +
         tb('✉️ Email To / CC', 'pckEmail()', 'Who gets the PAYOUT CHECKING file (the same list as Payout Check of CTCL vs NMASS).') +
         tb('📦 Backup files', 'pckSub(pckBackup)', 'Pick a date or a range and download the backed-up files as one zip.') +
@@ -326,7 +326,7 @@
     var fd = new FormData(); fd.append('files', file); fd.append('modified', String(file.lastModified || ''));      // the file's own saved time: the server checks it when the name has no date
     fetch(API + BASE + '/upload', { method: 'POST', body: fd }).then(function (r) { return r.json(); }).then(function (j) {
       if (j.error || j.detail) { okBox('Upload failed', String(j.error || j.detail), 'err'); return; }
-      if ((j.ok || []).length) okBox('Update Limits uploaded', 'Saved as ' + j.ok[0] + ' (it is also stored in UPDATE LIMITS DATA when you press Run) - press Run to make the PAYOUT CHECKING file.');
+      if ((j.ok || []).length) okBox('Update Limits uploaded', 'Saved as ' + j.ok[0] + ' (it goes to the backup when you press Run and is stored in UPDATE LIMITS DATA at 18:00) - press Run to make the PAYOUT CHECKING file.');
       else okBox('Not accepted', (j.rejected || ['The file was not accepted.']).join(' '), 'err');
       reload();
     }).catch(function (e) { okBox('Upload failed', (e && e.message) || String(e), 'err'); });

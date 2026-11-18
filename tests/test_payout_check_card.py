@@ -74,13 +74,7 @@ class CardTests(unittest.TestCase):
         self.assertIn("1650", names[0])
 
     # ---- run ----
-    def fns(self, records=3, fail_store=False, fail_check=None):
-        def store(p, by=""):
-            self.calls.append("store")
-            if fail_store:
-                raise OSError("disk")
-            return "stub"
-
+    def fns(self, records=3, fail_check=None):
         def download():
             self.calls.append("download")
             f = Path(os.environ["PAYOUT_FOLDER"]) / "base.xlsx"
@@ -96,13 +90,13 @@ class CardTests(unittest.TestCase):
             (run / "PAYOUT_CHECKING_x.xlsx").write_bytes(b"o")
             (run / "base.xlsx").write_bytes(b"b")
             return {"status": "ok"}
-        return {"store": store, "download": download, "check": check}
+        return {"download": download, "check": check}
 
     def test_run_ok_twice_without_password(self):
         self.upload()
         r = self.m.run("manual", "t", alert=self.alert, step_fns=self.fns())
         self.assertTrue(r["ok"], r)
-        self.assertEqual(self.calls, ["store", "download", "check"])
+        self.assertEqual(self.calls, ["download", "check"])
         st = self.m.status()
         self.assertEqual(st["status"], "done")
         self.assertEqual(st["counts"]["requests"], 3)
@@ -126,13 +120,22 @@ class CardTests(unittest.TestCase):
         steps = {s["key"]: s["status"] for s in self.m.status()["steps"]}
         self.assertEqual(steps["check"], "skipped")
 
-    def test_store_failure_does_not_stop_the_payout(self):
+    def test_update_limits_is_filed_for_the_18_00_store_and_nothing_is_stored_in_the_run(self):
         self.upload()
-        r = self.m.run("manual", "t", alert=self.alert, step_fns=self.fns(fail_store=True))
-        self.assertTrue(r["ok"])
-        self.assertIn("check", self.calls)
-        steps = {s["key"]: s["status"] for s in self.m.status()["steps"]}
-        self.assertEqual(steps["store"], "failed")
+        self.m.run("manual", "t", alert=self.alert, step_fns=self.fns())
+        self.assertEqual([s["key"] for s in self.m.status()["steps"]], ["input", "download", "check", "backup"])
+        from core import update_limits as ul
+        pf = ul.payout_files(dt.date.today())
+        self.assertEqual(len(pf), 1, pf)
+        self.assertTrue(pf[0]["time"])                                       # the snapshot time travels with the file
+        self.assertTrue(pf[0]["source"].startswith("PAYOUT CHECK"))
+        self.assertEqual([p.name for p in self.m._stash_dir().iterdir()], [])   # the stash copy was moved to the backup
+
+    def test_no_requests_still_files_the_update_limits(self):
+        self.upload()
+        self.m.run("manual", "t", alert=self.alert, step_fns=self.fns(records=0))
+        from core import update_limits as ul
+        self.assertEqual(len(ul.payout_files(dt.date.today())), 1)
 
     def test_missing_file_fails_with_alert(self):
         r = self.m.run("manual", "t", alert=self.alert, step_fns=self.fns())
