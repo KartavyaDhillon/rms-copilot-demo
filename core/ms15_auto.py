@@ -252,22 +252,37 @@ def _dl_nmass():
 _LABEL = {"mcx": "MCX files (MCX 90% + MCX Deposit)", "nmass": "NMASS / NCDEX files"}
 
 
-def start_download(n, what, fn=None):
-    """Start the download for run n in a thread (once). what = 'mcx' | 'nmass'. -> the job dict."""
+BUSY_MARK = "already in progress"          # "NMASS/NCDEX login already in progress (started by ctcl)" - another job holds the login
+BUSY_RETRY_S = _env_int("MS15_AUTO_BUSY_RETRY_S", 20)
+BUSY_RETRIES = _env_int("MS15_AUTO_BUSY_RETRIES", 12)       # 12 x 20 s = 4 min of patience, then the normal failure path
+
+
+def start_download(n, what, fn=None, force=False, sleep=time.sleep):
+    """Start the download for run n in a thread (once). what = 'mcx' | 'nmass'. -> the job dict.
+    force=True: start it again although this run already has a (finished / failed) job - the one extra try of the run.
+    A download that fails only because another job holds the portal login ("already in progress") is tried again every
+    BUSY_RETRY_S seconds, so it is done as soon as the other job lets go - it is not left for a person."""
     key = (int(n), what)
     with _LOCK:
         job = _JOBS.get(key)
-        if job and job.get("date") == _today():
+        if job and job.get("date") == _today() and not (force and not _job_alive(n, what)):
             return job
         fn = fn or (_dl_mcx if what == "mcx" else _dl_nmass)
         job = {"date": _today(), "ok": None, "msg": "", "t0": time.time(), "t1": None, "thread": None}
 
         def work():
             log(f"Run {n:02d}: {_LABEL[what]} download started.")
-            try:
-                ok, msg = fn()
-            except Exception as e:                               # noqa: BLE001
-                ok, msg = False, f"{type(e).__name__}: {e}"
+            tries = 0
+            while True:
+                try:
+                    ok, msg = fn()
+                except Exception as e:                           # noqa: BLE001
+                    ok, msg = False, f"{type(e).__name__}: {e}"
+                if ok or BUSY_MARK not in str(msg).lower() or tries >= BUSY_RETRIES:
+                    break
+                tries += 1
+                log(f"Run {n:02d}: {_LABEL[what]} - the portal login is busy with another job; trying again in {BUSY_RETRY_S} s ({tries}/{BUSY_RETRIES}).")
+                sleep(BUSY_RETRY_S)
             job.update(ok=ok, msg=msg, t1=time.time())
             _upd(n, **{what: "done" if ok else "failed", what + "_msg": msg[:300]})
             log(f"Run {n:02d}: {_LABEL[what]} download " + ("finished." if ok else f"FAILED: {msg}"))
@@ -401,6 +416,23 @@ def run_slot(n, st=None, now_fn=time.time, sleep=time.sleep, missing=None, run=N
             _upd(n, status=f"waiting for files (max {st['wait_min']} min)")
         sleep(5)
     busy, gaps = _state()
+    retry_min = int(st.get("retry_min", _env_int("MS15_AUTO_RETRY_MIN", 2)) or 0)
+    if gaps and retry_min > 0:
+        # one more try: download again ONLY what is still missing (a download that is still running is not repeated)
+        need = [w for w, hit in (("mcx", any(g.startswith("MCX") for g in gaps)),
+                                 ("nmass", any(not g.startswith("MCX") for g in gaps))) if hit and not _job_alive(n, w)]
+        for w in need:
+            log(f"Run {n:02d}: {_LABEL[w]} still missing - trying the download once more (max {retry_min} min).")
+            start(n, w, force=True)
+        if need or busy:
+            _upd(n, status=f"retrying the missing files (max {retry_min} min)")
+            deadline = now_fn() + retry_min * 60
+            while now_fn() < deadline:
+                busy, gaps = _state()
+                if not gaps:
+                    break
+                sleep(5)
+            busy, gaps = _state()
     if busy or gaps:
         reasons = []
         for w in ("mcx", "nmass"):

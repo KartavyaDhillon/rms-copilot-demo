@@ -60,6 +60,7 @@ class RunSlotTests(unittest.TestCase):
         M._JOBS.clear()
         self.alerts = []
         self.clock = [1000.0]
+        self.started = []
 
     def tearDown(self):
         M.LOG_DIR = self._old
@@ -74,10 +75,13 @@ class RunSlotTests(unittest.TestCase):
         self.alerts.append((n, head, detail))
         return {"sent": True, "reason": "sent"}
 
+    def start_fn(self, n, w, force=False):
+        self.started.append((w, force))
+
     def go(self, missing, run=lambda: (True, "ok"), pre=None):
         M._upd(1, **(pre or {"mcx": "done", "nmass": "done"}))
         return M.run_slot(1, ST, now_fn=self.now, sleep=self.sleep, missing=missing, run=run, alert=self.alert,
-                          start=lambda n, w: None)
+                          start=self.start_fn)
 
     def test_runs_when_files_ready(self):
         r = self.go(lambda: [])
@@ -97,10 +101,47 @@ class RunSlotTests(unittest.TestCase):
     def test_files_never_arrive_alerts_after_four_minutes(self):
         r = self.go(lambda: ["CM_CLIENT_LEVEL - missing"], pre={"mcx": "done", "nmass": "failed", "nmass_msg": "login failed"})
         self.assertEqual(r["status"], "failed")
-        self.assertGreaterEqual(self.clock[0] - 1000, 4 * 60)
+        self.assertGreaterEqual(self.clock[0] - 1000, 6 * 60)           # 4 min wait + the 2 min extra try
+        self.assertEqual(self.started, [("nmass", True)])               # only the missing group is tried once more
         self.assertEqual(len(self.alerts), 1)
         self.assertIn("NMASS", self.alerts[0][2])
         self.assertIn("login failed", self.alerts[0][2])
+
+    def test_extra_try_brings_the_files_no_alert(self):
+        state = {"t": 0}
+
+        def missing():
+            return ["CM_CLIENT_LEVEL - missing"] if not self.started else []
+        r = self.go(missing, pre={"mcx": "done", "nmass": "failed", "nmass_msg": "x"})
+        self.assertEqual(r["status"], "done")
+        self.assertEqual(self.alerts, [])
+        self.assertEqual(self.started, [("nmass", True)])
+
+    def test_busy_login_is_retried_until_it_is_free(self):
+        M._JOBS.clear()
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            return (False, "NMASS/NCDEX login already in progress (started by ctcl)") if calls["n"] < 3 else (True, "ok")
+        slept = []
+        job = M.start_download(7, "nmass", fn=fn, sleep=slept.append)
+        job["thread"].join(5)
+        self.assertEqual(calls["n"], 3)
+        self.assertTrue(job["ok"])
+        self.assertEqual(len(slept), 2)
+
+    def test_other_failures_are_not_retried_by_the_busy_rule(self):
+        M._JOBS.clear()
+        calls = {"n": 0}
+
+        def fn():
+            calls["n"] += 1
+            return False, "wrong password"
+        job = M.start_download(8, "nmass", fn=fn, sleep=lambda s: None)
+        job["thread"].join(5)
+        self.assertEqual(calls["n"], 1)
+        self.assertFalse(job["ok"])
 
     def test_run_error_alerts(self):
         r = self.go(lambda: [], run=lambda: (False, "boom"))
