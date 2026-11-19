@@ -131,7 +131,7 @@ class Lib(unittest.TestCase):
     def _run(self, rows):
         sent = []
         with mock.patch.object(L, "send_with_retry", lambda msg, recipients=None: sent.append(msg)), \
-                mock.patch.object(L, "enrich", lambda c, recs: [r.update(_ok=True) for r in recs]), \
+                mock.patch.object(L, "enrich", lambda c, recs: [r.update(_ok=True, **{"Pan No.": "ABCDE1234F", "Mobile No.": "9999999999"}) for r in recs]), \
                 mock.patch.object(L, "collect_replies", lambda st: False), \
                 mock.patch.object(L, "act_step_safe", lambda *a, **k: 0), \
                 mock.patch.object(L, "reminder_step_safe", lambda *a, **k: None), \
@@ -161,7 +161,7 @@ class Lib(unittest.TestCase):
             def boom(msg, recipients=None):
                 raise L.AppError("SMTP login was rejected")
             with mock.patch.object(L, "send_with_retry", boom), \
-                    mock.patch.object(L, "enrich", lambda c, recs: [r.update(_ok=True) for r in recs]):
+                    mock.patch.object(L, "enrich", lambda c, recs: [r.update(_ok=True, **{"Pan No.": "ABCDE1234F", "Mobile No.": "9999999999"}) for r in recs]):
                 L.run(self.Client([("M0009", "Fail Case")]))
             self.assertFalse(L.STATE_FILE.exists() and "M0009" in json.loads(L.STATE_FILE.read_text())["sent"])
         finally:

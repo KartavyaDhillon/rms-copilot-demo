@@ -80,6 +80,17 @@ CC = ["hrd@mastertrust.co.in", "rms_del@mastertrust.co.in", "suprita.b@mastertru
       "palkaachopra@mastertrust.co.in"]
 SUBJECT = "Employee Clearance"
 
+# --- PAN rule (manager's instruction, 19-Nov-2026): an employee WITHOUT a PAN number in Darwinbox is NOT mailed to
+# Manohar / Jagesh / Anuj. Only the HR team gets a mail saying the PAN is required before processing (no Cc to anyone
+# else, no reminders to anyone else). The employee is looked at again on every run and goes the normal way once the PAN is there.
+HR_TO = ["hrd@mastertrust.co.in"]
+PAN_HR_REMIND_HOURS = 24           # HR is reminded again (HR only) after this many hours while the PAN is still missing
+PAN_SUBJECT = "Employee Clearance - PAN number required before processing"
+# Contact number: when the Darwinbox form carries the employee's mobile number nothing extra is sent. When it does NOT, HR is
+# asked (HR only, once per employee) to provide it. The normal clearance mail is NOT held back for this - and HR stays in the
+# Cc of every normal mail / reminder either way (CC below is unchanged).
+MOBILE_SUBJECT = "Employee Clearance - contact number required"
+
 RETRY_DELAY = 5                    # seconds between retries (SMTP and network errors)
 MASK_PAN = False                   # True -> PAN shown as XXXXXX491G in the e-mail
 
@@ -279,7 +290,7 @@ class AppError(Exception):
 
 def _reset_stats() -> None:
     STATS.clear()
-    STATS.update(emailed=0, replies=0, submitted=0, reminders=0, alerts=0, idle=False, blocked=False)
+    STATS.update(emailed=0, replies=0, submitted=0, reminders=0, alerts=0, pan_held=0, idle=False, blocked=False)
 
 
 _reset_stats()
@@ -635,11 +646,11 @@ def form_params(reply: dict) -> dict:
     return found
 
 
-def get_details(client: Darwinbox, rec: dict, params: dict) -> dict:
+def get_details(client: Darwinbox, rec: dict, params: dict, fields: list | None = None) -> dict:
     if not params.get("form_process_id"):
         raise AppError("form_process_id not found in the task form reply")
     body = {
-        "add_variables": 1, "fields": DETAIL_FIELDS, "array_fields": [], "separation_fields": [],
+        "add_variables": 1, "fields": list(fields or DETAIL_FIELDS), "array_fields": [], "separation_fields": [],
         "type": params.get("type") or "separation_workflow", "preset_dropdown": [],
         "preset_dropdown_dynamic_list": [], "engagement_themes": [], "pillar": [], "scale": [],
         "user_id": rec["_user_id"], "survey_id": None, "form_type": 1, "employeement_details": [],
@@ -677,12 +688,48 @@ def apply_details(rec: dict, reply: dict) -> None:
     rec["_ok"] = True
 
 
+_MOBILE_LABEL = re.compile(r"mobile|contact|phone", re.I)
+
+
+def form_attr_fields(questions: list) -> list[tuple[str, str]]:
+    """[(field key, question label)] of the form's 'System Attributes' questions (PAN, and - on forms raised after
+    Darwinbox added it - the Contact Number). Only these can be read from the employee's profile."""
+    out = []
+    for q in questions or []:
+        cfg = q.get("config") or {}
+        if q.get("question_type") == "system-attributes" and cfg.get("field"):
+            out.append((str(cfg["field"]), " ".join(str(cfg.get("question") or cfg.get("questionText") or "").split())))
+    return out
+
+
+def mobile_from_form(questions: list, reply: dict) -> str:
+    """The contact number the form itself shows (a system-attribute question labelled Contact Number / Mobile ...),
+    '' when this form has no such question (older tasks) or the profile has no number."""
+    values = {**(reply.get("field_data_values") or {}), **(reply.get("fields_value") or {})}
+    for field, label in form_attr_fields(questions):
+        if _MOBILE_LABEL.search(label) or _MOBILE_LABEL.search(field):
+            v = str(values.get(field) or "").strip()
+            if v:
+                return v
+    return ""
+
+
 def enrich(client: Darwinbox, records: list[dict]) -> None:
     for i, rec in enumerate(records, start=1):
         label = f"{rec['Name']} ({rec['Emp ID']})"
         try:
-            apply_details(rec, get_details(client, rec, form_params(open_task_form(client, rec))))
-            ok(f"[{i}/{len(records)}] details fetched: {label}")
+            params = form_params(open_task_form(client, rec))
+            try:                                         # the form says which profile fields it shows (PAN, Contact Number ...)
+                questions = get_form_definition(client, rec, params)
+            except (AppError, requests.RequestException):
+                questions = []
+            extra = [f for f, _ in form_attr_fields(questions)]
+            reply = get_details(client, rec, params, fields=list(dict.fromkeys(list(DETAIL_FIELDS) + extra)))
+            apply_details(rec, reply)
+            mob = mobile_from_form(questions, reply)
+            if mob:
+                rec["Mobile No."] = mob
+            ok(f"[{i}/{len(records)}] details fetched: {label}" + ("" if rec.get("Mobile No.") else "  (no mobile number on the form)"))
         except (AppError, requests.RequestException) as exc:
             rec["_note"] = str(exc)
             warn(f"[{i}/{len(records)}] {label}: {exc} - will be retried on the next run")
@@ -709,6 +756,8 @@ def load_state() -> dict:
             state["batches"] = data.get("batches") or []
             state["pop_seen2"] = data.get("pop_seen2") or []
             state["act_alert"] = data.get("act_alert") or ""
+            state["pan_wait"] = data.get("pan_wait") or {}
+            state["mobile_asked"] = data.get("mobile_asked") or {}
             if data.get("reply_parser") != REPLY_PARSER:      # parsing improved: read the mailbox again once
                 state["pop_seen2"] = []
     if state["sent"] and not state["batches"]:
@@ -1922,6 +1971,8 @@ def overdue_batches(state: dict, force: bool = False) -> list:
     """Batches that need an alert: [{batch, waiting[], replied[], employees[], hours, sent_txt}]"""
     now, out = datetime.now(), []
     for b in state["batches"]:
+        if _batch_pan_missing(state, b):
+            continue
         if (b.get("alert") or {}).get("done") and not force:
             continue
         age = now - _sent_at(b)
@@ -2112,9 +2163,17 @@ def build_reminder(state: dict, b: dict, addr: str, role: str) -> EmailMessage:
     return msg
 
 
+def _batch_pan_missing(state: dict, b: dict) -> bool:
+    """True when every still-open employee of this mail has no PAN - no reminder / alert goes to anybody else then."""
+    recs = [(state["sent"].get(k) or {}) for k in b["keys"] if k in state["sent"] and not (state["sent"].get(k) or {}).get("acted")]
+    return bool(recs) and all(not pan_ok(((v.get("record") or {}).get("Pan No."))) for v in recs)
+
+
 def due_reminders(state: dict, force: bool = False) -> list:
     now, out = datetime.now(), []
     for b in state["batches"]:
+        if _batch_pan_missing(state, b):
+            continue
         age = now - _sent_at(b)
         if age > timedelta(days=REPLY_WATCH_DAYS) or not batch_open(state, b):
             continue
@@ -2173,6 +2232,134 @@ def check_config(dry_run: bool, replies_only: bool = False) -> None:
         raise AppError("Fill these in the CONFIG block first: " + ", ".join(missing))
 
 
+_PAN_RX = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
+
+
+def pan_ok(pan) -> bool:
+    """True when the PAN looks like a real one (ABCDE1234F). Empty / NA / '-' / half-filled counts as MISSING."""
+    p = str(pan or "").strip().upper().replace(" ", "")
+    if not p:
+        return False
+    if "X" in p[:-4] and len(p) == 10:          # a masked PAN (XXXXXX491G) was filled in by us, not missing
+        return True
+    return bool(_PAN_RX.match(p))
+
+
+def build_pan_message(records: list[dict]) -> EmailMessage:
+    """HR-ONLY mail: the PAN number of these employees is missing and is required before the clearance can be processed."""
+    esc = html.escape
+    cols = ["Name", "Emp ID", "Designation", "Deptt / Location", "Separation date"]
+    cell = "border:1px solid #000;padding:4px 10px;text-align:center;white-space:nowrap;"
+    head = "".join(f'<th style="{cell}background:#B4C6E7;font-weight:bold;">{esc(c)}</th>' for c in cols)
+    rows = "".join("<tr>" + "".join(f'<td style="{cell}">{esc(str(_fmt(r, c, n)))}</td>' for c in cols) + "</tr>"
+                   for n, r in enumerate(records, start=1))
+    intro = ("The PAN number is MISSING for the employee(s) below in Darwinbox. The PAN number is required before we can "
+             "process the Employee Clearance, so the clearance details have NOT been requested from anyone else yet.")
+    ask = "Kindly update the PAN number in Darwinbox (or reply with it) at the earliest. Processing starts as soon as the PAN is available."
+    html_body = ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#000;">'
+                 '<p style="margin:0 0 12px 0;">Dear HR Team,</p>'
+                 f'<p style="margin:0 0 12px 0;">{esc(intro)}</p>'
+                 f'<table style="border-collapse:collapse;font-size:10.5pt;"><tr>{head}</tr>{rows}</table>'
+                 f'<p style="margin:14px 0 12px 0;"><b>{esc(ask)}</b></p>'
+                 f'<p style="margin:16px 0 0 0;">{"<br>".join(esc(x) for x in SIGNATURE)}</p></div>')
+    lines = "\n".join(f"  - {r.get('Name', '')} ({r.get('Emp ID', '')})" for r in records)
+    text = f"Dear HR Team,\n\n{intro}\n\n{lines}\n\n{ask}\n\n" + "\n".join(SIGNATURE) + "\n"
+    msg = EmailMessage()
+    msg["Subject"] = PAN_SUBJECT
+    msg["From"] = FROM_ADDR
+    msg["To"] = ", ".join(HR_TO)                 # HR only - no Cc
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=(FROM_ADDR.split("@")[-1] or "localhost"))
+    msg.set_content(text)
+    msg.add_alternative(html_body, subtype="html")
+    return msg
+
+
+def build_mobile_message(records: list[dict]) -> EmailMessage:
+    """HR-ONLY mail: the contact number of these employees is not on the Darwinbox form."""
+    esc = html.escape
+    cols = ["Name", "Emp ID", "Designation", "Deptt / Location", "Separation date"]
+    cell = "border:1px solid #000;padding:4px 10px;text-align:center;white-space:nowrap;"
+    head = "".join(f'<th style="{cell}background:#B4C6E7;font-weight:bold;">{esc(c)}</th>' for c in cols)
+    rows = "".join("<tr>" + "".join(f'<td style="{cell}">{esc(str(_fmt(r, c, n)))}</td>' for c in cols) + "</tr>"
+                   for n, r in enumerate(records, start=1))
+    intro = "The contact (mobile) number is not available on the Darwinbox exit form for the employee(s) below."
+    ask = "Kindly update it in Darwinbox or reply with the contact number. The clearance has already been sent for the other details."
+    html_body = ('<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#000;">'
+                 '<p style="margin:0 0 12px 0;">Dear HR Team,</p>'
+                 f'<p style="margin:0 0 12px 0;">{esc(intro)}</p>'
+                 f'<table style="border-collapse:collapse;font-size:10.5pt;"><tr>{head}</tr>{rows}</table>'
+                 f'<p style="margin:14px 0 12px 0;"><b>{esc(ask)}</b></p>'
+                 f'<p style="margin:16px 0 0 0;">{"<br>".join(esc(x) for x in SIGNATURE)}</p></div>')
+    lines = "\n".join(f"  - {r.get('Name', '')} ({r.get('Emp ID', '')})" for r in records)
+    msg = EmailMessage()
+    msg["Subject"] = MOBILE_SUBJECT
+    msg["From"] = FROM_ADDR
+    msg["To"] = ", ".join(HR_TO)
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=(FROM_ADDR.split("@")[-1] or "localhost"))
+    msg.set_content(f"Dear HR Team,\n\n{intro}\n\n{lines}\n\n{ask}\n\n" + "\n".join(SIGNATURE) + "\n")
+    msg.add_alternative(html_body, subtype="html")
+    return msg
+
+
+def ask_hr_for_mobile(state: dict, ready: list, dry_run: bool) -> None:
+    """Employees just mailed whose contact number was not found: ask HR (HR only), once per employee."""
+    asked = state.setdefault("mobile_asked", {})
+    missing = [r for r in ready if not str(r.get("Mobile No.") or "").strip() and r["_key"] not in asked]
+    for r in ready:
+        if str(r.get("Mobile No.") or "").strip():
+            info(f"Contact number found for {r['Name']} ({r['Emp ID']}) - HR is not asked")
+    if not missing:
+        return
+    if dry_run:
+        info(f"DRY RUN: contact-number mail to HR for {len(missing)} employee(s) was NOT sent")
+        return
+    try:
+        send_with_retry(build_mobile_message(missing), recipients=list(HR_TO))
+    except AppError as exc:                              # never lets this break the clearance mail that already went out
+        warn(f"Contact-number mail to HR not sent ({exc}) - will be asked again on the next run")
+        return
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for r in missing:
+        asked[r["_key"]] = stamp
+    save_state(state)
+    ok(f"Contact number not found - HR asked ({', '.join(HR_TO)}) for {len(missing)} employee(s)")
+
+
+def hold_for_pan(state: dict, no_pan: list, dry_run: bool) -> None:
+    """Employees without a PAN: mail HR only (once, then again after PAN_HR_REMIND_HOURS), never the other people."""
+    wait = state.setdefault("pan_wait", {})
+    now = datetime.now()
+    due = []
+    for r in no_pan:
+        w = wait.get(r["_key"])
+        last = None
+        if w and w.get("last_mail"):
+            try:
+                last = datetime.strptime(w["last_mail"], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                last = None
+        if last is None or now - last >= timedelta(hours=PAN_HR_REMIND_HOURS):
+            due.append(r)
+        warn(f"PAN missing - held back (not mailed to Manohar / Jagesh / Anuj): {r['Name']} ({r['Emp ID']})")
+    STATS["pan_held"] = len(no_pan)
+    if not due:
+        info("HR already told about the missing PAN - waiting (next HR reminder after "
+             f"{PAN_HR_REMIND_HOURS} h)")
+        return
+    if dry_run:
+        info(f"DRY RUN: the PAN-required mail to {', '.join(HR_TO)} for {len(due)} employee(s) was NOT sent")
+        return
+    send_with_retry(build_pan_message(due), recipients=list(HR_TO))
+    stamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    for r in due:
+        w = wait.setdefault(r["_key"], {"name": r["Name"], "emp_code": r["Emp ID"], "first_at": stamp})
+        w["last_mail"] = stamp
+    save_state(state)
+    ok(f"PAN-required mail sent to HR only ({', '.join(HR_TO)}) for {len(due)} employee(s)")
+
+
 def process_new(client, state: dict, dry_run: bool, fresh: bool) -> int:
     sent = state["sent"]
     rows = extract_rows(client.get_tasks_html(fresh=fresh))
@@ -2191,10 +2378,22 @@ def process_new(client, state: dict, dry_run: bool, fresh: bool) -> int:
     info(f"{len(new)} new record(s): " + ", ".join(f"{r['Name']} ({r['Emp ID']})" for r in new))
 
     enrich(client, new)
-    ready = [r for r in new if r["_ok"]]
-    if not ready:
+    fetched = [r for r in new if r["_ok"]]
+    if not fetched:
         fail("Details could not be fetched for any new record - nothing sent; will retry on the next run")
         return 1
+    # PAN rule: no PAN -> HR only, held back from the normal mail (and looked at again on the next run)
+    no_pan = [r for r in fetched if not pan_ok(r.get("Pan No."))]
+    ready = [r for r in fetched if pan_ok(r.get("Pan No."))]
+    for r in ready:                                   # PAN arrived since the HR mail - back to the normal way
+        if (state.get("pan_wait") or {}).pop(r["_key"], None):
+            ok(f"PAN now available for {r['Name']} ({r['Emp ID']}) - processed the normal way")
+    if no_pan:
+        hold_for_pan(state, no_pan, dry_run)
+    if not ready:
+        if not dry_run:
+            save_state(state)
+        return 0 if len(fetched) == len(new) else 1
 
     msg = build_message(ready)
     if dry_run:
@@ -2211,7 +2410,8 @@ def process_new(client, state: dict, dry_run: bool, fresh: bool) -> int:
     save_state(state)
     STATS["emailed"] += len(ready)
     ok(f"Remembered {len(ready)} employee(s) as sent")
-    return 0 if len(ready) == len(new) else 1
+    ask_hr_for_mobile(state, ready, dry_run)
+    return 0 if len(fetched) == len(new) else 1
 
 
 def run(client, dry_run: bool = False, fresh: bool = False) -> int:
