@@ -255,6 +255,14 @@ def needs_intra(d):
             + _sa01(d) + _peaks(d) + _ncdex_end(d))
 
 
+def needs_intra_test(d):
+    """The normal MCX INTRASAR files, plus the exchange's CM / FO peak files 05-08 (optional: without one, the old source is used)."""
+    m, s = MEMBER, _dmy(d)
+    extra = [_n("FO SA01 peak 05-08 (test)", f"F_SA01 i0{i}", rf"F_SA01_P_{m}_{s}_i0{i}\.lis", True) for i in range(5, 9)]
+    extra += [_n("CM SA01 peak 05-08 (test)", f"C_SA01 i0{i}", rf"C_SA01_P_{m}_{s}_i0{i}\.lis", True) for i in range(5, 9)]
+    return needs_intra(d) + extra
+
+
 def _sa_common(d):
     s = _dmy(d)
     out = _sa01(d) + _sa01_co(d) + _peaks(d) + _ncdex_end(d)
@@ -325,6 +333,14 @@ _reg(Proc("mcx_intrasar", "MCX INTRASAR", "master", "mcx_intrasar.py", needs_int
           to_default="rajeev.kumar2@mastertrust.co.in,ashutosh.yadav@mastertrust.co.in,rms_del@mastertrust.co.in",
           cc_default="sandeep.kumar2@mastertrust.co.in,sumit.aggarwal@mastertrust.co.in",
           note="MCX_INTRASAR file + SA files + peaks + Master + live allocation report -> MCX_Intra_Output, e-mailed."))
+INTRA_TEST = "mcx_intrasar_test"
+_reg(Proc(INTRA_TEST, "MCX INTRASAR TEST (CM/FO peak 05-08)", "master", "mcx_intrasar_test.py", needs_intra_test,
+          ["day", "prev:master_file:\\d{8}_MASTER\\.xlsx", "prev:live_allocation_report:Report_Live_Allocation\\.xlsx"],
+          [r"MCX_Intra_Output_TEST\.xlsx"],
+          dict(roots={r"C:\MCX_INTRA_SAR": "", r"D:\MARGIN SHORTFALL TRACK": "_track"},
+               smtp=("SMTP_SERVER", "SMTP_PORT", "SMTP_USER", "SMTP_PASS"), to=("to_emails", "list"), cc=("cc_emails", "list")),
+          to_default="", cc_default="",
+          note="TEST ONLY: MCX INTRASAR with CM / FO peak files 05-08. Nothing is e-mailed, copied or backed up."))
 _reg(Proc("sa_cm", "SA CM", "sa", "sa_cm.py", needs_sa_cm,
           ["day", "risk", "manual:RESPONSE_2_mcx\\.csv", "live_flat:1,2,3,4,8:MCX_Web_Allocation_\\d+\\.xlsx"], [r"SA_CM_Full\.xlsx"],
           dict(roots={r"C:\PRIYANKA\SA_01_CM": "", r"C:\PRIYANKA\BACKUP FILES AUTOMATED": "_backup", r"D:\MARGIN SHORTFALL TRACK": "_track"},
@@ -987,7 +1003,31 @@ def status(card: str, d: Optional[dt.date] = None) -> dict:
     return {"card": card, "title": c["title"], "date": dstr(d), "iso": d.isoformat(), "default_iso": default_date().isoformat(),
             "procs": procs, "job": job_status(card), "manual": manual_status(d, card) if c["manual"] else None,
             "folder": str(card_dir(card) / dstr(d)), "auto": auto_info(card),
+            "test": intra_test_status() if card == "master" else None,
             "accepted": [{"group": g, "files": v} for g, v in acc.items()]}
+
+
+def intra_test_date() -> dt.date:
+    """The ONE day the MCX INTRASAR test works on (default 16-11-2026; INTRA_TEST_DATE=yyyy-mm-dd in .env changes it)."""
+    try:
+        return dt.date.fromisoformat(os.getenv("INTRA_TEST_DATE", "").strip() or "2026-11-16")
+    except ValueError:
+        return dt.date(2026, 11, 16)
+
+
+def intra_test_status() -> dict:
+    d = intra_test_date()
+    staged = stage_plan(INTRA_TEST, d)
+    needs = check_needs(INTRA_TEST, d, staged)
+    for n in needs:
+        n["later"] = bool(not n["present"] and n["upstream"] and would_pass(n["upstream"], d))
+    req = [n for n in needs if not n["optional"]]
+    peaks = [{"label": n["label"], "group": n["group"], "present": n["present"]} for n in needs if n["group"].endswith("(test)")]
+    return {"key": INTRA_TEST, "date": dstr(d), "iso": d.isoformat(),
+            "found": sum(1 for n in req if n["present"] or n["later"]), "total": len(req),
+            "missing": [n["label"] + (f"  [{n['group']}]" if n["group"] else "") for n in req if not n["present"] and not n["later"]],
+            "peaks": peaks, "outputs": [{"name": o.name, "size": o.stat().st_size} for o in outputs_of(INTRA_TEST, d)],
+            "last": last_result("master", INTRA_TEST, d)}
 
 
 def manual_status(d: dt.date, card: Optional[str] = None) -> dict:
@@ -1208,7 +1248,7 @@ def save_diwali_live(d: dt.date, name: str, data: bytes) -> dict:
 def start(card: str, procs: List[str], d: dt.date, by: str = "", ip: str = "", diwali: bool = False) -> dict:
     if card not in CARDS:
         return {"ok": False, "error": "unknown card"}
-    procs = [x for x in procs if x in CARDS[card]["procs"]]
+    procs = [x for x in procs if x in CARDS[card]["procs"] or (x == INTRA_TEST and card == "master")]
     if not procs:
         return {"ok": False, "error": "nothing to run"}
     with _JOB_LOCK:
@@ -1461,7 +1501,7 @@ def make_zip(card: str, d: dt.date, procs: Optional[List[str]] = None, io: str =
 
 
 def output_path(card: str, proc: str, d: dt.date, name: str) -> Optional[Path]:
-    if proc not in CARDS[card]["procs"]:
+    if proc not in CARDS[card]["procs"] and not (proc == INTRA_TEST and card == "master"):
         return None
     p = out_dir(card, proc, d) / os.path.basename(name)
     return p if p.is_file() else None
@@ -1494,7 +1534,8 @@ def _main(argv=None) -> int:
             print(m, flush=True)
 
         try:
-            res = run_proc(a.card, key, d, log, values=values)
+            res = run_proc(a.card, key, d, log, values=({"smtp": {"server": "", "port": "587", "user": "", "pass": ""}, "to": "", "cc": ""}
+                                                         if key == INTRA_TEST else values))
         except Exception as e:                    # noqa: BLE001
             print(f"FAILED: {type(e).__name__}: {e}", flush=True)
             res = {"ok": False, "outputs": [], "missing": [], "rc": None, "error": f"{type(e).__name__}: {e}"}

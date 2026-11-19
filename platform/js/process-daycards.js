@@ -168,6 +168,35 @@
       '<div style="font-size:10.5px;color:var(--dim);margin-top:6px">E-mailed to: ' + esc(p.to || '-') + (p.cc ? ' · Cc: ' + esc(p.cc) : '') + '</div></div>';
   }
 
+  // ── MCX INTRASAR TEST: CM / FO peak files 05-08, ONE fixed day, nothing is e-mailed / copied / backed up ──
+  function testPanel(card, t, job) {
+    if (!t) return '';
+    var last = t.last || {}, running = !!(job && job.running);
+    var miss = (t.missing || []).length;
+    var pills = (t.peaks || []).map(function (x) {
+      return '<span class="dc-pill ' + (x.present ? 'ok' : 'bad') + '">' + (x.present ? '✓' : '✗') + ' ' + esc(x.group.replace(' (test)', '').replace(' peak 05-08', '')) + ' ' + esc(x.label.split(' ').pop()) + '</span>';
+    }).join('');
+    var outs = (t.outputs || []).map(function (o) {
+      return '<div class="dc-out">📄 <a href="' + API + '/daycards/output?card=' + card + '&proc=' + t.key + '&date=' + encodeURIComponent(t.iso) + '&name=' + encodeURIComponent(o.name) + '" download>' + esc(o.name) + '</a><span style="color:var(--dim);font-size:11px">' + kb(o.size) + '</span></div>';
+    }).join('');
+    var res = last.finished ? '<div style="font-size:11.5px;margin-top:6px;color:' + (last.ok ? 'var(--green)' : 'var(--red)') + '">Last test run: ' + (last.ok ? 'done' : 'FAILED' + (last.stage === 'pre-check' ? ' at the pre-check' : '')) + ' · ' + esc(String(last.finished).replace('T', ' ')) + '</div>' : '';
+    var missHtml = miss ? '<div class="dc-list" style="max-height:110px;margin-top:6px"><b style="color:var(--red)">Not found for ' + esc(t.date) + ':</b><br>' + t.missing.slice(0, 20).map(function (m) { return '<span class="m">✗ ' + esc(m) + '</span>'; }).join('<br>') + '</div>' : '';
+    return '<div class="dc-p" style="border-left:3px solid var(--amber);margin-top:14px"><div class="dc-h"><span class="dc-t">🧪 TEST - MCX INTRASAR with CM / FO peak files 05-08</span>' +
+      '<span style="margin-left:auto"><button class="dc-btn amber" ' + (running ? 'disabled' : '') + ' onclick="dcIntraTest(\'' + card + '\')">🧪 Run test for ' + esc(t.date) + '</button></span></div>' +
+      '<div class="dc-note">Test only, for <b>' + esc(t.date) + '</b>. Indicators 05-08 take the CM and FO deposit and peak margin from the exchange\'s own C_SA01_P / F_SA01_P i05-i08 files (like 01-04). The old values stay in extra columns to compare. <b>Nothing is e-mailed, copied to the tracking folder or backed up</b>; the normal Run buttons are not affected.</div>' +
+      '<div style="font-size:12px"><b>' + t.found + '</b><span style="color:var(--dim)"> / ' + t.total + ' required files ready</span> ' + (miss ? '' : '<span style="color:var(--green)">✓ pre-check passes</span>') + '</div>' +
+      (pills ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + pills + '</div>' : '') + missHtml + res +
+      (outs ? '<div style="margin-top:8px"><div class="dc-lbl">Test output</div>' + outs + '</div>' : '') + '</div>';
+  }
+  window.dcIntraTest = function (card) {
+    var s = S(card);
+    post('/daycards/intra_test', {}).then(function (j) {
+      if (j && j.ok) { s.lastRunAt = Date.now(); say('Test started for ' + (j.date || '') + ' - it begins with the pre-check of the files. Nothing will be e-mailed.'); }
+      else say((j && (j.error || j.detail)) || 'Could not start the test.', 'err');
+      reload(card);
+    });
+  };
+
   function acceptedHtml(d) {
     var n = 0, body = (d.accepted || []).map(function (g) {
       n += g.files.length;
@@ -215,7 +244,7 @@
       (other ? '<div class="dc-msg" style="color:var(--amber)">A run for ' + esc(job.date) + ' is going on - its progress shows when you pick that date.</div>' : '') +
       (showLog ? '<div class="dc-lbl">Live log <span style="text-transform:none;letter-spacing:0">- the full log of each run is under 🗂️ Logs</span></div><div class="dc-log" id="dcLogBox">' + ((job.lines || []).length ? job.lines.slice(-60).map(esc).join('\n') : 'Starting…') + '</div>' : '') +
       manualHtml(card, d) +
-      d.procs.map(function (p) { return procPanel(card, p, job); }).join('') +
+      d.procs.map(function (p) { return procPanel(card, p, job); }).join('') + testPanel(card, d.test, job) +
       '<div style="font-size:11px;color:var(--dim);line-height:1.6">Every process starts with a <b>pre-check</b>: if a file it needs is not found it stops at once, says which one and where to get it, and sends no e-mail. ' +
       'Files are read from where they already are (76 FILES DOWNLOADER, LIVE ALLOCATION CAPTURE, COMMON FILES' + (d.manual ? ', manual files' : '') + ') - nothing is copied into another folder; a run works in a temporary folder that is removed afterwards.</div>';
     var nb = $('dcLogBox'); if (nb) nb.scrollTop = stick ? nb.scrollHeight : keep;

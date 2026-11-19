@@ -270,3 +270,37 @@ class Scripts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IntraTest(unittest.TestCase):
+    """The MCX INTRASAR TEST button: a separate script/process, never part of the card's normal run."""
+
+    def test_test_process_is_not_part_of_the_normal_card(self):
+        self.assertIn(D.INTRA_TEST, D.PROCS)
+        self.assertNotIn(D.INTRA_TEST, D.CARDS["master"]["procs"])
+        self.assertTrue((D.SCRIPTS / "mcx_intrasar_test.py").is_file())
+
+    def test_test_script_cannot_mail_copy_or_back_up(self):
+        txt = (D.SCRIPTS / "mcx_intrasar_test.py").read_text(encoding="utf-8")
+        i_exit = txt.index("sys.exit(0)\n", txt.index("TEST RUN - PEAK FILES 05-08"))
+        for risky in ("server.sendmail", "shutil.move(", "_mst_shutil.copy2("):
+            self.assertGreater(txt.index(risky), i_exit, f"{risky} must come after the test exit")
+        self.assertIn("MCX_Intra_Output_TEST.xlsx", txt)
+
+    def test_patch_leaves_no_login_or_recipients(self):
+        import pathlib
+        txt = (D.SCRIPTS / "mcx_intrasar_test.py").read_text(encoding="utf-8")
+        out = D.patch_script(D.INTRA_TEST, txt, pathlib.Path("/tmp/x"), {"smtp": {"server": "", "port": "587", "user": "", "pass": ""}, "to": "", "cc": ""})
+        self.assertIn("SMTP_USER = ''", out)
+        self.assertIn("SMTP_PASS = ''", out)
+        self.assertIn("to_emails = []", out)
+
+    def test_only_the_test_process_may_start_on_master_and_the_date_is_fixed(self):
+        self.assertEqual(D.intra_test_date(), dt.date(2026, 11, 16))
+        self.assertEqual(D.start("sa", [D.INTRA_TEST], dt.date(2026, 11, 16)).get("ok"), False)
+
+    def test_status_has_the_test_block_only_for_the_master_card(self):
+        st = D.intra_test_status()
+        self.assertEqual(st["date"], "16-11-2026")
+        self.assertIn("peaks", st)
+        self.assertEqual(len(st["peaks"]), 8)

@@ -430,7 +430,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-physdel.js?v=5"></script>'
                             '<script src="/platform/js/process-liveallocation.js?v=8"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
-                            '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
+                            '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=12"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=6"></script>'
                             '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=2"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=2"></script><script src="/platform/js/process-cardlock.js?v=3"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
@@ -1727,6 +1727,17 @@ async def dc_diwali_upload(request: Request, card: str, name: str):
         return _d.save_diwali_live(_dd, name, await request.body())
     except ValueError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+@app.post("/daycards/intra_test")
+async def dc_intra_test(request: Request):
+    """TEST button of MCX INTRASAR: runs mcx_intrasar_test.py for the ONE test date (16-11-2026). Nothing is e-mailed or backed up."""
+    _d = _dc("master")
+    try:
+        by = _actor(request)[0] or ""
+    except Exception:
+        by = ""
+    res = _d.start("master", [_d.INTRA_TEST], _d.intra_test_date(), by=by, ip=request.client.host if request.client else "")
+    return JSONResponse(res, status_code=200 if res.get("ok") else 409)
 
 @app.post("/daycards/stop")
 async def dc_stop(request: Request):
