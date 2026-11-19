@@ -180,7 +180,8 @@ def build_sheet(obl, cust, margins: dict) -> Sheet:
 
 
 # ───────────────────────── painting ─────────────────────────
-def render(path: str, obl, cust, margins: dict) -> str:
+def render(path: str, obl, cust, margins: dict, footer: str = "") -> str:
+    """footer: optional line painted in a dark-blue bar under the sheet (e.g. 'Report time: 19-11-2026  15:30')."""
     sh = build_sheet(obl, cust, margins)
     probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
     merged_cells = {(r, c) for (r1, c1, r2, c2) in sh.merges for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)}
@@ -221,6 +222,15 @@ def render(path: str, obl, cust, margins: dict) -> str:
             paint(r, c, r, c, cell)
     for (r1, c1, r2, c2) in sh.merges:
         paint(r1, c1, r2, c2, sh.cells[(r1, c1)])
+    if footer:
+        FH = 34
+        out = Image.new("RGB", (W, H + FH), "#000000")
+        out.paste(img, (0, 0))
+        od = ImageDraw.Draw(out)
+        od.rectangle([6, H - 6, W - 7, H + FH - 7], fill="#1F3864")
+        f = _font(True, 16)
+        od.text(((W - od.textlength(footer, font=f)) / 2, H - 6 + (FH - 6 - 16) / 2 - 2), footer, font=f, fill=WHITE)
+        img = out
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     img.save(path)
     return path

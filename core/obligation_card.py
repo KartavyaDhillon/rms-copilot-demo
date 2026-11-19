@@ -659,11 +659,23 @@ def _with_retries(label: str, fn, tries: int = None, gap_s: int = None, sleep=ti
 
 
 # ───────────────────────────── picture / mail / WhatsApp ─────────────────────────────
+def report_time_text(main_csv) -> str:
+    """'Report time: dd-mm-yyyy  HH:MM' - the time is the MAIN file's (MAIN_15.30.csv), the date is the file's own date."""
+    p = Path(main_csv)
+    m = _MAIN_RX.match(p.name)
+    try:
+        day = dt.datetime.fromtimestamp(p.stat().st_mtime)
+    except OSError:
+        day = dt.datetime.now()
+    hh, mm = (int(m.group(1)), int(m.group(2))) if m else (day.hour, day.minute)
+    return f"Report time: {day:%d-%m-%Y}  {hh:02d}:{mm:02d}"
+
+
 def step_build(main_csv: Path, fo_file: Path, search_file: Path, work: Path) -> Path:
     from core import obligation_image as OI
     obl, cust, margins = OI.build_data(str(main_csv), str(fo_file), str(search_file))
     out = work / "Obligation_Report_Detailed.png"
-    OI.render(str(out), obl, cust, margins)
+    OI.render(str(out), obl, cust, margins, footer=report_time_text(main_csv))
     if not out.is_file() or out.stat().st_size == 0:
         raise RuntimeError("the picture was not created")
     log(f"Picture ready: {out.name} ({out.stat().st_size // 1024} KB)")

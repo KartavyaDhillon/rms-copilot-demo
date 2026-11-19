@@ -1006,12 +1006,18 @@ def start_ticker() -> None:
 def bootstrap(user) -> dict:
     """Everything the page needs when it opens."""
     me = _uid(user)
-    procs = []
-    try:
+    names = set()
+    try:                                                         # Process Center / KPI cards
         from core.pipeline_box import PIPELINES
-        procs = sorted({str(v.get("name")) for v in PIPELINES.values() if v.get("name")})
+        names |= {str(v.get("name")).strip() for v in PIPELINES.values() if v.get("name")}
     except Exception:                                            # noqa: BLE001
-        procs = []
+        pass
+    try:                                                         # every Scheduler process
+        from core.scheduler import catalog as _cat
+        names |= {str(d.name).strip() for d in _cat.all_defs() if d.name}
+    except Exception as e:                                       # noqa: BLE001
+        _log(f"process list: scheduler catalogue not read ({type(e).__name__}: {e})")
+    procs = sorted({n for n in names if n}, key=str.upper)
     return {"me": {"id": me, "name": _uname(user), "manager": is_manager(user), "admin": bool(user and user.get("is_admin"))}, "people": people(), "processes": procs,
             "settings": get_settings(), "statuses": [{"id": s, "label": STATUS_LABEL[s]} for s in STATUSES],
             "priorities": list(PRIORITIES), "kinds": list(KINDS), "max_file_mb": MAX_FILE_MB, "mailbox": mailbox_status()}
