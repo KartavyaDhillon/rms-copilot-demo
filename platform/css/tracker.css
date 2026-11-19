@@ -81,9 +81,9 @@
 .wt-day .add input:focus { border-style: solid; border-color: var(--accent); }
 
 /* task window */
-.wt-win { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 0; max-height: 78vh; }
-.wt-main { padding: 18px 20px; overflow: auto; min-width: 0; }
-.wt-side { padding: 18px; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 60%, var(--bg)); overflow: auto; }
+.wt-win { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 0; height: 72vh; max-height: 72vh; grid-template-rows: minmax(0, 1fr); }
+.wt-main { padding: 18px 20px; overflow-y: auto; min-width: 0; min-height: 0; }
+.wt-side { padding: 18px; border-left: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 60%, var(--bg)); overflow-y: auto; min-height: 0; }
 .wt-side .f { margin-bottom: 13px; }
 .wt-side .wt-in, .wt-side .wt-sel { width: 100%; }
 .wt-title { width: 100%; font-size: 17px; font-weight: 800; letter-spacing: -.3px; background: transparent; border: 1px solid transparent; border-radius: var(--r-sm); color: var(--text); padding: 5px 7px; margin: -5px -7px 8px; outline: none; }
@@ -109,7 +109,7 @@
 .nav-count.late { background: var(--err); color: #fff; }
 html.rail .nav-count { display: none; }
 @media (max-width: 1250px) { .wt-board { grid-template-columns: repeat(3, minmax(0, 1fr)); } .wt-week { grid-template-columns: repeat(4, minmax(0, 1fr)); } .wt-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 900px) { .wt-two, .wt-win { grid-template-columns: 1fr; } .wt-side { border-left: none; border-top: 1px solid var(--line); } }
+@media (max-width: 900px) { .wt-two, .wt-win { grid-template-columns: 1fr; } .wt-win { height: auto; max-height: none; overflow-y: auto; grid-template-rows: none; } .wt-side { border-left: none; border-top: 1px solid var(--line); } }
 
 /* team diary + e-mail tracking */
 .wt-chip { display: inline-flex; gap: 6px; align-items: center; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--text-2); font-size: 12px; font-weight: 600; cursor: pointer; }
