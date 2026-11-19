@@ -111,43 +111,40 @@
                   (open ? "OPEN" : "CLOSED");
   }
   function tickMarkets() {
-    setMarket("hudNse", "hudNseSub", 9, 15, 15, 30);
-    setMarket("hudMcx", "hudMcxSub", 9, 0, 23, 30);
+    setMarket("hudNse", "hudNseSub", 9, 7, 15, 40);
+    setMarket("hudMcx", "hudMcxSub", 9, 0, 23, 55);
   }
   tickMarkets(); setInterval(tickMarkets, 30000);
 
-  /* HUD: runs today — REAL number from the console, not a decoration.
-     If the backend can't say, the card admits it rather than inventing one. */
-  (function hudRuns() {
-    var v = document.getElementById("hudRuns");
-    var s = document.getElementById("hudRunsSub");
-    if (!v) return;
-    fetch("/ops/summary").then(function (r) { return r.json(); }).then(function (d) {
-      var n = null;
-      if (d && typeof d.runs_today === "number") n = d.runs_today;
-      else if (d && d.kpis && typeof d.kpis.runs_today === "number") n = d.kpis.runs_today;
-      else if (d && d.summary && typeof d.summary.runs_today === "number") n = d.summary.runs_today;
-      if (n !== null) {
-        if (s) s.textContent = "pipeline runs completed today";
-        // count up 0 → n over ~700ms — numbers that arrive feel measured,
-        // numbers that just appear feel hardcoded
-        if (reduceMotion || n === 0) { v.textContent = String(n); }
-        else {
-          var t0 = performance.now();
-          (function cnt(now) {
-            var p = Math.min(1, (now - t0) / 700);
-            v.textContent = String(Math.round(n * (1 - Math.pow(1 - p, 3))));
-            if (p < 1) requestAnimationFrame(cnt);
-          })(t0);
-        }
-      } else {
-        v.textContent = "●";
-        if (s) s.textContent = "console reachable — live";
-      }
-    }).catch(function () {
-      v.textContent = "—";
-      if (s) s.textContent = "console not reachable";
-    });
+  /* HUD: AI CORE + RUNS TODAY - both REAL, from the console (/health/login: numbers only, open before sign-in).
+     AI CORE = ONLINE only while the console answers; OFFLINE when it does not. RUNS TODAY = runs completed / runs due today. */
+  (function hudLive() {
+    var ai = document.getElementById("hudAi"), aiSub = document.getElementById("hudAiSub");
+    var v = document.getElementById("hudRuns"), s = document.getElementById("hudRunsSub");
+    var shown = null;
+    function setAi(up) {
+      if (!ai) return;
+      ai.innerHTML = '<span class="pulse ' + (up ? "ok" : "off") + '"></span> ' + (up ? "ONLINE" : "OFFLINE");
+      if (aiSub) aiSub.textContent = up ? "console responding" : "console not reachable";
+    }
+    function setRuns(done, total) {
+      if (!v) return;
+      var txt = (total && total > 0) ? done + " / " + total : String(done);
+      if (txt !== shown) { v.textContent = txt; shown = txt; }
+      if (s) s.textContent = (total && total > 0) ? "runs completed / due today" : "runs completed today";
+    }
+    function poll() {
+      fetch("/health/login", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+        setAi(true);
+        if (d && typeof d.runs_completed === "number") setRuns(d.runs_completed, typeof d.runs_total === "number" ? d.runs_total : 0);
+        else if (v) { v.textContent = "\u2014"; if (s) s.textContent = "run count not available"; }
+      }).catch(function () {
+        setAi(false);
+        if (v) v.textContent = "\u2014";
+        if (s) s.textContent = "console not reachable";
+      });
+    }
+    poll(); setInterval(poll, 30000);
   })();
 
   /* ── FLOW FIELD ───────────────────────────────────────────────────────

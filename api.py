@@ -353,6 +353,29 @@ async def health():
     return {"status": "ok", "auto_send": AUTO_SEND}
 
 
+_HL = {"t": 0.0, "v": None}
+
+
+@app.get("/health/login")
+def health_login():
+    """Public, numbers only (no names / details): feeds the AI CORE and RUNS TODAY cards of the login page."""
+    import time as _t
+    if _HL["v"] is not None and _t.time() - _HL["t"] < 15:       # the login page polls; never recompute more than every 15 s
+        return _HL["v"]
+    out = {"status": "ok", "runs_completed": None, "runs_total": None}
+    try:
+        from core import ops_metrics
+        s = ops_metrics.summary() or {}
+        if isinstance(s.get("runs_completed"), (int, float)):
+            out["runs_completed"] = int(s["runs_completed"])
+        if isinstance(s.get("runs_total"), (int, float)):
+            out["runs_total"] = int(s["runs_total"])
+    except Exception:                                            # noqa: BLE001
+        pass
+    _HL["t"], _HL["v"] = _t.time(), out
+    return out
+
+
 _NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate",
              "Pragma": "no-cache", "Expires": "0"}
 _REPO_DIR = os.path.dirname(os.path.abspath(__file__))
