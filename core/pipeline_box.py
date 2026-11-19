@@ -2839,6 +2839,26 @@ def _pb_db_pipeline_names(pipe):
             seen.add(n); out.append(n)
     return out
 
+_PB_NOT_MCX_PREFIXES = ("shortage_vs_cc_deposit", "full_file_ctcl_vs_nmass", "update limits", "risk_report",
+                        "mtf_risk_report", "probable_fullfile", "all_exchange_margin_comparison", "f_dlmg02",
+                        "cm_clientlevelcollaterals", "fo_clientlevelcollaterals", "co_clientlevelcollaterals",
+                        "clientneteffectivedeposits")
+
+
+def _pb_glob_ok(fn, globs):
+    """True when file `fn` is wanted by the ticked file-type chips. The generic "*.xlsx" chip is the MCX one - it must
+    NOT drag in the other .xlsx files (outputs, Update Limits, risk report ...) unless their own chip is ticked."""
+    if not globs:
+        return True
+    low = fn.lower()
+    hit = [g for g in globs if _pb_fn.fnmatch(low, g)]
+    if not hit:
+        return False
+    if all(g == "*.xlsx" for g in hit) and (low.startswith(_PB_NOT_MCX_PREFIXES) or low.endswith("_zone data.xlsx")):
+        return False
+    return True
+
+
 def pb_list_backups(pipe, from_date="", to_date="", types=None, slots=None):
     globs = [g.strip().lower() for g in (types or []) if g and g.strip()]
     slot_filter = {s for s in (slots or []) if s in ("Morning", "Afternoon", "Evening")}
@@ -2879,7 +2899,7 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None, slots=None):
                 elif pipe == "cli":
                     crun = _pb_cli_slot_from_dirname(p) or crun
             for fn in files:
-                if globs and not any(_pb_fn.fnmatch(fn.lower(), g) for g in globs): continue
+                if not _pb_glob_ok(fn, globs): continue
                 fpp = os.path.join(dp, fn)
                 try: st = os.stat(fpp)
                 except Exception: continue
@@ -2916,7 +2936,7 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None, slots=None):
                                             to_date=(to_date or None), days=36500):
                     fn = r.get("filename") or ""
                     if not fn: continue
-                    if globs and not any(_pb_fn.fnmatch(fn.lower(), g) for g in globs): continue
+                    if not _pb_glob_ok(fn, globs): continue
                     fdate = r.get("run_date")
                     if not fdate: continue
                     key = (fdate.isoformat(), fn.lower(), r.get("size_bytes") or 0)
@@ -3469,7 +3489,7 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
         dl = cdate.strftime("%d-%m-%Y")
         group = by_dir[(cdate, run_n)]   # list of (fn, fpp)
 
-        def _scan_collatearl(tag, pref):
+        def _scan_collatearl(tag, pref, margin=False):
             cand = [(fn, fpp) for fn, fpp in group
                     if fn.lower().startswith(pref) and fn.lower().endswith((".csv",".xlsx"))]
             if not cand: return {}
@@ -3483,6 +3503,8 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                     v2  = _pb_col(df_pl, "Cash-Others (c)", "Cash-others (c)")
                     v3  = _pb_col(df_pl, "Non-cash Securities (d)")
                     vc  = [c for c in [v1, v2, v3] if c]
+                    if margin:
+                        vc = [c for c in [_pb_col(df_pl, "Minimum Margins (a)")] if c]
                     if not cc or not vc: warnings.append(f"{dl} R{run_n} {fn}: cols missing"); return {}
                     return _pb_sum_collateral_pl(df_pl, cc, vc, codes)
                 else:
@@ -3492,6 +3514,8 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                     vc  = [c for c in (_pb_col(tdf,"Cash allocated (b)"),
                                         _pb_col(tdf,"Cash-Others (c)","Cash-others (c)"),
                                         _pb_col(tdf,"Non-cash Securities (d)")) if c]
+                    if margin:
+                        vc = [c for c in [_pb_col(tdf, "Minimum Margins (a)")] if c]
                     if not cc or not vc: return {}
                     cs  = tdf[cc].astype(str).str.strip().str.upper()
                     res = {}
@@ -3517,6 +3541,9 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                            ("CO","co_clientlevelcollaterals")]:
             for code, v in _scan_collatearl(tag, pref).items():
                 vals[code][tag] = v
+            if pipe == "ms15":   # TOTAL MARGIN bifurcation (Minimum Margins (a)) - Margin Shortage only
+                for code, v in _scan_collatearl(tag, pref, margin=True).items():
+                    vals[code]["M_" + tag] = v
 
         # ── NCDEX ─────────────────────────────────────────────────────────────
         ncdex_cand = [(fn, fpp) for fn, fpp in group
@@ -3533,6 +3560,10 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                         if cc and vc:
                             for code, v in _pb_sum_collateral_pl(df_pl, cc, [vc], codes).items():
                                 vals[code]["NCDEX"] = v
+                        mc = _pb_col(df_pl, "Margin")
+                        if pipe == "ms15" and cc and mc:
+                            for code, v in _pb_sum_collateral_pl(df_pl, cc, [mc], codes).items():
+                                vals[code]["M_NCDEX"] = v
                 else:
                     tdf, err = _pb_read_xlsx_pandas(fpp)
                     if tdf is not None and not err:
@@ -3547,6 +3578,13 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                                     # bug as MCX/CM/FO/CO below.
                                     vc_clean = sub[vc].astype(str).str.replace(",", "", regex=False)
                                     vals[code]["NCDEX"] = round(float(pd.to_numeric(vc_clean, errors="coerce").fillna(0).sum()), 2)
+                            mc = _pb_col(tdf, "Margin")
+                            if pipe == "ms15" and mc:
+                                for code in codes:
+                                    sub = tdf[cs == code]
+                                    if not sub.empty:
+                                        mcl = sub[mc].astype(str).str.replace(",", "", regex=False)
+                                        vals[code]["M_NCDEX"] = round(float(pd.to_numeric(mcl, errors="coerce").fillna(0).sum()), 2)
             except Exception as e:
                 warnings.append(f"{dl} R{run_n} NCDEX: {e}")
 
@@ -3562,8 +3600,10 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                 tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Client Margin Limit"])
                 if err or tdf is None:
                     tdf, err = _pb_read_xlsx_header_scan(fpp, ["Client Code", "Margin Limit"])
+                if err or tdf is None:   # MCX Deposit report (RSK383) names the account "UCC Code"
+                    tdf, err = _pb_read_xlsx_header_scan(fpp, ["UCC Code", "Margin Limit"])
                 if err or tdf is None: continue
-                cc = _pb_col(tdf, "Client Code")
+                cc = _pb_col(tdf, "Client Code", "UCC Code")
                 ml = _pb_col(tdf, "Client Margin Limit", "Margin Limit")
                 if not cc or not ml: continue
                 cs = tdf[cc].astype(str).str.strip().str.upper()
@@ -3582,6 +3622,10 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
                         # as zero afterward.
                         ml_clean = sub[ml].astype(str).str.replace(",", "", regex=False)
                         vals[code]["MCX"] = round(float(pd.to_numeric(ml_clean, errors="coerce").fillna(0).sum()), 2)
+                        mu = _pb_col(tdf, "Margin Utilization", "Margin Utilisation")
+                        if pipe == "ms15" and mu:
+                            mu_clean = sub[mu].astype(str).str.replace(",", "", regex=False)
+                            vals[code]["M_MCX"] = round(float(pd.to_numeric(mu_clean, errors="coerce").fillna(0).sum()), 2)
                 break
             except Exception: continue
 
@@ -3590,12 +3634,17 @@ def pb_client_lookup(pipe, client_codes, from_date="", to_date="", runs=None):
             v = vals[code]
             if not v: continue
             comps = [v.get("CM",0), v.get("FO",0), v.get("CO",0), v.get("NCDEX",0), v.get("MCX",0)]
-            inputs.append({
+            _row = {
                 "date": dl, "run": run_n, "client_code": code,
                 "CM": v.get("CM",0), "FO": v.get("FO",0), "CO": v.get("CO",0),
                 "NCDEX": v.get("NCDEX",0), "MCX": v.get("MCX",0),
                 "TOTAL": round(sum(comps), 2),
-            })
+            }
+            if pipe == "ms15":
+                _m = [v.get("M_CM",0), v.get("M_FO",0), v.get("M_CO",0), v.get("M_NCDEX",0), v.get("M_MCX",0)]
+                _row.update({"M_CM": _m[0], "M_FO": _m[1], "M_CO": _m[2], "M_NCDEX": _m[3], "M_MCX": _m[4],
+                             "M_TOTAL": round(sum(_m), 2)})
+            inputs.append(_row)
 
         # ── Output row for this run ─────────────────────────────────────────
         # pipe-aware: CTCL vs NMASS writes FULL_FILE_CTCL_VS_NMASS_<NN>.xlsx

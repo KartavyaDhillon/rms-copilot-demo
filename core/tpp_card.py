@@ -1415,9 +1415,17 @@ def accept_upload(name: str, data: bytes, by="", modified_ms=None, now: dt.datet
             old.unlink()
     part.replace(target)
     _NEED_CACHE.clear()
+    threading.Thread(target=_prewarm_need, name="tpp-prewarm", daemon=True).start()          # parse it now, not when Run is pressed
     _event(f"Upload ACCEPTED: {name} as {target.name} ({len(data):,} bytes) by {by or 'user'} - "
            + (f"dated {dstr(d)} (today)" if d else f"no date in the name, saved within {FRESH_MIN} min"))
     return {"ok": True, "name": target.name, "size": len(data)}
+
+
+def _prewarm_need():
+    try:
+        need_symbols()
+    except Exception:                                            # noqa: BLE001
+        pass
 
 
 def _read_head(part: Path, ext: str):

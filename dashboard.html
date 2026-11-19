@@ -6646,14 +6646,16 @@ async function pxBackupFind(){
     // pxBkDownloadOneGroup below.
     const groups={};
     files.forEach(f=>{
-      const label=_pxBkRowMeta(f.name).label;
+      let label=_pxBkRowMeta(f.name).label;
+      // The two MCX exports (90% file / Deposit) are ONE group - the server keeps only the one this box actually used.
+      if(['MCX Deposit','MCX / xlsx','MCX 90% (Clientwise)'].includes(label)) label='MCX file';
       (groups[label]=groups[label]||[]).push(f);
     });
     window._pxBkGroups=groups;
     const labels=Object.keys(groups).sort();
     labels.forEach((label,gi)=>{
       const g=groups[label];
-      const m=_pxBkRowMeta(g[0].name);
+      const m=(label==='MCX file')?{icon:'💵',label:'MCX file (the one used)',col:'var(--violet)'}:_pxBkRowMeta(g[0].name);
       const dates=[...new Set(g.map(f=>f.date))].sort((a,b)=>iso(a).localeCompare(iso(b)));
       const totalKB=(g.reduce((s,f)=>s+(f.size||0),0)/1024).toFixed(1);
       const labelEsc=label.replace(/"/g,'&quot;');
@@ -6728,7 +6730,7 @@ async function pxBkDownloadSelected(){
     gchks.forEach(c=>{
       const label=c.dataset.label;
       const g=(window._pxBkGroups||{})[label]||[];
-      groupsToDownload[label]=g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file', time:f.time||''}));
+      groupsToDownload[label]=g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file', time:f.time||'', run:f.run||''}));
     });
     return pxBkDownloadMerged(pipe, groupsToDownload, clientCode, msg);
   }
@@ -6911,7 +6913,7 @@ async function pxBkDownloadOneGroup(label){
   const g=(window._pxBkGroups||{})[label]||[];
   if(!g.length) return;
   const msg=document.getElementById('pxBkDlMsg');
-  return pxBkDownloadMerged(pipe, {[label]: g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file', time:f.time||''}))}, clientCode, msg);
+  return pxBkDownloadMerged(pipe, {[label]: g.map(f=>({path:f.path, date:f.date||'', name:f.name||'file', time:f.time||'', run:f.run||''}))}, clientCode, msg);
 }
 // ── Run-filter chip helpers ─────────────────────────────────────────────────
 function _pxRunCount(pipe){ return pipe==='ms15'?17:5; } // CTCL vs NMASS=5 runs/day, Margin Shortage(ms15)=17 runs/day
@@ -7083,6 +7085,47 @@ function pxShowLookupPopup(d, codes, selectedRuns){
         <a href="${csv1U}" download="ctcl_inputs_${codes.join('_')}.csv" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:8px;border:1px solid rgba(52,211,153,.4);color:var(--teal);font-size:10px;font-weight:600;text-decoration:none">⬇ CSV</a>
       </div>
       <div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin-bottom:20px">${t1}</div>`;
+
+      // ── TOTAL MARGIN bifurcation (Margin Shortage only): the parts that add up to TOTAL MARGIN ──
+      if(isMs15 && t1rows.some(r=>r.M_TOTAL!==undefined)){
+        const mH=[...(multi?['Client']:[]),'Date','Run','CM Margin','FO Margin','CO Margin','NCDEX Margin','MCX Margin Utilization','Total Margin'];
+        const mR=t1rows.map(r=>[...(multi?[r.client_code||'']:[]),r.date,r.run!=null?r.run:'',fmtRaw(r.M_CM),fmtRaw(r.M_FO),fmtRaw(r.M_CO),fmtRaw(r.M_NCDEX),fmtRaw(r.M_MCX),fmtRaw(r.M_TOTAL)].join(','));
+        const mU='data:text/csv;charset=utf-8,'+encodeURIComponent([mH.join(','),...mR].join('\n'));
+        const th=(l,sub,c,e)=>subTh(l,sub,c,e||'');
+        let tm=`<table style="width:100%;border-collapse:collapse;font-size:11px;min-width:760px"><thead><tr>
+          ${multi?`<th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);border-bottom:2px solid var(--line)">Client</th>`:''}
+          <th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--line)">Date</th>
+          <th style="padding:8px 9px;text-align:left;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);border-bottom:2px solid var(--line)">Run</th>
+          ${th('CM Margin','Minimum Margins (a)','var(--red)','border-left:1px solid rgba(248,113,113,.2)')}
+          ${th('FO Margin','Minimum Margins (a)','var(--red)')}
+          ${th('CO Margin','Minimum Margins (a)','var(--red)')}
+          ${th('NCDEX Margin','Margin','#a78bfa')}
+          ${th('MCX Margin','Margin Utilization','#f59e0b')}
+          <th style="padding:8px 9px;text-align:right;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--teal);border-bottom:2px solid var(--line);border-left:1px solid rgba(52,211,153,.2)">Total Margin</th>
+        </tr></thead><tbody>`;
+        let lastD='';
+        t1rows.forEach((r,i)=>{
+          const nd=r.date!==lastD; lastD=r.date;
+          const rc2=r.run!=null?`<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:rgba(59,130,246,.13);border:1px solid rgba(59,130,246,.3);color:var(--blue);font-size:10px;font-weight:700">R${r.run}</span>`:'<span style="color:var(--dim)">—</span>';
+          tm+=`<tr style="font-size:11px;${i%2?'background:rgba(255,255,255,.018)':''}${nd&&i>0?';border-top:1px solid rgba(255,255,255,.07)':''}">
+            ${multi?`<td style="padding:5px 9px;font-family:var(--mono);font-size:10px;color:var(--violet);white-space:nowrap">${r.client_code||''}</td>`:''}
+            <td style="padding:5px 9px;font-family:var(--mono);font-size:10.5px;color:var(--teal);white-space:nowrap">${nd?r.date:'<span style="color:var(--dim);font-size:10px">↳</span>'}</td>
+            <td style="padding:5px 9px;white-space:nowrap">${rc2}</td>
+            <td style="padding:5px 9px;text-align:right;color:var(--red);border-left:1px solid rgba(248,113,113,.1)">${fmt(r.M_CM)}</td>
+            <td style="padding:5px 9px;text-align:right;color:var(--red)">${fmt(r.M_FO)}</td>
+            <td style="padding:5px 9px;text-align:right;color:var(--red)">${fmt(r.M_CO)}</td>
+            <td style="padding:5px 9px;text-align:right;color:#a78bfa">${fmt(r.M_NCDEX)}</td>
+            <td style="padding:5px 9px;text-align:right;color:#f59e0b">${fmt(r.M_MCX)}</td>
+            <td style="padding:5px 9px;text-align:right;border-left:1px solid rgba(52,211,153,.1)">${fmtBold(r.M_TOTAL)}</td>
+          </tr>`;
+        });
+        tm+='</tbody></table>';
+        html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
+          <b style="font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">🧮 Total Margin bifurcation — per date &amp; run</b>
+          <a href="${mU}" download="ms15_margin_${codes.join('_')}.csv" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:8px;border:1px solid rgba(52,211,153,.4);color:var(--teal);font-size:10px;font-weight:600;text-decoration:none">⬇ CSV</a>
+        </div>
+        <div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin-bottom:20px">${tm}</div>`;
+      }
     }
 
     // ── TABLE 2: OUTPUT PER RUN — CTCL VS NMASS (FULL_FILE) or Margin Shortage
@@ -7240,7 +7283,7 @@ async function pxLookupJob(body, box){
       const pct=st.total?Math.round(100*st.done/st.total):0;
       say(`<div style="padding:6px 0;font-size:12px">
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--muted)">${spin}
-    <b style="color:var(--ink)">${st.total?`Reading and merging files — day ${Math.min(st.done+1,st.total)} of ${st.total}`:'Finding the backup files…'}</b>
+    <b style="color:var(--ink)">${st.total?`Reading and merging files — run ${Math.min(st.done+1,st.total)} of ${st.total}`:'Finding the backup files…'}</b>
     ${st.label?`<span>· ${st.label}</span>`:''}<span>· ${fmt(st.elapsed)} elapsed</span>
     <button type="button" onclick="window._pxLkCancel&&window._pxLkCancel()" style="margin-left:auto;font-size:11px;padding:2px 9px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer">Cancel</button>
   </div>

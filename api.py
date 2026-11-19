@@ -409,7 +409,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=1"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=1"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=2"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=2"></script><script src="/platform/js/process-cardlock.js?v=3"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1009,7 +1009,8 @@ def _comm_card_routes(prefix, modname):
         except Exception:
             body = {}
         try:
-            return m.request_run(by=(_actor(request)[0] or ""), password=str(body.get("password") or ""))
+            kw = {"slot": body.get("slot")} if "slot" in body else {}              # cards with timed boxes (PAYOUT CHECK 3:40 / 4:50)
+            return m.request_run(by=(_actor(request)[0] or ""), password=str(body.get("password") or ""), **kw)
         except m.Busy as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
 
@@ -2386,6 +2387,16 @@ class _MailIdTestBody(_OpsBaseModel):
 def ops_mail_identity_test(body: _MailIdTestBody, request: Request):
     from core import mail_identity as _mi
     return _mi.send_test(body.to, body.as_noreply)          # sync route: runs in the worker pool, the SMTP call can take a few seconds
+
+
+@app.get("/ops/card-locks")
+def ops_card_locks():
+    """Which KPI cards are running right now and who started them (polled by process-cardlock.js on every screen)."""
+    try:
+        from core import card_locks
+        return card_locks.snapshot()
+    except Exception as e:                                       # noqa: BLE001
+        return {"error": str(e), "cards": {}}
 
 
 @app.get("/ops/locks")
@@ -4338,13 +4349,13 @@ def _bkm_start(body, ukey, uname):
                     ap = os.path.join(jd, "in", f"{n_in}_{os.path.basename(fn)}")
                     with open(ap, "wb") as f:
                         f.write(content)
-                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": fn, "nocache": True, "time": it.get("time", "")})
+                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": fn, "nocache": True, "time": it.get("time", ""), "run": it.get("run", "")})
                 else:
                     ap = _pbf(pipe, path)
                     if not ap:
                         missing += 1
                         continue
-                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": it.get("name", ""), "time": it.get("time", "")})
+                    g_items.append({"ap": ap, "date": it.get("date", ""), "name": it.get("name", ""), "time": it.get("time", ""), "run": it.get("run", "")})
                     all_paths.append(ap)
             groups.append({"label": str(label), "items": g_items, "missing": missing})
         total = sum(len(g["items"]) for g in groups)
@@ -4353,8 +4364,13 @@ def _bkm_start(body, ukey, uname):
             return {"ok": False, "error": "none of the selected files could be found"}
 
         pl = _bk.plan(all_paths, cands)
+        try:
+            from core import ctcl_mcx_source as _mcxs
+            _src = _mcxs.get_source(pipe) if pipe in _mcxs.PIPES else ""
+        except Exception:
+            _src = ""
         job = {"codes": codes, "cands": cands, "groups": groups, "workers": pl["workers"], "cold": pl["cold"],
-               "user": uname, "pipe": pipe, "created": _t.time()}
+               "user": uname, "pipe": pipe, "created": _t.time(), "mcx_source": _src}
         with open(os.path.join(jd, "job.json"), "w", encoding="utf-8") as f:
             _bkm_json.dump(job, f)
         flags = 0

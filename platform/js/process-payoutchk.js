@@ -74,6 +74,13 @@
     '.pck-kpi .f{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
     '.pck-steps{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}' +
     '@media(max-width:820px){.pck-kpis,.pck-steps{grid-template-columns:repeat(2,1fr)}}' +
+    '.pck-slots{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:0 0 14px}' +
+    '.pck-slot{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--panel-2,rgba(255,255,255,.03));min-width:0}' +
+    '.pck-slot.done{border-color:rgba(52,211,153,.55);box-shadow:0 0 0 1px rgba(52,211,153,.18)}.pck-slot.running{border-color:var(--amber);box-shadow:0 0 0 1px rgba(251,191,36,.25)}' +
+    '.pck-slot.failed,.pck-slot.stopped{border-color:rgba(248,113,113,.55)}.pck-slot.due{border-color:rgba(96,165,250,.6)}' +
+    '.pck-slot .t{font-size:22px;font-weight:750;font-variant-numeric:tabular-nums}.pck-slot .st{font-family:var(--mono);font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;margin:3px 0 4px}' +
+    '.pck-slot.done .st{color:var(--green)}.pck-slot.running .st{color:var(--amber)}.pck-slot.failed .st,.pck-slot.stopped .st{color:var(--red)}.pck-slot.due .st{color:var(--blue)}' +
+    '.pck-slot .m{font-size:11.5px;color:var(--muted);min-height:32px;line-height:1.4}' +
     '.pck-step{border:1px solid var(--line);border-radius:11px;padding:9px 11px;background:var(--panel-2);min-width:0}' +
     '.pck-step.ok{border-color:rgba(52,211,153,.4)}.pck-step.failed{border-color:rgba(248,113,113,.55)}.pck-step.running{border-color:var(--amber)}' +
     '.pck-step .n{font-size:12px;font-weight:650}.pck-step .s{font-family:var(--mono);font-size:9.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--dim);margin-top:2px}' +
@@ -180,9 +187,22 @@
   var ST = { idle: 'Not run yet today', running: 'Running…', done: '✓ Done', failed: '✗ Failed', stopped: 'Stopped' };
   function kpi(k, v, f) { return '<div class="pck-kpi"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="f" title="' + esc(f) + '">' + esc(f) + '</div></div>'; }
   function banner(d) {
-    if (d.status === 'failed') return '<div class="pck-ban" style="background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.45);color:var(--red)"><b>Today\'s run FAILED.</b> ' + esc(d.error || '') + ' <span style="color:var(--dim)">· ' + (d.alert_sent ? 'WhatsApp alert sent' : 'alert not sent' + (d.alert_reason ? ' (' + esc(d.alert_reason) + ')' : '')) + ' · fix it and press <b>Run</b> again.</span></div>';
-    if (d.status === 'done') return '<div class="pck-ban" style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.35);color:var(--green)"><b>✓ Done today</b> - ' + ((d.counts || {}).requests || 0) + ' payment request(s) today · mailed: ' + esc((d.sent || []).length ? 'yes' : 'no (none to check, or e-mail is off in Settings)') + ' · Run is open again for the next check (' + (d.runs || 1) + ' run(s) today).</div>';
-    return '<div class="pck-ban" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.35);color:var(--blue)">Upload today\'s Update Limits, then press <b>Run</b> (3:40, 4:50 ... as often as needed). There is no timer for this card.' + ((d.settings || {}).send_mail === false ? ' <b style="color:var(--amber)">E-mail is switched OFF.</b>' : '') + '</div>';
+    if (d.status === 'failed') return '<div class="pck-ban" style="background:rgba(248,113,113,.10);border:1px solid rgba(248,113,113,.45);color:var(--red)"><b>Today\'s run FAILED.</b> ' + esc(d.error || '') + ' <span style="color:var(--dim)">· ' + (d.alert_sent ? 'WhatsApp alert sent' : 'alert not sent' + (d.alert_reason ? ' (' + esc(d.alert_reason) + ')' : '')) + ' · fix it and press <b>Run</b> in its box again.</span></div>';
+    if (d.status === 'done') return '<div class="pck-ban" style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.35);color:var(--green)"><b>✓ Done today</b> - ' + ((d.counts || {}).requests || 0) + ' payment request(s) today · mailed: ' + esc((d.sent || []).length ? 'yes' : 'no (none to check, or e-mail is off in Settings)') + ' · The boxes above show which check is done and which is left (' + (d.runs || 1) + ' run(s) today).</div>';
+    return '<div class="pck-ban" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.35);color:var(--blue)">Upload today\'s Update Limits, then press <b>Run</b> in the box of the check you are doing (3:40 and 4:50). There is no timer for this card.' + ((d.settings || {}).send_mail === false ? ' <b style="color:var(--amber)">E-mail is switched OFF.</b>' : '') + '</div>';
+  }
+  var SLOT_ST = { pending: 'Left', due: 'Due now - run it', running: 'Running…', done: '✓ Done', failed: '✗ Failed', stopped: 'Stopped' };
+  function slots(d) {
+    var rows = d.slots || [];
+    if (!rows.length) return '';
+    return '<div class="pck-lbl">Today\'s checks</div><div class="pck-slots">' + rows.map(function (r) {
+      var m = r.state === 'done' ? 'Run by ' + esc(r.by || '—') + ' at ' + esc((r.finished || r.at || '').slice(11, 16)) + (r.requests != null ? ' · ' + r.requests + ' payment request(s)' : '')
+        : r.state === 'running' ? 'Started by ' + esc(r.by || '—') + ' at ' + esc((r.at || '').slice(11, 16))
+        : (r.state === 'failed' || r.state === 'stopped') ? esc(r.note || 'did not finish') + ' · tried by ' + esc(r.by || '—') + ' at ' + esc((r.at || '').slice(11, 16))
+        : r.state === 'due' ? 'Time is up - upload the Update Limits and run' : 'Not run yet';
+      return '<div class="pck-slot ' + r.state + '"><div class="t">' + esc(r.time) + '</div><div class="st">' + (SLOT_ST[r.state] || r.state) + '</div><div class="m">' + m + '</div>' +
+        '<button class="sa-tool" data-no-busy="1" style="width:100%;justify-content:center;margin-top:6px' + (r.state === 'done' ? '' : ';background:var(--blue);color:var(--blue-d);border-color:transparent') + '" onclick="pckRunSlot(' + r.slot + ')">▶ Run ' + esc(r.time) + (r.state === 'done' ? ' again' : '') + '</button></div>';
+    }).join('') + '</div>';
   }
   function kpis(d) {
     var ins = d.inputs || [], ok = ins.filter(function (x) { return x.ok; }).length, c = d.counts || {};
@@ -217,7 +237,7 @@
     if (sig === S.sig && !force) return;
     S.sig = sig;
     var old = $('pckLogBox'), stick = !old || (old.scrollHeight - old.scrollTop - old.clientHeight < 30), keep = old ? old.scrollTop : 0;
-    el.innerHTML = banner(d) + kpis(d) + steps(d) + logBox(d) + inputs(d) +
+    el.innerHTML = banner(d) + slots(d) + kpis(d) + steps(d) + logBox(d) + inputs(d) +
       '<div style="font-size:11px;color:var(--dim);line-height:1.6">Folder: <span style="font-family:var(--mono)">' + esc(d.folder) + '</span> · after a run the Update Limits, the Payment Request Log and the PAYOUT_CHECKING file are kept in <span style="font-family:var(--mono)">BACKUP AUTOMATION / dd-mm-yyyy / hhmmss</span>. ' +
       'If the e-mail does not go, the run FAILS and the files stay where they are.</div>';
     var nb = $('pckLogBox'); if (nb) nb.scrollTop = stick ? nb.scrollHeight : keep;
@@ -228,7 +248,7 @@
     chip.textContent = d.stopping ? 'stopping' : d.running ? 'running' : d.status === 'failed' ? 'failed' : d.status === 'done' ? 'done' : 'idle';
     chip.style.color = d.running ? 'var(--blue)' : d.status === 'failed' ? 'var(--red)' : d.status === 'done' ? 'var(--green)' : 'var(--dim)';
     var ok = (d.inputs || []).filter(function (x) { return x.ok; }).length;
-    mini.textContent = d.stopping ? 'Stopping…' : d.running ? 'Running…' : d.status === 'done' ? 'Done · ' + ((d.counts || {}).requests || 0) + ' request(s) checked' : d.status === 'failed' ? 'Failed - open for details' : (ok ? 'Update Limits is in - press Run' : 'Upload the Update Limits');
+    mini.textContent = d.stopping ? 'Stopping…' : d.running ? 'Running…' : (function () { var r = d.slots || [], n = r.filter(function (x) { return x.state === 'done'; }).length; return r.length ? n + ' of ' + r.length + ' checks done' : ''; })() || (d.status === 'done' ? 'Done · ' + ((d.counts || {}).requests || 0) + ' request(s) checked' : d.status === 'failed' ? 'Failed - open for details' : (ok ? 'Update Limits is in - press Run' : 'Upload the Update Limits'));
   }
   function load() {
     var next = 8000;
@@ -244,14 +264,15 @@
   function reload() { S.sig = ''; clearTimeout(S.timer); setTimeout(load, 700); }
 
   // ───────────────────────── actions ─────────────────────────
-  function startRun(pw) {
-    post(BASE + '/run', {}).then(function (j) {
+  function startRun(pw, slot) {
+    post(BASE + '/run', slot ? { slot: slot } : {}).then(function (j) {
       if (j && j.ok) okBox('Run started', 'PAYOUT CHECK is running - watch the steps and the live log in the window.');
       else okBox('Could not start', (j && (j.error || j.msg || j.detail)) || 'The run did not start.', 'err');
       reload();
     });
   }
   window.pckRun = function () { startRun(''); };
+  window.pckRunSlot = function (n) { startRun('', n); };
   window.pckStop = function () {
     confirmBox('Stop PAYOUT CHECK?', 'The run that is going now will be stopped. Files are kept where they are.', 'Stop', function () {
       post(BASE + '/stop').then(function (j) {

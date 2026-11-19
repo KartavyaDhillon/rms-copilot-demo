@@ -538,8 +538,8 @@ def add_comment(user, task_id: int, text: str) -> dict:
 def delete_task(user, task_id: int) -> dict:
     me, mgr = _uid(user), is_manager(user)
     t = _get(task_id)
-    if not _can_edit(t, me, mgr):
-        raise TrackerError("Only the creator or a manager can delete this task.")
+    if not (user and user.get("is_admin")):
+        raise TrackerError("Only an admin can delete a task.")
     for f in _run("SELECT stored FROM tracker_files WHERE task_id = ?", (int(task_id),), fetch=True):
         try:
             (files_root() / str(int(task_id)) / f["stored"]).unlink()
@@ -1010,6 +1010,6 @@ def bootstrap(user) -> dict:
         procs = sorted({str(v.get("name")) for v in PIPELINES.values() if v.get("name")})
     except Exception:                                            # noqa: BLE001
         procs = []
-    return {"me": {"id": me, "name": _uname(user), "manager": is_manager(user)}, "people": people(), "processes": procs,
+    return {"me": {"id": me, "name": _uname(user), "manager": is_manager(user), "admin": bool(user and user.get("is_admin"))}, "people": people(), "processes": procs,
             "settings": get_settings(), "statuses": [{"id": s, "label": STATUS_LABEL[s]} for s in STATUSES],
             "priorities": list(PRIORITIES), "kinds": list(KINDS), "max_file_mb": MAX_FILE_MB, "mailbox": mailbox_status()}

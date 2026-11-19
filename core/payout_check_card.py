@@ -39,6 +39,7 @@ BACKUP_SUB = "BACKUP AUTOMATION"
 STEP_LABEL = {"input": "Update Limits", "download": "Payment Request Log",
               "check": "Payout check + e-mail", "backup": "Backup"}
 STEP_ORDER = ("input", "download", "check", "backup")
+DEFAULT_SLOTS = ("15:40", "16:50")                           # the two daily checks (boxes in the window); each Run fills the next one
 MAIL_DEFAULTS = {"REPORT": ("rms_del@mastertrust.co.in", "")}
 MAIL_LABEL = {"REPORT": "Payout Check file"}
 MAIL_TRIES = 5
@@ -140,7 +141,7 @@ def _settings_path() -> Path:
 
 
 def get_settings() -> dict:
-    d = {"send_mail": True, "alert_numbers": ""}
+    d = {"slot_times": list(DEFAULT_SLOTS), "send_mail": True, "alert_numbers": ""}
     try:
         d.update(json.loads(_settings_path().read_text(encoding="utf-8")))
     except Exception:                                            # noqa: BLE001
@@ -443,7 +444,60 @@ def needs_password() -> bool:
     return False                                                 # 3:40, 4:50 ... - several runs a day are the normal case
 
 
-def run(trigger="manual", by="", alert=None, step_fns=None) -> dict:
+def slot_times() -> list:
+    out = []
+    for t in (get_settings().get("slot_times") or DEFAULT_SLOTS):
+        if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(t)):
+            out.append(str(t))
+    return out or list(DEFAULT_SLOTS)
+
+
+def _set_slot(n: int, **kw):
+    with _STATE_LOCK:
+        st = read_state()
+        sl = st.setdefault("slots", {})
+        cur = sl.get(str(n), {})
+        cur.update(kw)
+        sl[str(n)] = cur
+        _write_state(st)
+
+
+def pick_slot(slot=None) -> int:
+    """The box this run fills: the one asked for, else the first one not done yet, else the last one (a re-run)."""
+    n = len(slot_times())
+    try:
+        if slot is not None and str(slot).strip() != "":
+            k = int(slot)
+            if 1 <= k <= n:
+                return k
+    except (TypeError, ValueError):
+        pass
+    sl = read_state().get("slots") or {}
+    for k in range(1, n + 1):
+        if (sl.get(str(k)) or {}).get("state") != "done":
+            return k
+    return n
+
+
+def slot_rows(now: dt.datetime = None) -> list:
+    now = now or dt.datetime.now()
+    sl = read_state().get("slots") or {}
+    running = is_running()
+    rows = []
+    for i, t in enumerate(slot_times(), 1):
+        d = dict(sl.get(str(i)) or {})
+        st = d.get("state") or "pending"
+        if st == "running" and not running:
+            st = "failed"
+            d["note"] = "interrupted (the server restarted)"
+        if st == "pending" and now.strftime("%H:%M") >= t:
+            st = "due"
+        rows.append({"slot": i, "time": t, "state": st, "by": d.get("by", ""), "at": d.get("at", ""), "finished": d.get("finished", ""),
+                     "requests": d.get("requests"), "note": d.get("note", "")})
+    return rows
+
+
+def run(trigger="manual", by="", alert=None, step_fns=None, slot=None) -> dict:
     """`step_fns` (tests): {'download','check'} replacements."""
     if not _RUN_LOCK.acquire(blocking=False):
         raise Busy(f"{NAME} is already running.")
@@ -454,6 +508,8 @@ def run(trigger="manual", by="", alert=None, step_fns=None) -> dict:
     _ACTIVE["cancel"] = False
     _ACTIVE["log_file"] = _open_run_log(trigger, by)
     prev = read_state()
+    slot_n = pick_slot(slot)
+    _set_slot(slot_n, state="running", by=by or trigger, at=_iso(), finished="", requests=None, note="")
     _update(status="running", started=_iso(), finished="", error="", trigger=trigger, by=by, steps={}, counts={},
             alert_sent=False, alert_reason="", runs=int(prev.get("runs", 0)) + 1)
     old_pipe = os.environ.get("RMS_PIPE")
@@ -517,6 +573,14 @@ def run(trigger="manual", by="", alert=None, step_fns=None) -> dict:
             _update(alert_sent=bool(rec.get("sent")), alert_reason=rec.get("reason", ""))
             result = {"ok": False, "error": msg}
     finally:
+        try:
+            if result.get("ok"):
+                _set_slot(slot_n, state="done", finished=_iso(), requests=(read_state().get("counts") or {}).get("requests"), note="")
+            else:
+                _set_slot(slot_n, state="stopped" if result.get("stopped") else "failed", finished=_iso(),
+                          note=str(result.get("error") or ("Stopped." if result.get("stopped") else ""))[:200])
+        except Exception:                                        # noqa: BLE001
+            pass
         if old_pipe is None:
             os.environ.pop("RMS_PIPE", None)
         else:
@@ -540,15 +604,15 @@ def _to_list() -> list:
         return ["the To list"]
 
 
-def request_run(by="", password=None, background=True) -> dict:
+def request_run(by="", password=None, background=True, slot=None) -> dict:
     if is_running():
         raise Busy(f"{NAME} is already running.")
     if background:
-        th = threading.Thread(target=lambda: run("manual", by), name="payoutchk-manual", daemon=True)
+        th = threading.Thread(target=lambda: run("manual", by, slot=slot), name="payoutchk-manual", daemon=True)
         _ACTIVE["thread"] = th
         th.start()
         return {"ok": True, "started": True}
-    return run("manual", by)
+    return run("manual", by, slot=slot)
 
 
 def any_fetching(exclude: str = "") -> bool:
@@ -708,6 +772,7 @@ def status() -> dict:
             "finished": st.get("finished", ""), "error": st.get("error", ""), "trigger": st.get("trigger", ""), "by": st.get("by", ""),
             "counts": st.get("counts", {}), "sent": st.get("sent", []), "alert_sent": bool(st.get("alert_sent")),
             "alert_reason": st.get("alert_reason", ""), "auto": False, "needs_password": False, "runs": st.get("runs", 0),
+            "slots": slot_rows(),
             "settings": {k: set_[k] for k in ("send_mail", "alert_numbers")},
             "steps": [dict(key=k, label=STEP_LABEL[k], **steps.get(k, {"status": "", "msg": ""})) for k in STEP_ORDER],
             "inputs": inputs, "folder": str(root()), "log": recent_log(60)}

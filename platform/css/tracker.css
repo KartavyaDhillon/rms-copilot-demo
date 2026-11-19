@@ -173,3 +173,20 @@ html.rail .nav-count { display: none; }
 .wt-day.today { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); }
 .wt-day.today .dh b { color: var(--accent); }
 .wt-day.today .dh span::after { content: " \00B7 TODAY"; color: var(--accent); }
+
+/* task window: status colour + completed banner */
+.wt-sel.st-sel { font-weight: 700; border-width: 2px; }
+.wt-sel.st-sel.s-open { color: var(--text-2); }
+.wt-sel.st-sel.s-in_progress { color: var(--info); border-color: var(--info); background: color-mix(in srgb, var(--info) 10%, var(--surface-2)); }
+.wt-sel.st-sel.s-waiting { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--surface-2)); }
+.wt-sel.st-sel.s-review { color: #c084fc; border-color: #c084fc; background: rgba(192,132,252,.1); }
+.wt-sel.st-sel.s-done { color: var(--ok); border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, var(--surface-2)); }
+.wt-sel.st-sel.s-cancelled { color: var(--text-3); }
+.wt-win.st-in_progress .wt-main { box-shadow: inset 3px 0 0 var(--info); }
+.wt-win.st-waiting .wt-main { box-shadow: inset 3px 0 0 var(--warn); }
+.wt-win.st-review .wt-main { box-shadow: inset 3px 0 0 #c084fc; }
+.wt-win.st-done .wt-main { box-shadow: inset 3px 0 0 var(--ok); }
+.wt-doneb { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent); }
+.wt-doneb span { font-size: 11px; color: var(--text-3); }
+.wt-doneb svg { width: 14px; height: 14px; vertical-align: -2px; }

@@ -170,9 +170,12 @@ def read_raw_rows(path):
         except ImportError:
             raise AbortRun("openpyxl is required.\n  Install it with:  pip install openpyxl")
         wb = openpyxl.load_workbook(path, data_only=True, read_only=False)
-        ws = wb.worksheets[0]
-        for row in ws.iter_rows(values_only=True):
-            rows.append(["" if c is None else str(c).strip() for c in row])
+        try:
+            ws = wb.worksheets[0]
+            for row in ws.iter_rows(values_only=True):
+                rows.append(["" if c is None else str(c).strip() for c in row])
+        finally:
+            wb.close()                      # an open handle made Windows refuse to move the file into the Backup (WinError 32)
     else:
         return None
     return rows
@@ -299,13 +302,73 @@ def _split_date8(d):
 # auto-pick the 5 files for a given CLI backup slot (Morning/Afternoon/Evening)
 # ---------------------------------------------------------------------------
 
+_USED_LEDGER = ".used_files.json"
+
+
+def _ledger_path():
+    return os.path.join(BASE_FOLDER, _USED_LEDGER)
+
+
+def _ledger_load() -> dict:
+    try:
+        with open(_ledger_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _mark_used(path):
+    """A live file that could not be moved into the Backup (locked by another program) must never be taken as the NEXT
+    run's live file: it is remembered here (name + size + saved time) and skipped by every later scan."""
+    try:
+        st = os.stat(path)
+        led = _ledger_load()
+        led[os.path.basename(path)] = [st.st_size, int(st.st_mtime)]
+        with open(_ledger_path(), "w", encoding="utf-8") as f:
+            json.dump(led, f)
+    except Exception as e:
+        print(f"  [warn] could not note {os.path.basename(path)} as used: {e}")
+
+
+def _is_used(path, led) -> bool:
+    try:
+        st = os.stat(path)
+        return led.get(os.path.basename(path)) == [st.st_size, int(st.st_mtime)]
+    except OSError:
+        return False
+
+
+def _move_with_retry(src, dest, tries=6, wait=1.0):
+    """shutil.move that survives a file another program (Excel, antivirus, a reader not closed yet) still holds for a moment."""
+    import gc
+    last = None
+    for n in range(1, tries + 1):
+        try:
+            gc.collect()
+            shutil.move(src, dest)
+            return
+        except OSError as e:
+            last = e
+            time.sleep(wait)
+    try:                                    # last resort: copy it, then try once more to remove the original
+        shutil.copy2(src, dest)
+        os.remove(src)
+        return
+    except OSError:
+        pass
+    raise last
+
+
 def list_files_in(folder):
     """Excludes this pipeline's own files (master xlsx, meta json, in-progress
     .tmp write) so they're never mistaken for a segment source file."""
     out = []
     own_files = {MASTER_FILENAME.lower(), META_FILENAME.lower()}
+    led = _ledger_load() if os.path.abspath(folder) == os.path.abspath(BASE_FOLDER) else {}
     for name in sorted(os.listdir(folder)):
         full = os.path.join(folder, name)
+        if led and _is_used(full, led):
+            continue                        # already used by an earlier run (could not be moved away) - not today's fresh file
         if not os.path.isfile(full):
             continue
         if name.startswith("~$") or name.startswith("."):
@@ -469,7 +532,7 @@ def _consume_base_folder_files(chosen_paths, tag):
     for seg, src in chosen_paths.items():
         dest = os.path.join(hold_dir, os.path.basename(src))
         try:
-            shutil.move(src, dest)
+            _move_with_retry(src, dest)
             moved[seg] = dest
         except Exception as e:
             print(f"  [warn] could not move consumed {tag} {seg} file out of {BASE_FOLDER}: {e}")
@@ -710,6 +773,13 @@ def load_master_xlsx(path):
     if not os.path.exists(path):
         return [], {}
     wb = openpyxl.load_workbook(path, data_only=True)
+    try:
+        return _read_master_rows(wb)
+    finally:
+        wb.close()
+
+
+def _read_master_rows(wb):
     ws = wb.active
     rows_iter = ws.iter_rows(values_only=True)
     fieldnames = [str(c) if c is not None else "" for c in next(rows_iter)]
@@ -857,11 +927,14 @@ def _backup_run_files(today_str, mode_key, morning_paths, seg_paths, master_path
             if mode_key == "live":
                 if os.path.exists(dest):
                     os.remove(dest)
-                shutil.move(src, dest)
+                _move_with_retry(src, dest)
             else:
                 shutil.copy2(src, dest)
         except Exception as e:
             print(f"  [warn] could not back up {mode_key} {seg} file: {e}")
+            if mode_key == "live" and os.path.exists(src):
+                _mark_used(src)             # it is in the Backup as a copy (or will be) - never reuse it as the next live file
+                print(f"  [note] {os.path.basename(src)} stays in the folder but will NOT be used by the next run.")
 
     try:
         shutil.copy2(master_path, os.path.join(run_dir, MASTER_FILENAME))

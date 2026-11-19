@@ -255,6 +255,47 @@ def tidy_numbers(df):
     return df.with_columns(cols) if cols else df
 
 
+
+# ───────────────────────────── MCX file: only the one that was used, no repeat noise ─────────────────────────────
+def _mcx_used_only(frames, meta, used_src):
+    """Each run folder can hold BOTH MCX files (90% and Deposit). Keep only the kind the box was set to use; if a
+    day/run has none of that kind, keep what it has rather than show nothing."""
+    if not used_src:
+        return frames
+    by_day = {}
+    for f, (d, r, kind) in zip(frames, meta):
+        by_day.setdefault((d, r), []).append((f, kind))
+    keep = []
+    for (d, r), lst in by_day.items():
+        good = [f for f, k in lst if k == used_src]
+        keep.extend(good if good else [f for f, _ in lst])
+    # keep original order
+    ids = {id(f) for f in keep}
+    return [f for f in frames if id(f) in ids]
+
+
+def _collapse_same_rows(df):
+    """The same MCX file is copied into every run of a day, so a client shows the same row 4-17 times. Rows that are
+    identical (apart from Run / Backup Time) on the same backup day become ONE row; Run lists the runs it covered
+    (e.g. 1,2,3,4) and Backup Time is the first of them."""
+    import polars as pl
+    if df.height == 0 or "Run" not in df.columns:
+        return df
+    meta = {"Run", "Backup Time", "Time"}
+    key = [c for c in df.columns if c not in meta or (c == "Time" and "Backup Time" not in df.columns and False)]
+    tcol = "Backup Time" if "Backup Time" in df.columns else ("Time" if "Time" in df.columns else None)
+    key = [c for c in df.columns if c not in ("Run", tcol)]
+    aggs = [pl.col("Run").unique(maintain_order=True).sort().alias("_runs")]
+    if tcol:
+        aggs.append(pl.col(tcol).first().alias("_t"))
+    out = df.group_by(key, maintain_order=True).agg(aggs)
+    out = out.with_columns(pl.col("_runs").list.join(",").alias("Run"))
+    if tcol:
+        out = out.with_columns(pl.col("_t").alias(tcol))
+    order = [c for c in df.columns]
+    return out.select(order)
+
+
 # ───────────────────────────── one file ─────────────────────────────
 def filter_one(path, codes, cands=None, use_cache=True):
     """Rows of ONE backup file that belong to `codes`.
@@ -553,6 +594,9 @@ def run_job(job_dir):
     out_groups = []
     for gi, g in enumerate(groups):
         frames, out_name, recognized, errs = [], None, False, 0
+        frames_meta = []
+        is_mcx = "mcx" in str(g.get("label", "")).lower()
+        used_src = job.get("mcx_source") or ""
         for ii, it in enumerate(g["items"]):
             r = results.get((gi, ii))
             if not r:
@@ -568,15 +612,30 @@ def run_job(job_dir):
             df = r["df"]
             if r["status"] != "ok" or df is None or df.height == 0:
                 continue
-            if not any(_norm(c) == "date" for c in df.columns):
-                d = it.get("date") or ""
-                tcol = "Backup Time" if any(_norm(c) == "time" for c in df.columns) else "Time"
-                t = file_time(it.get("name") or os.path.basename(it.get("ap", "")), it.get("time", ""),
-                              it.get("ap", ""), use_mtime=not it.get("nocache"))
-                df = df.with_columns(pl.lit(f'="{d}"' if d else "").alias("Date"),
-                                     pl.lit(t).alias(tcol)).select(
-                    ["Date", tcol] + [c for c in df.columns if c != tcol])
+            d = it.get("date") or ""
+            own_date = any(_norm(c) == "date" for c in df.columns)
+            tcol = "Backup Time" if any(_norm(c) == "time" for c in df.columns) else "Time"
+            if own_date:
+                tcol = "Backup Time"
+            t = file_time(it.get("name") or os.path.basename(it.get("ap", "")), it.get("time", ""),
+                          it.get("ap", ""), use_mtime=not it.get("nocache"))
+            dcol = "Backup Date" if own_date else "Date"
+            df = df.with_columns(pl.lit(f'="{d}"' if d else "").alias(dcol),
+                                 pl.lit(t).alias(tcol))
+            first = [dcol, tcol]
+            if is_mcx:                                  # MCX file: say which run each row came from
+                df = df.with_columns(pl.lit(str(it.get("run") or "")).alias("Run"))
+                first.append("Run")
+            df = df.select(first + [c for c in df.columns if c not in first])
+            if is_mcx and used_src:
+                cols = {_norm(c) for c in df.columns}
+                kind = "deposit" if "ucc code" in cols else ("mcx90" if "client code" in cols else "")
+                frames_meta.append((d, str(it.get("run") or ""), kind))
+            else:
+                frames_meta.append((d, str(it.get("run") or ""), ""))
             frames.append(df)
+        if is_mcx and frames:
+            frames = _mcx_used_only(frames, frames_meta, used_src)
         entry = {"idx": gi, "label": g["label"], "files_total": len(g["items"]), "files_with_rows": len(frames),
                  "missing": g.get("missing", 0), "errors": errs, "rows": 0, "file": "", "fname": ""}
         if not recognized:
@@ -585,6 +644,8 @@ def run_job(job_dir):
             entry["state"] = "no_data"
         else:
             merged = pl.concat(frames, how="diagonal")
+            if is_mcx:
+                merged = _collapse_same_rows(merged)
             base = re.sub(r"\.(csv|txt|xlsx)$", "", out_name or "merged", flags=re.I)
             outp = os.path.join(job_dir, f"group_{gi}.csv")
             merged.write_csv(outp)

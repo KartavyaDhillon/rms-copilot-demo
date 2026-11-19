@@ -440,6 +440,10 @@
     const seen = new Set(["open", t.status]);
     t.activity.forEach((a) => { const m = /^Status: (.+?) \(was (.+)\)$/.exec(a.body || ""); if (m) COLS.forEach((c) => { if (c[1] === m[1] || c[1] === m[2]) seen.add(c[0]); }); });
     const flow = '<div class="wt-flow">' + COLS.map((c, i) => '<div class="wt-fs' + (c[0] === t.status ? " now" : seen.has(c[0]) ? " seen" : "") + '" style="--c:' + c[2] + '"><b>' + (seen.has(c[0]) && c[0] !== t.status ? "✓" : i + 1) + "</b><span>" + esc(c[1]) + "</span></div>").join('<em></em>') + "</div>";
+    const cmts = t.activity.filter((a) => a.kind === "comment").slice().reverse();
+    const cmtList = '<div class="wt-lbl" style="margin-top:4px">Comments (' + cmts.length + ")</div>" + (cmts.length ?
+      '<div class="wt-tl" style="margin-bottom:14px">' + cmts.map((a) => '<div class="wt-tn cm"><i></i><div class="c">' + av(a.by_name) + '<div class="b"><small>' + esc(a.by_name) + " · " + when(a.at) + "</small>" + esc(a.body) + "</div></div></div>").join("") + "</div>" :
+      '<div class="card-sub" style="margin-bottom:14px">No comments yet.</div>');
     const files = t.file_list.map((f) => '<a class="wt-file" href="/tracker/file/' + f.id + '" target="_blank" title="' + esc(f.name + " · " + f.by_name) + '">' +
       (f.is_image ? '<img src="/tracker/file/' + f.id + '" alt="' + esc(f.name) + '">' : esc(f.name)) + '<span class="x" data-del="' + f.id + '" title="Remove">✕</span></a>').join("");
     const follow = t.status === "waiting" || t.kind === "followup";
@@ -461,21 +465,23 @@
       '<button class="btn sm" id="wtMailLink" data-no-busy>' + RMS.icon("copy") + " Link a sent mail</button>" +
       (t.status === "waiting" ? '<button class="btn sm primary" id="wtReply" data-no-busy>' + RMS.icon("check") + " Reply received</button>" : "") +
       (mb.configured && t.status === "waiting" ? '<button class="btn sm ghost" id="wtMailCheck" data-no-busy>' + RMS.icon("refresh") + " Check mailbox now</button>" : "") + "</div></div>" : "";
+    el.className = "wt-win st-" + t.status;
     el.innerHTML = '<div class="wt-main">' +
       '<input class="wt-title" id="wtTitle" value="' + esc(t.title) + '"' + (edit ? "" : " readonly") + ' maxlength="200">' +
       '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><span class="wt-pill s-' + t.status + '">' + esc(t.status_label) + '</span><span class="wt-pill">' + esc(KIND[t.kind] || t.kind) + "</span>" + pills(t) +
       '<span class="card-sub">Created by ' + esc(t.created_by_name) + ", " + when(t.created_at) + "</span></div>" +
+      '<div class="wt-lbl">Progress</div>' + flow +
       (t.status === "waiting" ? '<div class="wt-warn">' + RMS.icon("mail") + " Waiting for a reply" + (t.waiting_on ? " from <b>" + esc(t.waiting_on) + "</b>" : "") +
         (t.waiting_days != null ? " · " + (t.waiting_days === 0 ? "since today" : t.waiting_days + " day(s) with no reply") : "") +
         (t.follow_up_days ? " · reminder every " + t.follow_up_days + " day(s)" : "") + "</div>" : "") +
       links + mailPanel +
       '<div class="wt-cbox"><div class="wt-lbl" style="color:var(--text)">' + RMS.icon("file") + ' Add a comment</div><textarea class="wt-ta" id="wtCmt" style="min-height:54px" placeholder="Write a comment… (Ctrl+Enter to send)"></textarea>' +
-      '<div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="btn primary" id="wtSend" data-no-busy>Send comment</button></div></div>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="btn primary" id="wtSend" data-no-busy>Send comment</button></div></div>' + cmtList +
       '<div class="wt-lbl">Details</div><textarea class="wt-ta" id="wtDesc"' + (edit ? "" : " readonly") + ' placeholder="No details">' + esc(t.description || "") + "</textarea>" +
       '<div class="wt-lbl" style="margin-top:14px">Pictures and files</div><div class="wt-files">' + files + "</div>" +
       '<div class="wt-drop" id="wtDrop">' + RMS.icon("download") + ' Drop pictures or files here, click to choose, or paste a screenshot (Ctrl+V)</div><input type="file" id="wtPick" multiple style="display:none">' +
-      '<div class="wt-lbl" style="margin-top:16px">History</div>' + flow + '<div class="wt-tl">' + acts + "</div></div>" +
-      '<div class="wt-side"><div class="f"><div class="wt-lbl">Status</div><select class="wt-sel" id="wtSt"' + (canSt ? "" : " disabled") + ">" + selOpts(S.boot.statuses.map((s) => [s.id, s.label]), t.status) + "</select></div>" +
+      '<div class="wt-lbl" style="margin-top:16px">History</div><div class="wt-tl">' + acts + "</div></div>" +
+      '<div class="wt-side"><div class="f"><div class="wt-lbl">Status</div><select class="wt-sel st-sel s-' + t.status + '" id="wtSt"' + (canSt ? "" : " disabled") + ">" + selOpts(S.boot.statuses.map((s) => [s.id, s.label]), t.status) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Assigned to</div><select class="wt-sel" id="wtWho"' + (edit && !t.private ? "" : " disabled") + ">" + peopleOpts(t.assignee) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Due date</div><input type="date" class="wt-in" id="wtDue" value="' + esc(t.due || "") + '"' + (edit ? "" : " disabled") + "></div>" +
       '<div class="f"><div class="wt-lbl">Priority</div><select class="wt-sel" id="wtPri"' + (edit ? "" : " disabled") + ">" + selOpts(S.boot.priorities.map((p) => [p, PRI[p]]), t.priority) + "</select></div>" +
@@ -484,8 +490,8 @@
       (follow ? '<div class="f"><div class="wt-lbl">Waiting for reply from</div><input class="wt-in" id="wtWait" value="' + esc(t.waiting_on || "") + '"' + (canSt ? "" : " disabled") + "></div>" +
         '<div class="f"><div class="wt-lbl">Remind every (days)</div><input type="number" min="1" max="60" class="wt-in" id="wtDays" value="' + (t.follow_up_days || "") + '"' + (canSt ? "" : " disabled") + "></div>" : "") +
       '<div class="card-sub" style="margin:4px 0 12px">Assigned to ' + esc(t.assignee_name || t.assignee) + "</div>" +
-      (t.status !== "done" && canSt ? '<button class="btn primary" id="wtDone" data-no-busy style="width:100%;justify-content:center;margin-bottom:8px">' + RMS.icon("check") + " Mark done</button>" : "") +
-      (edit ? '<button class="btn ghost" id="wtDel" data-no-busy style="width:100%;justify-content:center;color:var(--err)">Delete task</button>' : "") + "</div>";
+      (t.status === "done" ? '<div class="wt-doneb">' + RMS.icon("check") + " <b>Completed</b><span>Change the status above to reopen it.</span></div>" : "") +
+      (((S.boot.me || {}).admin) ? '<button class="btn ghost" id="wtDel" data-no-busy style="width:100%;justify-content:center;color:var(--err);margin-top:10px">Delete task (admin)</button>' : "") + "</div>";
     wireTask();
   }
   function followupWin(t) {
@@ -578,7 +584,6 @@
       const d = await api("/tracker/task/" + t.id); if (d.ok) { S.win = d.task; paintTask(); }
       okBox(r.matched ? r.matched + " reply found" : "Mailbox checked", r.matched ? "Tasks with a reply moved to In progress." : "No reply found yet."); reload();
     };
-    if (g("wtDone")) g("wtDone").onclick = async () => { await patch({ status: "done" }); okBox(t.key + " marked done", "The creator is told."); };
     const send = async () => {
       const txt = g("wtCmt").value.trim(); if (!txt) { g("wtCmt").focus(); return; }
       const r = await api("/tracker/task/" + t.id + "/comment", { text: txt });

@@ -86,7 +86,7 @@ class CardTests(unittest.TestCase):
             if fail_check:
                 raise RuntimeError(fail_check)
             run = Path(os.environ["PAYOUT_FOLDER"]) / "BACKUPFILES AUTOMATED" / dt.date.today().strftime("%d %b %Y").upper() / "01"
-            run.mkdir(parents=True)
+            run.mkdir(parents=True, exist_ok=True)
             (run / "PAYOUT_CHECKING_x.xlsx").write_bytes(b"o")
             (run / "base.xlsx").write_bytes(b"b")
             return {"status": "ok"}
@@ -136,6 +136,31 @@ class CardTests(unittest.TestCase):
         self.m.run("manual", "t", alert=self.alert, step_fns=self.fns(records=0))
         from core import update_limits as ul
         self.assertEqual(len(ul.payout_files(dt.date.today())), 1)
+
+    def test_two_daily_boxes_fill_in_order(self):
+        self.upload()
+        rows = self.m.status()["slots"]
+        self.assertEqual([r["time"] for r in rows], ["15:40", "16:50"])
+        self.assertTrue(all(r["state"] in ("pending", "due") for r in rows))
+        self.m.run("manual", "Abhishek", alert=self.alert, step_fns=self.fns())
+        rows = self.m.status()["slots"]
+        self.assertEqual((rows[0]["state"], rows[0]["by"]), ("done", "Abhishek"))
+        self.assertIn(rows[1]["state"], ("pending", "due"))                              # 4:50 is still left
+        self.assertEqual(rows[0]["requests"], 3)
+        self.upload(f"Update Limits {self.today()} 1650.xlsx")
+        self.m.run("manual", "Raj", alert=self.alert, step_fns=self.fns())
+        rows = self.m.status()["slots"]
+        self.assertEqual([r["state"] for r in rows], ["done", "done"])
+        self.assertEqual(rows[1]["by"], "Raj")
+
+    def test_a_box_can_be_run_by_itself_and_a_failure_is_shown_on_it(self):
+        self.upload()
+        r = self.m.run("manual", "t", alert=self.alert, step_fns=self.fns(fail_check="mail down"), slot=2)
+        self.assertFalse(r["ok"])
+        rows = self.m.status()["slots"]
+        self.assertEqual(rows[1]["state"], "failed")
+        self.assertIn("mail down", rows[1]["note"])
+        self.assertIn(rows[0]["state"], ("pending", "due"))
 
     def test_missing_file_fails_with_alert(self):
         r = self.m.run("manual", "t", alert=self.alert, step_fns=self.fns())
