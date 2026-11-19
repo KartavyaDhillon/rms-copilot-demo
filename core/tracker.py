@@ -497,6 +497,8 @@ def update_task(user, task_id: int, **ch) -> dict:
         if v not in STATUSES:
             raise TrackerError("Unknown status.")
         if v != t["status"]:
+            if t["status"] in CLOSED and not full:
+                raise TrackerError("A finished task can only be reopened by the person who created it or a manager.")
             sets["status"] = v
             notes.append(f"Status: {STATUS_LABEL[v]} (was {STATUS_LABEL.get(t['status'], t['status'])})")
             if v == "waiting":

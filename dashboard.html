@@ -4207,7 +4207,7 @@ async function saBkDownloadSelected(){
   if(msg) msg.innerHTML='<span style="color:var(--muted)">Starting download…</span>';
 
   // ── Try File System Access API (Chrome/Edge) — saves into a chosen LOCAL folder ──
-  if('showDirectoryPicker' in window){
+  if(false){   // no browser 'edit files' popup: files go straight to the Downloads folder
     let dirHandle;
     try{ dirHandle=await window.showDirectoryPicker({mode:'readwrite'}); }
     catch(e){ if(e.name==='AbortError') { if(msg) msg.innerHTML=''; return; } /* fall through */ }
@@ -6420,8 +6420,14 @@ const _PX_BK_META={
   'CTCL output file':              {icon:'📊', col:'#2dd4bf', sec:'CTCL Output'},
   'Margin Shortage output':        {icon:'📊', col:'#2dd4bf', sec:'MS15 Output'},
 };
-function _pxBkRowMeta(name){
-  const n=(name||'').toLowerCase();
+function _pxBkRowMeta(name,kind){
+  let n=(name||'').toLowerCase();
+  // MCX exports: the server read the header of the file - 'deposit' (UCC Code) or 'mcx90' (Client Code). The console renames
+  // the file it did NOT use to NOT_USED__<name>.
+  const notUsed=n.startsWith('not_used__');
+  if(kind==='deposit') return {icon:'💵', label:notUsed?'MCX Deposit (not used)':'MCX Deposit', col:'var(--violet)'};
+  if(kind==='mcx90')   return {icon:'💵', label:notUsed?'MCX 90% (not used)':'MCX 90%', col:'var(--violet)'};
+  if(notUsed) n=n.slice(10);
   if(n.startsWith('cm_clientlevelcollaterals'))  return {icon:'C', label:'CM Input',      col:'var(--blue)'};
   if(n.startsWith('fo_clientlevelcollaterals'))  return {icon:'F', label:'FO Input',      col:'var(--blue)'};
   if(n.startsWith('co_clientlevelcollaterals'))  return {icon:'O', label:'CO Input',      col:'var(--blue)'};
@@ -6501,9 +6507,9 @@ async function pxBackup(pipe, tab){
         let chips='';
         ['Morning','Afternoon','Evening'].forEach(s=>{
           const on=sel.has(s);
-          chips+=`<button id="pxCliSlotChip_${s}" onclick="pxToggleCliSlot('${s}')" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">${_lbl[s]}</button>`;
+          chips+=`<button data-no-busy id="pxCliSlotChip_${s}" onclick="pxToggleCliSlot('${s}')" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">${_lbl[s]}</button>`;
         });
-        return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button onclick="pxCliSlotSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">All</button><button onclick="pxCliSlotClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
+        return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button data-no-busy onclick="pxCliSlotSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">All</button><button data-no-busy onclick="pxCliSlotClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
       };
       saShowModal('🔍 Client data lookup',_tabs+`<div style="font-size:12px;color:var(--muted);margin-bottom:14px">One consolidated row per date &amp; slot: CM / FO / CO / MCX / NCDEX Deposit + Total NMASS — plus the raw Cash allocated (b) / Cash-Others (c) / Non-cash Securities (d) columns that were summed into each of CM/FO/CO, individually.</div><div class="sa-field" style="margin-bottom:12px"><label>Client / Account Code(s) <span style="font-weight:400;color:var(--dim)">— comma-separate for multiple</span></label><input id="pxCliClient" placeholder="e.g. SN120 or SN120, AB1234" style="text-transform:uppercase"></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px"><div class="sa-field"><label>From (DD/MM/YYYY)</label><input type="text" id="pxCliFrom" value="${dmy(mAgo)}" placeholder="DD/MM/YYYY"></div><div class="sa-field"><label>To (DD/MM/YYYY)</label><input type="text" id="pxCliTo" value="${dmy(t)}" placeholder="DD/MM/YYYY"></div></div><div id="pxRunChipsWrap">${_slotChips()}</div><button class="sa-save" style="width:100%;background:var(--blue);color:var(--blue-d)" onclick="pxCliSlotFind()">🔍 Look up client data</button><div id="pxCliResult" style="margin-top:12px"></div>`);
       setTimeout(()=>{const el=document.getElementById('pxCliClient');if(el){el.focus();el.addEventListener('input',e=>{e.target.value=e.target.value.toUpperCase();});}},100);
@@ -6522,9 +6528,9 @@ async function pxBackup(pipe, tab){
       let chips='';
       for(let i=1;i<=p;i++){
         const on=sel.has(i);
-        chips+=`<button id="pxRunChip${i}" onclick="pxToggleRun(${i})" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">Run ${i}</button>`;
+        chips+=`<button data-no-busy id="pxRunChip${i}" onclick="pxToggleRun(${i})" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">Run ${i}</button>`;
       }
-      return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button onclick="pxRunSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Select all</button><button onclick="pxRunClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
+      return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:14px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button data-no-busy onclick="pxRunSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Select all</button><button data-no-busy onclick="pxRunClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
     };
     const _cliDesc = pipe==='ms15'
       ? "Detailed breakdown: CM / FO / CO / MCX / NCDEX collaterals + this box's own Shortage_vs_CC_Deposit output (Total Margin, Difference, Margin Warning %) per run."
@@ -6591,9 +6597,9 @@ ${pipe==='cli'?(()=>{
   let chips='';
   ['Morning','Afternoon','Evening'].forEach(s=>{
     const on=sel.has(s);
-    chips+=`<button id="pxCliSlotChip_${s}" onclick="pxToggleCliSlot('${s}')" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">${_lbl[s]}</button>`;
+    chips+=`<button data-no-busy id="pxCliSlotChip_${s}" onclick="pxToggleCliSlot('${s}')" style="padding:4px 11px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'rgba(59,130,246,.6)':'var(--line)'};background:${on?'rgba(59,130,246,.14)':'transparent'};color:${on?'var(--blue)':'var(--dim)'};transition:all .15s">${_lbl[s]}</button>`;
   });
-  return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button onclick="pxCliSlotSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">All</button><button onclick="pxCliSlotClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
+  return `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px"><span style="font-size:10.5px;color:var(--muted);font-weight:600;letter-spacing:.4px;text-transform:uppercase;min-width:60px">Run filter</span>${chips}<button data-no-busy onclick="pxCliSlotSelAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">All</button><button data-no-busy onclick="pxCliSlotClearAll()" style="padding:3px 9px;border-radius:12px;font-size:10px;cursor:pointer;border:1px solid var(--line);background:transparent;color:var(--dim)">Clear</button></div>`;
 })():''}
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
   <div class="sa-field"><label>From (DD/MM/YYYY)</label><input type="text" id="pxBkFrom" value="${dmy(mAgo)}" placeholder="DD/MM/YYYY"></div>
@@ -6646,9 +6652,10 @@ async function pxBackupFind(){
     // pxBkDownloadOneGroup below.
     const groups={};
     files.forEach(f=>{
-      let label=_pxBkRowMeta(f.name).label;
+      if(/^not_used__/i.test(f.name||'')) return;   // the MCX file the run did not use is never part of the merge
+      let label=_pxBkRowMeta(f.name,f.kind).label;
       // The two MCX exports (90% file / Deposit) are ONE group - the server keeps only the one this box actually used.
-      if(['MCX Deposit','MCX / xlsx','MCX 90% (Clientwise)'].includes(label)) label='MCX file';
+      if(/^MCX (Deposit|90%)|^MCX \/ xlsx/.test(label)) label='MCX file';
       (groups[label]=groups[label]||[]).push(f);
     });
     window._pxBkGroups=groups;
@@ -6683,7 +6690,7 @@ async function pxBackupFind(){
       const p=date.split('-'); const dLabel=p.length===3?`${p[0]} ${MON[parseInt(p[1],10)]||p[1]} ${p[2]}`:date;
       rows+=`<div style="padding:6px 12px 4px;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);background:var(--panel-2);border-bottom:1px solid var(--line)${di>0?';border-top:1px solid var(--line)':''}">${dLabel} · ${dFiles.length} file(s)</div>`;
       dFiles.forEach((f,fi)=>{
-        const m=_pxBkRowMeta(f.name);
+        const m=_pxBkRowMeta(f.name,f.kind);
         const border=fi<dFiles.length-1?'border-bottom:1px solid rgba(34,41,50,.4)':'';
         const pEsc=(f.path||'').replace(/"/g,'&quot;');
         rows+=`<div class="pxBkRow" style="display:flex;align-items:center;gap:10px;padding:9px 12px;${border};transition:background .1s" onmouseenter="this.style.background='rgba(255,255,255,.03)'" onmouseleave="this.style.background=''">
@@ -6739,7 +6746,7 @@ async function pxBkDownloadSelected(){
   const items=chks.map(c=>({path:c.dataset.path, fn:c.dataset.fn||'file'}));
   if(msg) msg.innerHTML='<span style="color:var(--muted)">Starting download…</span>';
   // File System Access API (Chrome/Edge) — save into a chosen LOCAL folder
-  if('showDirectoryPicker' in window){
+  if(false){   // no browser 'edit files' popup: files go straight to the Downloads folder
     let dirHandle;
     try{ dirHandle=await window.showDirectoryPicker({mode:'readwrite'}); }
     catch(e){ if(e.name==='AbortError'){ if(msg) msg.innerHTML=''; return; } }
@@ -6814,7 +6821,7 @@ async function pxBkDownloadMerged(pipe, groups, clientCode, msg, resumeJob, canP
   const fmt=(s)=>{ s=Math.max(0,Math.round(s||0)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); };
   const eta=(s)=>{ if(s==null) return ''; if(s<45) return ' · less than a minute left'; return ' · about '+Math.ceil(s/60)+' min left'; };
   const say=(html)=>{ if(msg) msg.innerHTML=html; };
-  const dirHandle = ('showDirectoryPicker' in window && (!resumeJob || canPick)) ? await (async()=>{
+  const dirHandle = (false && !resumeJob && canPick) ? await (async()=>{
     try{ return await window.showDirectoryPicker({mode:'readwrite'}); }
     catch(e){ return null; }
   })() : null;
@@ -7080,9 +7087,17 @@ function pxShowLookupPopup(d, codes, selectedRuns){
       });
       t1+='</tbody></table>';
 
+      // ONE file with both bifurcations side by side (Margin Shortage only): deposit parts, margin parts, difference.
+      let fullLink='';
+      if(isMs15 && t1rows.some(r=>r.M_TOTAL!==undefined)){
+        const fH=[...(multi?['Client']:[]),'Date','Run','CM Deposit','FO Deposit','CO Deposit','NCDEX Deposit','MCX Deposit','Total NMASS (Deposit)','CM Margin','FO Margin','CO Margin','NCDEX Margin','MCX Margin Utilization','Total Margin','Difference (Deposit - Margin)'];
+        const fR=t1rows.map(r=>[...(multi?[r.client_code||'']:[]),r.date,r.run!=null?r.run:'',fmtRaw(r.CM),fmtRaw(r.FO),fmtRaw(r.CO),fmtRaw(r.NCDEX),fmtRaw(r.MCX),fmtRaw(r.TOTAL),fmtRaw(r.M_CM),fmtRaw(r.M_FO),fmtRaw(r.M_CO),fmtRaw(r.M_NCDEX),fmtRaw(r.M_MCX),fmtRaw(r.M_TOTAL),(Math.round(((+r.TOTAL||0)-(+r.M_TOTAL||0))*100)/100)].join(','));
+        const fU='data:text/csv;charset=utf-8,'+encodeURIComponent([fH.join(','),...fR].join('\n'));
+        fullLink=`<a href="${fU}" download="ms15_full_bifurcation_${codes.join('_')}.csv" title="One file: Deposit bifurcation + Margin bifurcation + Difference, per date and run" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:8px;border:1px solid rgba(96,165,250,.5);color:var(--blue);font-size:10px;font-weight:600;text-decoration:none;margin-right:6px">⬇ Full bifurcation (Deposit + Margin)</a>`;
+      }
       html+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
         <b style="font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">📥 Input Deposits — per date &amp; run</b>
-        <a href="${csv1U}" download="ctcl_inputs_${codes.join('_')}.csv" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:8px;border:1px solid rgba(52,211,153,.4);color:var(--teal);font-size:10px;font-weight:600;text-decoration:none">⬇ CSV</a>
+        <span>${fullLink}<a href="${csv1U}" download="ctcl_inputs_${codes.join('_')}.csv" style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:8px;border:1px solid rgba(52,211,153,.4);color:var(--teal);font-size:10px;font-weight:600;text-decoration:none">⬇ CSV</a></span>
       </div>
       <div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin-bottom:20px">${t1}</div>`;
 

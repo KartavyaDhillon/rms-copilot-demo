@@ -2842,7 +2842,55 @@ def _pb_db_pipeline_names(pipe):
 _PB_NOT_MCX_PREFIXES = ("shortage_vs_cc_deposit", "full_file_ctcl_vs_nmass", "update limits", "risk_report",
                         "mtf_risk_report", "probable_fullfile", "all_exchange_margin_comparison", "f_dlmg02",
                         "cm_clientlevelcollaterals", "fo_clientlevelcollaterals", "co_clientlevelcollaterals",
-                        "clientneteffectivedeposits")
+                        "clientneteffectivedeposits", "shortfall_allocation_working")
+
+
+_PB_KIND_CACHE = {}
+
+
+def _pb_mcx_kind(path, name=""):
+    """'deposit' (header has "UCC Code") or 'mcx90' (header has "Client Code" + "Client Margin Limit") for an MCX .xlsx,
+    '' when it is neither / unreadable. Names can't tell them apart (both may be random-named), so the header is read once
+    per file (first rows only) and remembered."""
+    low = (name or os.path.basename(path)).lower()
+    if low.startswith("not_used__"):
+        low = low[10:]
+    if low.startswith("mcx_deposit_"):
+        return "deposit"
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ""
+    key = (path, st.st_size, int(st.st_mtime))
+    if key in _PB_KIND_CACHE:
+        return _PB_KIND_CACHE[key]
+    kind = ""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            ws = wb.worksheets[0]
+            for i, row in enumerate(ws.iter_rows(min_row=1, max_row=15, values_only=True)):
+                cells = {_pb_norm_header(c) for c in row if c is not None}
+                if "UCC Code" in cells and "Margin Limit" in cells:
+                    kind = "deposit"; break
+                if "Client Code" in cells and ("Client Margin Limit" in cells or "Margin Limit" in cells):
+                    kind = "mcx90"; break
+        finally:
+            wb.close()
+    except Exception:
+        kind = ""
+    if len(_PB_KIND_CACHE) > 5000:
+        _PB_KIND_CACHE.clear()
+    _PB_KIND_CACHE[key] = kind
+    return kind
+
+
+def _pb_is_known_xlsx(fn):
+    low = fn.lower()
+    if low.startswith("not_used__"):
+        low = low[10:]
+    return low.startswith(_PB_NOT_MCX_PREFIXES) or low.endswith("_zone data.xlsx") or low.startswith("mtf_")
 
 
 def _pb_glob_ok(fn, globs):
@@ -2851,6 +2899,8 @@ def _pb_glob_ok(fn, globs):
     if not globs:
         return True
     low = fn.lower()
+    if low.startswith("not_used__"):
+        low = low[10:]
     hit = [g for g in globs if _pb_fn.fnmatch(low, g)]
     if not hit:
         return False
@@ -2915,6 +2965,7 @@ def pb_list_backups(pipe, from_date="", to_date="", types=None, slots=None):
                     "size": st.st_size,
                     "run": crun,
                     "time": datetime.datetime.fromtimestamp(st.st_mtime).strftime("%H:%M"),
+                    **({"kind": _pb_mcx_kind(fpp, fn)} if (fn.lower().endswith(".xlsx") and not _pb_is_known_xlsx(fn)) else {}),
                 })
                 seen_keys.add((fdate.isoformat(), fn.lower(), st.st_size))
 

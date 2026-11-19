@@ -481,7 +481,7 @@
       '<div class="wt-lbl" style="margin-top:14px">Pictures and files</div><div class="wt-files">' + files + "</div>" +
       '<div class="wt-drop" id="wtDrop">' + RMS.icon("download") + ' Drop pictures or files here, click to choose, or paste a screenshot (Ctrl+V)</div><input type="file" id="wtPick" multiple style="display:none">' +
       '<div class="wt-lbl" style="margin-top:16px">History</div><div class="wt-tl">' + acts + "</div></div>" +
-      '<div class="wt-side"><div class="f"><div class="wt-lbl">Status</div><select class="wt-sel st-sel s-' + t.status + '" id="wtSt"' + (canSt ? "" : " disabled") + ">" + selOpts(S.boot.statuses.map((s) => [s.id, s.label]), t.status) + "</select></div>" +
+      '<div class="wt-side"><div class="f"><div class="wt-lbl">Status</div><select class="wt-sel st-sel s-' + t.status + '" id="wtSt"' + (canSt && (edit || ["done", "cancelled"].indexOf(t.status) < 0) ? "" : " disabled") + ">" + selOpts(S.boot.statuses.map((s) => [s.id, s.label]), t.status) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Assigned to</div><select class="wt-sel" id="wtWho"' + (edit && !t.private ? "" : " disabled") + ">" + peopleOpts(t.assignee) + "</select></div>" +
       '<div class="f"><div class="wt-lbl">Due date</div><input type="date" class="wt-in" id="wtDue" value="' + esc(t.due || "") + '"' + (edit ? "" : " disabled") + "></div>" +
       '<div class="f"><div class="wt-lbl">Priority</div><select class="wt-sel" id="wtPri"' + (edit ? "" : " disabled") + ">" + selOpts(S.boot.priorities.map((p) => [p, PRI[p]]), t.priority) + "</select></div>" +
@@ -490,7 +490,8 @@
       (follow ? '<div class="f"><div class="wt-lbl">Waiting for reply from</div><input class="wt-in" id="wtWait" value="' + esc(t.waiting_on || "") + '"' + (canSt ? "" : " disabled") + "></div>" +
         '<div class="f"><div class="wt-lbl">Remind every (days)</div><input type="number" min="1" max="60" class="wt-in" id="wtDays" value="' + (t.follow_up_days || "") + '"' + (canSt ? "" : " disabled") + "></div>" : "") +
       '<div class="card-sub" style="margin:4px 0 12px">Assigned to ' + esc(t.assignee_name || t.assignee) + "</div>" +
-      (t.status === "done" ? '<div class="wt-doneb">' + RMS.icon("check") + " <b>Completed</b><span>Change the status above to reopen it.</span></div>" : "") +
+      (t.status === "done" ? '<div class="wt-doneb">' + RMS.icon("check") + " <b>Completed</b><span>" + (edit ? "Not satisfied? Reopen it with a comment." : "Only the creator or a manager can reopen it.") + "</span>" +
+        (edit ? '<button class="btn sm" id="wtReopen" data-no-busy style="margin-top:8px;justify-content:center">' + RMS.icon("refresh") + " Reopen task</button>" : "") + "</div>" : "") +
       (((S.boot.me || {}).admin) ? '<button class="btn ghost" id="wtDel" data-no-busy style="width:100%;justify-content:center;color:var(--err);margin-top:10px">Delete task (admin)</button>' : "") + "</div>";
     wireTask();
   }
@@ -564,6 +565,30 @@
       const r = await api("/tracker/task/" + t.id, { process: v });   // saved quietly - no repaint, so the dropdown stays open while ticking
       if (r.ok) { S.win = r.task; ok("Process link saved"); reload(); } else bad(r.error);
     }, 700); });
+    if (g("wtReopen")) g("wtReopen").onclick = () => {
+      const close = RMS.modal("Reopen " + t.key,
+        '<div class="card-sub" style="margin-bottom:12px;line-height:1.55">Tell <b>' + esc(t.assignee_name || t.assignee) + '</b> what is still not right. The task goes back to <b>In progress</b> and they are notified.</div>' +
+        '<div class="wt-lbl">What is not satisfactory <span style="color:var(--err)">*</span></div><textarea class="wt-ta" id="roTxt" style="min-height:90px" placeholder="Explain what needs to be redone…"></textarea>' +
+        '<div class="wt-lbl" style="margin-top:12px">New due date (project deadline)</div><input type="date" class="wt-in" id="roDue" style="width:100%" value="' + esc(t.due || "") + '">' +
+        '<div class="wt-lbl" style="margin-top:12px">Pictures / files (optional)</div><input type="file" id="roFiles" multiple class="wt-in" style="width:100%">' +
+        '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px"><button class="btn ghost" id="roNo" data-no-busy>Cancel</button><button class="btn primary" id="roGo" data-no-busy>Reopen task</button></div>',
+        { width: 560, icon: "refresh" });
+      $("#roNo").onclick = () => { close(); openTask(t.id); };
+      $("#roGo").onclick = async () => {
+        const txt = $("#roTxt").value.trim(); if (!txt) { $("#roTxt").focus(); return; }
+        const btn = $("#roGo"); btn.disabled = true; btn.textContent = "Reopening…";
+        const b = { status: "in_progress" }; const due = $("#roDue").value; if (due && due !== t.due) b.due = due;
+        const r1 = await api("/tracker/task/" + t.id, b);
+        if (!r1.ok) { btn.disabled = false; btn.textContent = "Reopen task"; bad(r1.error); return; }
+        await api("/tracker/task/" + t.id + "/comment", { text: "Reopened: " + txt });
+        const files = Array.from($("#roFiles").files || []);
+        if (files.length) {
+          const fd = new FormData(); files.forEach((f) => fd.append("files", f, f.name));
+          try { await fetch("/tracker/task/" + t.id + "/file", { method: "POST", body: fd, credentials: "same-origin" }); } catch (e) { /* ignore */ }
+        }
+        close(); await openTask(t.id); reload(); okBox(t.key + " reopened", "It is back In progress and " + (t.assignee_name || "the assignee") + " is notified.");
+      };
+    };
     g("wtSt").onchange = () => {
       const v = g("wtSt").value, b = { status: v };
       if (v === "waiting") b.follow_up_days = t.follow_up_days || 2;

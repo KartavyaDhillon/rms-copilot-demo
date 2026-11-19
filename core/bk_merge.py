@@ -275,15 +275,16 @@ def _mcx_used_only(frames, meta, used_src):
 
 
 def _collapse_same_rows(df):
-    """The same MCX file is copied into every run of a day, so a client shows the same row 4-17 times. Rows that are
-    identical (apart from Run / Backup Time) on the same backup day become ONE row; Run lists the runs it covered
-    (e.g. 1,2,3,4) and Backup Time is the first of them."""
+    """The same MCX file is copied into every run of a day, so a client shows the same row 4-17 times. Copies of the
+    SAME file (same name and size, same backup day) become ONE record; Run lists the runs it covered (e.g. 1,2,3,4) and
+    Backup Time is the first of them. A DIFFERENT file (another download, another time) stays its own record, even when
+    its numbers happen to be identical."""
     import polars as pl
     if df.height == 0 or "Run" not in df.columns:
         return df
-    meta = {"Run", "Backup Time", "Time"}
-    key = [c for c in df.columns if c not in meta or (c == "Time" and "Backup Time" not in df.columns and False)]
     tcol = "Backup Time" if "Backup Time" in df.columns else ("Time" if "Time" in df.columns else None)
+    if "_fid" not in df.columns:
+        df = df.with_columns(pl.lit("").alias("_fid"))
     key = [c for c in df.columns if c not in ("Run", tcol)]
     aggs = [pl.col("Run").unique(maintain_order=True).sort().alias("_runs")]
     if tcol:
@@ -292,8 +293,11 @@ def _collapse_same_rows(df):
     out = out.with_columns(pl.col("_runs").list.join(",").alias("Run"))
     if tcol:
         out = out.with_columns(pl.col("_t").alias(tcol))
-    order = [c for c in df.columns]
-    return out.select(order)
+    order = [c for c in df.columns if c != "_fid"]
+    out = out.select(order + ["_fid"])
+    if tcol:
+        out = out.sort(["Backup Date" if "Backup Date" in out.columns else "Date", tcol], maintain_order=True)
+    return out.drop("_fid")
 
 
 # ───────────────────────────── one file ─────────────────────────────
@@ -607,6 +611,8 @@ def run_job(job_dir):
             if r["status"] == "no_column":
                 continue
             recognized = True
+            if is_mcx and os.path.basename(str(it.get("name") or it.get("ap") or "")).lower().startswith("not_used__"):
+                continue                                    # the MCX file the run renamed NOT_USED__ is never merged
             if out_name is None:
                 out_name = r["fname"]
             df = r["df"]
@@ -624,7 +630,13 @@ def run_job(job_dir):
                                  pl.lit(t).alias(tcol))
             first = [dcol, tcol]
             if is_mcx:                                  # MCX file: say which run each row came from
-                df = df.with_columns(pl.lit(str(it.get("run") or "")).alias("Run"))
+                try:
+                    _sz = os.path.getsize(it.get("ap", ""))
+                except OSError:
+                    _sz = 0
+                # file identity: the same file copied into several runs is ONE record, a different file is another
+                df = df.with_columns(pl.lit(str(it.get("run") or "")).alias("Run"),
+                                     pl.lit(f"{os.path.basename(str(it.get('name') or it.get('ap') or ''))}|{_sz}").alias("_fid"))
                 first.append("Run")
             df = df.select(first + [c for c in df.columns if c not in first])
             if is_mcx and used_src:

@@ -408,7 +408,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-liveallocation.js?v=8"></script>'
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=11"></script>'
-                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=5"></script>'
+                            '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=6"></script>'
                             '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=2"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=2"></script><script src="/platform/js/process-cardlock.js?v=3"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)

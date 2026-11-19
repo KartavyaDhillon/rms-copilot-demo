@@ -396,10 +396,15 @@
 
   // ───────────────────────── actions / sub views ─────────────────────────
   window.ulStoreToday = function () {
+    // Show something AT ONCE: the server first scans the backup folders, which can take several seconds.
+    var el = $('ulJob');
+    if (el) el.innerHTML = '<div class="ul-sec" style="border-color:var(--amber)"><div style="display:flex;gap:10px;align-items:center;font-size:12.5px"><span class="dc-spin"></span><b>Starting…</b> <span style="color:var(--dim)">looking for today\'s Update Limits files in the CTCL backup</span></div></div>';
+    ST.jobSig = '';
     post('/ulimits/store-today').then(function (j) {
       say(j.queued ? j.queued + ' file' + (j.queued > 1 ? 's' : '') + ' of today being stored (' + (j.found - j.queued) + ' already there).' : j.found ? 'All ' + j.found + ' Update Limits files of today are already stored.' : 'No Update Limits file of today in the CTCL backup folder yet.', j.found ? '' : 'err');
+      if (!j.queued && el) el.innerHTML = '';
       refresh(300);
-    });
+    }).catch(function () { if (el) el.innerHTML = ''; say('Could not start - try again.', 'err'); });
   };
   window.ulStop = function () { post('/ulimits/stop').then(function (j) { say(j.stopped ? 'Stopping…' : 'Nothing is being stored.'); refresh(500); }); };
   function back() { return '<button class="dc-link" style="margin:0 0 12px" onclick="ulOpen(true)">← back</button>'; }
@@ -450,8 +455,9 @@
       if (d && d.ok) {
         var wasRunning = ST.data && ST.data.job && ST.data.job.running;
         ST.data = d; paintTile();
-        if (d.job && d.job.running) next = isOpen() ? 2500 : 8000;
-        if (isOpen()) { paintSum(); paintJob(); if (wasRunning && !d.job.running) loadDay(); }
+        if (d.job && d.job.running) next = isOpen() ? 2000 : 8000;
+        var doneNow = d.job ? d.job.done : 0, prevDone = ST.lastDone || 0; ST.lastDone = doneNow;
+        if (isOpen()) { paintSum(); paintJob(); if ((wasRunning && !d.job.running) || (d.job && d.job.running && doneNow !== prevDone)) loadDay(); }
       }
     }).catch(function () { next = 30000; }).then(function () {
       clearTimeout(ST.timer);
