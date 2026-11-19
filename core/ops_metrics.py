@@ -410,6 +410,23 @@ def _unresolved_failures(logs):
     return [e for e in logs if e["status"] == "failed" and last_ok.get((e["pipe"], e["label"]), "") <= e["start"]]
 
 
+def _inventory():
+    """How many processes the console has: Process Center / KPI cards + Scheduler processes (names, de-duplicated)."""
+    names_cards, names_sched = set(), set()
+    try:
+        from core.pipeline_box import PIPELINES
+        names_cards = {str(v.get("name")).strip() for v in PIPELINES.values() if v.get("name")}
+        names_cards.add("Short Allocation")
+    except Exception:
+        pass
+    try:
+        from core.scheduler import catalog
+        names_sched = {str(d.name).strip() for d in catalog.all_defs() if d.name}
+    except Exception:
+        pass
+    return {"cards": len(names_cards), "scheduler": len(names_sched), "total": len(names_cards | names_sched)}
+
+
 def _summary_inner():
     tl = timeline()
     items = tl["items"]
@@ -433,6 +450,7 @@ def _summary_inner():
         "date": today,
         "runs_completed": completed + sc["done"], "runs_total": total + sc["total"],
         "boxes": {"done": completed, "total": total},
+        "inventory": _cached("inventory", 60, _inventory),
         "sched": {k: sc.get(k, 0) for k in ("done", "total", "failed", "running", "missed", "due")},
         "due_now": [{"id": i["id"], "pipe_name": i["pipe_name"], "window": i["window"],
                      "overdue": i["status"] == "overdue"} for i in due],

@@ -142,7 +142,8 @@
     renderBanner(s);
     const b = s.boxes || {}, sc = s.sched || {};
     setKpi("kRuns", s.runs_completed + '<small> / ' + s.runs_total + "</small>",
-      "Process Center " + (b.done || 0) + "/" + (b.total || 0) + "\nScheduler " + (sc.done || 0) + "/" + (sc.total || 0), s.runs_completed ? "ok" : "");
+      "Process Center " + (b.done || 0) + "/" + (b.total || 0) + "\nScheduler " + (sc.done || 0) + "/" + (sc.total || 0)
+      + (s.inventory && s.inventory.total ? "\n" + s.inventory.total + " processes on the console" : ""), s.runs_completed ? "ok" : "");
     if (s.running && s.running.length) {
       const r = s.running[0];
       setKpi("kRunning", '<span style="display:inline-flex;align-items:center;gap:8px"><span class="spinner"></span>' + esc(r.label) + "</span>",

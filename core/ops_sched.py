@@ -38,6 +38,90 @@ def _classify(execs, occ, now):
     return "due" if (now - occ).total_seconds() <= _DUE_GRACE_MIN * 60 else "missed"
 
 
+_SLOT_STATE = {"done": "done", "skipped": "done", "failed": "failed", "stopped": "failed", "partial": "failed", "missed": "missed",
+               "running": "running", "due": "due", "waiting": "due", "attention": "missed", "upcoming": "upcoming"}
+
+# Cards with ONE timed auto-run a day: (name, module, status-key of the time, default time)
+_SINGLE_CARDS = [("ENTERPRISE RISK REPORT", "core.enterprise_risk", "run_at", "10:30"),
+                 ("MTF ORDER FILE", "core.mtf_order_file", "run_at", "10:00"),
+                 ("MTF CONCENTRATION", "core.mtf_concentration", "run_at", "09:30")]
+
+
+def _hm(text, default):
+    try:
+        h, m = str(text or default).strip().replace(".", ":").split(":")[:2]
+        return int(h) * 60 + int(m)
+    except Exception:
+        h, m = default.split(":")
+        return int(h) * 60 + int(m)
+
+
+def _is_today(v, d):
+    return str(v or "")[:10] in (d.isoformat(), d.strftime("%d-%m-%Y"))
+
+
+def single_item(name, st, run_min, now):
+    """One daily slot of a card from its status(): done / failed / running by the card's own state, else by the clock."""
+    if not st.get("auto"):
+        return None                                          # auto OFF = it does not run by itself = not a daily slot
+    s = str(st.get("status") or "").lower() if _is_today(st.get("date"), now.date()) else ""
+    cur = now.hour * 60 + now.minute
+    if st.get("running"):
+        state = "running"
+    elif s in ("done", "ok", "success"):
+        state = "done"
+    elif s == "failed":
+        state = "failed"
+    elif cur < run_min:
+        state = "upcoming"
+    else:
+        state = "due" if cur - run_min <= _DUE_GRACE_MIN else "missed"
+    return {"id": name, "pipe": "sched", "pipe_name": name, "source": "scheduler", "window": f"{run_min // 60:02d}:{run_min % 60:02d}",
+            "start_min": run_min, "status": state, "schedule_id": name.lower().replace(" ", "-")}
+
+
+def card_items(now):
+    """Daily slots of the KPI cards that have their own timer and were not counted before (never raises)."""
+    import importlib
+    out = []
+    try:                                                     # OBLIGATION: 8 timed slots (its own slot table)
+        from core import obligation_card as oc
+        st = oc.status(now)
+        if st.get("auto") and st.get("trading_day"):
+            for sl in st.get("slots") or []:
+                h, m = str(sl["time"]).split(":")
+                out.append({"id": f"OBLIGATION REPORT - {sl['time']}", "pipe": "sched", "pipe_name": "OBLIGATION REPORT",
+                            "source": "scheduler", "window": sl["time"], "start_min": int(h) * 60 + int(m),
+                            "status": _SLOT_STATE.get(sl.get("state"), "upcoming"), "schedule_id": "obligation"})
+    except Exception:
+        pass
+    for name, mod, key, default in _SINGLE_CARDS:
+        try:
+            m = importlib.import_module(mod)
+            if not m._trading_day(now.date()):
+                continue
+            st = m.status()
+            it = single_item(name, st, _hm((st.get("settings") or {}).get(key), default), now)
+            if it:
+                out.append(it)
+        except Exception:
+            continue
+    try:                                                     # 76 FILES DOWNLOADER: one auto run from F76_AUTO_TIME
+        from core import files70 as f
+        if f.auto_on() and f._trading_day(now.date()):
+            last = f._last_result(now.date()) or {}
+            ok = last.get("ok")
+            st = {"auto": True, "date": now.date().isoformat(), "running": f.is_running(),
+                  "status": "done" if (ok is True or str(last.get("status", "")).lower() in ("done", "ok", "success")) else
+                            ("failed" if (ok is False or str(last.get("status", "")).lower() == "failed") else "")}
+            it = single_item("76 FILES DOWNLOADER", st, _hm(f.auto_time(), "09:00"), now)
+            if it:
+                out.append(it)
+    except Exception:
+        pass
+    return out
+
+
 def today(now=None):
     """-> {"items": [...], "done": n, "total": n, "failed": n, "running": n, "missed": n}"""
     empty = {"items": [], "done": 0, "total": 0, "failed": 0, "running": 0, "missed": 0}
@@ -116,6 +200,10 @@ def today(now=None):
                                       "pipe_name": "MCX CASH MAINTENANCE", "source": "scheduler", "window": sl["time"],
                                       "start_min": int(h) * 60 + int(m), "status": cmap.get(sl["state"], "upcoming"),
                                       "schedule_id": "mcx-cash"})
+        except Exception:
+            pass
+        try:                                                 # every OTHER card that runs by its own timer
+            items.extend(card_items(local.replace(tzinfo=None)))
         except Exception:
             pass
         items.sort(key=lambda x: (x["start_min"], x["id"]))

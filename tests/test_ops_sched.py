@@ -28,6 +28,17 @@ class OpsSched(unittest.TestCase):
         self.addCleanup(os.environ.pop, "MCX_CASH_DIR", None)
         from core import mcx_cash_maintenance as _mc
         _mc.save_settings(auto=False)
+        _old_ci = ops_sched.card_items                                   # the other KPI cards are tested on their own below
+        ops_sched.card_items = lambda now: []
+        self.addCleanup(setattr, ops_sched, "card_items", _old_ci)
+
+    def test_other_cards_are_counted_once_each_and_only_when_auto_is_on(self):
+        n = dt.datetime(2026, 11, 19, 15, 30)
+        on = ops_sched.single_item("X", {"auto": True, "date": "2026-11-19", "status": "done"}, 630, n)
+        self.assertEqual(on["status"], "done")
+        self.assertEqual(ops_sched.single_item("X", {"auto": True, "date": "2026-11-18", "status": "done"}, 630, n)["status"], "missed")
+        self.assertEqual(ops_sched.single_item("X", {"auto": True, "date": "", "status": "idle"}, 1000, n)["status"], "upcoming")
+        self.assertIsNone(ops_sched.single_item("X", {"auto": False}, 630, n))
 
     def test_mcx_cash_times_are_counted_when_its_timer_is_on(self):
         from core import mcx_cash_maintenance as mc

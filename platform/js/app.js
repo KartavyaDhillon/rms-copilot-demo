@@ -69,9 +69,9 @@
     const d = new Date();
     const mins = d.getHours() * 60 + d.getMinutes();
     const wd = d.getDay() >= 1 && d.getDay() <= 5;
-    const nse = wd && mins >= 555 && mins < 930;          // 09:15–15:30
-    const nsePre = wd && mins >= 540 && mins < 555;       // 09:00–09:15
-    const mcx = wd && mins >= 540 && mins < 1410;         // 09:00–23:30
+    const nse = wd && mins >= 547 && mins < 940;          // 09:07–15:40
+    const nsePre = wd && mins >= 540 && mins < 547;       // 09:00–09:07
+    const mcx = wd && mins >= 540 && mins < 1435;         // 09:00–23:55
     $("#marketChips").innerHTML =
       '<span class="mkt-chip ' + (nse ? "open" : "closed") + '"><span class="dot"></span>NSE ' + (nse ? "OPEN" : nsePre ? "PRE-OPEN" : "CLOSED") + "</span>" +
       '<span class="mkt-chip ' + (mcx ? "open" : "closed") + '"><span class="dot"></span>MCX ' + (mcx ? "OPEN" : "CLOSED") + "</span>";
