@@ -80,6 +80,25 @@ def single_item(name, st, run_min, now):
             "start_min": run_min, "status": state, "schedule_id": name.lower().replace(" ", "-")}
 
 
+def _files70_ran_today(f, today):
+    """The newest 76 FILES result that FINISHED today. It downloads the PREVIOUS trading day's files, so its result file is
+    named after that earlier day (last_<that day>.json) - looking only for today's file name made a good run show 'Missed'."""
+    import json
+    best, best_at = {}, ""
+    try:
+        for p in f.LOG_DIR.glob("last_*.json"):
+            try:
+                r = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            at = str(r.get("finished") or "")
+            if at[:10] == today.isoformat() and at > best_at:
+                best, best_at = r, at
+    except Exception:
+        pass
+    return best
+
+
 def card_items(now):
     """Daily slots of the KPI cards that have their own timer and were not counted before (never raises)."""
     import importlib
@@ -109,7 +128,7 @@ def card_items(now):
     try:                                                     # 76 FILES DOWNLOADER: one auto run from F76_AUTO_TIME
         from core import files70 as f
         if f.auto_on() and f._trading_day(now.date()):
-            last = f._last_result(now.date()) or {}
+            last = _files70_ran_today(f, now.date())
             ok = last.get("ok")
             st = {"auto": True, "date": now.date().isoformat(), "running": f.is_running(),
                   "status": "done" if (ok is True or str(last.get("status", "")).lower() in ("done", "ok", "success")) else

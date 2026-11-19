@@ -40,6 +40,16 @@ class OpsSched(unittest.TestCase):
         self.assertEqual(ops_sched.single_item("X", {"auto": True, "date": "", "status": "idle"}, 1000, n)["status"], "upcoming")
         self.assertIsNone(ops_sched.single_item("X", {"auto": False}, 630, n))
 
+    def test_76_files_run_today_counts_even_though_its_result_file_is_named_after_the_previous_day(self):
+        import json, pathlib
+        from core import files70 as f
+        old, f.LOG_DIR = f.LOG_DIR, pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(setattr, f, "LOG_DIR", old)
+        (f.LOG_DIR / "last_18-11-2026.json").write_text(json.dumps({"ok": True, "finished": "2026-11-19T08:21:05"}))
+        (f.LOG_DIR / "last_17-11-2026.json").write_text(json.dumps({"ok": False, "finished": "2026-11-18T08:20:00"}))
+        self.assertTrue(ops_sched._files70_ran_today(f, dt.date(2026, 11, 19)).get("ok"))
+        self.assertEqual(ops_sched._files70_ran_today(f, dt.date(2026, 11, 20)), {})
+
     def test_mcx_cash_times_are_counted_when_its_timer_is_on(self):
         from core import mcx_cash_maintenance as mc
         mc.save_settings(auto=True)
