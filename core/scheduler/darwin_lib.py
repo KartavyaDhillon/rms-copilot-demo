@@ -714,6 +714,33 @@ def mobile_from_form(questions: list, reply: dict) -> str:
     return ""
 
 
+def form_field_report(rec: dict, questions: list, reply: dict, where: str) -> None:
+    """DETAILED FIELD LOG (no personal values): which questions the task form has, which profile fields they read, and for
+    each whether Darwinbox returned a value. One log line + Darwin_Form_Fields_<EmpID>.json (kept per employee, never
+    overwritten by another employee) - so when somebody says 'the mobile number was on the form' it can be checked."""
+    try:
+        values = {**(reply.get("field_data_values") or {}), **(reply.get("fields_value") or {})}
+        qs = []
+        for q in questions or []:
+            cfg = q.get("config") or {}
+            field = cfg.get("field") if q.get("question_type") == "system-attributes" else None
+            qs.append({"id": q.get("custom_id"), "type": q.get("question_type"),
+                       "label": " ".join(str(cfg.get("question") or cfg.get("questionText") or "").split()),
+                       "profile_field": field, "has_value": (bool(str(values.get(field) or "").strip()) if field else None)})
+        av = reply.get("add_variables_value") or {}
+        report = {"emp_id": rec.get("Emp ID"), "name": rec.get("Name"), "where": where,
+                  "at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "questions": qs,
+                  "profile_variables": {k: bool(str(v or "").strip()) for k, v in av.items()},      # True = has a value
+                  "fields_returned": {k: bool(str(v or "").strip()) for k, v in values.items()}}
+        path = OUT_DIR / f"Darwin_Form_Fields_{re.sub(r'[^A-Za-z0-9_-]', '', str(rec.get('Emp ID') or 'unknown'))}.json"
+        path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        attrs = [f"{q['label']}[{q['profile_field']}]={'value' if q['has_value'] else 'EMPTY'}" for q in qs if q["profile_field"]]
+        info(f"Form fields ({where}) for {rec.get('Name')} ({rec.get('Emp ID')}): {len(qs)} question(s); "
+             + ("; ".join(attrs) or "no profile-field question") + f"  -> {path.name}")
+    except Exception as exc:                                       # a log must never break the run
+        warn(f"Form-field log not written ({type(exc).__name__}: {exc})")
+
+
 def enrich(client: Darwinbox, records: list[dict]) -> None:
     for i, rec in enumerate(records, start=1):
         label = f"{rec['Name']} ({rec['Emp ID']})"
@@ -726,6 +753,7 @@ def enrich(client: Darwinbox, records: list[dict]) -> None:
             extra = [f for f, _ in form_attr_fields(questions)]
             reply = get_details(client, rec, params, fields=list(dict.fromkeys(list(DETAIL_FIELDS) + extra)))
             apply_details(rec, reply)
+            form_field_report(rec, questions, reply, "new task")
             mob = mobile_from_form(questions, reply)
             if mob:
                 rec["Mobile No."] = mob
@@ -1647,7 +1675,11 @@ def build_submission(client, rec: dict, plan: dict) -> dict:
     for need in ("phase_id", "SeprationEmployeeWorkFLow[id]", "FormFramework[id]", "NewFormInput"):
         if need not in names:
             raise AppError(f"the Act form has no '{need}' field - layout changed, not submitting")
-    answers = build_answers(get_form_definition(client, rec, params), plan, get_details(client, rec, params))
+    questions = get_form_definition(client, rec, params)
+    attr_fields = [f for f, _ in form_attr_fields(questions)]
+    details = get_details(client, rec, params, fields=list(dict.fromkeys(list(DETAIL_FIELDS) + attr_fields)))
+    form_field_report({"Emp ID": rec.get("Emp ID"), "Name": rec.get("Name")}, questions, details, "act step")
+    answers = build_answers(questions, plan, details)
     answers_json = json.dumps(answers, separators=(",", ":"), ensure_ascii=False)
     fields = []
     for name, val in hidden:

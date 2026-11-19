@@ -104,3 +104,17 @@ class MobileAskHr(unittest.TestCase):
 
     def test_hr_stays_in_cc_of_the_normal_mail(self):
         self.assertIn("hrd@mastertrust.co.in", L.CC)
+
+
+class FormFieldLog(unittest.TestCase):
+    def test_log_has_no_values_and_shows_empty_fields(self):
+        import json
+        qs = ContactFromForm.QS
+        reply = {"fields_value": {"bank_pan_num": "CBNPD5401L", "personal_mobile_x": ""},
+                 "add_variables_value": {"primary_mobile": "", "firstname": "A"}}
+        L.form_field_report({"Emp ID": "M777", "Name": "T"}, qs, reply, "test")
+        data = json.loads((L.OUT_DIR / "Darwin_Form_Fields_M777.json").read_text(encoding="utf-8"))
+        self.assertNotIn("CBNPD5401L", json.dumps(data))
+        labels = {q["label"]: q["has_value"] for q in data["questions"] if q["profile_field"]}
+        self.assertEqual(labels, {"PAN": True, "Contact Number": False})
+        self.assertEqual(data["profile_variables"]["primary_mobile"], False)
