@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import shutil
 import time
 import zipfile
@@ -251,6 +252,13 @@ class _UploadAuth:
         raise RuntimeError(f"Upload API login failed 10 times - {last}")
 
 
+class NoDataToUpload(RuntimeError):
+    """The API refused the file only because it holds no rows to import (e.g. 'no annexure rows found in pdf')."""
+
+
+_NO_ROWS_RX = re.compile(r"no\s+annexure\s+rows", re.I)
+
+
 def upload(folder: str, zip_path: Path, template_name: str, d: dt.date, ctx, mime: str = "application/zip",
            part_name: Optional[str] = None) -> str:
     """POST customFileImport (file = the zip, fileName = the literal template, date = DD-MM-YYYY). -> the answer text.
@@ -292,6 +300,10 @@ def upload(folder: str, zip_path: Path, template_name: str, d: dt.date, ctx, mim
             pass
         if 200 <= r.status_code < 300 and ok_flag is not False:
             return r.text[:300]
+        if r.status_code == 400 and _NO_ROWS_RX.search(r.text or ""):
+            # The API only accepts a PDF that has rows to import. "no annexure rows found in pdf" = the letter has nothing in it
+            # that day (not an error): the caller treats the file as "nothing to upload".
+            raise NoDataToUpload(f"{zip_path.name}: the upload API found no annexure rows in it - nothing to upload ({r.text[:120]})")
         raise RuntimeError(f"The upload API did not accept {zip_path.name}: HTTP {r.status_code} {r.text[:300]}")
     raise RuntimeError(f"Upload of {zip_path.name} failed 8 times - {last}")
 

@@ -237,6 +237,66 @@ class TestUploadProcess(Base):
         res, ctx = self.run_it()                                                          # next run: only the missing one
         self.assertEqual([p["template"] for p in self.posts], [f"F_{MEM}_ASMOTM_DDMMYYYY.csv"])
 
+    def test_pdf_with_no_annexure_rows_is_nothing_to_upload_not_a_failure(self):
+        from core.scheduler import peak_upload as PU, fo_files as F
+
+        def api(folder, path, template, d, ctx, mime="x", part_name=None):
+            if template.endswith(".pdf"):
+                raise PU.NoDataToUpload("the upload API found no annexure rows in it")
+            return '{"success":true}'
+        res, ctx = self.run_it(upload_fn=api)
+        self.assertNotIsInstance(res, BaseException, res)                                 # no failure -> no WhatsApp alert
+        self.assertIn("no annexure rows (nothing to upload): ASM_PDF", res)
+        self.assertIn("uploaded F_OPTCSHDTLS01, ASMOTM", res)
+        self.assertTrue(F.is_uploaded(self.U.FOLDER, "ASM_PDF", D))                       # not sent again by the next run
+        self.assertTrue(any("not an error" in m for m in ctx.lines))
+
+    def test_only_empty_pdf_available_is_still_not_a_failure(self):
+        from core.scheduler import peak_upload as PU
+
+        def api(folder, path, template, d, ctx, mime="x", part_name=None):
+            raise PU.NoDataToUpload("no annexure rows")
+        res, ctx = self.run_it(avail={names(D)["pdf"]: b"%PDF-1.4 fake"}, upload_fn=api)
+        self.assertNotIsInstance(res, BaseException, res)
+
+    def test_api_400_no_annexure_rows_becomes_NoDataToUpload_and_other_400s_still_fail(self):
+        from core.scheduler import peak_upload as PU
+        import tempfile
+
+        class R:
+            def __init__(self, code, text):
+                self.status_code, self.text = code, text
+
+            def json(self):
+                import json
+                return json.loads(self.text)
+
+        class Req:
+            def __init__(self, r):
+                self.r = r
+
+            def post(self, *a, **k):
+                return self.r
+
+        class Auth:
+            base = "http://x"
+
+            def __init__(self, *a, **k):
+                pass
+
+            def get(self, force=False):
+                return "tok"
+        f = Path(tempfile.mkdtemp()) / "x.pdf"
+        f.write_bytes(b"%PDF")
+        with mock.patch.object(PU, "_UploadAuth", Auth):
+            with mock.patch.object(PU, "_requests_with_windows_certs", lambda ctx: Req(R(400, '{"Success":false,"Message":"no annexure rows found in pdf"}'))):
+                with self.assertRaises(PU.NoDataToUpload):
+                    PU.upload("FO FILES UPLOAD", f, "t", D, Ctx(), mime="application/pdf")
+            with mock.patch.object(PU, "_requests_with_windows_certs", lambda ctx: Req(R(400, '{"Success":false,"Message":"bad template"}'))):
+                with self.assertRaises(RuntimeError) as cm:
+                    PU.upload("FO FILES UPLOAD", f, "t", D, Ctx(), mime="application/pdf")
+                self.assertNotIsInstance(cm.exception, PU.NoDataToUpload)
+
     def test_force_date_uploads_that_day_again(self):
         self.run_it()
         self.posts.clear()

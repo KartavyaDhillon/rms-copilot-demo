@@ -11,6 +11,7 @@ ONE DATE PER RUN - no lookback window. The date is the previous trading day on t
 The e-mail process sends the same day's files at 10 PM, so they are on NSE by then. Each (file, date) is written to a
 ledger, so a second run of the same date uploads nothing twice. A file that NSE does not have is 'not available'
 (not an error) as long as at least one of the three exists; if NONE exists the run FAILS (WhatsApp warning).
+A file the API refuses ONLY because it holds no rows ("no annexure rows found in pdf") is 'nothing to upload' - not a failure, no alert.
 To send a day again / a missed day: Run Now with 'Upload only this trade date'."""
 import datetime as dt
 from pathlib import Path
@@ -55,7 +56,7 @@ def _run(params, ctx):
         wait = max(0, int(params.get("wait_minutes") or 0))
     except (TypeError, ValueError):
         wait = 0
-    uploaded, missing, failed, keep = [], [], [], []
+    uploaded, missing, failed, keep, empty = [], [], [], [], []
     for i, spec in enumerate(todo):
         if getattr(ctx, "cancelled", False):
             break
@@ -75,20 +76,28 @@ def _run(params, ctx):
             uploaded.append(spec["key"])
             keep += [p, send] if send != p else [p]
             ctx.log(f"✓ {local} uploaded. {ans[:160]}")
+        except P.NoDataToUpload as e:
+            # The API accepts a PDF only when it has annexure rows. A letter with none is NOT a failure and must not alert:
+            # it is written to the ledger (so a second run does not send it again) and kept in the backup.
+            F.mark_uploaded(FOLDER, spec["key"], d, "no annexure rows")
+            empty.append(spec["key"])
+            keep += [p, send] if send != p else [p]
+            ctx.log(f"ℹ {local}: NOT uploaded because it has no annexure rows (nothing to import) - this is normal, not an error. ({e})")
         except Exception as e:
             failed.append((spec["key"], f"{type(e).__name__}: {e}"))
             ctx.log(f"✗ {local} NOT uploaded - {type(e).__name__}: {e}")
             if str(e).startswith("Upload API"):               # the upload itself is unusable: the others would fail the same
                 ctx.log("The upload API cannot be used right now - the remaining files are left for a manual run.")
                 break
-    if uploaded or missing:
+    if uploaded or missing or empty:
         _archive(d, keep, work, remove_work=not failed, ctx=ctx)
     summary = (f"{d:%d-%m-%Y}: uploaded {', '.join(uploaded) or 'none'}"
+               + (f"; no annexure rows (nothing to upload): {', '.join(empty)}" if empty else "")
                + (f"; not available on NSE: {', '.join(missing)}" if missing else ""))
     if failed:
         raise RuntimeError(summary + " | NOT uploaded: " + "; ".join(f"{k} ({m[:140]})" for k, m in failed)
                            + " | Run Now with 'Upload only this trade date' sends them again.")
-    if not uploaded:
+    if not uploaded and not empty:
         raise FileNotFoundError(f"None of the {len(todo)} files exists on NSE for {d:%d-%m-%Y} - nothing could be uploaded. "
                                 "If it was a trading day the files are late: Run Now later.")
     return summary

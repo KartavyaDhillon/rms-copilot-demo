@@ -483,8 +483,9 @@
       const m = d.mtfposition || {};
       const mt = '<div class="card-sub" style="margin-bottom:10px"><b>' + esc(m.name || "MTFPOSITION") + "</b>: " +
         (m.present ? '<span class="badge ok">Present · ' + esc(m.time || "") + "</span>" + (m.source === "FTP" ? " ⚡ auto-fetched" : m.source === "Manual" ? " ✋ by hand" : "")
-          : '<span class="badge warn">Missing</span> fetched automatically at 09:15 by MTF CONCENTRATION' + (m.detail ? " · last try: " + esc(m.detail) : "")) +
-        (!m.present && m.configured ? ' <button class="btn sm" id="pcMtfGo" style="margin-left:6px">📥 Fetch now</button>' : "") + "</div>";
+          : m.fetching ? '<span class="badge warn"><span class="rms-spin"></span>Checking the FTP / downloading…</span>'
+          : '<span class="badge warn">Missing</span> fetched automatically at 09:15 by MTF CONCENTRATION' + (m.detail ? " · last try" + (m.at ? " " + esc(m.at) : "") + ": " + esc(m.detail) : "")) +
+        (!m.present && m.configured && !m.fetching ? ' <button class="btn sm" id="pcMtfGo" style="margin-left:6px">📥 Fetch now</button>' : "") + "</div>";
       const rows = (d.files || []).map((f) =>
         "<tr><td style='word-break:break-all'><b>" + esc(f.name) + "</b><div class='card-sub'>" + kbs(f.size) + " · " + esc(f.time) + (f.by ? " · " + esc(f.by) : "") + "</div></td>" +
         "<td style='text-align:right;white-space:nowrap'><a href='/common/other/download?name=" + encodeURIComponent(f.name) + "' download title='Download' style='color:inherit;text-decoration:none;margin-right:10px'>⬇</a>" +
@@ -495,10 +496,38 @@
         '<input type="file" id="pcOtherFile" multiple style="display:none">' +
         '<button class="btn primary" id="pcOtherPick" style="width:100%;justify-content:center;height:44px;margin-top:12px">⬆️ Choose file(s) to keep</button>' +
         '<div id="pcOtherMsg" class="card-sub" style="min-height:18px;margin-top:8px">' + (msg || "") + "</div>";
+      // follow one fetch (started here, or already running on the server, e.g. the 09:15 timer): spinner while it works, then the RESULT
+      const watchMtf = (beforeAt) => {
+        const t0 = Date.now(); let seen = false;
+        const tick = async () => {
+          if (!$("#pcTabOther")) return;                                      // the window was closed
+          let f = {};
+          try { f = (await (await fetch("/common/other", { credentials: "same-origin" })).json()).mtfposition || {}; } catch (e) {}
+          if (f.fetching) seen = true;
+          const finished = !f.fetching && (seen || f.present || (f.at && f.at !== beforeAt) || Date.now() - t0 > 8000);
+          if (!finished && Date.now() - t0 < 5 * 60 * 1000) {
+            const msg = $("#pcOtherMsg");
+            if (msg) msg.innerHTML = '<span class="rms-spin"></span><b>Checking the FTP for ' + esc(f.name || "MTFPOSITION") + "…</b> " + Math.round((Date.now() - t0) / 1000) + " s - a big file can take a minute or two.";
+            setTimeout(tick, 1500); return;
+          }
+          const good = f.present || f.status === "downloaded" || f.status === "present";
+          const wait = f.status === "not on ftp" || f.status === "being written";
+          const line = good ? '<span style="color:var(--ok,#34d399)">✔ ' + esc(f.name || "MTFPOSITION") + " is in COMMON FILES now" + (f.detail ? " - " + esc(f.detail) : "") + ".</span>"
+            : wait ? '<span style="color:var(--amber,#fbbf24)">⏳ ' + esc(f.detail || f.status) + ". Try again in a few minutes.</span>"
+            : '<span style="color:var(--err)">✗ ' + esc(f.detail || "the fetch did not finish - see the console log") + "</span>";
+          loadOther(line);
+        };
+        setTimeout(tick, 1200);
+      };
+      if (m.fetching) { const msg = $("#pcOtherMsg"); if (msg) msg.innerHTML = '<span class="rms-spin"></span><b>A fetch is running…</b>'; watchMtf(m.at || ""); }
       if ($("#pcMtfGo")) $("#pcMtfGo").onclick = async () => {
-        $("#pcMtfGo").disabled = true;
-        const r = await (await fetch("/common/mtfposition/fetch", { method: "POST", credentials: "same-origin" })).json().catch(() => ({}));
-        $("#pcOtherMsg").innerHTML = r.ok ? "Fetching MTFPOSITION… reopen this tab in a minute." : '<span style="color:var(--err)">' + esc(r.error || "failed") + "</span>";
+        const b = $("#pcMtfGo"), before = m.at || "";
+        b.disabled = true; b.style.opacity = ".7"; b.innerHTML = '<span class="rms-spin"></span>Fetching… please wait';
+        $("#pcOtherMsg").innerHTML = '<span class="rms-spin"></span><b>Checking the FTP for ' + esc(m.name || "MTFPOSITION") + "…</b>";
+        let r = {};
+        try { r = await (await fetch("/common/mtfposition/fetch", { method: "POST", credentials: "same-origin" })).json(); } catch (e) { r = { ok: false, error: e.message }; }
+        if (!r.ok) { loadOther('<span style="color:var(--err)">✗ ' + esc(r.error || "could not start the fetch") + "</span>"); return; }
+        watchMtf(before);
       };
       $("#pcOtherPick").onclick = () => $("#pcOtherFile").click();
       $("#pcOtherFile").onchange = async () => {
