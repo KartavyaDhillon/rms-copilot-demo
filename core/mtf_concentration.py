@@ -252,9 +252,8 @@ def read_state() -> dict:
 
 def _write_state(st: dict):
     with _STATE_LOCK:
-        tmp = _state_path().with_suffix(".tmp")
-        tmp.write_text(json.dumps(st, indent=1), encoding="utf-8")
-        tmp.replace(_state_path())
+        from core.safe_state import write_json
+        write_json(_state_path(), st)
 
 
 def _update(**kw) -> dict:
