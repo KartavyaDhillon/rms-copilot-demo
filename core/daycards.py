@@ -368,9 +368,9 @@ CARDS.update({
     "master": {"title": "MASTER FILE", "folder": "MASTER FILE", "icon": "🧾", "accent": "#10b981",
                "procs": ["master_file", "live_allocation_report", "mcx_intrasar"], "manual": False, "auto_time": "09:30",
                "desc": "Master file → Live allocation report → MCX intrasar. One click runs them in order."},
-    "sa": {"title": "SA04 REPORTING", "folder": "SA04 REPORTING", "icon": "📑", "accent": "#6366f1", "procs": ["sa_cm", "sa_fo"], "manual": True, "auto_time": "11:00",
+    "sa": {"title": "SA04 REPORTING", "folder": "SA04 REPORTING", "icon": "📑", "accent": "#6366f1", "procs": ["sa_cm", "sa_fo"], "manual": True,
            "desc": "SA04 reports for CM and FO (with the MCX end-of-day files)."},
-    "eodsar": {"title": "EODSAR", "folder": "EODSAR", "icon": "🌙", "accent": "#ec4899", "procs": ["mcx_eodsar", "ncdex_eodsar"], "manual": True, "auto_time": "11:00",
+    "eodsar": {"title": "EODSAR", "folder": "EODSAR", "icon": "🌙", "accent": "#ec4899", "procs": ["mcx_eodsar", "ncdex_eodsar"], "manual": True,
                "desc": "MCX and NCDEX end-of-day short-allocation reports."},
 })
 
@@ -1331,7 +1331,8 @@ def list_logs(card: str, limit: int = 60) -> list:
 
 
 # ───────────────────────────── auto run (a card's own daily timer) ─────────────────────────────
-# Only for cards with "auto_time" (MASTER FILE 09:30; SA04 REPORTING and EODSAR 11:00 - their manual files are uploaded before that). Settings under the card's Credentials:
+# Only for cards with "auto_time" (MASTER FILE 09:30). SA04 REPORTING and EODSAR have NO timer: people upload their manual files and
+# click Run, so they run only then. Settings under the card's Credentials:
 #   DC_<CARD>_AUTO = on / off      DC_<CARD>_AUTO_TIME = HH:MM
 # Trading days only (holiday calendar of the console), for the PREVIOUS trading day. It runs what is not done yet,
 # in order; if a pre-check fails (a file is not there yet) it tries again every DC_<CARD>_AUTO_RETRY_MIN minutes
@@ -1359,6 +1360,8 @@ def _hhmm(v: str, default: str) -> int:
 
 
 def auto_time(card: str) -> str:
+    if not has_auto(card):
+        return ""
     mins = _hhmm(os.getenv(_akey(card, "TIME"), ""), CARDS[card].get("auto_time", "09:30"))
     return f"{mins // 60:02d}:{mins % 60:02d}"
 

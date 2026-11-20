@@ -126,21 +126,24 @@ class Auto(Base):
         return D.auto_tick(card, dt.datetime(2026, 10, 30, h, m), starter=starter or (lambda c, procs, d, by="": {"ok": True}))
 
     def test_times_per_card(self):
-        self.assertEqual({c: D.auto_time(c) for c in D.CARDS}, {"master": "09:30", "sa": "11:00", "eodsar": "11:00"})
+        self.assertEqual({c: D.auto_time(c) for c in D.CARDS}, {"master": "09:30", "sa": "", "eodsar": ""})
+        self.assertEqual([c for c in D.CARDS if D.has_auto(c)], ["master"])      # SA04 REPORTING and EODSAR run only on a click
 
     def test_runs_only_after_its_time_on_trading_days(self):
         self.assertIsNone(self.at(9, 29))
         self.assertIn("attempt 1", self.at(9, 30))
         self.assertIsNone(D.auto_tick("master", dt.datetime(2026, 10, 31, 9, 45), starter=lambda *a, **k: {"ok": True}))   # Saturday
-        self.assertIsNone(self.at(10, 59, "sa"))
-        self.assertTrue(self.at(11, 0, "sa"))
+        for card in ("sa", "eodsar"):                      # no timer: never started by the clock, whatever the time or the settings
+            os.environ[f"DC_{card.upper()}_AUTO"] = "on"
+            self.assertIsNone(self.at(11, 0, card))
+            self.assertIsNone(self.at(15, 30, card))
 
     def test_retries_wait_and_switch_off(self):
         self.assertTrue(self.at(9, 30))
         self.assertIsNone(self.at(9, 40))                 # too soon after the first try
         self.assertTrue(self.at(9, 46))
-        os.environ["DC_SA_AUTO"] = "off"
-        self.assertIsNone(self.at(11, 5, "sa"))
+        os.environ["DC_MASTER_AUTO"] = "off"
+        self.assertIsNone(self.at(11, 5))
 
     def test_time_can_be_changed(self):
         os.environ["DC_MASTER_AUTO_TIME"] = "10:15"
