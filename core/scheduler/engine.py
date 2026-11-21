@@ -80,7 +80,7 @@ class SchedulerEngine:
         self.clock = clock
         self.synchronous = synchronous            # tests: run processes inline
         self.worker = worker_id or f"{socket.gethostname()}:{os.getpid()}:{os.urandom(2).hex()}"
-        self.is_holiday = is_holiday if is_holiday is not None else holidays.is_holiday
+        self.is_holiday = is_holiday if is_holiday is not None else holidays.is_closed
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._started_ok = False

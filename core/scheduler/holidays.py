@@ -70,6 +70,11 @@ def is_holiday(d: dt.date) -> bool:
     return d in load()
 
 
+def is_closed(d: dt.date) -> bool:
+    """Saturday, Sunday or a listed market holiday - the days schedules (with Skip holidays on) never fire."""
+    return d.weekday() >= 5 or d in load()
+
+
 # ───────────────────────── special trading days (e.g. Muhurat trading on a Sunday) ─────────────────────────
 # A date listed here is a day the exchanges are OPEN although it is a weekend / listed holiday.  It never changes
 # the schedules or the auto-run timers (those keep treating the day as closed); it only lets a MANUAL run

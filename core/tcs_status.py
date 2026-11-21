@@ -200,7 +200,7 @@ def _next_users(now: dt.datetime) -> list:
             today = now.date()
             runs = []
             for u in rules.occurrences({"rule": s["rule"], "tz": s["tz"], "start_date": s.get("start_date"),
-                                        "end_date": s.get("end_date"), "skip_holidays": s.get("skip_holidays")}, utc_now, holidays.is_holiday):
+                                        "end_date": s.get("end_date"), "skip_holidays": s.get("skip_holidays")}, utc_now, holidays.is_closed):
                 loc = u.astimezone(tz)
                 if loc.date() != today:
                     break

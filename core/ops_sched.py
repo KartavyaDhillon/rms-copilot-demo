@@ -169,7 +169,7 @@ def today(now=None):
             pname = pdef.name if pdef else s["process_key"]
             stz = rules.get_tz(s.get("tz"))
             try:
-                occs = rules.between(s, day0 - dt.timedelta(seconds=1), day1 - dt.timedelta(seconds=1), holidays.is_holiday)
+                occs = rules.between(s, day0 - dt.timedelta(seconds=1), day1 - dt.timedelta(seconds=1), holidays.is_closed)
             except Exception:
                 continue
             execs = {}

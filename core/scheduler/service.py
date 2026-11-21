@@ -122,7 +122,7 @@ def preview(data: dict, now: Optional[dt.datetime] = None, n: int = 5) -> dict:
     timing_errs = rules.validate_schedule_timing(_timing(c)) if c.get("rule") else errs
     if timing_errs:
         return {"errors": errs or timing_errs, "upcoming": []}
-    ups = rules.upcoming(_timing(c), now, n, holidays.is_holiday)
+    ups = rules.upcoming(_timing(c), now, n, holidays.is_closed)
     out = {"errors": [e for e in errs if e], "tz": c["tz"],
            "upcoming": [{"utc": store.ts(u), "text": rules.fmt_local(u, c["tz"], True)} for u in ups]}
     if not ups and not out["errors"]:
@@ -144,7 +144,7 @@ def create(data: dict, user: str, now: Optional[dt.datetime] = None) -> dict:
     errs, c = validate_payload(data)
     if errs:
         raise ValidationFailed(errs)
-    nxt = rules.next_after(_timing(c), now, holidays.is_holiday)
+    nxt = rules.next_after(_timing(c), now, holidays.is_closed)
     if nxt is None:
         raise ValidationFailed(["No future run exists for these settings."])
     return store.create_schedule(c, user, now, nxt)
@@ -158,7 +158,7 @@ def update(sid: str, data: dict, user: str, now: Optional[dt.datetime] = None) -
     cur = store.get_schedule(sid)
     if not cur:
         return None
-    nxt = rules.next_after(_timing(c), now, holidays.is_holiday)
+    nxt = rules.next_after(_timing(c), now, holidays.is_closed)
     if nxt is None:
         raise ValidationFailed(["No future run exists for these settings."])
     out = store.update_schedule(sid, c, user, now, nxt)
@@ -168,7 +168,7 @@ def update(sid: str, data: dict, user: str, now: Optional[dt.datetime] = None) -
 
 
 def _next_for(s: dict, now: dt.datetime):
-    return rules.next_after(_timing(s), now, holidays.is_holiday)
+    return rules.next_after(_timing(s), now, holidays.is_closed)
 
 
 def pause(sid, user, now=None):
