@@ -42,7 +42,8 @@ def risk_categories(path: Path, software: str, exclude) -> list:
 def _run(params, ctx):
     pd = H.need("pandas")
     to, cc = K.recipients(params)
-    K.require_trading_day(ctx)
+    if not H.is_manual(ctx):                       # Run now works on any day; only the SCHEDULED run skips weekends / holidays
+        K.require_trading_day(ctx)
     if H.already_sent(FOLDER, "mail", ctx):
         raise H.Skipped(H.skip_message(FOLDER, ["mail"], "e-mailed"))
     inp, out = paths.proc_dir(FOLDER, "inputs"), paths.proc_dir(FOLDER, "outputs")
