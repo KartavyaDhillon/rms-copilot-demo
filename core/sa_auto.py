@@ -468,9 +468,20 @@ def due_action(now: dt.datetime, st=None, state=None):
     return None
 
 
+def _closed_day(d) -> bool:
+    """Saturday / Sunday / market holiday: the timers do nothing (the server runs 24x7, so no 'missed' alerts either)."""
+    try:
+        from core.scheduler import helpers as H
+        return not H.is_trading_day(d)
+    except Exception:                                            # noqa: BLE001
+        return d.weekday() >= 5
+
+
 def tick(now=None, **kw):
     """One look at the clock. Runs at most one action (blocking). -> the action taken or None."""
     now = now or dt.datetime.now()
+    if _closed_day(now.date()):
+        return None
     if SA._SA.get("running"):
         return None                                              # a run is going on (manual or automatic): wait
     act = due_action(now)

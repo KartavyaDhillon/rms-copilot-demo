@@ -651,7 +651,18 @@ def purge_stale_ctcl_mcx(now_ts=None):
     return gone
 
 
+def _closed_day(d) -> bool:
+    """Saturday / Sunday / market holiday: the timers do nothing (the server runs 24x7, so no 'missed' alerts either)."""
+    try:
+        from core.scheduler import helpers as H
+        return not H.is_trading_day(d)
+    except Exception:                                            # noqa: BLE001
+        return d.weekday() >= 5
+
+
 def tick_ctcl(now=None):
+    if _closed_day((now or dt.datetime.now()).date()):
+        return None
     if not get_settings().get("ctcl_prefetch"):
         pass
     else:
@@ -682,6 +693,8 @@ def _pipeline_busy():
 def tick(now=None, **kw):
     """One look at the clock. Downloads start in threads (not blocking); a run blocks until it ends. -> the action or None."""
     now = now or dt.datetime.now()
+    if _closed_day(now.date()):
+        return None
     act = due_action(now)
     if not act:
         return None
