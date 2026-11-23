@@ -1056,18 +1056,31 @@ def main(run_mode):
               "continuing without it.\n")
         morning_totals, morning_paths = None, None
 
-    if "morning" not in meta.get("modes_done", []):
+    # The Morning CLI backup is ALWAYS the base: its columns are rewritten into the master on every run (never trusted from an
+    # earlier run / the meta file - a master that lost them, or an earlier run that used other files, must not give wrong diffs).
+    if morning_totals is not None:
         _, morning_label, note = parse_file_stamp(morning_paths["CM"])
         print(f"Morning stamped as {morning_label}"
               + ("" if note == "filename" else f"  (time taken from {note})") + "\n")
 
         update_master(BASE_FOLDER, meta, morning_totals, morning_label, is_morning=True)
-        meta["modes_done"].append("morning")
+        if "morning" not in meta.get("modes_done", []):
+            meta["modes_done"].append("morning")
         meta["morning_labels"] = {seg: morning_label for seg in SEGMENT_ORDER}
         save_meta(BASE_FOLDER, meta)
-        print("Morning baseline written to master.\n")
+        print("Morning baseline (CLI Morning backup) written to master.\n")
     else:
-        print("Morning baseline already in today's master - reusing it.\n")
+        # the Morning backup could not be read this time: reuse the master's morning columns ONLY if they are really there
+        labels = meta.get("morning_labels") or {}
+        have = set(load_master_xlsx(os.path.join(BASE_FOLDER, MASTER_FILENAME))[0])
+        need = [f"{seg}_{labels.get(seg)}" for seg in SEGMENT_ORDER]
+        if not labels or any(c not in have for c in need):
+            raise AbortRun(
+                "The Morning CLI backup could not be read and the master has no Morning columns "
+                "(" + ", ".join(need) + ").\n"
+                "  Nothing was changed - run CLI Prudential Limit's Morning step, then run again."
+            )
+        print("Morning backup not readable now - reusing the Morning columns already in today's master.\n")
 
     # ── Step 2: this run's second snapshot ───────────────────────────────
     print(f"Fetching {slot_name} snapshot...\n")
