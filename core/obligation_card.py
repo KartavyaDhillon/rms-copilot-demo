@@ -41,7 +41,7 @@ REPO = Path(__file__).resolve().parent.parent
 BACKUP_SUB = "BACKUP FILES AUTOMATED"
 DEFAULT_TIMES = "09:30,10:30,11:30,12:30,14:00,16:30,18:00,19:30"
 MAX_SLOTS = 12
-STEP_LABEL = {"input": "MAIN file", "fo": "FO collaterals (NMASS)", "mcx": "MCX Margin Utilization", "build": "Picture",
+STEP_LABEL = {"input": "MAIN file", "fo": "FO Level-1 margins (NMASS)", "mcx": "MCX Margin Utilization", "build": "Picture",
               "send": "E-mail + WhatsApp", "backup": "Backup"}
 STEP_ORDER = ("input", "fo", "mcx", "build", "send", "backup")
 MAIL_DEFAULTS = {"REPORT": ("sukhbirsingh@mastertrust.co.in, hs@mastertrust.co.in, rks@mastertrust.co.in",
@@ -64,7 +64,7 @@ _LOG = collections.deque(maxlen=400)
 _ACTIVE: dict = {"cancel": False, "log_file": None, "thread": None, "proc": None, "slot": None}
 _TICK = {"thread": None, "stop": threading.Event()}
 _MAIN_RX = re.compile(r"^MAIN[_ -]?(\d{1,2})[._](\d{2})(?!\d).*\.csv$", re.I)
-_FO_RX = re.compile(r"^FO_ClientLevelCollaterals_.*\.(csv|txt|xlsx)$", re.I)
+_FO_RX = re.compile(r"^(?:FO_Level1_Margins|FO_ClientLevelCollaterals)_.*\.(csv|txt|xlsx)$", re.I)   # Level-1 row (new) | old full FO file
 _AUTH_BAD = ("password", "LOCKED", "RSA code")           # a refused login is never repeated
 
 
@@ -502,7 +502,7 @@ def main_time(name: str):
 
 
 def fo_date(name: str):
-    """FO_ClientLevelCollaterals_<ddmmyyyy><hhmmss>.csv -> the date inside the name (None when it has none)."""
+    """FO_Level1_Margins_<ddmmyyyy><hhmmss>.csv (or the old FO_ClientLevelCollaterals_...) -> the date inside the name (None when it has none)."""
     m = re.search(r"_(\d{2})(\d{2})(\d{4})(?:\d{4,6})?(?!\d)", os.path.basename(name or ""))
     if not m:
         return _cnc.name_date(name)
@@ -555,7 +555,8 @@ def pre_run_check(base: Path = None) -> dict:
 
 # ───────────────────────────── downloads ─────────────────────────────
 def step_fo(work: Path) -> Path:
-    """FO client-level collaterals by the console's own NMASS script (shared NMASS session; captcha filled automatically)."""
+    """FO Level-1 margin row (NMASS Risk Management - FO > Margins > CM) by the console's own NMASS script (shared NMASS session; captcha
+    filled automatically). Saved as FO_Level1_Margins_<ddmmyyyy><hhmmss>.csv with the NSE screen's column names."""
     script = os.getenv("CTCL_NMASS_SCRIPT", str(REPO / "ctcl_codes" / "NMASS_NCFE_API_MIX.PY"))
     if not os.path.isfile(script):
         raise RuntimeError(f"NMASS script not found: {script}")
@@ -579,7 +580,7 @@ def step_fo(work: Path) -> Path:
         env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1",
                     "NMASS_SAVE_DIR": str(work), "NCFE_LOGOUT_AFTER": "1"})
         env["NMASS_RUN_MODE"] = "fo_only"                       # only the FO file: no CM / CO, no NCDEX (NCFE) login
-        log("NMASS download (FO client-level collaterals) ...")
+        log("NMASS download (FO Level-1 margin row) ...")
         alive = threading.Event()
 
         def keep_fresh():                                        # dl_lock treats a lock older than 3 min as abandoned
@@ -599,7 +600,7 @@ def step_fo(work: Path) -> Path:
     found = sorted((p for p in work.iterdir() if p.is_file() and _FO_RX.match(p.name)), key=lambda p: p.stat().st_mtime) if work.is_dir() else []
     if found:
         return found[-1]
-    raise RuntimeError(_auth_message(tail) or f"FO client-level collaterals were not downloaded (script ended with code {rc}).")
+    raise RuntimeError(_auth_message(tail) or f"The FO Level-1 margin row was not downloaded (script ended with code {rc}).")
 
 
 def step_mcx(work: Path) -> Path:
@@ -925,12 +926,12 @@ def run(trigger="manual", by="", alert=None, step_fns=None, now: dt.datetime = N
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir(parents=True, exist_ok=True)
         _set_step("fo", "running")
-        fo_file = _with_retries("FO collaterals", lambda: fns["fo"](work))
+        fo_file = _with_retries("FO Level-1 margins", lambda: fns["fo"](work))
         _set_step("fo", "ok", fo_file.name)
         _check_cancel()
         fo_day = fo_date(fo_file.name)
         if fo_day is not None and fo_day != d:
-            raise RuntimeError(f"the FO file is dated {dstr(fo_day)} - not today's ({dstr(d)}); NMASS gave an old file")
+            raise RuntimeError(f"the FO file is dated {dstr(fo_day)} - not today's ({dstr(d)}); NMASS gave an old row")
         _set_step("mcx", "running")
         search_file = _with_retries("MCX Margin Utilization", lambda: fns["mcx"](work))
         _set_step("mcx", "ok", search_file.name)

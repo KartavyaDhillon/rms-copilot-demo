@@ -54,11 +54,15 @@ def build_data(main_csv: str, fo_file: str, search_file: str):
     for c in ("MCXDayNetPremium", "MCXFuturesMTM", "MCXDayNetPremium_Cr", "MCXFuturesMTM_Cr"):
         if c in cust.columns:
             cust = cust.drop(columns=[c])
-    coll = pd.read_csv(fo_file) if str(fo_file).lower().endswith((".csv", ".txt")) else pd.read_excel(fo_file)
-    fo_dep = (coll["Cash allocated (b)"].sum() + coll["Cash-others (c)"].sum() + coll["Non-cash Securities (d)"].sum()) / 1e7
-    fo_used = coll["Minimum Margins (a)"].sum() / 1e7
     mcx = read_search_results(search_file)
-    margins = {"fo_deposit": float(fo_dep), "fo_used": float(fo_used),
+    from core import nmass_level1 as L1
+    if L1.is_level1(fo_file):                                   # the NMASS Level-1 row: the portal's own four FO numbers
+        fo = L1.read_boxes(str(fo_file))
+    else:                                                       # old full FO_ClientLevelCollaterals file (kept for old backups)
+        coll = pd.read_csv(fo_file) if str(fo_file).lower().endswith((".csv", ".txt")) else pd.read_excel(fo_file)
+        fo = {"fo_deposit": float((coll["Cash allocated (b)"].sum() + coll["Cash-others (c)"].sum() + coll["Non-cash Securities (d)"].sum()) / 1e7),
+              "fo_used": float(coll["Minimum Margins (a)"].sum() / 1e7), "fo_pro": None, "fo_client": None}
+    margins = {"fo_deposit": fo["fo_deposit"], "fo_used": fo["fo_used"], "fo_pro": fo["fo_pro"], "fo_client": fo["fo_client"],
                "mcx_deposit": float(_num(mcx["TM / CP Margin Limit"]).sum() / 1e7),
                "mcx_used": float(_num(mcx["Total MU (Rs)"]).sum() / 1e7),
                "pro_util": float(_num(mcx["Margin Utilization"]).sum() / 1e7),
@@ -164,13 +168,18 @@ def build_sheet(obl, cust, margins: dict) -> Sheet:
     cur = _blocks(sh, obl, 7, METRICS + MCX_METRICS)
     # 2. FO / MCX deposit + margin block (header row, value row)
     info = cur + 2
-    heads = ["FO Deposit", "Total Margin Used (FO)", "MCX Deposit", "Total Margin Used (MCX)", "PRO Margin Utilization", "CLIENT Margin Utilization"]
-    keys = ["fo_deposit", "fo_used", "mcx_deposit", "mcx_used", "pro_util", "client_util"]
-    for i, (h, k) in enumerate(zip(heads, keys), 1):
-        sh.put(info, i, h, "#E7F3FF", True, "#000000", "center")
-        sh.put(info + 1, i, f"{margins.get(k, 0):.2f} Cr", "#F8FBFF", True, "#000000", "center")
+    # line 1 = FO, line 2 = MCX (four boxes each)
+    lines = [(info, "#E7F3FF", [("FO DEPOSIT", "fo_deposit"), ("TOTAL MARGIN USED (FO)", "fo_used"),
+                                ("PRO MARGIN UTILISATION (FO)", "fo_pro"), ("CLIENT MARGIN UTILISATION (FO)", "fo_client")]),
+             (info + 3, "#FDE9D9", [("MCX DEPOSIT", "mcx_deposit"), ("TOTAL MARGIN USED (MCX)", "mcx_used"),
+                                    ("PRO MARGIN UTILIZATION (MCX)", "pro_util"), ("CLIENT MARGIN UTILIZATION (MCX)", "client_util")])]
+    for r0, fill, items in lines:
+        for i, (h, k) in enumerate(items, 1):
+            v = margins.get(k)
+            sh.put(r0, i, h, fill, True, "#000000", "center")
+            sh.put(r0 + 1, i, "-" if v is None else f"{v:.2f} Cr", "#F8FBFF", True, "#000000", "center")
     # 3. Custodian Obligation
-    start = info + 3
+    start = info + 6
     sh.put(start, 1, "Custodian Obligation", TITLE_BLUE, True, WHITE, "center", size=19)
     sh.merge(start, 1, start, ncols)
     _summary(sh, cust, start + 2, METRICS)
@@ -237,9 +246,9 @@ def render(path: str, obl, cust, margins: dict, footer: str = "") -> str:
 
 
 def find_inputs(folder: str):
-    """(main csv, FO collateral file, SearchResults file) of a folder - the newest of each, like the script."""
+    """(main csv, FO file, SearchResults file) of a folder - the newest of each. FO file = the Level-1 row, else the old collateral file."""
     def newest(*pats):
         files = [f for p in pats for f in glob.glob(os.path.join(folder, p))]
         return max(files, key=os.path.getmtime) if files else None
-    return (newest("MAIN*.csv"), newest("FO_ClientLevelCollaterals_*.csv", "FO_ClientLevelCollaterals_*.txt", "FO_ClientLevelCollaterals_*.xlsx"),
+    return (newest("MAIN*.csv"), newest("FO_Level1_Margins_*.csv", "FO_ClientLevelCollaterals_*.csv", "FO_ClientLevelCollaterals_*.txt", "FO_ClientLevelCollaterals_*.xlsx"),
             newest("SearchResults*.xlsx", "SearchResults*.csv"))

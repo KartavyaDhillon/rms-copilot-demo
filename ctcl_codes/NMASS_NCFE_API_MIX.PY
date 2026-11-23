@@ -972,6 +972,62 @@ def download_file(api_url, payload, retry=0):
 
 
 # -----------------------------
+# LEVEL-1 ROW (Risk Management - FO > Margins > CM)  -  used by the OBLIGATION REPORT (NMASS_RUN_MODE=fo_only)
+# One GET, same session / cookies / `ufp` header as the file downloads. Saved as FO_Level1_Margins_<ddmmyyyy><hhmmss>.csv
+# with the column names exactly as the NSE screen shows them (core/nmass_level1.py).
+# -----------------------------
+def download_level1(retry=0):
+    from core import nmass_level1 as L1
+    print("\nLEVEL-1 MARGINS:", L1.PATH)
+    try:
+        with session_lock:
+            r = session.get(
+                f"{BASE}{L1.PATH}",
+                headers={**COMMON_HEADERS, "Content-Type": "application/json",
+                         "Cache-Control": "no-cache", "Pragma": "no-cache", "withCredentials": "true"},
+                timeout=20
+            )
+        with print_lock:
+            print("Status:", r.status_code)
+        if r.status_code != 200:
+            if r.status_code in [401, 403, 404]:
+                print(f"🚨 SESSION EXPIRED — RE-LOGIN (NMASS, HTTP {r.status_code})")
+                global authcode, conskey
+                session.cookies.clear()
+                authcode = None
+                conskey = None
+                try:
+                    os.remove(COOKIE_FILE)
+                except OSError:
+                    pass
+            if retry < 10:
+                login()
+                return download_level1(retry + 1)
+            print("Max retries reached ❌")
+            return None
+        row = L1.parse(r.json())
+        path = L1.write_csv(row, DOWNLOAD_FOLDER)
+        with print_lock:
+            print("Saved:", path)
+            print("MARGIN SUMMARY @", row[L1.TS_COLUMN])
+        return path
+    except L1.Level1Error as e:
+        print("Level-1 answer not usable:", e)
+        if retry < 3:
+            time.sleep(5)
+            return download_level1(retry + 1)
+        print("Max retries reached ❌")
+        return None
+    except Exception as e:
+        print("Level-1 download crashed:", e)
+        if retry < 3:
+            login()
+            return download_level1(retry + 1)
+        print("Max retries reached after crash ❌")
+        return None
+
+
+# -----------------------------
 # PAYLOADS
 # -----------------------------
 # File format requested from NMASS. CTCL / Margin Shortage use CSV (default).
@@ -1023,11 +1079,15 @@ def run_downloads():
     print("\n" + "-"*60)
     log_header("DOWNLOAD STARTED")
 
-    if not _FO_ONLY:
-        download_file(
-            "/nmass/collateral-management/cm-coll-client-dtls",
-            cm_payload
-        )
+    if _FO_ONLY:                                  # OBLIGATION REPORT: the Level-1 row only - not the full FO collateral file
+        download_level1()
+        log_success("LEVEL-1 DOWNLOAD COMPLETED ✅")
+        return
+
+    download_file(
+        "/nmass/collateral-management/cm-coll-client-dtls",
+        cm_payload
+    )
 
     download_file(
         "/nmass/collateral-management/fo-coll-client-dtls",
