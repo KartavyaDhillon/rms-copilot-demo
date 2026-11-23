@@ -106,7 +106,35 @@
     if (!S.err) S.loaded[tab] = true;
     render();
     if (tab === "processes") S.focusProc = "";   // the jump-to-process request has now been honoured
+    if (tab === "schedules") applyFocus();
   }
+
+  /* Jump from the dashboard (a failed row of Today's Timeline / Needs your attention): open the Schedules tab, scroll to that
+     schedule's row in the list and mark it. A slot that has no schedule row (a card's own timer) goes to the Process Center instead. */
+  function applyFocus() {
+    const f = S.focus; if (!f) return;
+    S.focus = null;
+    const body = $("#scBody"); if (!body) return;
+    let tr = null;
+    const rows = [].slice.call(body.querySelectorAll("tbody tr[data-id]"));
+    if (f.schedule_id) tr = rows.filter((r) => r.dataset.id === f.schedule_id)[0] || null;
+    if (!tr && f.id) tr = rows.filter((r) => { const b = r.querySelector("td b"); return b && b.textContent.trim() === f.id; })[0] || null;
+    if (tr) {
+      tr.scrollIntoView({ block: "center" });
+      tr.style.transition = "background .5s";
+      tr.style.background = "rgba(248,113,113,.22)";
+      tr.style.outline = "2px solid var(--err, #f87171)";
+      setTimeout(() => { tr.style.background = ""; tr.style.outline = ""; }, 4000);
+    } else if (RMS.focusProcess) {
+      RMS.focusProcess({ pipe: f.pipe || "", pipe_name: f.pipe_name || f.id || "" });
+    }
+  }
+  RMS.focusSchedule = function (item) {
+    S.focus = { schedule_id: item.schedule_id || "", id: item.id || "", pipe_name: item.pipe_name || "", pipe: item.pipe || "" };
+    S.filter = "all"; S.q = ""; S.sort = null;
+    RMS.go("scheduler");
+    if (location.hash === "#/scheduler" && S.loaded && S.loaded.schedules && $("#scBody") && S.tab === "schedules") setTimeout(() => { render(); applyFocus(); }, 0);
+  };
 
   function render() {
     if (!$("#scBody")) return;

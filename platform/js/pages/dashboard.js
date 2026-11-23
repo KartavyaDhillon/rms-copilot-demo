@@ -185,16 +185,16 @@
   function renderAttention() {
     const box = $("#attnList"); if (!box) return;
     const rows = [];
-    attnItems().forEach((i) => rows.push({ st: i.status, title: i.pipe_name, sub: (i.source === "scheduler" ? "Scheduler \u00b7 " : "Process Center \u00b7 ") + i.id + " \u00b7 planned " + (i.window || "").split("-")[0] }));
+    attnItems().forEach((i) => rows.push({ item: i, st: i.status, title: i.pipe_name, sub: (i.source === "scheduler" ? "Scheduler \u00b7 " : "Process Center \u00b7 ") + i.id + " \u00b7 planned " + (i.window || "").split("-")[0] }));
     ((lastSum && lastSum.failed_open) || []).forEach((e) =>
       rows.push({ st: "failed", title: e.pipe_name + " \u2014 " + e.label, sub: "Failed at " + (e.start || "").slice(11, 16) + " \u00b7 not run again successfully" + (e.why ? " \u00b7 why: " + e.why : "") + " \u00b7 click to open the log", entry: e }));
     $("#attnSub").textContent = rows.length ? rows.length + " item" + (rows.length > 1 ? "s" : "") : "";
     if (!rows.length) { box.innerHTML = '<div class="d-allgood">' + RMS.icon("check") + "<b>All clear</b><small>Nothing failed or was missed today.</small></div>"; return; }
     box.innerHTML = rows.map((r, k) =>
-      '<div class="feed-item" data-k="' + k + '" style="' + (r.entry ? "" : "cursor:default") + '"><span class="feed-ic failed">' + RMS.icon("alert") + "</span>" +
+      '<div class="feed-item" data-k="' + k + '" style="' + (r.entry || r.item ? "" : "cursor:default") + '"><span class="feed-ic failed">' + RMS.icon("alert") + "</span>" +
       '<div class="feed-main"><b>' + esc(r.title) + "</b><small>" + esc(r.sub) + "</small></div>" +
       '<span class="badge err">' + (ST[r.st] || ST.failed)[1] + '</span><button class="btn sm ghost" data-task="' + k + '" title="Hand this to somebody in the Work Tracker">+ Task</button></div>').join("");
-    box.querySelectorAll("[data-k]").forEach((el) => { const r = rows[+el.dataset.k]; if (r && r.entry) el.onclick = () => RMS.openLogViewer(r.entry); });
+    box.querySelectorAll("[data-k]").forEach((el) => { const r = rows[+el.dataset.k]; if (r && r.entry) el.onclick = () => RMS.openLogViewer(r.entry); else if (r && r.item) el.onclick = () => gotoItem(r.item); });
     box.querySelectorAll("[data-task]").forEach((bt) => {
       bt.onclick = (ev) => {
         ev.stopPropagation();
@@ -206,12 +206,20 @@
     });
   }
 
+  // a failed / missed row opens the process itself: the Scheduler's Schedules list for a scheduled one, the Process Center for the rest
+  function gotoItem(i) {
+    if (!i) return;
+    if (i.source === "scheduler") { if (RMS.focusSchedule) RMS.focusSchedule(i); else RMS.go("scheduler"); }
+    else if (RMS.focusProcess) RMS.focusProcess(i); else RMS.go("process");
+  }
+
   function renderTimeline(t) {
     lastOv = t;
     const list = $("#tlList");
     const all = t.items || [];
     const pass = (i) => tlFilter === "all" ? true : tlFilter === "todo" ? !isDone(i.status)
       : tlFilter === "attn" ? isAttn(i.status) : tlFilter === "sched" ? i.source === "scheduler" : i.source !== "scheduler";
+    all.forEach((x, k) => { x.__k = k; });
     const items = all.filter(pass);
     $("#tlSub").textContent = all.filter((i) => isDone(i.status)).length + " finished \u00b7 " +
       all.filter((i) => !isDone(i.status)).length + " to go";
@@ -227,12 +235,13 @@
         : '<span class="badge ' + m[0] + '">' + (isDone(st) ? "\u2713 " : "") + m[1] + "</span>";
       const src = i.source === "scheduler" ? '<span class="src-tag sched">Scheduler</span>' : '<span class="src-tag box">Process Center</span>';
       const sub = i.source === "scheduler" ? (i.id && i.id !== i.pipe_name ? i.id : "") : i.id;
-      html += '<div class="tl-item ' + cls + '"><span class="tl-time">' + esc((i.window || "").split("-")[0] || "\u2014") + "</span>" +
+      html += '<div class="tl-item ' + cls + '" data-ti="' + i.__k + '"' + (isAttn(st) ? ' style="cursor:pointer" title="Click to open this process"' : "") + '><span class="tl-time">' + esc((i.window || "").split("-")[0] || "\u2014") + "</span>" +
         '<span class="tl-rail"><span class="tl-dot"></span></span>' +
         '<span class="tl-main"><span class="tl-name2"><b>' + esc(i.pipe_name) + "</b>" + (sub ? "<small>" + esc(sub) + "</small>" : "") + "</span></span>" + src + badge + "</div>";
     });
     if (!nowInserted && items.length) html += '<div class="tl-now">NOW ' + hhmm(t.now_min) + " \u2014 end of schedule</div>";
     list.innerHTML = html || '<div class="bm-empty">Nothing matches this filter.</div>';
+    list.querySelectorAll(".tl-item[data-ti]").forEach((el) => { const it = all[+el.dataset.ti]; if (it && isAttn(it.status)) el.onclick = () => gotoItem(it); });
     const now = list.querySelector(".tl-now");
     if (now && list.dataset.scrolled !== tlFilter) { list.scrollTop = Math.max(0, now.offsetTop - list.clientHeight / 2); list.dataset.scrolled = tlFilter; }
     if (lastSum) { renderBanner(lastSum); renderAttnKpi(lastSum); renderAttention(); }

@@ -27,6 +27,44 @@
   const $ = RMS.$;
   let booted = false;
 
+  /* Jump from the dashboard (a failed row): open the Process Center, scroll to that process's box / card tile and mark it.
+     A KPI card tile (OBLIGATION REPORT, CNC F11 ...) is opened too. item = {pipe, pipe_name}. */
+  function pcFindBox(d, item) {
+    const norm = (t) => String(t || "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+    const pipe = String(item.pipe || "");
+    let el = pipe && pipe !== "sched" ? d.getElementById(pipe === "sa" ? "saBox" : "pxBox-" + pipe) : null;
+    if (el) return { el, tile: false };
+    const want = norm(item.pipe_name);
+    if (!want) return null;
+    const tiles = [].slice.call(d.querySelectorAll(".tile"));
+    const nm = (t) => { const n = t.querySelector(".tile-name"); return n ? norm(n.textContent) : ""; };
+    el = tiles.filter((t) => nm(t).indexOf(want) === 0)[0] || tiles.filter((t) => nm(t).indexOf(want) >= 0)[0];
+    if (el) return { el, tile: true };
+    const boxes = [].slice.call(d.querySelectorAll(".sa-box"));
+    el = boxes.filter((b) => { const h = b.querySelector("h1,h2,h3,.sa-title,.sa-head,b"); return h && norm(h.textContent).indexOf(want) >= 0; })[0];
+    return el ? { el, tile: false } : null;
+  }
+  RMS.focusProcess = function (item) {
+    RMS.go("process");
+    let n = 0;
+    const iv = setInterval(() => {
+      if (++n > 40) { clearInterval(iv); return; }
+      let d = null;
+      try { const fr = $("#pcFrame"); d = fr && fr.contentDocument; } catch (e) { d = null; }
+      if (!d || d.readyState !== "complete") return;
+      const hit = pcFindBox(d, item || {});
+      if (!hit) { if (n > 10) clearInterval(iv); return; }
+      clearInterval(iv);
+      const el = hit.el;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      const old = el.style.boxShadow;
+      el.style.transition = "box-shadow .4s";
+      el.style.boxShadow = "0 0 0 3px #f87171";
+      setTimeout(() => { el.style.boxShadow = old; }, 4000);
+      if (hit.tile) { const b = el.querySelector(".tbtn"); if (b) setTimeout(() => b.click(), 500); }
+    }, 300);
+  };
+
   RMS.pages = RMS.pages || {};
   RMS.pages.process = {
     title: "Process Center", crumb: "Execute and monitor today's automation workflows.",
