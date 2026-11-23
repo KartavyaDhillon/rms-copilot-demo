@@ -7688,6 +7688,31 @@ async def reco_holidays_remove(req: Request):
     return {"ok": True}
 
 
+@app.get("/calendar/today")
+@_ttl_cached(30)
+def calendar_today():
+    """Is today a weekend / market holiday? The console shows a 'run anyway?' popup before a manual run on such a day."""
+    from core.scheduler import holidays as _sh
+    return _sh.closed_status()
+
+
+@app.get("/calendar/day")
+def calendar_day(d: str = ""):
+    """The same answer for any date (YYYY-MM-DD or DD-MM-YYYY), to check the holiday list ahead of time, e.g. /calendar/day?d=2026-11-24."""
+    import datetime as _cdt
+    from core.scheduler import holidays as _sh
+    day = None
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d%m%Y"):
+        try:
+            day = _cdt.datetime.strptime((d or "").strip(), fmt).date()
+            break
+        except ValueError:
+            continue
+    if day is None:
+        return {"ok": False, "error": "use a date like 2026-11-24 or 24-11-2026"}
+    return {"ok": True, **_sh.closed_status(day), "in_holiday_list": day in _sh.load(), "special_trading_day": _sh.is_special(day)}
+
+
 @app.get("/special-days")
 def special_days_list():
     """Special trading days (e.g. Muhurat on a Sunday): a MANUAL run works on these days; schedules / auto timers don't change."""

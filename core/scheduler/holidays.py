@@ -199,3 +199,16 @@ def _load_special_file() -> set:
 
 def is_special(d: dt.date) -> bool:
     return d in load_special()
+
+
+def closed_status(d=None) -> dict:
+    """What the console says about a day, for the 'run anyway?' popup before a manual run.
+    closed = a weekend / listed market holiday that is NOT also a special trading day (Muhurat etc.)."""
+    d = d or dt.date.today()
+    try:
+        special = d in load_special()
+    except Exception:                                            # noqa: BLE001
+        special = False
+    closed = (not special) and is_closed(d)
+    reason = "" if not closed else ("weekend" if d.weekday() >= 5 and d not in load() else "market holiday")
+    return {"date": d.isoformat(), "weekday": d.strftime("%A"), "closed": closed, "reason": reason}

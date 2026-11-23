@@ -450,7 +450,10 @@ def _run(params, ctx):
     now = datetime.now()
     first, last = _hm(params.get("first_run"), "09:00"), _hm(params.get("last_run"), "00:30")
     cut = _hm(params.get("saturday_cutoff"), "04:00")
-    if not _in_window(now, first, last, cut, manual=H.is_manual(ctx)):
+    if H.is_manual(ctx):
+        if not _in_window(now, first, last, cut, manual=True):
+            ctx.log(f"{now:%H:%M} is outside the run window - running anyway because Run now was clicked.")
+    elif not _in_window(now, first, last, cut, manual=False):
         raise H.Skipped(f"{now:%H:%M} is outside the run window ({params.get('first_run') or '09:00'}–"
                         f"{params.get('last_run') or '00:30'}, Sundays never) — no MCX login attempted.")
     out, tmp = paths.proc_dir(FOLDER, "outputs"), paths.proc_dir(FOLDER, "inputs")

@@ -45,8 +45,12 @@ def require_trading_day(ctx, d: dt.date = None):
     if not H.is_trading_day(d, manual=manual):
         raise H.Skipped(f"{d:%d-%m-%Y} is not a trading day (weekend / market holiday) — nothing to do.")
     if manual and not H.is_trading_day(d):
-        ctx.log(f"{d:%d-%m-%Y} is a SPECIAL trading day ({d:%A}): today's file is tried first, and if it is not on the "
-                f"portal the previous trading day's file ({H.prev_trading_day(d):%d-%m-%Y}) is used.")
+        if H.is_special_day(d):
+            ctx.log(f"{d:%d-%m-%Y} is a SPECIAL trading day ({d:%A}): today's file is tried first, and if it is not on the "
+                    f"portal the previous trading day's file ({H.prev_trading_day(d):%d-%m-%Y}) is used.")
+        else:
+            ctx.log(f"{d:%d-%m-%Y} ({d:%A}) is a weekend / market holiday - running anyway because Run now was clicked "
+                    f"(scheduled runs skip such days).")
 
 
 def wait_of(params) -> int:

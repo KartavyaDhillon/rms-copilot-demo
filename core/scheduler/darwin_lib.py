@@ -1231,7 +1231,10 @@ def build_message(records: list[dict]) -> EmailMessage:
     body_rows = "".join(
         "<tr>" + "".join(f'<td style="{cell}">{esc(_fmt(r, c, n))}</td>' for c in COLUMNS) + "</tr>"
         for n, r in enumerate(records, start=1))
-    paras = "".join(f'<p style="margin:0 0 12px 0;">{esc(g)}<br>{esc(t)}</p>' for g, t in BODY_LINES)
+    # "Dear HR Team - please update the contact details" is left out when every employee in this mail already has a mobile number
+    all_have_mobile = bool(records) and all(str(r.get("Mobile No.") or "").strip() for r in records)
+    body_lines = [(g, t) for g, t in BODY_LINES if not (all_have_mobile and g.lower().startswith("dear hr"))]
+    paras = "".join(f'<p style="margin:0 0 12px 0;">{esc(g)}<br>{esc(t)}</p>' for g, t in body_lines)
     html_body = (
         '<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt;color:#000;">'
         f'{paras}'
@@ -1242,7 +1245,7 @@ def build_message(records: list[dict]) -> EmailMessage:
     line = lambda cells: " | ".join(v.ljust(w) for v, w in zip(cells, widths))
     table_txt = "\n".join([line(COLUMNS), "-+-".join("-" * w for w in widths)] +
                           [line([_fmt(r, c, n) for c in COLUMNS]) for n, r in enumerate(records, 1)])
-    text_body = "\n\n".join(f"{g}\n{t}" for g, t in BODY_LINES) + "\n\n" + table_txt + "\n\n" + "\n".join(SIGNATURE) + "\n"
+    text_body = "\n\n".join(f"{g}\n{t}" for g, t in body_lines) + "\n\n" + table_txt + "\n\n" + "\n".join(SIGNATURE) + "\n"
 
     msg = EmailMessage()
     msg["Subject"] = SUBJECT

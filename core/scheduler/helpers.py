@@ -158,12 +158,13 @@ def is_special_day(d: dt.date) -> bool:
 
 
 def is_trading_day(d: dt.date, hol: Optional[set] = None, manual: bool = False) -> bool:
-    """Mon-Fri and not a market holiday. With manual=True (a Run now / Process Center button) a SPECIAL trading day
-    also counts. Schedules and auto timers never pass manual=True, so they keep treating that day as closed."""
+    """Mon-Fri and not a market holiday. With manual=True (a Run now / Process Center button) EVERY day counts: a person
+    who clicks Run now is always allowed to run. Schedules and auto timers never pass manual=True, so they keep
+    following the holiday calendar (weekends, holidays, and special days that are not in the calendar as open)."""
     hol = holidays() if hol is None else hol
     if d.weekday() < 5 and d not in hol:
         return True
-    return bool(manual) and is_special_day(d)
+    return bool(manual)
 
 
 def is_manual(ctx) -> bool:

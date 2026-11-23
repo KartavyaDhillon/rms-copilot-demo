@@ -227,7 +227,9 @@
       if (a === "edit") return openEditor(s);
       if (a === "more") return openMore(s);
       if (a === "run") {
-        if (!(await confirmBox("Run now — " + s.name, "This really runs the process now (for example it sends the WhatsApp / e-mail), even if it already ran today. The normal schedule is not changed.", "Run now"))) return;
+        const cd = RMS.closedDay ? await RMS.closedDay() : null;      // weekend / market holiday: say so in the same confirmation
+        const closedNote = cd && cd.closed ? " " + RMS.closedDayText(cd) + " Run it anyway?" : "";
+        if (!(await confirmBox("Run now — " + s.name, "This really runs the process now (for example it sends the WhatsApp / e-mail), even if it already ran today. The normal schedule is not changed." + closedNote, cd && cd.closed ? "Run anyway" : "Run now"))) return;
         const pw = await unlock(needsPw(), "Run now — " + s.name);
         if (pw === null) return;
         await call("POST", "/sched/schedules/" + id + "/run-now", pw ? { _password: pw } : undefined);

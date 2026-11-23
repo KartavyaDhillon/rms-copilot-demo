@@ -40,7 +40,8 @@ class SpecialDays(unittest.TestCase):
     def test_auto_stays_closed_manual_opens(self):
         self.assertFalse(self.H.is_trading_day(SUN))                       # schedules / timers: unchanged
         self.assertTrue(self.H.is_trading_day(SUN, manual=True))           # Run now
-        self.assertFalse(self.H.is_trading_day(dt.date(2026, 11, 15), manual=True))   # an ordinary Sunday stays closed
+        self.assertTrue(self.H.is_trading_day(dt.date(2026, 11, 15), manual=True))    # Run now works on an ordinary Sunday / holiday too
+        self.assertFalse(self.H.is_trading_day(dt.date(2026, 11, 15)))                # ...but a schedule / timer still sees it closed
 
     def test_require_trading_day(self):
         from core.scheduler.processes import _kit as K
@@ -48,8 +49,16 @@ class SpecialDays(unittest.TestCase):
         K.require_trading_day(Ctx(self.H.MANUAL), SUN)                      # no error
         with self.assertRaises(Skipped):
             K.require_trading_day(Ctx("SCHEDULED"), SUN)
+        K.require_trading_day(Ctx(self.H.MANUAL), dt.date(2026, 11, 15))   # Run now on an ordinary Sunday: no error either
         with self.assertRaises(Skipped):
-            K.require_trading_day(Ctx(self.H.MANUAL), dt.date(2026, 11, 15))
+            K.require_trading_day(Ctx("SCHEDULED"), dt.date(2026, 11, 15))
+
+    def test_closed_status_for_the_run_anyway_popup(self):
+        from core.scheduler import holidays as HL
+        self.assertTrue(HL.closed_status(dt.date(2026, 11, 14))["closed"])                 # an ordinary Saturday
+        self.assertEqual(HL.closed_status(dt.date(2026, 11, 14))["reason"], "weekend")
+        self.assertFalse(HL.closed_status(dt.date(2026, 11, 16))["closed"])                # an ordinary Monday
+        self.assertFalse(HL.closed_status(SUN)["closed"])                                   # a special trading Sunday: no warning
 
     def test_previous_trading_day_of_sunday_is_friday(self):
         self.assertEqual(self.H.prev_trading_day(SUN), FRI)
