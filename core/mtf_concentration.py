@@ -38,6 +38,8 @@ CALC_SCRIPT = Path(__file__).resolve().parent / "mtf_conc_calc.py"
 
 NIFTY_URL = "https://www.niftyindices.com/IndexConstituent/ind_nifty50list.csv"
 BSE_API = "https://api.bseindia.com/BseIndiaAPI/api"
+BSE_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+          "Chrome/157.0.0.0 Safari/537.36")          # same Chrome version as the sec-ch-ua header sent with it
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 # (label, BSE iname, BSE index_Code, final file name, columns the calculation needs)
 BSE_FILES = [("BSE 500", "BSE500", "17", "BSE 500index_Constituents.csv"),
@@ -540,15 +542,10 @@ def _save_bytes(base: Path, name: str, content: bytes):
 
 def _bse_one(s, label, iname, code, final, base: Path) -> str:
     """Returns '' when saved, else the reason."""
-    idx = label                                                  # "BSE 500" / "BSE 200" - what BSE's own download uses in the file name
-    try:                                                         # BSE now answers this name look-up with a web page: then the label is used
-        meta = s.get(f"{BSE_API}/indiceswatch_weight_ng/w?flag={code}", timeout=40).json()
-        idx = ((meta.get("Table") or [{}])[0].get("IndexName") or label).strip()
-    except Exception as e:                                       # noqa: BLE001
-        log(f"{label}: BSE name look-up gave no data ({type(e).__name__}) - using '{label}'")
-    r = s.get(f"{BSE_API}/NS_IndexWeight_SPDJ_Download_ng/w?iname={iname}&fName={idx}Index_Constituents", timeout=60,
-              headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Origin": None,
-                       "Upgrade-Insecure-Requests": "1"})      # the same kind of request the BSE website's download button sends
+    idx = label                                                  # "BSE 500" / "BSE 200" - what BSE's own download button uses in the file name
+    # No name look-up call any more (BSE answers it with a web page, and it made the session look like a script).
+    # Just the download, sent like the BSE website's own button: browser-style headers, nothing JSON-like.
+    r = s.get(f"{BSE_API}/NS_IndexWeight_SPDJ_Download_ng/w?iname={iname}&fName={idx}Index_Constituents", timeout=60)
     why = _valid_csv(r.content, BSE_NEED, 100) if r.status_code == 200 else f"HTTP {r.status_code}"
     if not why:
         _save_bytes(base, final, r.content)
@@ -594,8 +591,13 @@ def step_index(base: Path, force: bool = False) -> dict:
                     _save_bytes(base, final, r.content)
             else:
                 s = requests.Session()
-                s.headers.update({"User-Agent": UA, "Accept": "application/json, text/plain, */*", "Origin": "https://www.bseindia.com",
-                                  "Referer": "https://www.bseindia.com/"})
+                s.headers.update({"User-Agent": BSE_UA,                   # the same headers the BSE website's download button sends
+                                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                                  "Accept-Language": "en-US,en;q=0.9", "Referer": "https://www.bseindia.com/",
+                                  "sec-ch-ua": '"Not-A.Brand";v="99", "Google Chrome";v="157", "Chromium";v="157"',
+                                  "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"', "sec-fetch-dest": "document",
+                                  "sec-fetch-mode": "navigate", "sec-fetch-site": "same-site", "sec-fetch-user": "?1",
+                                  "Upgrade-Insecure-Requests": "1"})
                 s.get("https://www.bseindia.com/", timeout=30)
                 spec = next(x for x in BSE_FILES if x[3] == final)
                 why = _bse_one(s, spec[0], spec[1], spec[2], final, base)

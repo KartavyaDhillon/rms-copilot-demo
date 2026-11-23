@@ -397,17 +397,47 @@ def timeline():
 
 
 # ── summary / KPIs ────────────────────────────────────────────────────────────
-def _unresolved_failures(logs):
-    """Failed runs of today that are still failed: a failure is dropped as soon as a LATER run of the same step
-    (same pipeline + same log label) finished OK - e.g. Margin Shortage fails at 13:30, re-run at 13:32 succeeds.
-    Newest first."""
+def _override_times():
+    """{pipe key: latest 'HH:MM' today at which somebody used Manual overrides > Mark run done for that box}."""
+    out = {}
+    try:
+        from core import pipeline_box as PB
+        for key, p in PB.PIPELINES.items():
+            try:
+                runs = PB._read_overrides(p) or {}
+            except Exception:                                    # noqa: BLE001
+                continue
+            ats = [str(v.get("at") or "") for v in runs.values() if isinstance(v, dict) and v.get("type") == "mark_done" and v.get("at")]
+            if ats:
+                out[key] = max(ats)
+    except Exception:                                            # noqa: BLE001
+        pass
+    return out
+
+
+def _unresolved_failures(logs, overrides=None):
+    """Failed runs of today that are still failed. A failure is dropped as soon as
+      - a LATER run of the same step (same pipeline + same log label) finished OK, e.g. Margin Shortage fails at 13:30,
+        re-run at 13:32 succeeds, or
+      - somebody marked that box's run done by hand (Manual overrides) AFTER the failure.
+    A step that failed many times (PROBABLE x4) is listed ONCE: its newest failure. Newest first."""
+    overrides = _override_times() if overrides is None else overrides
     last_ok = {}
     for e in logs:
         if e["status"] == "ok":
             k = (e["pipe"], e["label"])
             if e["start"] > last_ok.get(k, ""):
                 last_ok[k] = e["start"]
-    return [e for e in logs if e["status"] == "failed" and last_ok.get((e["pipe"], e["label"]), "") <= e["start"]]
+    out, seen = [], set()
+    for e in sorted((x for x in logs if x["status"] == "failed"), key=lambda x: x["start"], reverse=True):
+        k = (e["pipe"], e["label"])
+        if k in seen or last_ok.get(k, "") > e["start"]:
+            continue
+        if overrides.get(e["pipe"], "") and overrides[e["pipe"]] >= str(e["start"])[11:16]:
+            continue
+        seen.add(k)
+        out.append(e)
+    return out
 
 
 def _inventory():
