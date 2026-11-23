@@ -432,7 +432,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=12"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=6"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=2"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=2"></script><script src="/platform/js/process-cardlock.js?v=4"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=2"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=2"></script><script src="/platform/js/process-mst.js?v=1"></script><script src="/platform/js/process-cardlock.js?v=5"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -1257,6 +1257,28 @@ async def _tpp_settle_apply(request: Request):
 
 
 _comm_card_routes("tpp", "core.tpp_card")                        # TENTATIVE PAYIN PAYOUT card: /tpp/* (same routes; upload = PositionBook)
+
+
+@app.post("/margin-track/upload", name="margin_track_upload_own")
+async def _margin_track_upload(request: Request):
+    """MARGIN SHORTFALL TRACK upload (declared BEFORE the shared card routes so it wins): any number of Margin_Detail files (each becomes a
+    version of its date), FINAL_SHORTFALL files or a zip of them (import). Answers one line per file - the screen shows it as a table."""
+    from core import margin_shortfall_track as m
+    if m.is_running():
+        return JSONResponse({"ok": False, "error": "A run is going - Stop it first."}, status_code=409)
+    form = await request.form()
+    by = (_actor(request)[0] or "")
+    results, rejected = [], []
+    for f in form.getlist("files"):
+        nm = getattr(f, "filename", "") or ""
+        try:
+            results.append(m.accept_upload(nm, await f.read(), by=by))
+        except ValueError as e:
+            rejected.append(str(e))
+    return {"ok": [r.get("name") for r in results], "results": results, "rejected": rejected, "status": m.status()}
+
+
+_comm_card_routes("margin-track", "core.margin_shortfall_track")   # MARGIN SHORTFALL TRACK card: /margin-track/* (same routes)
 
 
 @app.on_event("startup")
@@ -2275,9 +2297,9 @@ async def _slow_request_log(request, call_next):
 _BUSY_CARD_PREFIX = {"cnc-f11": "CNC F11", "payout-check": "PAYOUT CHECK", "obligation": "OBLIGATION REPORT",
                      "tpp": "TENTATIVE PAYIN PAYOUT", "live-alloc": "LIVE ALLOCATION CAPTURE", "mcx-cash": "MCX CASH MAINTENANCE",
                      "files70": "76 FILES DOWNLOADER", "mtfic": "MTF CONCENTRATION", "entrisk": "ENTERPRISE RISK REPORT",
-                     "pd": "PHYSICAL DELIVERY"}
+                     "pd": "PHYSICAL DELIVERY", "margin-track": "MARGIN SHORTFALL TRACK"}
 _BUSY_WRITE_RX = __import__("re").compile(
-    r"^/(cnc-f11|payout-check|obligation|tpp|live-alloc|mcx-cash|files70|mtfic|entrisk|pd)/"
+    r"^/(cnc-f11|payout-check|obligation|tpp|live-alloc|mcx-cash|files70|mtfic|entrisk|pd|margin-track)/"
     r"(upload|upload-chunk|upload-finalize|settings|override|settle/save|settle/apply|screener|percent|file-percent|wa-config|safe-test/arm|safe-test/disarm)$")
 
 

@@ -22,6 +22,7 @@ CARDS = {
     "PAYOUT CHECK": ("payoutchk", "core.payout_check_card"),
     "OBLIGATION REPORT": ("obligation", "core.obligation_card"),
     "TENTATIVE PAYIN PAYOUT": ("tpp", "core.tpp_card"),
+    "MARGIN SHORTFALL TRACK": ("mst", "core.margin_shortfall_track"),
     "LIVE ALLOCATION CAPTURE": ("liveallocation", "core.live_allocation"),
     "MCX CASH MAINTENANCE": ("mcxcash", "core.mcx_cash_maintenance"),
     "76 FILES DOWNLOADER": ("files70", "core.files70"),

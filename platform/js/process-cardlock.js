@@ -15,7 +15,7 @@
   var PIPE_TITLE = { 'PHYSICAL DELIVERY': ['physdel', 'physdelfile'] };
   // what stays usable while a card runs: Stop, Logs, Backup files and read-only viewing/downloading. Everything else (Upload, Run, Email,
   // WhatsApp, Credentials, Settings, Safe test, Override ...) is locked, so nobody changes a file or a setting under a running process.
-  var ALLOW = /(^|[^a-z])(stop|logs?|backup|download|zip|view|open|copy|close|back|refresh|reload|cancel|preview)([^a-z]|$)|^[\s×✕✖xX]*$/i;
+  var ALLOW = /(^|[^a-z])(stop|logs?|backup|download|zip|view|open|copy|close|back|refresh|reload|cancel|preview)([^a-z]|$)|skip\s*&\s*stop|^[\s×✕✖xX]*$/i;
 
   var css = document.createElement('style');
   css.textContent = 'button[data-cl="1"]{opacity:.55!important;cursor:not-allowed!important}' +
@@ -48,9 +48,13 @@
     var strip = $('clStrip'), html = '<span class="cl-sp"></span><span><b>' + esc(l.label) + '</b> is running — started ' + esc(who(l)) + '. Run, Upload and settings are locked until it finishes - Backup files and Logs stay open.</span>';
     if (!strip) { strip = document.createElement('div'); strip.id = 'clStrip'; strip.className = 'cl-strip'; m.insertBefore(strip, m.firstChild); }
     if (strip.dataset.sig !== html) { strip.innerHTML = html; strip.dataset.sig = html; }
-    [].slice.call(m.querySelectorAll('button')).forEach(function (b) {
+    var all = [].slice.call(m.querySelectorAll('button'));
+    // ONE Run button on the window: it shows the spinner ("Running…"). Several (a window with 8 slots / folders): the running slot draws
+    // its own spinner, the others keep their label and are only locked - never 8 spinning buttons.
+    var single = all.filter(function (b) { return b.dataset.clOrig !== undefined || isRun(b); }).length === 1;
+    all.forEach(function (b) {
       if (b.dataset.cl === '1') return;
-      if (isRun(b)) {
+      if (isRun(b) && single) {
         b.dataset.clOrig = b.innerHTML; b.dataset.cl = '1'; b.dataset.clWas = b.disabled ? '1' : ''; b.disabled = true;
         b.innerHTML = '<span class="cl-sp" style="margin-right:6px"></span>Running…';
       } else if (!allowed(b)) {

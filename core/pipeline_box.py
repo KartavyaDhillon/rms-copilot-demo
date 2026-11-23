@@ -738,6 +738,22 @@ try:
     }
 except Exception as _e:                                          # noqa: BLE001
     print(f"⚠️  TENTATIVE PAYIN PAYOUT not registered: {type(_e).__name__}: {_e}")
+# MARGIN SHORTFALL TRACK (core/margin_shortfall_track.py): Margin_Detail files uploaded (versions) + SA / EODSAR / MASTER FILE outputs of the console
+# -> FINAL_SHORTFALL + TRACK -> ONE mail for the newest unsent date (rms_del). Run by the button. Logs: logs/mst/mst__<dd-mm-yyyy>__<time>.log
+try:
+    from core import margin_shortfall_track as _mc_mst
+    _mc_mst.apply_defaults()
+    PIPELINES["mst"] = {
+        "name": "MARGIN SHORTFALL TRACK", "module": "core.margin_shortfall_track", "func": "run", "logdir": "mst", "runs": 0,
+        "state_dir_env": "MST_DIR", "state_default": r"D:\CONSOLE\data\MARGIN SHORTFALL TRACK", "state_file": "run_counter.txt",
+        "email_default": "",
+        "email_keys": {_mc_mst.MAIL_LABEL[k]: _mc_mst.mail_keys(k) for k in _mc_mst.MAIL_DEFAULTS},
+        "cred": {"E-mail sender (SMTP login) of this card": {
+                     "user_key": "MST_SENDER_EMAIL", "pass_key": "MST_SENDER_PASSWORD",
+                     "note": "The login the Daily Shortfall Track mail goes out from. Empty = the shared login (Scheduler > Connections > E-mail sending)."}},
+    }
+except Exception as _e:                                          # noqa: BLE001
+    print(f"⚠️  MARGIN SHORTFALL TRACK not registered: {type(_e).__name__}: {_e}")
 # ENTERPRISE RISK REPORT (core/enterprise_risk.py): Enterprise mails from 10:03, run 10:30 Mon-Fri, screener.in data, one mail.
 # Logs: logs/entrisk/entrisk__<dd-mm-yyyy>__<time>.log
 try:
