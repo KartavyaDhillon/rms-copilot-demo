@@ -45,7 +45,6 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
-import pytesseract
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -242,16 +241,9 @@ def encrypt_password(password, hdn_value):
 
 
 def detect_captcha_text(image_path):
-    img = cv2.imread(image_path)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-    kernel = np.ones((2,2), np.uint8)
-    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-    thresh = cv2.resize(thresh, None, fx=2, fy=2)
-    custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    text = pytesseract.image_to_string(thresh, config=custom_config)
-    return ''.join(c for c in text.strip().replace(" ", "").upper() if c.isalnum())[:6]
+    """No local OCR any more (needs Tesseract/EasyOCR): the captcha is answered by 2Captcha, and when that is
+    switched off or fails it goes to the person in the dashboard popup. Returns '' = nothing pre-filled."""
+    return ""
 
 
 def captcha_popup(image_path):

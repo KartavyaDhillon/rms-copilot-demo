@@ -183,9 +183,9 @@ def today(now=None):
             manual_ok = sorted(m for m in manual_ok if m)
             for occ in occs:
                 st = _classify(execs, occ, now)
-                if st == "missed" and occ not in execs:
+                if st in ("missed", "failed"):               # missed OR failed slot, then somebody ran it by hand (Run now) and it succeeded
                     hit = next((m for m in manual_ok if m >= occ - dt.timedelta(minutes=30)), None)
-                    if hit:                                  # somebody ran it by hand around that time
+                    if hit:
                         manual_ok.remove(hit)
                         st = "done"
                 lt = occ.astimezone(stz)

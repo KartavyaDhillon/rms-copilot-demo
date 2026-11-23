@@ -18,9 +18,6 @@ init(autoreset=True)
 
 import cv2
 import numpy as np
-import pytesseract
-
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 try:
     from dotenv import load_dotenv as _ld
@@ -561,41 +558,10 @@ def split_characters(img):
 # -----------------------------
 
 
-import easyocr
-
-reader = easyocr.Reader(['en'], gpu=False)
-
 def detect_captcha_text(image_path):
-
-    img = preprocess_captcha(image_path)
-
-    characters = split_characters(img)
-
-    captcha_text = ""
-
-    for char in characters:
-
-        result = reader.readtext(
-            char,
-            detail=0,
-            allowlist='abcdefghijklmnopqrstuvwxyz0123456789'
-        )
-
-        if result:
-            captcha_text += result[0]
-
-    captcha_text = captcha_text.lower().replace(" ", "")
-   
-    # fix common OCR mistakes
-    captcha_text = captcha_text.replace("o","0")
-    captcha_text = captcha_text.replace("l","1")
-    captcha_text = captcha_text.replace("i","1")
-    captcha_text = captcha_text.replace("s","5")
-
-    # ensure exactly 5 characters
-    captcha_text = captcha_text[:5]
-
-    return captcha_text
+    """No local OCR any more (needs Tesseract/EasyOCR): the captcha is answered by 2Captcha, and when that is
+    switched off or fails it goes to the person in the dashboard popup. Returns '' = nothing pre-filled."""
+    return ""
 
 
 
@@ -1144,14 +1110,11 @@ def _run_ncdex_inner():
     import base64
     import urllib.parse
 
-    import pytesseract
     import tkinter as tk
     from PIL import Image, ImageTk
 
     import cv2
     import numpy as np
-
-    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
     # =========================
     # 🔐 AES ENCRYPTION (FINAL FIX)
@@ -1172,40 +1135,8 @@ def _run_ncdex_inner():
     # HELPERS CAPTCHA
     # =========================
     def detect_captcha_text(image_path):
-        img = cv2.imread(image_path)
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        # 🔥 better contrast
-        gray = cv2.equalizeHist(gray)
-
-        # 🔥 adaptive threshold (KEY CHANGE)
-        thresh = cv2.adaptiveThreshold(
-            gray, 255,
-            cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY_INV,
-            11, 2
-        )
-
-        # 🔥 remove noise (light)
-        kernel = np.ones((2,2), np.uint8)
-        thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-
-        # 🔥 enlarge
-        thresh = cv2.resize(thresh, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
-
-        processed_path = os.path.join(TEMP_FOLDER, "processed_captcha.png")
-        cv2.imwrite(processed_path, thresh)
-
-        # 🔥 BETTER CONFIG
-        custom_config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-
-        text = pytesseract.image_to_string(thresh, config=custom_config)
-
-        text = text.strip().replace(" ", "").upper()
-        text = ''.join(c for c in text if c.isalnum())
-
-        return text[:6]
+        """No local OCR (needs Tesseract): 2Captcha first, then the dashboard popup. '' = nothing pre-filled."""
+        return ""
 
 
     def captcha_popup(image_path, reason=None):
