@@ -179,14 +179,12 @@ def today(now=None):
                     execs[u] = r
             manual_ok = [store.parse_ts(r.get("started_utc") or r.get("created_utc"))
                          for r in by_sched.get(s["id"], [])
-                         if (r.get("trigger_type") or "").lower() == "manual" and r.get("status") == "SUCCESS"]
+                         if (r.get("trigger_type") or "").upper().startswith("MANUAL") and r.get("status") == "SUCCESS"]   # Run now is stored as MANUAL_RUN_NOW
             manual_ok = sorted(m for m in manual_ok if m)
             for occ in occs:
                 st = _classify(execs, occ, now)
                 if st in ("missed", "failed"):               # missed OR failed slot, then somebody ran it by hand (Run now) and it succeeded
-                    hit = next((m for m in manual_ok if m >= occ - dt.timedelta(minutes=30)), None)
-                    if hit:
-                        manual_ok.remove(hit)
+                    if any(m >= occ - dt.timedelta(minutes=30) for m in manual_ok):   # a later Run now that succeeded supersedes the earlier miss / failure
                         st = "done"
                 lt = occ.astimezone(stz)
                 items.append({"id": s["name"], "pipe": "sched", "pipe_name": pname, "source": "scheduler",

@@ -540,15 +540,24 @@ def _save_bytes(base: Path, name: str, content: bytes):
 
 def _bse_one(s, label, iname, code, final, base: Path) -> str:
     """Returns '' when saved, else the reason."""
-    meta = s.get(f"{BSE_API}/indiceswatch_weight_ng/w?flag={code}", timeout=40).json()
-    idx = ((meta.get("Table") or [{}])[0].get("IndexName") or label).strip()
-    r = s.get(f"{BSE_API}/NS_IndexWeight_SPDJ_Download_ng/w?iname={iname}&fName={idx}Index_Constituents", timeout=60)
+    idx = label                                                  # "BSE 500" / "BSE 200" - what BSE's own download uses in the file name
+    try:                                                         # BSE now answers this name look-up with a web page: then the label is used
+        meta = s.get(f"{BSE_API}/indiceswatch_weight_ng/w?flag={code}", timeout=40).json()
+        idx = ((meta.get("Table") or [{}])[0].get("IndexName") or label).strip()
+    except Exception as e:                                       # noqa: BLE001
+        log(f"{label}: BSE name look-up gave no data ({type(e).__name__}) - using '{label}'")
+    r = s.get(f"{BSE_API}/NS_IndexWeight_SPDJ_Download_ng/w?iname={iname}&fName={idx}Index_Constituents", timeout=60,
+              headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Origin": None,
+                       "Upgrade-Insecure-Requests": "1"})      # the same kind of request the BSE website's download button sends
     why = _valid_csv(r.content, BSE_NEED, 100) if r.status_code == 200 else f"HTTP {r.status_code}"
     if not why:
         _save_bytes(base, final, r.content)
         return ""
     log(f"{label}: download call gave {why} - trying the table call")
-    t = s.get(f"{BSE_API}/NS_IndexWeight_SPDJ_ng/w?iname={iname}", timeout=60).json().get("Table") or []
+    try:
+        t = s.get(f"{BSE_API}/NS_IndexWeight_SPDJ_ng/w?iname={iname}", timeout=60).json().get("Table") or []
+    except Exception as e:                                       # noqa: BLE001
+        return f"both BSE calls failed ({why}; table call: BSE returned a web page, not data - {type(e).__name__})"
     if not t:
         return f"both BSE calls failed ({why})"
     buf = io.StringIO()
