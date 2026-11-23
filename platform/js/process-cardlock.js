@@ -10,7 +10,12 @@
   if (window.__cardLockInjected) return;
   window.__cardLockInjected = true;
   var API = (typeof window.API !== 'undefined' && window.API) ? window.API : '';
-  var LOCKS = {}, LAST_OK = 0;
+  var LOCKS = {}, EXTRA = {}, LAST_OK = 0;
+  // windows whose run is tracked by the console's other lock list (/ops/locks) instead of /ops/card-locks: window title -> lock pipes
+  var PIPE_TITLE = { 'PHYSICAL DELIVERY': ['physdel', 'physdelfile'] };
+  // what stays usable while a card runs: Stop, Logs, Backup files and read-only viewing/downloading. Everything else (Upload, Run, Email,
+  // WhatsApp, Credentials, Settings, Safe test, Override ...) is locked, so nobody changes a file or a setting under a running process.
+  var ALLOW = /(^|[^a-z])(stop|logs?|backup|download|zip|view|open|copy|close|back|refresh|reload|cancel|preview)([^a-z]|$)|^[\s×✕✖xX]*$/i;
 
   var css = document.createElement('style');
   css.textContent = 'button[data-cl="1"]{opacity:.55!important;cursor:not-allowed!important}' +
@@ -21,6 +26,8 @@
 
   function esc(s) { return String(s == null ? '' : s).replace(/[<>&"']/g, function (c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function $(id) { return document.getElementById(id); }
+  function lockFor(t) { return t ? (LOCKS[t] || EXTRA[t] || null) : null; }
+  function allowed(b) { return b.hasAttribute('data-lock-ok') || ALLOW.test((b.textContent || '').replace(/\s+/g, ' ').trim()) || /close|modal-x|sa-x/i.test(b.className || '') || b.getAttribute('aria-label') === 'Close'; }
   function title() { var t = $('saModalTitle'), m = $('saModal'); return (t && m && m.classList.contains('show')) ? (t.textContent || '').trim() : ''; }
   function isRun(b) { return /^\s*[^A-Za-z]*run\b/i.test((b.textContent || '').replace(/\s+/g, ' ')); }
   function hhmm(since) { return since && since.length >= 16 ? since.slice(11, 16) : ''; }
@@ -29,21 +36,30 @@
   function unlock(body) {
     [].slice.call(body.querySelectorAll('button[data-cl="1"]')).forEach(function (b) {
       if (b.dataset.clOrig !== undefined) b.innerHTML = b.dataset.clOrig;
-      b.disabled = false; delete b.dataset.cl; delete b.dataset.clOrig;
+      b.disabled = b.dataset.clWas === '1'; b.removeAttribute('title'); delete b.dataset.cl; delete b.dataset.clOrig; delete b.dataset.clWas;
     });
+    [].slice.call(body.querySelectorAll('input[data-cl="1"]')).forEach(function (i) { i.disabled = i.dataset.clWas === '1'; delete i.dataset.cl; delete i.dataset.clWas; });
     var s = $('clStrip'); if (s) s.remove();
   }
   function apply() {
     var m = $('saModalBody'); if (!m) return;
-    var t = title(), l = t && LOCKS[t];
+    var t = title(), l = lockFor(t);
     if (!l) { unlock(m); return; }
-    var strip = $('clStrip'), html = '<span class="cl-sp"></span><span><b>' + esc(l.label) + '</b> is running — started ' + esc(who(l)) + '. Run is locked until it finishes.</span>';
+    var strip = $('clStrip'), html = '<span class="cl-sp"></span><span><b>' + esc(l.label) + '</b> is running — started ' + esc(who(l)) + '. Run, Upload and settings are locked until it finishes - Backup files and Logs stay open.</span>';
     if (!strip) { strip = document.createElement('div'); strip.id = 'clStrip'; strip.className = 'cl-strip'; m.insertBefore(strip, m.firstChild); }
     if (strip.dataset.sig !== html) { strip.innerHTML = html; strip.dataset.sig = html; }
     [].slice.call(m.querySelectorAll('button')).forEach(function (b) {
-      if (b.dataset.cl === '1' || !isRun(b)) return;
-      b.dataset.clOrig = b.innerHTML; b.dataset.cl = '1'; b.disabled = true;
-      b.innerHTML = '<span class="cl-sp" style="margin-right:6px"></span>Running…';
+      if (b.dataset.cl === '1') return;
+      if (isRun(b)) {
+        b.dataset.clOrig = b.innerHTML; b.dataset.cl = '1'; b.dataset.clWas = b.disabled ? '1' : ''; b.disabled = true;
+        b.innerHTML = '<span class="cl-sp" style="margin-right:6px"></span>Running…';
+      } else if (!allowed(b)) {
+        b.dataset.cl = '1'; b.dataset.clWas = b.disabled ? '1' : ''; b.disabled = true; b.title = 'Locked while this process is running';
+      }
+    });
+    [].slice.call(m.querySelectorAll('input[type="file"]')).forEach(function (i) {
+      if (i.dataset.cl === '1') return;
+      i.dataset.cl = '1'; i.dataset.clWas = i.disabled ? '1' : ''; i.disabled = true;
     });
   }
 
@@ -52,8 +68,8 @@
     var b = e.target && e.target.closest ? e.target.closest('button') : null;
     var m = $('saModalBody');
     if (!b || !m || !m.contains(b)) return;
-    var t = title(), l = t && LOCKS[t];
-    if (l && isRun(b)) {
+    var t = title(), l = lockFor(t);
+    if (l && (isRun(b) || !allowed(b))) {
       e.preventDefault(); e.stopImmediatePropagation();
       notice(l);
       return;
@@ -67,7 +83,7 @@
     bg.style.cssText = 'position:fixed;inset:0;z-index:100010;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center';
     bg.innerHTML = '<div style="background:var(--panel,#141821);color:var(--ink,#e8ecf3);border:1px solid var(--amber,#fbbf24);border-radius:14px;padding:20px 22px;width:min(420px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.6)">' +
       '<div style="font-size:15px;font-weight:700;margin-bottom:8px;color:var(--amber,#fbbf24)">🔒 ' + esc(l.label) + ' is already running</div>' +
-      '<div style="font-size:13px;color:var(--muted,#9aa4b5);line-height:1.5;margin-bottom:16px">Started ' + esc(who(l)) + '. Please wait for it to finish - Run unlocks by itself.</div>' +
+      '<div style="font-size:13px;color:var(--muted,#9aa4b5);line-height:1.5;margin-bottom:16px">Started ' + esc(who(l)) + '. Run, Upload and settings are locked until it finishes (Backup files and Logs stay open) - they unlock by themselves.</div>' +
       '<div style="display:flex;justify-content:flex-end"><button class="sa-tool" data-no-busy="1" id="clNoteOk" style="min-width:90px">OK</button></div></div>';
     document.body.appendChild(bg);
     $('clNoteOk').onclick = function () { bg.remove(); };
@@ -116,7 +132,19 @@
 
   function poll() {
     return fetch(API + '/ops/card-locks', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
-      LOCKS = (d && d.cards) || {}; LAST_OK = Date.now(); apply();
+      LOCKS = (d && d.cards) || {}; LAST_OK = Date.now(); return extra();
+    }).then(apply).catch(function () {});
+  }
+  // windows that are not in /ops/card-locks (PHYSICAL DELIVERY ...): the console's other lock list, matched by pipe or by name
+  function extra() {
+    var t = title(); EXTRA = {};
+    if (!t || LOCKS[t]) return null;
+    return fetch(API + '/ops/locks', { cache: 'no-store', credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (d) {
+      (d.locks || []).forEach(function (l) {
+        var pipes = PIPE_TITLE[t] || [], lab = String(l.label || '').toUpperCase();
+        if (pipes.indexOf(l.pipe) >= 0 || (lab && lab.length > 4 && lab.indexOf(t) >= 0))
+          EXTRA[t] = { key: l.pipe, running: true, by: l.by || '', since: l.started_at || '', label: t };
+      });
     }).catch(function () {});
   }
   function loop() {

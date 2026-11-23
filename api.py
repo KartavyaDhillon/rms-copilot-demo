@@ -432,7 +432,7 @@ def serve_dashboard(embed: int = 0):
                             '<script src="/platform/js/process-mcxcash.js?v=5"></script>'
                             '<script src="/platform/js/process-files70.js?v=6"></script><script src="/platform/js/process-daycards.js?v=12"></script>'
                             '<script src="/platform/js/process-saauto.js?v=2"></script><script src="/platform/js/process-updlimits.js?v=6"></script>'
-                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=2"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=2"></script><script src="/platform/js/process-cardlock.js?v=3"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
+                            '<script src="/platform/js/process-ms15card.js?v=6"></script><script src="/platform/js/process-mcxcomm.js?v=1"></script><script src="/platform/js/process-ncdexcomm.js?v=1"></script><script src="/platform/js/process-mtfconc.js?v=1"></script><script src="/platform/js/process-mtforder.js?v=1"></script><script src="/platform/js/process-entrisk.js?v=2"></script><script src="/platform/js/process-cncf11.js?v=1"></script><script src="/platform/js/process-payoutchk.js?v=2"></script><script src="/platform/js/process-obligation.js?v=1"></script><script src="/platform/js/process-tpp.js?v=2"></script><script src="/platform/js/process-cardlock.js?v=4"></script><script src="/platform/js/process-wanumbers.js?v=1"></script><script src="/platform/js/process-organizer.js?v=1"></script></body>', 1)
         from fastapi.responses import HTMLResponse
         return HTMLResponse(html, headers=_NO_CACHE)
     except Exception:
@@ -2270,6 +2270,56 @@ async def _slow_request_log(request, call_next):
             _sw.log_slow(request.method, request.url.path, request.url.query or "", _t.perf_counter() - t0)
         except Exception:
             pass
+
+
+_BUSY_CARD_PREFIX = {"cnc-f11": "CNC F11", "payout-check": "PAYOUT CHECK", "obligation": "OBLIGATION REPORT",
+                     "tpp": "TENTATIVE PAYIN PAYOUT", "live-alloc": "LIVE ALLOCATION CAPTURE", "mcx-cash": "MCX CASH MAINTENANCE",
+                     "files70": "76 FILES DOWNLOADER", "mtfic": "MTF CONCENTRATION", "entrisk": "ENTERPRISE RISK REPORT",
+                     "pd": "PHYSICAL DELIVERY"}
+_BUSY_WRITE_RX = __import__("re").compile(
+    r"^/(cnc-f11|payout-check|obligation|tpp|live-alloc|mcx-cash|files70|mtfic|entrisk|pd)/"
+    r"(upload|upload-chunk|upload-finalize|settings|override|settle/save|settle/apply|screener|percent|file-percent|wa-config|safe-test/arm|safe-test/disarm)$")
+
+
+@app.middleware("http")
+async def _busy_guard(request, call_next):
+    """While a process runs nobody may change what it works with: uploads, settings, e-mail / WhatsApp / credential changes and overrides
+    of that process are refused (HTTP 409). Run again is already refused by each card; Stop, Logs and Backup files stay open.
+    The screens grey the same buttons (platform/js/process-cardlock.js) - this is the server side, for a stale page or a second tab."""
+    try:
+        if request.method in ("POST", "PUT", "DELETE"):
+            path = request.url.path
+            m = _BUSY_WRITE_RX.match(path)
+            busy = None
+            if m:
+                title = _BUSY_CARD_PREFIX[m.group(1)]
+                if m.group(1) == "pd":
+                    from core import lock_manager as _lmb
+                    for l in (_lmb.snapshot().get("locks") or []):
+                        if l.get("pipe") in ("physdel", "physdelfile"):
+                            busy = {"by": l.get("by"), "label": title}
+                            break
+                else:
+                    from core import card_locks as _clb
+                    c = (_clb.snapshot().get("cards") or {}).get(title)
+                    if c:
+                        busy = {"by": c.get("by"), "label": title}
+            elif path == "/px/upload":                           # the Process Center boxes' uploads: ?pipe=<box>
+                pipe = request.query_params.get("pipe", "")
+                if pipe:
+                    from core import lock_manager as _lmb
+                    for l in (_lmb.snapshot().get("locks") or []):
+                        if l.get("pipe") == pipe:
+                            busy = {"by": l.get("by"), "label": l.get("label") or pipe}
+                            break
+            if busy:
+                from fastapi.responses import JSONResponse as _JR
+                who = f" (started by {busy['by']})" if busy.get("by") else ""
+                return _JR({"detail": f"{busy['label']} is running{who} - uploads and settings are locked until it finishes. "
+                                      f"Backup files and Logs stay open."}, status_code=409)
+    except Exception:                                            # noqa: BLE001 - the guard must never take the console down
+        pass
+    return await call_next(request)
 
 
 @app.on_event("startup")

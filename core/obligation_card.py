@@ -560,9 +560,11 @@ def step_fo(work: Path) -> Path:
     script = os.getenv("CTCL_NMASS_SCRIPT", str(REPO / "ctcl_codes" / "NMASS_NCFE_API_MIX.PY"))
     if not os.path.isfile(script):
         raise RuntimeError(f"NMASS script not found: {script}")
+    own_user, own_pass = os.getenv("OBLIGATION_NMASS_USER", "").strip(), os.getenv("OBLIGATION_NMASS_PASSWORD", "")
+    own = bool(own_user and own_pass)                            # this card's OWN NMASS login (Credentials) - used here and nowhere else
     from core import dl_lock
     waited = 0
-    while True:                                                  # the NMASS login is shared with the other cards - wait our turn
+    while not own:                                               # the shared login is shared with the other cards - wait our turn
         try:
             dl_lock.acquire(PIPE)
             break
@@ -579,11 +581,21 @@ def step_fo(work: Path) -> Path:
         env = os.environ.copy()
         env.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1",
                     "NMASS_SAVE_DIR": str(work), "NCFE_LOGOUT_AFTER": "1"})
-        env["NMASS_RUN_MODE"] = "fo_only"                       # only the FO file: no CM / CO, no NCDEX (NCFE) login
+        env["NMASS_RUN_MODE"] = "fo_only"                       # only the Level-1 row: no CM / CO, no NCDEX (NCFE) login
+        if own:
+            # only for this child process: its own user, its own session / captcha folder - the shared NMASS session is never touched
+            sess = root() / "_nmass_session"
+            sess.mkdir(parents=True, exist_ok=True)
+            env.update({"CTCL_NMASS_USER": own_user, "CTCL_NMASS_PASSWORD": own_pass, "NMASS_SESSION_DIR": str(sess)})
+            log(f"NMASS login: this card's own user {own_user} (separate session)")
+        else:
+            log("NMASS login: the shared login (no own login set in this card's Credentials)")
         log("NMASS download (FO Level-1 margin row) ...")
         alive = threading.Event()
 
         def keep_fresh():                                        # dl_lock treats a lock older than 3 min as abandoned
+            if own:
+                return
             while not alive.wait(45):
                 try:
                     os.utime(dl_lock._LOCK_PATH, None)
@@ -595,7 +607,8 @@ def step_fo(work: Path) -> Path:
         finally:
             alive.set()
     finally:
-        dl_lock.release()
+        if not own:
+            dl_lock.release()
     _check_cancel()
     found = sorted((p for p in work.iterdir() if p.is_file() and _FO_RX.match(p.name)), key=lambda p: p.stat().st_mtime) if work.is_dir() else []
     if found:

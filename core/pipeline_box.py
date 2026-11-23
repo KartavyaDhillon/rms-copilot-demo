@@ -709,9 +709,10 @@ try:
         "state_dir_env": "OBLIGATION_DIR", "state_default": r"D:\CONSOLE\data\OBLIGATION REPORT", "state_file": "run_counter.txt",
         "email_default": "",
         "email_keys": {_mc_ob.MAIL_LABEL[k]: _mc_ob.mail_keys(k) for k in _mc_ob.MAIL_DEFAULTS},
-        "cred": {"NSCCL / NMASS login (FO collaterals)": {
-                     "user_key": "CTCL_NMASS_USER", "pass_key": "CTCL_NMASS_PASSWORD",
-                     "note": "Shared with CTCL vs NMASS and the other NMASS downloads - change it here and they follow."},
+        "cred": {"NMASS login for the FO Level-1 row (this card only)": {
+                     "user_key": "OBLIGATION_NMASS_USER", "pass_key": "OBLIGATION_NMASS_PASSWORD",
+                     "note": "The NMASS user that can open Risk Management - FO. Used by the OBLIGATION REPORT only, in its own session - no other process, "
+                             "and not the shared CTCL / NMASS login. Empty = this card falls back to the shared login."},
                  "MCX eclear login (Margin Utilization View)": {
                      "user_key": "SA_MCX_DEPOSIT_USER", "pass_key": "SA_MCX_DEPOSIT_PASSWORD",
                      "note": "The eclear.mcxccl.com login. Shared with the other MCX downloads. The RSA code is filled automatically."},

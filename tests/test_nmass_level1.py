@@ -75,3 +75,57 @@ class Level1(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnLoginTests(unittest.TestCase):
+    """The OBLIGATION card's own NMASS login (Credentials) goes to its child process only, with its own session folder and no shared lock."""
+
+    def _run(self, own):
+        import os
+        from unittest import mock
+        from core import obligation_card as oc
+        seen = {}
+
+        def fake_child(cmd, env, timeout):
+            seen["env"] = env
+            work = Path(env["NMASS_SAVE_DIR"])
+            L1.write_csv(L1.parse(REAL), str(work))
+            return 0, ""
+        keys = ("OBLIGATION_NMASS_USER", "OBLIGATION_NMASS_PASSWORD")
+        old = {k: os.environ.get(k) for k in keys}
+        with tempfile.TemporaryDirectory() as t:
+            os.environ["OBLIGATION_DIR"] = t
+            for k in keys:
+                os.environ.pop(k, None)
+            if own:
+                os.environ["OBLIGATION_NMASS_USER"], os.environ["OBLIGATION_NMASS_PASSWORD"] = "M0999999", "secret-x"
+            work = Path(t) / "w"
+            work.mkdir()
+            from core import dl_lock
+            with mock.patch.object(oc, "_run_child", fake_child), mock.patch.object(dl_lock, "acquire") as acq, \
+                    mock.patch.object(dl_lock, "release") as rel:
+                out = oc.step_fo(work)
+            seen.update(acq=acq.called, rel=rel.called, out=out.name, sess_exists=(Path(t) / "_nmass_session").is_dir())
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        return seen
+
+    def test_own_login_is_used_only_in_the_child_with_its_own_session(self):
+        r = self._run(own=True)
+        self.assertEqual(r["env"]["CTCL_NMASS_USER"], "M0999999")
+        self.assertEqual(r["env"]["CTCL_NMASS_PASSWORD"], "secret-x")
+        self.assertTrue(r["env"]["NMASS_SESSION_DIR"].endswith("_nmass_session"))
+        self.assertTrue(r["sess_exists"])
+        self.assertFalse(r["acq"] or r["rel"])                         # the shared NMASS lock is not touched
+        self.assertTrue(r["out"].startswith("FO_Level1_Margins_"))
+        import os
+        self.assertNotEqual(os.environ.get("CTCL_NMASS_USER"), "M0999999")   # this process's shared login is unchanged
+
+    def test_without_an_own_login_the_shared_one_and_its_lock_are_used(self):
+        r = self._run(own=False)
+        self.assertNotEqual(r["env"].get("CTCL_NMASS_USER"), "M0999999")
+        self.assertNotIn("NMASS_SESSION_DIR", {k for k in r["env"] if k == "NMASS_SESSION_DIR" and r["env"][k].endswith("_nmass_session")})
+        self.assertTrue(r["acq"] and r["rel"])

@@ -976,9 +976,31 @@ def download_file(api_url, payload, retry=0):
 # One GET, same session / cookies / `ufp` header as the file downloads. Saved as FO_Level1_Margins_<ddmmyyyy><hhmmss>.csv
 # with the column names exactly as the NSE screen shows them (core/nmass_level1.py).
 # -----------------------------
+_L1_APP_OPENED = {"done": False}
+_L1_MAX_RELOGIN = 1            # a 404 right after a fresh login is NOT an expired session: never loop through captchas for it
+
+
+def _open_risk_app():
+    """The browser enters 'Risk Management - FO' by loading its page first (it sets the app's own cookies); do the same once per session."""
+    if _L1_APP_OPENED["done"]:
+        return
+    try:
+        with session_lock:
+            r = session.get(f"{BASE}/nmass/risk-fo/", headers={
+                "User-Agent": COMMON_HEADERS.get("User-Agent", "Mozilla/5.0"),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Upgrade-Insecure-Requests": "1", "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin"}, timeout=20)
+        print("Risk app page:", r.status_code)
+        _L1_APP_OPENED["done"] = True
+    except Exception as e:
+        print("Risk app page not opened:", e)
+
+
 def download_level1(retry=0):
     from core import nmass_level1 as L1
     print("\nLEVEL-1 MARGINS:", L1.PATH)
+    _open_risk_app()
     try:
         with session_lock:
             r = session.get(
@@ -990,20 +1012,22 @@ def download_level1(retry=0):
         with print_lock:
             print("Status:", r.status_code)
         if r.status_code != 200:
-            if r.status_code in [401, 403, 404]:
+            global authcode, conskey
+            if r.status_code in (401, 403) or (r.status_code == 404 and retry < _L1_MAX_RELOGIN):
                 print(f"🚨 SESSION EXPIRED — RE-LOGIN (NMASS, HTTP {r.status_code})")
-                global authcode, conskey
                 session.cookies.clear()
                 authcode = None
                 conskey = None
+                _L1_APP_OPENED["done"] = False
                 try:
                     os.remove(COOKIE_FILE)
                 except OSError:
                     pass
-            if retry < 10:
-                login()
-                return download_level1(retry + 1)
-            print("Max retries reached ❌")
+                if retry < 3:
+                    login()
+                    return download_level1(retry + 1)
+            print(f"Level-1 request refused (HTTP {r.status_code}) - NMASS did not give the Risk Management - FO row to this login. "
+                  f"Body: {r.text[:200]!r}")
             return None
         row = L1.parse(r.json())
         path = L1.write_csv(row, DOWNLOAD_FOLDER)
@@ -1020,8 +1044,8 @@ def download_level1(retry=0):
         return None
     except Exception as e:
         print("Level-1 download crashed:", e)
-        if retry < 3:
-            login()
+        if retry < 2:
+            time.sleep(3)
             return download_level1(retry + 1)
         print("Max retries reached after crash ❌")
         return None
