@@ -194,7 +194,7 @@
       '<div class="feed-item" data-k="' + k + '" style="' + (r.entry || r.item ? "" : "cursor:default") + '"><span class="feed-ic failed">' + RMS.icon("alert") + "</span>" +
       '<div class="feed-main"><b>' + esc(r.title) + "</b><small>" + esc(r.sub) + "</small></div>" +
       '<span class="badge err">' + (ST[r.st] || ST.failed)[1] + '</span><button class="btn sm ghost" data-task="' + k + '" title="Hand this to somebody in the Work Tracker">+ Task</button></div>').join("");
-    box.querySelectorAll("[data-k]").forEach((el) => { const r = rows[+el.dataset.k]; if (r && r.entry) el.onclick = () => RMS.openLogViewer(r.entry); else if (r && r.item) el.onclick = () => gotoItem(r.item); });
+    box.querySelectorAll("[data-k]").forEach((el) => { const r = rows[+el.dataset.k]; if (r && r.entry) el.onclick = () => gotoEntry(r.entry); else if (r && r.item) el.onclick = () => gotoItem(r.item); });
     box.querySelectorAll("[data-task]").forEach((bt) => {
       bt.onclick = (ev) => {
         ev.stopPropagation();
@@ -211,6 +211,12 @@
     if (!i) return;
     if (i.source === "scheduler") { if (RMS.focusSchedule) RMS.focusSchedule(i); else RMS.go("scheduler"); }
     else if (RMS.focusProcess) RMS.focusProcess(i); else RMS.go("process");
+  }
+
+  // a failed run from the logs (Short Allocation - SA-02 ...): open its process; only when that box / tile cannot be found the log opens
+  function gotoEntry(e) {
+    if (RMS.focusProcess) RMS.focusProcess({ pipe: e.pipe, pipe_name: e.pipe_name }, () => RMS.openLogViewer(e));
+    else RMS.openLogViewer(e);
   }
 
   function renderTimeline(t) {

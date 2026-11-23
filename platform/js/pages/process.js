@@ -44,16 +44,16 @@
     el = boxes.filter((b) => { const h = b.querySelector("h1,h2,h3,.sa-title,.sa-head,b"); return h && norm(h.textContent).indexOf(want) >= 0; })[0];
     return el ? { el, tile: false } : null;
   }
-  RMS.focusProcess = function (item) {
+  RMS.focusProcess = function (item, onMiss) {
     RMS.go("process");
     let n = 0;
     const iv = setInterval(() => {
-      if (++n > 40) { clearInterval(iv); return; }
+      if (++n > 40) { clearInterval(iv); if (onMiss) onMiss(); return; }
       let d = null;
       try { const fr = $("#pcFrame"); d = fr && fr.contentDocument; } catch (e) { d = null; }
       if (!d || d.readyState !== "complete") return;
       const hit = pcFindBox(d, item || {});
-      if (!hit) { if (n > 10) clearInterval(iv); return; }
+      if (!hit) { if (n > 10) { clearInterval(iv); if (onMiss) onMiss(); } return; }
       clearInterval(iv);
       const el = hit.el;
       el.scrollIntoView({ block: "center", behavior: "smooth" });
