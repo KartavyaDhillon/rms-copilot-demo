@@ -277,7 +277,7 @@
     S.settleToken = ''; S.settleName = '';
     var bg = overlay('tppSet', 100001);
     var rows = symbols.map(function (m, i) {
-      return '<div style="display:flex;gap:12px;align-items:center;border:1px solid var(--line,#222);border-radius:10px;padding:9px 12px;margin-bottom:8px">' +
+      return '<div class="tppRow" style="display:flex;gap:12px;align-items:center;border:1px solid var(--line,#222);border-radius:10px;padding:9px 12px;margin-bottom:8px">' +
         '<div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700">' + esc(m.symbol) + (m.optional ? ' <span style="font-size:10px;color:var(--amber,#fbbf24);font-weight:600">OPTIONAL - blank = skip</span>' : '') + '</div>' +
         '<div style="font-size:11px;color:var(--dim)">' + esc(m.exch) + ' · ' + m.rows + ' ITM rows · strikes ' + esc(m.strikes) + '</div></div>' +
         '<span style="color:var(--green);font-weight:700">₹</span><input type="text" inputmode="decimal" class="tpp-in" id="tppP' + i + '" data-sym="' + esc(m.symbol) + '" data-opt="' + (m.optional ? '1' : '') + '" style="width:130px;text-align:right;font-weight:700" value="' + (m.price != null ? esc(String(m.price)) : '') + '"></div>';
@@ -285,17 +285,38 @@
     bg.innerHTML = '<div style="' + BOX + 'width:min(560px,94vw)">' +
       '<div style="font-size:16px;font-weight:700;margin-bottom:4px">📊 Expiry settlement prices</div>' +
       '<div style="font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:12px">ITM contracts expiring today were found. Enter the final settlement price for each symbol - or add them from any csv / Excel file: you tell the console which column is the <b>SYMBOL</b> and which is the <b>PRICE</b>.</div>' +
-      '<div id="tppSetRows">' + rows + '</div><div id="tppSetMsg" style="font-size:12px;min-height:18px;margin:6px 0 12px"></div>' +
+      '<div id="tppSetSum" style="font-size:12px;margin:0 0 8px"></div><div id="tppSetRows">' + rows + '</div><div id="tppSetMsg" style="font-size:12px;min-height:18px;margin:6px 0 12px"></div>' +
       '<div style="display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap"><button class="sa-tool" data-no-busy="1" id="tppSetFile">📂 Add prices from a file</button>' +
       '<span style="display:flex;gap:10px"><button class="sa-tool" data-no-busy="1" id="tppSetNo" style="min-width:90px">Cancel</button><button class="sa-tool" data-no-busy="1" id="tppSetYes" style="min-width:130px;background:var(--green,#34d399);color:#06251a;border-color:transparent">✅ Submit &amp; Run</button></span></div></div>';
     var first = bg.querySelector('input'); if (first) first.focus();
     function msg(t, bad) { var e = $('tppSetMsg'); if (e) e.innerHTML = t ? '<span style="color:' + (bad ? 'var(--red,#f87171)' : 'var(--green,#34d399)') + '">' + t + '</span>' : ''; }
+    // only the symbols still WITHOUT a price are shown; the ones already filled (from a file / saved earlier) are folded away
+    // (they stay in the form and are submitted with the rest) - "show all" opens them again
+    var showAll = false;
+    function fold() {
+      var inputs = [].slice.call(bg.querySelectorAll('input[data-sym]')), filled = 0, empty = 0;
+      inputs.forEach(function (i) {
+        var row = i.closest ? i.closest('.tppRow') : i.parentNode, has = i.value.trim() !== '';
+        if (has) filled++; else empty++;
+        row.style.display = (!showAll && has && inputs.some(function (x) { return x.value.trim() === ''; })) ? 'none' : 'flex';
+      });
+      var sum = $('tppSetSum'); if (!sum) return;
+      var anyEmpty = inputs.some(function (x) { return x.value.trim() === ''; });
+      sum.innerHTML = filled && anyEmpty
+        ? '<span style="color:var(--green,#34d399)">✓ ' + filled + ' price(s) already filled</span> · <b>' + empty + '</b> still to enter. <a href="#" id="tppSetToggle" style="color:var(--blue,#60a5fa)">' + (showAll ? 'show only the missing' : 'show all ' + inputs.length) + '</a>'
+        : '';
+      var t = $('tppSetToggle'); if (t) t.onclick = function (e) { e.preventDefault(); showAll = !showAll; fold(); };
+    }
+    fold();
+    var firstEmpty = [].slice.call(bg.querySelectorAll('input[data-sym]')).filter(function (i) { return i.value.trim() === ''; })[0]; if (firstEmpty) firstEmpty.focus();
     $('tppSetNo').onclick = function () { bg.remove(); };
     $('tppSetFile').onclick = function () { pickSettleFile(function (res) {
       var n = 0, inputs = [].slice.call(bg.querySelectorAll('input[data-sym]'));
       inputs.forEach(function (i) { var v = res.prices[String(i.dataset.sym).toUpperCase()]; if (v != null) { i.value = String(v); n++; } });
       S.settleToken = res.token; S.settleName = res.name;
       var miss = inputs.filter(function (i) { return res.prices[String(i.dataset.sym).toUpperCase()] == null; }).map(function (i) { return i.dataset.sym; });
+      showAll = false; fold();
+      var fe = inputs.filter(function (i) { return i.value.trim() === ''; })[0]; if (fe) fe.focus();
       msg('Loaded ' + n + ' of ' + inputs.length + ' price(s) from ' + esc(res.name) + (miss.length ? ' - still to enter: ' + esc(miss.join(', ')) : ' - check them and press Submit &amp; Run.'), miss.length > 0);
     }); };
     function submit() {
