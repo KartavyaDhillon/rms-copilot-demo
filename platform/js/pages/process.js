@@ -80,15 +80,10 @@
         '<button class="btn sm ghost" id="pcMail" title="Who the console\'s e-mails are sent from: Kartavya (with the moving-to-noreply note) or noreply_rms. Click to change.">\u2709 MAIL <b id="pcMailState">\u2026</b></button>' +
         '<button class="btn sm ghost" id="pcAuto" title="Automatic captcha and RSA-token filling, and the low-balance e-mail">\u26a1 AUTOFILL</button>' +
         '<button class="btn sm primary" id="pcCommon" style="font-weight:700" title="Upload today\'s HOLDING and RISK_REPORT files">' + RMS.icon("download") + " Upload Common Files</button>" +
-        '<button class="btn sm ghost" id="pcReload" title="Reload console (only if nothing is running!)">' + RMS.icon("refresh") + " Reload</button>" +
-        '<a class="btn sm ghost" href="/legacy" target="_blank" title="Original console with sidebar and internal views, in a new tab">' + RMS.icon("external") + " Standalone</a></div></div>" +
+        '<button class="btn sm ghost" id="pcContacts" title="Employee leaving? Replace or delete a phone number / e-mail everywhere it is used. Password protected.">\ud83d\udcc7 Change email / number</button></div></div>' +
         '<iframe class="pc-frame" id="pcFrame" src="/legacy?embed=1"></iframe>';
       RMS.mountIcons(el);
-      $("#pcReload").onclick = () => {
-        if (confirm("Reload the Process Center console?\n\nOnly do this if no run is currently streaming in it — an active run keeps running on the server, but this tab would stop showing its live output.")) {
-          $("#pcFrame").src = "/legacy?embed=1&t=" + Date.now();
-        }
-      };
+      $("#pcContacts").onclick = contactsOpen;
       $("#pcCommon").onclick = openCommon;
       $("#pcFrame").addEventListener("load", () => { if (RMS.pcApply) RMS.pcApply(""); });   // a reloaded console shows everything again
       captchaAutoInit();
@@ -386,6 +381,106 @@
     $("#pcAuto").onclick = autoOpen;
     autoRefresh();
     setInterval(autoRefresh, 30000);
+  }
+
+
+  /* ── CHANGE EMAIL / NUMBER: find a phone / e-mail everywhere, replace it or delete it. Password protected, audited, undo 24 h ── */
+  async function cPost(path, body) {
+    const r = await fetch("/sched/contacts/" + path, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(body) });
+    let d = {}; try { d = await r.json(); } catch (e) { /* no body */ }
+    if (!r.ok || d.ok === false) throw new Error(d.error || ("Request failed (" + r.status + ")"));
+    return d;
+  }
+  function cAskPassword() {
+    return new Promise((resolve) => {
+      const close = RMS.modal("Change email / number",
+        '<div class="card-sub" style="margin-bottom:10px">Enter the console password to continue.</div>' +
+        '<div id="cpErr" style="color:var(--err);font-size:12.5px;min-height:18px;margin-bottom:6px"></div>' +
+        '<input type="password" id="cpIn" class="f-input" style="width:100%;height:42px;box-sizing:border-box" autocomplete="new-password" placeholder="Password">' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px"><button class="btn ghost" id="cpNo">Cancel</button><button class="btn primary" id="cpOk">Continue</button></div>',
+        { width: 420, icon: "settings" });
+      const go = async () => {
+        const v = $("#cpIn").value; if (!v) return;
+        try { await cPost("history", { _password: v }); close(); resolve(v); }
+        catch (e) { $("#cpErr").textContent = e.message; $("#cpIn").select(); }
+      };
+      $("#cpOk").onclick = go; $("#cpIn").onkeydown = (e) => { if (e.key === "Enter") go(); };
+      $("#cpNo").onclick = () => { close(); resolve(null); }; $("#cpIn").focus();
+    });
+  }
+  async function contactsOpen() {
+    let pw = "";
+    try {
+      const info = await (await fetch("/sched/contacts/info", { credentials: "same-origin" })).json();
+      if (info.needs_password) { pw = await cAskPassword(); if (pw === null) return; }
+    } catch (e) { popup("Change email / number", "Could not reach the server: " + e.message, false); return; }
+    const inp = "width:100%;box-sizing:border-box;height:38px;padding:0 10px;border-radius:8px;border:1px solid var(--line,#2a3342);background:var(--panel2,#0f141c);color:inherit";
+    const close = RMS.modal("Change email / number",
+      '<div class="card-sub" style="margin-bottom:10px">Finds the number / e-mail in <b>every process, scheduler alert, card and credential</b>. Nothing changes until you tick the places and confirm.</div>' +
+      '<div style="display:flex;gap:16px;margin-bottom:10px;font-weight:600"><label><input type="radio" name="cKind" value="phone" checked> Phone number</label><label><input type="radio" name="cKind" value="email"> Email</label></div>' +
+      '<div style="display:flex;gap:16px;margin-bottom:10px;font-weight:600"><label><input type="radio" name="cMode" value="replace" checked> Replace with a new one</label><label style="color:var(--err)"><input type="radio" name="cMode" value="delete"> Delete only (add nothing)</label></div>' +
+      '<label class="card-sub">Number / email to replace (leaving)</label><input id="cOld" style="' + inp + ';margin-bottom:8px" placeholder="9812345678">' +
+      '<div id="cNewBox"><label class="card-sub">New number / email (the name after # is kept unless you type one below)</label><input id="cNew" style="' + inp + ';margin-bottom:8px" placeholder="9876543210">' +
+      '<label class="card-sub">New name (optional)</label><input id="cName" style="' + inp + ';margin-bottom:8px" placeholder="e.g. Ravi"></div>' +
+      '<div style="display:flex;gap:8px;margin:8px 0"><button class="btn primary" id="cFind">🔍 Find all places</button><button class="btn ghost" id="cHist">History / Undo</button></div>' +
+      '<div id="cOut" class="card-sub" style="max-height:300px;overflow:auto"></div>',
+      { width: 720, icon: "mail" });
+    const kind = () => document.querySelector('input[name="cKind"]:checked').value;
+    const mode = () => document.querySelector('input[name="cMode"]:checked').value;
+    let found = [];
+    const sync = () => { $("#cNewBox").style.display = mode() === "delete" ? "none" : ""; $("#cOld").placeholder = kind() === "phone" ? "9812345678" : "name@mastertrust.co.in"; $("#cNew").placeholder = kind() === "phone" ? "9876543210" : "new.name@mastertrust.co.in"; paintApply(); };
+    document.querySelectorAll('input[name="cKind"],input[name="cMode"]').forEach((r) => (r.onchange = sync));
+    function paintApply() {
+      const b = $("#cApply"); if (!b) return;
+      const n = document.querySelectorAll(".cChk:checked").length;
+      b.textContent = (mode() === "delete" ? "Delete from " : "Replace in ") + n + " place" + (n === 1 ? "" : "s");
+      b.disabled = !n;
+    }
+    $("#cFind").onclick = async () => {
+      $("#cOut").innerHTML = "Searching…";
+      try {
+        found = (await cPost("scan", { _password: pw, kind: kind(), old: $("#cOld").value })).items;
+        if (!found.length) { $("#cOut").innerHTML = "<b>Not found anywhere</b> - nothing uses this " + (kind() === "phone" ? "number" : "e-mail") + "."; return; }
+        $("#cOut").innerHTML = '<div style="margin-bottom:6px"><b>' + found.length + ' place' + (found.length === 1 ? "" : "s") + ' found</b> - untick any you want to keep.</div>' +
+          '<table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr style="text-align:left;opacity:.7"><th></th><th>Where</th><th>Field</th><th>Entries</th></tr>' +
+          found.map((f, i) => '<tr style="border-top:1px solid var(--line,#2a3342)"><td><input type="checkbox" class="cChk" data-i="' + i + '" checked></td><td>' + esc(f.where) + '</td><td>' + esc(f.field) + '</td><td>' + f.count + "</td></tr>").join("") +
+          '</table><div style="margin-top:10px;text-align:right"><button class="btn primary" id="cApply" style="font-weight:700"></button></div>';
+        document.querySelectorAll(".cChk").forEach((c) => (c.onchange = paintApply));
+        $("#cApply").onclick = apply; paintApply();
+      } catch (e) { $("#cOut").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; }
+    };
+    function apply() {
+      const ids = [...document.querySelectorAll(".cChk:checked")].map((c) => found[+c.dataset.i].id);
+      const del = mode() === "delete", nw = $("#cNew").value.trim();
+      if (!del && !nw) { popup("Change email / number", "Type the new number / email - or choose “Delete only”.", false); return; }
+      const msg = del ? "Delete " + $("#cOld").value.trim() + " from " + ids.length + " place(s)? Nothing is added in its place." : "Replace " + $("#cOld").value.trim() + " with " + nw + " in " + ids.length + " place(s)?";
+      const c2 = RMS.modal("Please confirm",
+        '<div style="font-size:13.5px;line-height:1.55;margin-bottom:16px">' + esc(msg) + '<br><span class="card-sub">Saved in the audit log. You can undo it for 24 hours.</span></div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="cNo2">Cancel</button><button class="btn primary" id="cYes2">' + (del ? "Delete" : "Replace") + "</button></div>", { width: 440, icon: "alert" });
+      $("#cNo2").onclick = c2;
+      $("#cYes2").onclick = async () => {
+        c2();
+        try {
+          const r = await cPost("replace", { _password: pw, kind: kind(), mode: mode(), old: $("#cOld").value, new: nw, new_name: $("#cName").value, ids });
+          close();
+          popup("Change email / number", (del ? "Deleted" : "Replaced") + " in " + r.changed + " place(s)" + (r.skipped.length ? " (" + r.skipped.length + " skipped)" : "") + ".\nSaved in the audit log - undo is available for 24 hours.", true);
+        } catch (e) { popup("Change email / number", e.message, false); }
+      };
+    }
+    $("#cHist").onclick = async () => {
+      $("#cOut").innerHTML = "Loading…";
+      try {
+        const h = (await cPost("history", { _password: pw })).items;
+        $("#cOut").innerHTML = !h.length ? "No changes yet." : '<table style="width:100%;border-collapse:collapse;font-size:12.5px"><tr style="text-align:left;opacity:.7"><th>When</th><th>Who</th><th>Change</th><th>Places</th><th></th></tr>' +
+          h.map((x) => '<tr style="border-top:1px solid var(--line,#2a3342)"><td>' + esc(x.ts.replace("T", " ")) + "</td><td>" + esc(x.user) + "</td><td>" + esc(x.old) + (x.new ? " → " + esc(x.new) : " → (deleted)") + "</td><td>" + x.places + "</td><td>" +
+            (x.undone ? "undone" : x.can_undo ? '<button class="btn sm ghost cUndo" data-id="' + esc(x.change_id) + '">Undo</button>' : "") + "</td></tr>").join("") + "</table>";
+        document.querySelectorAll(".cUndo").forEach((b) => (b.onclick = async () => {
+          try { const r = await cPost("undo", { _password: pw, change_id: b.dataset.id }); close(); popup("Change email / number", "Undone - restored " + r.restored + " place(s)" + (r.skipped.length ? ", " + r.skipped.length + " left as they are (changed again since)" : "") + ".", true); }
+          catch (e) { popup("Change email / number", e.message, false); }
+        }));
+      } catch (e) { $("#cOut").innerHTML = '<span style="color:var(--err)">' + esc(e.message) + "</span>"; }
+    };
+    sync();
   }
 
   /* ── Upload Common Files: strictly today's HOLDING + RISK_REPORT ── */

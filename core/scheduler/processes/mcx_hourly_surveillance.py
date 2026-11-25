@@ -461,12 +461,37 @@ def _run(params, ctx):
 
     # login + fetch together: if the connection breaks anywhere (e.g. "forcibly closed by the remote host"),
     # the whole login starts again from the beginning after 5 s — up to 5 times. A refused password is not retried.
-    def _login_and_fetch():
-        _s, _rnd = login(ctx)
-        return fetch_rows(_s, _rnd, ctx)
-    rows = H.restart_on_network_error(ctx, "MCX eclear", _login_and_fetch)
+    # An EMPTY answer (the grid comes back with no rows) is retried too: first the SAME search once more on the same login
+    # (cheap), then - if it is still empty - a fresh login. At most MAX_LOGINS logins in all; after that the run fails (the
+    # failure alert goes out) and nothing logs in again.
+    MAX_LOGINS, SEARCH_AGAIN_WAIT, RELOGIN_WAIT = 3, 8, 15
+    rows = []
+    for attempt in range(1, MAX_LOGINS + 1):
+        held = {}
+
+        def _login_and_fetch():
+            held["s"], held["rnd"] = login(ctx)
+            return fetch_rows(held["s"], held["rnd"], ctx)
+        rows = H.restart_on_network_error(ctx, "MCX eclear", _login_and_fetch)
+        if rows:
+            break
+        ctx.log(f"The Margin Utilization search returned no rows (login {attempt}/{MAX_LOGINS}) - searching again on the "
+                f"same login in {SEARCH_AGAIN_WAIT}s.")
+        time.sleep(SEARCH_AGAIN_WAIT)
+        try:
+            rows = fetch_rows(held["s"], held["rnd"], ctx)
+        except Exception as e:                                           # noqa: BLE001 - the next login tries again
+            ctx.log(f"The second search on the same login failed: {type(e).__name__}: {str(e)[:160]}")
+            rows = []
+        if rows:
+            ctx.log("The second search on the same login returned rows.")
+            break
+        if attempt < MAX_LOGINS:
+            ctx.log(f"Still no rows - logging in again ({attempt + 1}/{MAX_LOGINS}) in {RELOGIN_WAIT}s.")
+            time.sleep(RELOGIN_WAIT)
     if not rows:
-        raise RuntimeError("The Margin Utilization search returned no rows.")
+        raise RuntimeError(f"The Margin Utilization search returned no rows after {MAX_LOGINS} logins (each searched "
+                           f"twice) - stopped; no more logins.")
     rec = next((r for r in rows if r.get("TM / CP Code", "").strip() == MEMBER_ROW), rows[0])
     raw = tmp / f"RAW_MCX_{now:%Y%m%d_%H%M%S}.csv"
     with open(raw, "w", newline="", encoding="utf-8-sig") as f:

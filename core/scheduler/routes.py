@@ -653,3 +653,76 @@ async def files_delete(pkey: str, request: Request, name: str = ""):
         return _deny(str(ex).strip("'\""), 404)
     except ValueError as ex:
         return _deny(str(ex), 400)
+
+
+# ── CHANGE E-MAIL / NUMBER (Process Center top bar) - every call needs the console password (admins are exempt) ──
+@router.get("/contacts/info")
+def contacts_info(request: Request):
+    who, err = _guard(request, False)
+    if err:
+        return err
+    return {"needs_password": not _who(request)[1]}
+
+
+@router.post("/contacts/scan")
+async def contacts_scan(request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core import contact_replace as cr
+
+    def go():
+        try:
+            return cr.scan(body.get("kind"), body.get("old"))
+        except ValueError as ex:
+            raise service.ValidationFailed([str(ex)])
+    items, e = _safe(go)
+    return e or {"ok": True, "items": items}
+
+
+@router.post("/contacts/replace")
+async def contacts_replace(request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core import contact_replace as cr
+    delete_only = str(body.get("mode") or "") == "delete"          # "Delete only": remove the old value, add nothing
+
+    def go():
+        try:
+            return cr.replace(body.get("kind"), body.get("old"), "" if delete_only else body.get("new"),
+                              "" if delete_only else body.get("new_name"), list(body.get("ids") or []), who)
+        except ValueError as ex:
+            raise service.ValidationFailed([str(ex)])
+    out, e = _safe(go)
+    return e or {"ok": True, **out}
+
+
+@router.post("/contacts/history")
+async def contacts_history(request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core import contact_replace as cr
+    out, e = _safe(lambda: cr.history())
+    return e or {"ok": True, "items": out}
+
+
+@router.post("/contacts/undo")
+async def contacts_undo(request: Request):
+    body = await _json(request)
+    who, err = _gate(request, body)
+    if err:
+        return err
+    from core import contact_replace as cr
+
+    def go():
+        try:
+            return cr.undo(str(body.get("change_id") or ""), who)
+        except ValueError as ex:
+            raise service.ValidationFailed([str(ex)])
+    out, e = _safe(go)
+    return e or {"ok": True, **out}
