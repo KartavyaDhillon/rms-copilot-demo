@@ -1987,6 +1987,29 @@ def _read_overrides(p):
             _t.sleep(0.05)
     return _OVERRIDES_LAST.get(fp, {})                    # still unreadable: last good value, else none
 
+def _real_runs(p, overrides):
+    """Run numbers whose 'marked done' record is SUPERSEDED by a real run: the run is the latest one done today and the
+    counter file was rewritten at least a minute AFTER the override was recorded (the pipeline writes the counter itself
+    when it finishes). Without this, a run that really executed in the console still showed 'Ran elsewhere' because an
+    earlier Manual-overrides click (this browser or another) was still on file."""
+    out = []
+    try:
+        fp = os.path.join(_pb_dyn(p, os.getenv(p.get("state_dir_env", ""), p.get("state_default", ""))),
+                          p.get("state_file", "run_counter.txt"))
+        mt = datetime.datetime.fromtimestamp(os.path.getmtime(fp))
+        n = _read_counter(p)
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        for key, ent in (overrides or {}).items():
+            if int(key) != n or (ent or {}).get("type") != "mark_done":
+                continue
+            at = datetime.datetime.strptime(f"{today} {ent.get('at')}", "%Y-%m-%d %H:%M")
+            if (mt - at).total_seconds() >= 60:
+                out.append(int(key))
+    except Exception:
+        pass
+    return out
+
+
 def _write_override(p, run_num, info):
     """Record run `run_num` as manually overridden today. Merges with any
     existing entries for today (e.g. mark_done then later backfill for the
@@ -2047,7 +2070,8 @@ def pb_status(pipe):
             # Server-side override records (see _read_overrides docstring) — lets
             # EVERY viewer, not just whoever clicked the button, tell a genuinely
             # executed run apart from one that was only marked done manually.
-            "overrides": _read_overrides(p)}
+            "overrides": _read_overrides(p),
+            "real_runs": _real_runs(p, _read_overrides(p))}
 
 def pb_get_config(pipe):
     p = PIPELINES.get(pipe, {}); g = os.getenv

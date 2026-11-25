@@ -139,6 +139,21 @@ def _expired(text: str, table: str = "") -> bool:
     return False
 
 
+def _step(log, label, call, note=""):
+    """Run ONE portal request with a visible start line, finish line and timing - when the portal stops answering, the last
+    '->' line in the log names the step that is waiting (and its timeout), instead of a silent gap."""
+    t0 = time.time()
+    log(f"  -> {label}{(' ' + note) if note else ''} ...")
+    try:
+        r = call()
+    except Exception as e:                                           # noqa: BLE001 - logged, then re-raised unchanged
+        log(f"  !! {label} FAILED after {time.time() - t0:.1f}s: {type(e).__name__}: {str(e)[:160]}")
+        raise
+    code = getattr(r, "status_code", "")
+    log(f"  OK {label}: HTTP {code} in {time.time() - t0:.1f}s")
+    return r
+
+
 def login(sess, user: str, password: str, token_fn, log=print, token_attempts: int = 3, auth_tag: str = "MCX_DEPOSIT"):
     """Full TCS BANCS login. Returns the session token (rndaak)."""
     ajax = {"User-Agent": _UA, "Accept": "*/*", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -150,26 +165,31 @@ def login(sess, user: str, password: str, token_fn, log=print, token_attempts: i
     ajax2 = {"User-Agent": _UA, "Content-Type": "application/x-www-form-urlencoded", "Origin": BASE_URL,
              "X-Requested-With": "XMLHttpRequest", "Accept": "*/*", "Referer": BASE_URL + "/Bancs/common/welcome.jsp"}
     log("Opening session ...")
-    sess.get(BASE_URL, timeout=60)
-    sess.post(BASE_URL + "/Bancs/login.do?method=authMode", headers=ajax, timeout=60)
+    _step(log, "open the login page", lambda: sess.get(BASE_URL, timeout=60), "(waits up to 60s)")
+    _step(log, "auth mode", lambda: sess.post(BASE_URL + "/Bancs/login.do?method=authMode", headers=ajax, timeout=60))
     p, ig = _encrypt(password)
-    r = sess.post(BASE_URL + "/Bancs/login.do?method=authenticatePassward", headers=ajax, timeout=60,
-                  data={"userId": user + "\t", "password": p, "lng": "1", "ignoreFlag": ig})
+    log("PASSWORD STEP")
+    r = _step(log, "password check", lambda: sess.post(BASE_URL + "/Bancs/login.do?method=authenticatePassward", headers=ajax,
+                                                       timeout=60, data={"userId": user + "\t", "password": p, "lng": "1", "ignoreFlag": ig}))
     if "INVALID_LOGIN_OR_PASSWORD" in r.text or "error_div1" in r.text:
         log(f"[{auth_tag}_AUTH_FAIL] wrong password - update it in Credentials")
         raise GridAuthError("wrong password")
+    log("Saved password accepted.")
+    log("TOKEN STEP")
     entity = codes = None
     err = None
     for attempt in range(1, token_attempts + 1):
+        log(f"  waiting for the RSA code (attempt {attempt}/{token_attempts}) - enter it in the popup")
         try:
             code = token_fn(attempt, token_attempts, err)
         except Exception as e:                                   # the callers' token functions raise on timeout / failure
             raise GridTokenError(str(e)) from e
         t, tig = _encrypt(str(code))
-        r = sess.post(BASE_URL + "/Bancs/login.do?method=authenticateToken", headers=ajax, timeout=60,
-                      data={"userId": user + "\t", "password": t, "lng": "1", "ignoreFlag": tig})
+        r = _step(log, "RSA code check", lambda: sess.post(BASE_URL + "/Bancs/login.do?method=authenticateToken", headers=ajax,
+                                                          timeout=60, data={"userId": user + "\t", "password": t, "lng": "1", "ignoreFlag": tig}))
         try:
             entity, codes = _entity(r.text)
+            log(f"  entity: {entity}")
             break
         except Exception:
             err = "Invalid token. Please try again."
@@ -178,12 +198,13 @@ def login(sess, user: str, password: str, token_fn, log=print, token_attempts: i
         log("[MCX_TOKEN_FAIL] the RSA code was refused - stopped (more wrong codes could lock the account)")
         raise GridTokenError("RSA code refused")
     p2, ig2 = _encrypt(password)
-    r = sess.post(BASE_URL + "/Bancs/login.do?method=Login", timeout=60, headers={
+    log("FINAL LOGIN")
+    r = _step(log, "final login", lambda: sess.post(BASE_URL + "/Bancs/login.do?method=Login", timeout=60, headers={
         "User-Agent": _UA, "Accept": "text/html,application/xhtml+xml", "Content-Type": "application/x-www-form-urlencoded",
         "Origin": BASE_URL, "Referer": BASE_URL + "/Bancs/common/dologin.jsp"},
         data={"method": "Login", "availHeight": "744", "availWidth": "1522", "isArchival": "false", "userEntityCodes": codes,
               "lng": "1", "userId": user, "ignoreFlag": ig2, "password": p2, "dummy": "FltM/sA2fPfqsjtM55oLOQ==",
-              "entity": entity})
+              "entity": entity}))
     rnd = None
     for pat in (r"name=['\"]rndaak['\"][^>]*value=['\"]([^'\"]+)", r"rndaak['\"]?\s*:\s*['\"]([^'\"]+)"):
         m = re.search(pat, r.text)
@@ -191,11 +212,13 @@ def login(sess, user: str, password: str, token_fn, log=print, token_attempts: i
             rnd = m.group(1)
             break
     if not rnd:
+        log("[MCX_LOGIN] session key (rndaak) not found in the final-login answer")
         raise RuntimeError("rndaak not found after login")
-    sess.post(BASE_URL + "/Bancs/common/CommonImpl.jsp", headers=nav, data={"rndaak": rnd}, timeout=60)
-    sess.post(BASE_URL + "/Bancs/common/welcome.jsp", headers=nav, data={"rndaak": rnd}, timeout=60)
-    sess.post(BASE_URL + "/Bancs/common/layout.save", headers=ajax2, data={"events": "", "rndaak": rnd}, timeout=60)
-    sess.post(BASE_URL + "/Bancs/common/welcome.jsp", headers=nav, data={"rndaak": rnd}, timeout=60)
+    log(f"  session key (rndaak) found: {rnd[:6]}...")
+    _step(log, "STEP 1 CommonImpl.jsp", lambda: sess.post(BASE_URL + "/Bancs/common/CommonImpl.jsp", headers=nav, data={"rndaak": rnd}, timeout=60), "(waits up to 60s)")
+    _step(log, "STEP 2 welcome.jsp", lambda: sess.post(BASE_URL + "/Bancs/common/welcome.jsp", headers=nav, data={"rndaak": rnd}, timeout=60), "(waits up to 60s)")
+    _step(log, "STEP 3 layout.save", lambda: sess.post(BASE_URL + "/Bancs/common/layout.save", headers=ajax2, data={"events": "", "rndaak": rnd}, timeout=60), "(waits up to 60s)")
+    _step(log, "STEP 4 welcome.jsp (again)", lambda: sess.post(BASE_URL + "/Bancs/common/welcome.jsp", headers=nav, data={"rndaak": rnd}, timeout=60), "(waits up to 60s)")
     log("Logged in.")
     return rnd
 
@@ -399,41 +422,48 @@ def fetch_one(sess, rnd, key: str, out_dir: str, log=print, cm: str = "56720", d
     'Clientwise_mcx_margin.xlsx'); the defaults are deposit_name() / portal_name()."""
     date_api = date_api or datetime.now().strftime("%Y%m%d")
     if key == "deposit":
-        _page_init(sess, rnd, "RSK383", "RSK", "Query Detailed Limit", "panel2")
+        _step(log, "open the RSK383 page", lambda: _page_init(sess, rnd, "RSK383", "RSK", "Query Detailed Limit", "panel2"), "(waits up to 60s)")
         table = "RSK383_Table"
 
         def post(size):
-            r = sess.post(_RSK383_URL, headers=dict(_FETCH_H, Referer=_REFERER_383), timeout=300,
-                          data=_body_383(rnd, date_api, size))
+            r = _step(log, f"RSK383 search (rows per page {size or 50})", lambda: sess.post(
+                _RSK383_URL, headers=dict(_FETCH_H, Referer=_REFERER_383), timeout=300, data=_body_383(rnd, date_api, size)),
+                "(the portal builds the whole list - can take minutes, waits up to 300s)")
             if _expired(r.text, table):
                 raise _SessionLost()
             return r.text
     elif key == "search":
         from core.pipelines import tcs_rsk136 as R136
         day = datetime.strptime(date_api, "%Y%m%d").date()
-        sess.post(R136.RSK136_URL, timeout=60, data=R136._init_payload(rnd),
-                  headers={"User-Agent": _UA, "Content-Type": "application/x-www-form-urlencoded", "Origin": BASE_URL,
-                           "Referer": BASE_URL + "/Bancs/common/PageLoader.html"})
+        _step(log, "open the RSK136 page", lambda: sess.post(
+            R136.RSK136_URL, timeout=60, data=R136._init_payload(rnd),
+            headers={"User-Agent": _UA, "Content-Type": "application/x-www-form-urlencoded", "Origin": BASE_URL,
+                     "Referer": BASE_URL + "/Bancs/common/PageLoader.html"}), "(waits up to 60s)")
         table = "RSK136_Table"
 
         def post(size):
             d = R136._search_payload(rnd, day)
             if size:
                 d["confViewSize"], d["butvalue"] = str(size), str(size)
-            r = sess.post(R136.RSK136_URL, headers=dict(_FETCH_H, Referer=R136.RSK136_URL), timeout=300, data=d)
+            r = _step(log, f"RSK136 search (rows per page {size or 50})", lambda: sess.post(
+                R136.RSK136_URL, headers=dict(_FETCH_H, Referer=R136.RSK136_URL), timeout=300, data=d),
+                "(waits up to 300s)")
             if _expired(r.text, table):
                 raise _SessionLost()
             return r.text
     else:
-        _open_335(sess, rnd, cm)
+        _step(log, "open the RSK335 page", lambda: _open_335(sess, rnd, cm), "(waits up to 60s per request)")
         table = "RSK335_Table"
 
         def post(size):
-            r = sess.post(_RSK335_URL, headers=dict(_FETCH_H, Referer=_RSK335_URL), timeout=300, data=_data_335(rnd, cm, size))
+            r = _step(log, f"RSK335 search (rows per page {size or 50})", lambda: sess.post(
+                _RSK335_URL, headers=dict(_FETCH_H, Referer=_RSK335_URL), timeout=300, data=_data_335(rnd, cm, size)),
+                "(waits up to 300s)")
             if _expired(r.text, table):
                 raise _SessionLost()
             return r.text
     heads, rows, amounts, total = _fetch_whole(post, table, log)
+    log(f"  parsed {len(rows)} rows, {len(heads)} columns - writing the Excel file")
     norm = {re.sub(r"\s+", " ", str(h)).strip().lower() for h in heads}
     missing = [c for c in REQUIRED_COLUMNS[key] if c.lower() not in norm]
     if missing:

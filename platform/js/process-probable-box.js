@@ -189,8 +189,12 @@
   // SERVER record wins when present (visible to every viewer, carries `by`);
   // localStorage is only consulted as a fallback for pre-fix entries or a
   // momentarily-unreachable backend.
+  var _serverRealRuns = {};   // pipe -> run numbers that really ran in this console after being marked done
   function _overrideInfo(pipe, runNum) {
     var md = null, bf = null;
+    if ((_serverRealRuns[pipe] || []).indexOf(Number(runNum)) !== -1) {
+      return { mark_done: null, backfill: null, isOverride: false };   // a real run supersedes the manual mark
+    }
     try {
       var serverEntry = _serverOverridesCache[pipe] && _serverOverridesCache[pipe][String(runNum)];
       if (serverEntry) {
@@ -568,6 +572,7 @@
 
   function _pxOverrideTiles(pipe, s) {
     if (s && s.overrides) { _serverOverridesCache[pipe] = s.overrides; }
+    if (s && s.real_runs) { _serverRealRuns[pipe] = s.real_runs; }
     var wrap = document.getElementById('pxRuns-' + pipe);
     if (!wrap) return;
 

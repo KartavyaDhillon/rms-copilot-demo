@@ -119,10 +119,21 @@
     b.classList.add("lm-busybtn");
     b.disabled = true;
   }
-  function markPxTile(box, target) {
+  function markPxTile(box, target, lock) {
     // the tile that is "ready - run" is the one being run
     var wrap = box.querySelector("#pxRuns-" + target) || box;
+    // R1-R2 has three always-ready tiles (Live / Afternoon / Evening) sharing ONE run slot: only the one that is
+    // really running may show "Running…" - the lock's run name says which ("r1r2 live" ...)
+    var only = null;
+    if (target === "r1r2") {
+      var m = /live|afternoon|evening/i.exec((lock && lock.run) || "");
+      only = m ? m[0].toLowerCase() : "";
+    }
     wrap.querySelectorAll(".sa-run.active-win:not(.done)").forEach(function (tile) {
+      if (only !== null) {
+        var idTxt = ((tile.querySelector(".sa-run-id") || {}).textContent || "").toLowerCase();
+        if (!only || idTxt.indexOf(only) === -1) return;   // not the running tile (or a download: no tile is "the run")
+      }
       var stt = tile.querySelector(".sa-run-state");
       if (stt && stt.dataset.lmOrig === undefined) { stt.dataset.lmOrig = stt.innerHTML; stt.innerHTML = "\u25cf Running\u2026"; }
       tile.querySelectorAll(".sa-run-btn").forEach(function (b, i) { if (i === 0) spinBtn(b, "Running\u2026"); });
@@ -334,7 +345,7 @@
           box.insertBefore(strip, box.firstChild);
         }
         if (strip.dataset.sig !== html) { strip.innerHTML = html; strip.dataset.sig = html; }
-        if (lock.kind !== "action") { watchSteps(t, box, strip); if (t !== "sa") markPxTile(box, t); }
+        if (lock.kind !== "action") { watchSteps(t, box, strip); if (t !== "sa") markPxTile(box, t, lock); }
         else watchSteps(t, box, strip, "action", sinceEpoch);
         // The green "ready — run it now" banner is specifically about the Run
         // button, which a standalone-download action lock never touches — so

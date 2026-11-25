@@ -233,6 +233,7 @@ def snapshot():
                 locks.append({
                     "key": _key, "kind": "process", "state": "RUNNING",
                     "pipe": _pipe, "label": _busy_label_for(_pipe),
+                    "run": meta.get("label") or "",      # which run of the box, e.g. "r1r2 live" (R1-R2 has 3 tiles in one slot)
                     "by": meta.get("by") or "unknown user", "ip": meta.get("ip", ""),
                     "started_at": started, "elapsed_s": _elapsed(started) if started else None,
                     "affects": _AFFECTS.get(_key, [_pipe]),
