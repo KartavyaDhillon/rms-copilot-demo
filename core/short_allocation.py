@@ -1200,6 +1200,14 @@ def update_env(updates: dict):
         from core.scheduler import helpers as _H
         # stored as +91...#Name with NO space before the '#': a " #" in a .env value would be read as a comment and cut the rest
         updates["SA_WA_FAILURE_ALERT"] = ",".join(f"{n}#{nm}" if nm else n for n, nm in _H.phone_entries(updates["SA_WA_FAILURE_ALERT"]))
+    for _wk in SA_KEYS_WA:
+        # the zone WhatsApp boxes are plain comma-separated text now: 10-digit numbers get +91, a typo is refused with a plain message
+        if _wk != "SA_WA_FAILURE_ALERT" and _wk in updates:
+            from core.scheduler import helpers as _H2
+            try:
+                updates[_wk] = ",".join(n for n, _nm in _H2.phone_entries(updates[_wk]))
+            except ValueError as _e:
+                raise ValueError(f"{_wk}: {_e}")
     try:
         with open(ENV_FILE, encoding="utf-8") as f: lines = f.readlines()
     except Exception:
