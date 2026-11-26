@@ -3577,21 +3577,25 @@ async function saOpenEditor(kind, pw){
   const pair=(title,toK,ccK,note)=>(toK in cfg.mail)||(ccK in cfg.mail)?card(title,field('To',toK,cfg.mail,'name@mastertrust.co.in')+field('CC',ccK,cfg.mail,'name@mastertrust.co.in',true),note):'';
   let rows='';
   if(kind==='wa'){
-    rows+='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Edit WhatsApp numbers (comma-separated, 10-digit — +91 is added automatically; a <b>#Name</b> is kept only for the FAILURE ALERT box). What you see here is what is used — a blank box is saved as empty (no recipient).</div>';
-    const L={SA_WA_DELHI:'Delhi',SA_WA_CHND:'Chandigarh',SA_WA_LUDH:'Ludhiana',SA_WA_MUMB:'Mumbai',SA_WA_V1:'Vertical 1',SA_WA_V2:'Vertical 2',SA_WA_6NBB707:'6NBB707',SA_WA_FAILURE_ALERT:'⚠ FAILURE ALERT (auto run)'};
-    for(const k in cfg.whatsapp){
-      rows+=card(L[k]||k, field('Numbers',k,cfg.whatsapp,'9811122233, 9876543210 #Name',true), k==='SA_WA_FAILURE_ALERT'?'Gets the WhatsApp picture when an automatic run fails.':'');
+    const band=(t,sub)=>`<div style="margin:18px 0 10px;padding:9px 12px;border-radius:9px;background:rgba(45,212,191,.10);border:1px solid rgba(45,212,191,.30)"><div style="font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--teal)">${t}</div><div style="font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.45">${sub}</div></div>`;
+    rows+='<div style="font-size:12.5px;color:var(--muted);margin-bottom:6px">Edit WhatsApp numbers (comma-separated, 10-digit — +91 is added automatically). What you see here is what is used — a blank box is saved as empty (no recipient). The Short Allocation step itself sends <b>no</b> WhatsApp (only emails — see Email To/CC).</div>';
+    const Z={SA_WA_DELHI:['Delhi','LAS FUNDING DELHI ZONE'],SA_WA_CHND:['Chandigarh','LAS FUNDING CHANDIGARH'],SA_WA_LUDH:['Ludhiana','LAS FUNDING LUDHIANA'],SA_WA_MUMB:['Mumbai','LAS FUNDING MUMBAI'],SA_WA_V1:['Vertical 1','LAS FUNDING V1'],SA_WA_V2:['Vertical 2','LAS FUNDING V2'],SA_WA_6NBB707:['6NBB707','LAS FUNDING 6NBB707']};
+    rows+=band('LAS Funding images — Runs 1, 2, 3 and 4','One WhatsApp picture per zone, sent by every LAS run (runs 1–3 send only these; run 4 sends them too, plus its emails). The picture title is shown under each name.');
+    for(const k in Z){ if(!(k in cfg.whatsapp)) continue; rows+=card(Z[k][0], field('Numbers',k,cfg.whatsapp,'9811122233, 9876543210',true), 'Picture title: '+Z[k][1]+' · sent in runs 1, 2, 3 and 4'); }
+    if('SA_WA_FAILURE_ALERT' in cfg.whatsapp){
+      rows+=band('Automatic runs 1 to 4 — Failure alert','When an automatic run fails (or its exchange file never arrives) a warning picture goes to these numbers. A #Name after a number is kept (e.g. 9811122233#Kartavya).');
+      rows+=card('⚠ FAILURE ALERT (auto run)', field('Numbers','SA_WA_FAILURE_ALERT',cfg.whatsapp,'9811122233#Kartavya, 9876543210',true));
     }
   } else {
     rows+='<div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Edit email recipients (comma-separated). What you see here is what is used — a blank box is saved as empty (no recipient).</div>';
-    rows+=secHdr('SA Processing emails');
-    rows+=pair('Ludhiana','SA2_MAIL_LUDH_TO','SA2_MAIL_LUDH_CC')+pair('Delhi','SA2_MAIL_DELH_TO','SA2_MAIL_DELH_CC')+pair('Mumbai','SA2_MAIL_MUMB_TO','SA2_MAIL_MUMB_CC')+pair('Chandigarh','SA2_MAIL_CHND_TO','SA2_MAIL_CHND_CC')+pair('Full file','SA2_MAIL_FULL_TO','SA2_MAIL_FULL_CC');
-    rows+=secHdr('File missing alert');
-    rows+=pair('File missing / manual intervention','SA_DL_EMAIL_TO','SA_DL_EMAIL_CC','Sent while the run waits for an expected input file.');
-    rows+=secHdr('Scenario &amp; Report emails (LAS)');
-    rows+=pair('SCENARIO-ALL ZONE','SA_MAIL_SCENARIO_ALL_TO','SA_MAIL_SCENARIO_ALL_CC')+pair('SCENARIO ANALYSIS — Delhi zone','SA_MAIL_DELHI_TO','SA_MAIL_DELHI_CC')+pair('Tentative Obligation File','SA_MAIL_TENTATIVE_TO','SA_MAIL_TENTATIVE_CC');
-    rows+=secHdr('LAS Funding emails');
-    rows+=pair('Scenario Analysis — Top 100 ALL ZONE','SA_MAIL_TOP100_TO','SA_MAIL_TOP100_CC')+pair('Scenario Analysis — Top 15 ALL ZONE','SA_MAIL_TOP15_TO','SA_MAIL_TOP15_CC');
+    const band=(t,sub)=>`<div style="margin:20px 0 10px;padding:9px 12px;border-radius:9px;background:rgba(45,212,191,.10);border:1px solid rgba(45,212,191,.30)"><div style="font-size:11px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:var(--teal)">${t}</div><div style="font-size:11.5px;color:var(--muted);margin-top:2px;line-height:1.45">${sub}</div></div>`;
+    rows+=band('Short Allocation — Runs 1 to 4','Sent by the Short Allocation step after each of runs 1–4: one file per zone, and the full output file.');
+    rows+=pair('Ludhiana','SA2_MAIL_LUDH_TO','SA2_MAIL_LUDH_CC')+pair('Delhi','SA2_MAIL_DELH_TO','SA2_MAIL_DELH_CC')+pair('Mumbai','SA2_MAIL_MUMB_TO','SA2_MAIL_MUMB_CC')+pair('Chandigarh','SA2_MAIL_CHND_TO','SA2_MAIL_CHND_CC')+pair('Full file (SA_xx_OUTPUT FILE)','SA2_MAIL_FULL_TO','SA2_MAIL_FULL_CC');
+    rows+=band('LAS Funding — Runs 1 to 3','<b>No emails.</b> LAS runs 1–3 send only the LAS FUNDING WhatsApp images — change those numbers in <b>WhatsApp numbers</b>.');
+    rows+=band('LAS Funding — Run 4','Sent only by LAS run 4 (run 4 also sends the same WhatsApp images as runs 1–3).');
+    rows+=pair('SCENARIO-ALL ZONE','SA_MAIL_SCENARIO_ALL_TO','SA_MAIL_SCENARIO_ALL_CC')+pair('SCENARIO ANALYSIS LAS ACCOUNT — Delhi zone','SA_MAIL_DELHI_TO','SA_MAIL_DELHI_CC')+pair('Tentative Obligation File','SA_MAIL_TENTATIVE_TO','SA_MAIL_TENTATIVE_CC')+pair('Scenario Analysis — Top 100 ALL ZONE','SA_MAIL_TOP100_TO','SA_MAIL_TOP100_CC')+pair('Scenario Analysis — Top 15 ALL ZONE','SA_MAIL_TOP15_TO','SA_MAIL_TOP15_CC');
+    rows+=band('All runs — File missing alert','Sent while a run waits (every 5 minutes) for an input file that has not arrived.');
+    rows+=pair('File missing / manual intervention','SA_DL_EMAIL_TO','SA_DL_EMAIL_CC');
   }
   rows+=`<button class="sa-save" style="width:100%" onclick="saSaveConfig()">Save</button><div class="sa-msg" id="saCfgMsg"></div>`;
   saShowModal((kind==='wa'?'📱 SHORT ALLOCATION WhatsApp numbers':'✉️ SHORT ALLOCATION email recipients'), rows);

@@ -2222,35 +2222,6 @@
       window.pxBackup = wrappedBackup;
     }
 
-    // ── Expose the "FILE MISSING EMAIL" recipients (SA_DL_EMAIL_TO/CC) inside
-    // the existing "✉️ Email To / CC" modal for Short Allocation. These two env
-    // keys already drive the real alert email sa_codes/newshortallocationfile
-    // downloader.py sends while it waits (in 5-min cycles) for an expected
-    // input file — they just weren't wired into SA_KEYS_MAIL/the modal before,
-    // so there was no way to see or change them without editing .env by hand.
-    // Since dashboard.html's saOpenEditor() can't be edited, this wraps it:
-    // let the native version build its usual sections, then splice one more
-    // section in — right after "SA Processing emails" — using the SAME
-    // saListFieldCollapsed()/saListUpdateSummary() helpers dashboard.html
-    // already defines, so it saves through the existing saSaveConfig()
-    // unchanged (it just serializes every window._saListState key). ──
-    if (typeof window.saOpenEditor === 'function' && !window.saOpenEditor.__fileMissingPatched) {
-      var origSaOpenEditor = window.saOpenEditor;
-      var wrappedEditor = function (kind, pw) {
-        var ret = origSaOpenEditor(kind, pw);
-        if (kind !== 'wa' && ret && typeof ret.then === 'function') {
-          ret.then(function () {
-            fetch(API + '/sa/config').then(function (r) { return r.json(); }).then(function (cfg) {
-              injectFileMissingEmailSection(cfg);
-            }).catch(function () {});
-          });
-        }
-        return ret;
-      };
-      wrappedEditor.__fileMissingPatched = true;
-      window.saOpenEditor = wrappedEditor;
-    }
-
     // ── A "waiting" event is not a success. dashboard.html's saAddEvent() only
     // has two states, ok (green ✓) or not-ok (red !), so "⏳ Waiting for exchange
     // upload — will retry in 5 min" was passed as ok=true and rendered as a green
@@ -2416,39 +2387,6 @@
       };
       wrappedMaskValue.__ctclLabelPatched = true;
       window.saMaskValue = wrappedMaskValue;
-    }
-  }
-
-  function injectFileMissingEmailSection(cfg) {
-    var body = document.getElementById('saModalBody');
-    if (!body || !cfg || !cfg.mail || body.querySelector('.fme-section')) return;
-    if (typeof window.saListFieldCollapsed !== 'function') return;
-    if (!window._saListState) window._saListState = {};
-    window._saListState['SA_DL_EMAIL_TO'] = (cfg.mail.SA_DL_EMAIL_TO || []).slice();
-    window._saListState['SA_DL_EMAIL_CC'] = (cfg.mail.SA_DL_EMAIL_CC || []).slice();
-    var hdr = '<div class="fme-section" style="font-size:10px;font-weight:700;letter-spacing:.08em;color:var(--teal);text-transform:uppercase;padding:10px 0 6px;border-top:1px solid var(--line);margin-top:4px">FILE MISSING EMAIL</div>';
-    var html = hdr +
-      window.saListFieldCollapsed('SA_DL_EMAIL_TO', 'FILE MISSING · TO', 'name@mastertrust.co.in', 'email') +
-      window.saListFieldCollapsed('SA_DL_EMAIL_CC', 'FILE MISSING · CC', 'name@mastertrust.co.in', 'email');
-    var wrap = document.createElement('div');
-    wrap.innerHTML = html;
-    // Land it right after "SA Processing emails" (before "Scenario & Report
-    // emails (LAS step)") so it's grouped with the SA-side emails, not LAS —
-    // falls back to just before the Save button if that section isn't found.
-    var divs = body.querySelectorAll('div');
-    var target = null;
-    for (var i = 0; i < divs.length; i++) {
-      if (divs[i].textContent.trim() === 'Scenario & Report emails (LAS step)') { target = divs[i]; break; }
-    }
-    if (!target) target = body.querySelector('button.sa-save');
-    var frag = Array.prototype.slice.call(wrap.childNodes);
-    frag.forEach(function (node) {
-      if (target && target.parentNode === body) body.insertBefore(node, target);
-      else body.appendChild(node);
-    });
-    if (typeof window.saListUpdateSummary === 'function') {
-      window.saListUpdateSummary('SA_DL_EMAIL_TO');
-      window.saListUpdateSummary('SA_DL_EMAIL_CC');
     }
   }
 
