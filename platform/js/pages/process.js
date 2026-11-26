@@ -451,9 +451,10 @@
     };
     function apply() {
       const ids = [...document.querySelectorAll(".cChk:checked")].map((c) => found[+c.dataset.i].id);
-      const del = mode() === "delete", nw = $("#cNew").value.trim();
+      // read EVERYTHING now: opening the confirm window replaces this one, so its boxes are gone afterwards
+      const del = mode() === "delete", nw = $("#cNew").value.trim(), kd = kind(), oldV = $("#cOld").value, nmV = $("#cName").value;
       if (!del && !nw) { popup("Change email / number", "Type the new number / email - or choose “Delete only”.", false); return; }
-      const msg = del ? "Delete " + $("#cOld").value.trim() + " from " + ids.length + " place(s)? Nothing is added in its place." : "Replace " + $("#cOld").value.trim() + " with " + nw + " in " + ids.length + " place(s)?";
+      const msg = del ? "Delete " + oldV.trim() + " from " + ids.length + " place(s)? Nothing is added in its place." : "Replace " + oldV.trim() + " with " + nw + " in " + ids.length + " place(s)?";
       const c2 = RMS.modal("Please confirm",
         '<div style="font-size:13.5px;line-height:1.55;margin-bottom:16px">' + esc(msg) + '<br><span class="card-sub">Saved in the audit log. You can undo it for 24 hours.</span></div>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px"><button class="btn ghost" id="cNo2">Cancel</button><button class="btn primary" id="cYes2">' + (del ? "Delete" : "Replace") + "</button></div>", { width: 440, icon: "alert" });
@@ -461,8 +462,8 @@
       $("#cYes2").onclick = async () => {
         c2();
         try {
-          const r = await cPost("replace", { _password: pw, kind: kind(), mode: mode(), old: $("#cOld").value, new: nw, new_name: $("#cName").value, ids });
-          close();
+          const r = await cPost("replace", { _password: pw, kind: kd, mode: del ? "delete" : "replace", old: oldV, new: nw, new_name: nmV, ids });
+          try { close(); } catch (e2) { /* already closed */ }
           popup("Change email / number", (del ? "Deleted" : "Replaced") + " in " + r.changed + " place(s)" + (r.skipped.length ? " (" + r.skipped.length + " skipped)" : "") + ".\nSaved in the audit log - undo is available for 24 hours.", true);
         } catch (e) { popup("Change email / number", e.message, false); }
       };
