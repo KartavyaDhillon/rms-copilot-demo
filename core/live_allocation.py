@@ -345,8 +345,17 @@ def cancel_requested() -> bool:
     return _cancel_flag().exists()
 
 
-def request_cancel():
-    _cancel_flag().write_text(_iso(), encoding="utf-8")
+def cancel_info():
+    """(when, who) of the Stop / Skip click that cancelled the running capture ('' when not known)."""
+    try:
+        when, _, who = _cancel_flag().read_text(encoding="utf-8").partition("|")
+        return when.strip(), who.strip()
+    except Exception:                                            # noqa: BLE001
+        return "", ""
+
+
+def request_cancel(by=""):
+    _cancel_flag().write_text(f"{_iso()}|{by or ''}", encoding="utf-8")
     p = _ACTIVE.get("proc")
     if p is not None:
         _kill(p)
@@ -723,7 +732,8 @@ def run_slot(slot: int, trigger="schedule", by="", log=print, cancelled=lambda: 
         if cur.get("skipped"):
             status, msg = "skipped", "Skipped by user."
         elif stop() and chk["missing"]:
-            status, msg = "cancelled", "Stopped before it finished."
+            _cw, _cb = cancel_info()
+            status, msg = "cancelled", "Stopped before it finished." + (f" Stopped by {_cb} at {_cw.replace('T', ' ')}." if _cb else " (who stopped it was not recorded)")
         elif not chk["missing"] and all(s.get("ok") for s in steps.values()):
             status, msg = "done", "All 5 files captured."
         else:
@@ -751,7 +761,7 @@ def skip_slot(slot: int, by="") -> dict:
     running = _RUN_LOCK.locked() and _ACTIVE.get("slot") == int(slot)
     rec = _update(d, slot, skipped=True, skipped_by=by, skipped_at=_iso())
     if running:
-        request_cancel()
+        request_cancel(by=f"{by or 'someone'} (Skip button)")
         return rec
     return _update(d, slot, status="skipped", msg="Skipped by user.", ended=_iso())
 
@@ -767,7 +777,7 @@ def unskip_slot(slot: int) -> dict:
 def stop_running(by="") -> bool:
     if not _RUN_LOCK.locked():
         return False
-    request_cancel()
+    request_cancel(by=f"{by or 'someone'} (Stop button)")
     return True
 
 

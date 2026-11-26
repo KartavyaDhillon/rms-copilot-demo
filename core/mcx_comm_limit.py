@@ -73,7 +73,7 @@ INPUTS = [
     ("Exclusion list", "EXCLUSION", EXCL_PATTERNS, "none"),
 ]
 BACKUP_PATTERNS = (MCX_PATTERNS + CASH_PATTERNS + SEARCH_PATTERNS + CO_PATTERNS + CM_PATTERNS + FO_PATTERNS
-                   + EXCL_PATTERNS + [KAMB_PATTERN, "sum.csv", "ClientNetEffectiveDeposits*.csv"])   # the last one comes along with the NMASS download
+                   + EXCL_PATTERNS + [KAMB_PATTERN, KAMB_PATTERN + ".original", "sum.csv", "ClientNetEffectiveDeposits*.csv"])   # the last one comes along with the NMASS download
 
 STEP_LABEL = {"risk": "Risk report", "kambala": "Kambala TXT", "exclusion": "Exclusion list", "nmass": "NMASS (CO/FO/CM)",
               "korp": "Cash margin (KORP)", "mail": "MCX active mail", "tcs": "TCS search result", "calc": "Calculation",
@@ -485,10 +485,21 @@ def calculate(base, log=log) -> dict:
     sum_file = os.path.join(BASE_DIR, "sum.csv")
     df_reco[["ACCOUNTID", "FINAL_SUM"]].to_csv(sum_file, index=False)
 
-    # Kambala TXT: NOVAL_EXP clients
+    # Kambala TXT: NOVAL_EXP clients.
+    # The file from Kambala is rewritten IN PLACE below, so the very first time it is used today an untouched copy is kept as
+    # <name>.original. Every run (also a second run, or one after a Stop) reads NOVAL_EXP and the template rows from that
+    # original - never from a file this card already rewrote (which no longer shows NOVAL_EXP and lost COM_BAS before).
     txt_file = pl([KAMB_PATTERN])
+    orig_file = txt_file + ".original"
+    if not os.path.exists(orig_file):
+        _tmp_o = orig_file + ".tmp"
+        shutil.copy2(txt_file, _tmp_o)
+        os.replace(_tmp_o, orig_file)
+        log(f"Kambala TXT: untouched original saved as {os.path.basename(orig_file)}")
+    else:
+        log(f"Kambala TXT: reading the saved untouched original {os.path.basename(orig_file)}")
     noval_exp_clients = set()
-    with open(txt_file, "r", encoding="utf-8") as f:
+    with open(orig_file, "r", encoding="utf-8") as f:
         rows = [line.rstrip("\n").split("|") for line in f]
     for row in rows[1:]:
         if len(row) > 16:
@@ -500,7 +511,7 @@ def calculate(base, log=log) -> dict:
 
     # update the TXT
     rows = []
-    with open(txt_file, "r", encoding="utf-8") as f:
+    with open(orig_file, "r", encoding="utf-8") as f:
         for line in f:
             rows.append(line.rstrip("\n").split("|"))
     header = rows[0]
@@ -541,6 +552,7 @@ def calculate(base, log=log) -> dict:
             row[16] = "COMMODITY_EXP"
         new_rows.append(row)
 
+    _check_cancel()                      # a Stop clicked during the calculation must not rewrite the file
     with open(txt_file, "w", encoding="utf-8") as f:
         f.write("|".join(header) + "\n")
         for r in new_rows:

@@ -803,9 +803,9 @@ async def la_skip(request: Request):
     return {"ok": True, "state": rec.get("status", "")}
 
 @app.post("/live-alloc/stop")
-def la_stop():
+def la_stop(request: Request):
     from core import live_allocation as _la
-    return {"ok": True, "stopped": _la.stop_running()}
+    return {"ok": True, "stopped": _la.stop_running(by=(_actor(request)[0] or ""))}
 
 @app.on_event("startup")
 def _live_alloc_startup():

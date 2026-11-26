@@ -1183,19 +1183,29 @@ def collect_replies(state: dict) -> bool:
     return True
 
 
+def expected_senders(state: dict, b: dict) -> dict:
+    """{address: name} of the people who must still answer THIS mail. HR Team counts only when HR was actually asked for a
+    contact number for one of the mail's employees (state['mobile_asked']); when the number was found HR is not asked,
+    so HR is not 'missing', gets no gentle reminder and is not counted in the x/4 replies."""
+    asked = {str(k).upper() for k in (state.get("mobile_asked") or {})}
+    hr_asked = any(str(k).upper() in asked for k in b.get("keys", []))
+    return {a: n for a, n in REPLY_SENDERS.items() if n != "HR Team" or hr_asked}
+
+
 def log_reply_status(state: dict) -> None:
     now = datetime.now()
     for b in state["batches"]:
         if now - _sent_at(b) > timedelta(days=REPLY_WATCH_DAYS) or not batch_open(state, b):
             continue
-        missing = [name for addr, name in REPLY_SENDERS.items() if addr not in b["replies"]]
+        need = expected_senders(state, b)
+        missing = [name for addr, name in need.items() if addr not in b["replies"]]
         label = f"Mail of {b['sent_at']} ({len(b['keys'])} employee(s))"
         if not missing:
             if not b.get("done_logged"):
-                ok(f"{label}: all {len(REPLY_SENDERS)} replies received")
+                ok(f"{label}: all {len(need)} replies received")
                 b["done_logged"] = True
         else:
-            warn(f"{label}: {len(REPLY_SENDERS) - len(missing)}/{len(REPLY_SENDERS)} replies - "
+            warn(f"{label}: {len(need) - len(missing)}/{len(need)} replies - "
                  f"still waiting for {', '.join(missing)}")
 
 
@@ -2214,7 +2224,7 @@ def due_reminders(state: dict, force: bool = False) -> list:
             continue
         if age < timedelta(hours=REMINDER_AFTER_HOURS, minutes=-DUE_GRACE_MIN) and not force:
             continue
-        for addr, role in REPLY_SENDERS.items():
+        for addr, role in expected_senders(state, b).items():          # HR only when HR was asked for a contact number
             if addr in b["replies"]:
                 continue
             if (b.get("reminders") or {}).get(addr) and not force:
