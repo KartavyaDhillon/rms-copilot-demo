@@ -228,6 +228,7 @@ def needs_master(d):
         out.append(_n("NSE FO", f"FO peak {t}", rf"Margin_NCL_FO_0_CM_{m}_{y}_P_{t}\.(csv|xlsx)"))
     out.append(_n("NSE FO", "FO final (F_0000)", rf"Margin_NCL_FO_0_CM_{m}_{y}_F_0000\.(csv|xlsx)"))
     out += _peaks(d) + _ncdex_end(d)
+    out.append(_n("MCX end file", f"MCX_MARGIN (FINAL_MCX column)", rf"MCX_MARGIN_{MCX_USER}_{y}\.csv", True))
     for t in ("1100", "1230", "1430", "1530", "1700", "1900", "2030", "2230"):
         out.append(_n("NSE CO (optional)", f"CO peak {t}", rf"Margin_NCL_CO_0_CM_{m}_{y}_P_{t}\.(csv|xlsx)", True))
     out.append(_n("NSE CO (optional)", "CO final (F_0000)", rf"Margin_NCL_CO_0_CM_{m}_{y}_F_0000\.(csv|xlsx)", True))

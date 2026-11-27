@@ -47,6 +47,19 @@ def _card_holder():
         return None
 
 
+def _mcxcomm_on_tcs() -> bool:
+    """True only while MCX COMM LIMIT's own run is really in its TCS (RSK136) step. Its lock file can outlive that step
+    (the run goes on to calculate / mail), and the login is not in use then."""
+    try:
+        from core import mcx_comm_limit as M
+        if not M.is_running():
+            return False
+        step = ((M.read_state().get("steps") or {}).get("tcs") or {}).get("status", "")
+        return step == "running"
+    except Exception:
+        return True                                      # cannot tell -> keep the old behaviour (show it)
+
+
 def _box_holders():
     """The manual boxes' own lock files -> a list of holder dicts."""
     out = []
@@ -58,6 +71,8 @@ def _box_holders():
         mdd = importlib.import_module("mcx_deposit_downloader")
         for o in getattr(mdd, "_MCX_OWNERS", ("sa", "cli", "probable")):
             st = mdd.mcx_lock_status(o) or {}
+            if st.get("busy") and o == "mcxcomm" and not _mcxcomm_on_tcs():
+                continue                                 # leftover lock: the card is not downloading from TCS any more
             if st.get("busy"):
                 since = st.get("started_at") or ""
                 el = None
@@ -66,7 +81,7 @@ def _box_holders():
                 except Exception:
                     pass
                 out.append({"name": BOX_NAMES.get(o, o), "since": str(since)[11:19] if len(str(since)) >= 19 else str(since),
-                            "elapsed_s": el, "source": "box"})
+                            "elapsed_s": el, "source": "box", "key": o})
     except Exception:
         pass
     return out
@@ -140,7 +155,7 @@ def _action_holders():
                 el, since = max(0, int((dt.datetime.now() - t0).total_seconds())), t0.strftime("%H:%M:%S")
             except Exception:
                 pass
-            out.append({"name": name, "since": since, "elapsed_s": el, "source": "button"})
+            out.append({"name": name, "since": since, "elapsed_s": el, "source": "button", "key": pipe})
     except Exception:
         pass
     return out
@@ -276,10 +291,18 @@ def _build(now: dt.datetime) -> dict:
     if c:
         holders.append(c)
     seen = {h["name"] for h in holders}
+    by_key = {}
     for h in _box_holders() + _action_holders():
+        k = h.get("key")
+        if k and k in by_key:                           # the SAME job seen twice (its lock file AND its running button)
+            if h.get("source") == "button":
+                by_key[k]["name"] = h["name"]           # keep the more detailed name, one entry
+            continue
         if h["name"] not in seen:                       # the same download can show up in two places
             holders.append(h)
             seen.add(h["name"])
+            if k:
+                by_key[k] = h
     for h in holders:
         h["short"] = short_name(h["name"])
     state = "free" if not holders else ("busy" if len(holders) == 1 else "clash")

@@ -413,6 +413,25 @@ for f in os.listdir(FOLDER):
                 main_df[f"MCX{i}"] = 0
         break
 
+# --- FINAL MCX (MCX_MARGIN_56720_<date>.csv, from the 76 FILES DOWNLOADER) ---
+# NO header: client code = column C, value = column D. Optional - without the file the FINAL_MCX column is 0.
+_mcx_final_files = sorted(f for f in os.listdir(FOLDER) if re.fullmatch(r"MCX_MARGIN_56720_\d{8}\.csv", f, re.IGNORECASE))
+if _mcx_final_files:
+    try:
+        _mcx_final_raw = pd.read_csv(os.path.join(FOLDER, _mcx_final_files[-1]), header=None, dtype=str)
+        _fm = pd.DataFrame({
+            "ClntId": normalize_clntid_series(_mcx_final_raw[2].astype(str).str.replace("'", "", regex=False)),   # column C
+            "FINAL_MCX": parse_numeric_series(_mcx_final_raw[3]),                                                # column D
+        })
+        _fm = _fm[(_fm["ClntId"] != "") & (_fm["ClntId"].str.lower() != "nan")]
+        _fm = _fm.drop_duplicates(subset=["ClntId"], keep="first")
+        main_df = pd.merge(main_df, _fm, on="ClntId", how="outer")
+        print(f"✅ FINAL_MCX loaded: {_mcx_final_files[-1]} ({len(_fm)} clients)")
+    except Exception as _e:
+        print(f"⚠️ FINAL_MCX NOT loaded ({type(_e).__name__}: {_e}) - column set to 0")
+else:
+    print("⚠️ MCX_MARGIN_56720_<date>.csv NOT found - FINAL_MCX column set to 0")
+
 # --- NCD FILES ---
 # ===== CHANGED: now loops 01..08 because NCD_MAX_SHEETS = 8 =====
 # Any of _06/_07/_08 that has not arrived is safely handled by the else-branch
@@ -522,6 +541,7 @@ main_columns = (
     + [f"FM{i}" for i in range(1,5)]
     + ["Final Fut"]
     + [f"MCX{i}" for i in range(1, MCX_COUNT+1)]
+    + ["FINAL_MCX"]
     + [f"NCDEX{i}" for i in range(1, NCD_MAX_SHEETS+1)]
     + ["FINAL_NCDEX"]
     + [f"NSE_COMM_{i}" for i in range(1, 9)]  # New 8 columns
